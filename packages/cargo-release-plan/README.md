@@ -1,12 +1,12 @@
 # cargo-release-plan
 
 A Cargo subcommand that classifies every publishable workspace package against its
-version **anchor**, reports unreleased content, and applies an approved increment
-plan (group expansion, `=`-pin rewrites, lockfile refresh).
+version **anchor**, reports changes to **released content**, and applies an
+approved increment plan (group expansion, `=`-pin rewrites, lockfile refresh).
 
 The version increment is the release event. A package fails the check when its
 released content differs from the last parsed `version` change on the base
-branch's first-parent line, and the declared version has not increased.
+revision's first-parent line, and the declared version has not increased.
 
 ## Usage
 
@@ -21,8 +21,8 @@ cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>]
 ```
 
 `--base` defaults to `origin/main`. CI should pass an explicit SHA of the
-merge-base or target-branch tip. `--manifest-path` defaults to `Cargo.toml` in
-the current directory.
+merge-base or target-branch tip (the **base revision**). `--manifest-path`
+defaults to `Cargo.toml` in the current directory.
 
 ### `report`
 
@@ -53,7 +53,7 @@ Reads an approved plan and:
   `=` pins
 * refreshes the workspace lockfile so `--locked` builds keep working
 
-Manifests are edited with `toml_edit` (comments and layout preserved). Every
+Manifests are edited structurally so comments and layout are preserved. Every
 edit is computed before any file is written. `--dry-run` lists the manifests
 that would change.
 
@@ -73,13 +73,25 @@ The plan schema is:
 or `patch`. An explicit `version` is used as-is for that target (and its group).
 Each increment must supply exactly one of `level` or `version`.
 
+### Plan and report schema
+
+`report.json` uses the same schema revision. Top-level fields are
+`schema_version`, `head`, `packages`, and `groups`. Each package object includes
+`name`, `declared_version`, `status` (`releasing` / `unreleased-changes` /
+`released`), `changed`, `stat`, `dependencies`, and `dependents`, plus omitted
+when empty: `group`, `anchor`, `diff_path`, `untracked`. A change is either
+`{"path","change","source":"package"}` or `{"field","source":"inherited"}`.
+`diff_path` is relative to the report directory. Plan and report formats
+advance this revision together: an incompatible field, enum, or path-layout
+change increments it.
+
 ## Classification
 
 | Status               | Condition                                                | Verdict  |
 | -------------------- | -------------------------------------------------------- | -------- |
 | `releasing`          | version increased since the anchor                       | pass     |
 | `unreleased-changes` | version unchanged, released content changed since anchor | fail     |
-| `released`           | version unchanged, nothing released-relevant changed     | pass     |
+| `released`           | version unchanged, released content unchanged            | pass     |
 
 Packages with `publish = false` are ignored. `Cargo.lock` is never released
 content. Untracked files are advisory only.
@@ -91,6 +103,7 @@ on the base revision are exempt from the consistency rule.
 
 ## Offline operation
 
-The tool shells out only to `git` and `cargo metadata --no-deps`. It does not
-contact crates.io, resolve a dependency graph, or compile as part of
-classification.
+Classification shells out only to `git` and `cargo metadata --no-deps`. It does
+not contact crates.io, resolve a dependency graph, or compile. `check
+--verify-packaging` may spawn `cargo package --list`. `apply` may spawn
+`cargo update --offline` to refresh the workspace lockfile.

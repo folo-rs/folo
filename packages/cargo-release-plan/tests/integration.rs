@@ -1,7 +1,8 @@
 //! End-to-end classification and apply tests against hermetic Git fixtures.
 //!
 //! Each test drives [`cargo_release_plan::run`] directly. Git identity, signing,
-//! and autogc are pinned by [`common::Fixture`].
+//! and autogc are pinned by [`common::Fixture`]. Integer literals assigned to
+//! unused locals in generated Rust sources are arbitrary byte-change markers.
 
 mod common;
 
@@ -259,6 +260,9 @@ license = "Apache-2.0"
     assert!(!passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("workspace.package.license"));
+    let patch = fs::read_to_string(fixture.path().join("out/diffs/demo.patch")).unwrap();
+    assert!(patch.contains("Inherited workspace values changed"));
+    assert!(patch.contains("workspace.package.license"));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -305,8 +309,9 @@ fn shallow_history_without_a_version_change_is_an_error() {
     let fixture = seeded_package();
     fixture.write("packages/demo/README.md", "docs\n");
     fixture.commit("second commit at the same version");
-    // Same declared version, second commit. A depth-1 clone of HEAD cannot see
-    // the creation commit, so classification must error rather than pass.
+    // Same declared version, second commit. A clone that contains only HEAD
+    // cannot see the creation commit, so classification must error rather than
+    // pass.
     let clone = tempfile::TempDir::new().unwrap();
     let mut command = std::process::Command::new("git");
     command.args([
@@ -429,6 +434,47 @@ fn new_package_on_the_branch_is_releasing() {
     let report = report_json(&fixture, &base);
     assert!(report.contains("\"name\": \"fresh\""));
     assert!(report.contains("\"status\": \"releasing\""));
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_replaces_workspace_inherited_version() {
+    let fixture = Fixture::new();
+    write_workspace(
+        &fixture,
+        r#"
+[workspace.package]
+version = "0.1.0"
+"#,
+    );
+    fixture.write(
+        "packages/demo/Cargo.toml",
+        r#"[package]
+name = "demo"
+version.workspace = true
+edition = "2021"
+"#,
+    );
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() {}\n");
+    fixture.commit("inherit version");
+
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(
+        &plan_path,
+        r#"{ "schema_version": 1, "increments": [{ "name": "demo", "level": "patch" }] }"#,
+    )
+    .unwrap();
+    run(&RunInput::Apply {
+        plan: plan_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+
+    let manifest = fs::read_to_string(fixture.path().join("packages/demo/Cargo.toml")).unwrap();
+    assert!(manifest.contains("version = \"0.1.1\""));
+    assert!(!manifest.contains("version.workspace"));
 }
 
 fn seeded_package() -> Fixture {

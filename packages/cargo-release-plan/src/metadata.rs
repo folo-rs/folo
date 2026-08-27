@@ -19,6 +19,7 @@ use crate::manifest::{PackageManifest, parse_package_manifest, repo_relative_dir
 #[cfg(test)]
 use crate::packaging::PackagingRules;
 
+/// Raw `cargo metadata --format-version 1` document before conversion to [`WorkTree`].
 #[derive(Debug, Deserialize)]
 struct MetadataJson {
     packages: Vec<MetadataPackage>,
@@ -28,6 +29,7 @@ struct MetadataJson {
     metadata: serde_json::Value,
 }
 
+/// One package object from the metadata document.
 #[derive(Debug, Deserialize)]
 struct MetadataPackage {
     name: String,
@@ -40,6 +42,7 @@ struct MetadataPackage {
     dependencies: Vec<MetadataDep>,
 }
 
+/// One declared dependency from the metadata document.
 #[derive(Debug, Deserialize)]
 struct MetadataDep {
     name: String,
@@ -53,25 +56,25 @@ struct MetadataDep {
 /// One publishable workspace member in the work tree.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkPackage {
-    pub manifest: PackageManifest,
-    pub manifest_path: PathBuf,
-    pub dependencies: Vec<ReportedDep>,
+    pub(crate) manifest: PackageManifest,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) dependencies: Vec<ReportedDep>,
 }
 
 /// Intra-workspace dependency as exposed in `report.json`.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct ReportedDep {
-    pub name: String,
-    pub req: String,
-    pub exact_pin: bool,
+    pub(crate) name: String,
+    pub(crate) req: String,
+    pub(crate) exact_pin: bool,
 }
 
 /// Work-tree snapshot from `cargo metadata --no-deps`.
 #[derive(Debug)]
 pub(crate) struct WorkTree {
-    pub workspace_root: PathBuf,
-    pub packages: Vec<WorkPackage>,
-    pub groups: Groups,
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) packages: Vec<WorkPackage>,
+    pub(crate) groups: Groups,
 }
 
 pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError> {
@@ -79,6 +82,8 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     // `--no-deps` is the classification Cargo invocation: no graph resolve and
     // no crates.io. `--offline` is omitted so a workspace without a lockfile
     // can still be classified; no registry packages are consulted.
+    // `--format-version 1` is Cargo's only documented metadata schema; the
+    // `MetadataJson` projections in this module deserialize that contract.
     let stdout = run_capture(
         "cargo",
         &[
@@ -97,7 +102,23 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     let workspace_root = PathBuf::from(&json.workspace_root);
     let member_ids: HashSet<&str> = json.workspace_members.iter().map(String::as_str).collect();
 
-    let groups = groups_from_metadata(&json.metadata)?;
+    let workspace_names: HashSet<String> = json
+        .packages
+        .iter()
+        .filter(|package| member_ids.contains(package.id.as_str()))
+        .map(|package| package.name.clone())
+        .collect();
+    let member_dirs: HashSet<PathBuf> = json
+        .packages
+        .iter()
+        .filter(|package| member_ids.contains(package.id.as_str()))
+        .filter_map(|package| {
+            Path::new(&package.manifest_path)
+                .parent()
+                .map(Path::to_path_buf)
+        })
+        .collect();
+    let groups = groups_from_metadata(&json.metadata, &workspace_names)?;
     let mut packages = Vec::new();
 
     for package in &json.packages {
@@ -127,12 +148,10 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         })?;
         parsed.name.clone_from(&package.name);
 
-        let workspace_names: HashSet<&str> =
-            json.packages.iter().map(|p| p.name.as_str()).collect();
         let dependencies = package
             .dependencies
             .iter()
-            .filter(|dep| is_intra_workspace_normal(dep, &workspace_names))
+            .filter(|dep| is_intra_workspace_normal(dep, &member_dirs))
             .map(|dep| ReportedDep {
                 name: dep.name.clone(),
                 req: dep.req.clone(),
@@ -156,7 +175,10 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     })
 }
 
-fn groups_from_metadata(metadata: &serde_json::Value) -> Result<Groups, AppError> {
+fn groups_from_metadata(
+    metadata: &serde_json::Value,
+    workspace_names: &HashSet<String>,
+) -> Result<Groups, AppError> {
     let Some(groups) = metadata
         .get("release-plan")
         .and_then(|plan| plan.get("groups"))
@@ -167,21 +189,32 @@ fn groups_from_metadata(metadata: &serde_json::Value) -> Result<Groups, AppError
     let mut map = BTreeMap::new();
     for (name, members) in groups {
         let Some(array) = members.as_array() else {
-            continue;
+            return Err(crate::MalformedVersionGroupError::new(name).into());
         };
-        let members = array
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        map.insert(name.clone(), members);
+        let mut parsed = Vec::new();
+        for item in array {
+            let Some(package) = item.as_str() else {
+                return Err(crate::MalformedVersionGroupError::new(name).into());
+            };
+            if !workspace_names.contains(package) {
+                return Err(crate::UnknownGroupMemberError::new(name, package).into());
+            }
+            parsed.push(package.to_owned());
+        }
+        map.insert(name.clone(), parsed);
     }
     Groups::from_members(map)
 }
 
-fn is_intra_workspace_normal(dep: &MetadataDep, workspace_names: &HashSet<&str>) -> bool {
+fn is_intra_workspace_normal(dep: &MetadataDep, member_dirs: &HashSet<PathBuf>) -> bool {
     let kind = dep.kind.as_deref().unwrap_or("normal");
-    kind == "normal" && (dep.path.is_some() || workspace_names.contains(dep.name.as_str()))
+    if kind != "normal" {
+        return false;
+    }
+    let Some(path) = &dep.path else {
+        return false;
+    };
+    member_dirs.contains(Path::new(path))
 }
 
 pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String> {
@@ -206,41 +239,71 @@ mod tests {
                 }
             }
         });
-        let groups = groups_from_metadata(&json).unwrap();
+        let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
+        let groups = groups_from_metadata(&json, &names).unwrap();
         assert_eq!(groups.group_of("nm_impl"), Some("nm"));
     }
 
     #[test]
-    fn intra_workspace_normal_deps_require_path_or_workspace_name() {
-        let names = HashSet::from(["bar"]);
+    fn groups_from_metadata_rejects_malformed_and_unknown_members() {
+        let names = HashSet::from(["nm".to_string()]);
+        let malformed = serde_json::json!({
+            "release-plan": { "groups": { "nm": "nm" } }
+        });
+        let error = groups_from_metadata(&malformed, &names).unwrap_err();
+        let source = error
+            .find_source::<crate::MalformedVersionGroupError>()
+            .expect("malformed group");
+        assert_eq!(source.group(), "nm");
+        let unknown = serde_json::json!({
+            "release-plan": { "groups": { "nm": ["ghost"] } }
+        });
+        let error = groups_from_metadata(&unknown, &names).unwrap_err();
+        let source = error
+            .find_source::<crate::UnknownGroupMemberError>()
+            .expect("unknown member");
+        assert_eq!(source.group(), "nm");
+        assert_eq!(source.package(), "ghost");
+    }
+
+    #[test]
+    fn intra_workspace_normal_deps_require_a_member_directory() {
+        let dirs = HashSet::from([PathBuf::from("/ws/packages/bar")]);
         let path_dep = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
-            path: Some("../bar".to_string()),
+            path: Some("/ws/packages/bar".to_string()),
             kind: None,
         };
-        assert!(is_intra_workspace_normal(&path_dep, &names));
+        assert!(is_intra_workspace_normal(&path_dep, &dirs));
         let named = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
             path: None,
             kind: Some("normal".to_string()),
         };
-        assert!(is_intra_workspace_normal(&named, &names));
+        assert!(!is_intra_workspace_normal(&named, &dirs));
+        let colliding = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            path: Some("/other/bar".to_string()),
+            kind: None,
+        };
+        assert!(!is_intra_workspace_normal(&colliding, &dirs));
         let dev = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
-            path: Some("../bar".to_string()),
+            path: Some("/ws/packages/bar".to_string()),
             kind: Some("dev".to_string()),
         };
-        assert!(!is_intra_workspace_normal(&dev, &names));
+        assert!(!is_intra_workspace_normal(&dev, &dirs));
         let foreign = MetadataDep {
             name: "serde".to_string(),
             req: "1.0.0".to_string(),
             path: None,
             kind: None,
         };
-        assert!(!is_intra_workspace_normal(&foreign, &names));
+        assert!(!is_intra_workspace_normal(&foreign, &dirs));
     }
 
     #[test]

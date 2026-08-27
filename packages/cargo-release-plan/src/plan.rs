@@ -4,7 +4,7 @@
 // raised by the highest required level. An explicit `version` overrides that
 // arithmetic for the named target and its group.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use ohno::AppError;
@@ -18,7 +18,7 @@ use crate::{
     VersionOverflowError,
 };
 
-/// Requested bump relative to the highest declared member version.
+/// Requested version increment relative to the highest declared member version.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum IncrementLevel {
     Patch,
@@ -42,24 +42,51 @@ impl FromStr for IncrementLevel {
 /// One increment entry as stored in plan JSON.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct PlanIncrement {
-    pub name: String,
+    pub(crate) name: String,
     #[serde(default)]
-    pub level: Option<String>,
+    pub(crate) level: Option<String>,
     #[serde(default)]
-    pub version: Option<String>,
+    pub(crate) version: Option<String>,
+}
+
+/// Parsed form of exactly one of `level` or `version`.
+enum IncrementSpec {
+    Level(IncrementLevel),
+    Version(Version),
+}
+
+impl PlanIncrement {
+    fn spec(&self) -> Result<IncrementSpec, AppError> {
+        match (&self.level, &self.version) {
+            (Some(level), None) => {
+                let parsed = IncrementLevel::from_str(level)
+                    .map_err(|()| UnknownIncrementLevelError::new(&self.name, level))?;
+                Ok(IncrementSpec::Level(parsed))
+            }
+            (None, Some(version)) => {
+                let parsed = version
+                    .parse::<Version>()
+                    .map_err(|error| InvalidVersionError::caused_by(&self.name, version, error))?;
+                Ok(IncrementSpec::Version(parsed))
+            }
+            (None, None) | (Some(_), Some(_)) => {
+                Err(PlanIncrementSpecError::new(&self.name).into())
+            }
+        }
+    }
 }
 
 /// On-disk plan file.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct PlanFile {
-    pub schema_version: u32,
-    pub increments: Vec<PlanIncrement>,
+    pub(crate) schema_version: u32,
+    pub(crate) increments: Vec<PlanIncrement>,
 }
 
 /// Package name → new version after group expansion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ExpandedPlan {
-    pub packages: BTreeMap<String, Version>,
+    pub(crate) packages: BTreeMap<String, Version>,
 }
 
 /// Accumulated decision for one group or ungrouped package.
@@ -86,10 +113,8 @@ pub(crate) fn expand_plan(
     for increment in &plan.increments {
         let targets = resolve_targets(&increment.name, groups, publishable)?;
         let keys = decision_keys(&targets, groups);
-        match (&increment.level, &increment.version) {
-            (Some(level), None) => {
-                let parsed = IncrementLevel::from_str(level)
-                    .map_err(|()| UnknownIncrementLevelError::new(&increment.name, level))?;
+        match increment.spec()? {
+            IncrementSpec::Level(parsed) => {
                 for key in keys {
                     let decision = decisions.entry(key).or_insert(Decision {
                         level: None,
@@ -102,10 +127,7 @@ pub(crate) fn expand_plan(
                     );
                 }
             }
-            (None, Some(version)) => {
-                let parsed = version.parse::<Version>().map_err(|error| {
-                    InvalidVersionError::caused_by(&increment.name, version, error)
-                })?;
+            IncrementSpec::Version(parsed) => {
                 for key in keys {
                     let decision = decisions.entry(key.clone()).or_insert(Decision {
                         level: None,
@@ -118,9 +140,6 @@ pub(crate) fn expand_plan(
                     }
                     decision.version = Some(parsed.clone());
                 }
-            }
-            (None, None) | (Some(_), Some(_)) => {
-                return Err(PlanIncrementSpecError::new(&increment.name).into());
             }
         }
     }
@@ -139,7 +158,7 @@ pub(crate) fn expand_plan(
             else {
                 continue;
             };
-            bump(&max, level)?
+            increment_version(&max, level)?
         } else {
             continue;
         };
@@ -174,15 +193,11 @@ fn resolve_targets(
     Err(UnknownPlanTargetError::new(name).into())
 }
 
-fn decision_keys(targets: &[String], groups: &Groups) -> Vec<String> {
-    let mut keys = Vec::new();
-    for target in targets {
-        let key = groups.group_of(target).unwrap_or(target).to_string();
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
-    keys
+fn decision_keys(targets: &[String], groups: &Groups) -> BTreeSet<String> {
+    targets
+        .iter()
+        .map(|target| groups.group_of(target).unwrap_or(target).to_string())
+        .collect()
 }
 
 fn members_for_key(
@@ -206,7 +221,10 @@ fn members_for_key(
     }
 }
 
-pub(crate) fn bump(version: &Version, level: IncrementLevel) -> Result<Version, AppError> {
+pub(crate) fn increment_version(
+    version: &Version,
+    level: IncrementLevel,
+) -> Result<Version, AppError> {
     match level {
         IncrementLevel::Major => {
             let major = version
@@ -250,10 +268,12 @@ mod tests {
     }
 
     fn current() -> BTreeMap<String, Version> {
+        // Synthetic versions; tests assert relative increment arithmetic, not
+        // workspace pins.
         BTreeMap::from([
-            ("nm".to_string(), v("0.1.43")),
-            ("nm_impl".to_string(), v("0.1.43")),
-            ("events".to_string(), v("0.7.13")),
+            ("nm".to_string(), v("0.1.0")),
+            ("nm_impl".to_string(), v("0.1.0")),
+            ("events".to_string(), v("0.2.0")),
         ])
     }
 
@@ -268,8 +288,8 @@ mod tests {
             }],
         };
         let expanded = expand_plan(&plan, &nm_groups(), &current(), &current()).unwrap();
-        assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.44")));
-        assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.44")));
+        assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.1")));
+        assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.1")));
         assert!(!expanded.packages.contains_key("events"));
     }
 
@@ -313,6 +333,7 @@ mod tests {
     #[test]
     fn rejects_unknown_schema() {
         let plan = PlanFile {
+            // Arbitrary revision distinct from the supported schema.
             schema_version: 9,
             increments: vec![],
         };
@@ -349,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn max_declared_version_is_the_bump_base() {
+    fn max_declared_version_is_the_increment_base() {
         let mut versions = current();
         versions.insert("nm_impl".to_string(), v("0.1.50"));
         let plan = PlanFile {
@@ -387,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn ungrouped_package_is_bumped_alone() {
+    fn ungrouped_package_is_incremented_alone() {
         let plan = PlanFile {
             schema_version: 1,
             increments: vec![PlanIncrement {
@@ -397,12 +418,12 @@ mod tests {
             }],
         };
         let expanded = expand_plan(&plan, &nm_groups(), &current(), &current()).unwrap();
-        assert_eq!(expanded.packages.get("events"), Some(&v("0.7.14")));
+        assert_eq!(expanded.packages.get("events"), Some(&v("0.2.1")));
         assert!(!expanded.packages.contains_key("nm"));
     }
 
     #[test]
-    fn major_level_bumps_the_major_component() {
+    fn major_level_increments_the_major_component() {
         let plan = PlanFile {
             schema_version: 1,
             increments: vec![PlanIncrement {
@@ -416,9 +437,9 @@ mod tests {
     }
 
     #[test]
-    fn bump_errors_when_a_component_overflows() {
+    fn increment_version_errors_when_a_component_overflows() {
         let max = Version::new(0, 0, u64::MAX);
-        let error = bump(&max, IncrementLevel::Patch).unwrap_err();
+        let error = increment_version(&max, IncrementLevel::Patch).unwrap_err();
         assert!(error.find_source::<VersionOverflowError>().is_some());
     }
 }

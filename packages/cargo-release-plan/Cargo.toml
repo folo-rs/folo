@@ -1,5 +1,5 @@
 [package]
-# Cargo has its own logic for naming and expects dashes. Okay.
+# Cargo's binary-package naming convention uses dashes.
 name = "cargo-release-plan"
 description = "A Cargo subcommand that classifies publishable packages against their version anchors and applies increment plans"
 publish = true
@@ -13,13 +13,13 @@ rust-version.workspace = true
 
 # Only the consumer build ships. Tests, the agent notes, and development
 # manifests stay in git. Ref: docs/design.md "Released content".
-include = ["src/**", "README.md", "docs/**"]
+include = ["src/**", "README.md"]
 
 [package.metadata.docs.rs]
 all-features = true
 
 # Baseline of external types intentionally exposed in the public API. Any new
-# external type here trips the check so accidental exposures are caught.
+# external type here causes the check to fail so accidental exposures are caught.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [

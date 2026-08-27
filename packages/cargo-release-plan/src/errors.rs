@@ -34,6 +34,12 @@ pub(crate) struct CommandFailedError {
 impl UnwindSafe for CommandFailedError {}
 impl RefUnwindSafe for CommandFailedError {}
 
+impl CommandFailedError {
+    pub(crate) fn stderr(&self) -> &str {
+        &self.stderr
+    }
+}
+
 /// A file could not be read.
 #[ohno::error]
 #[display("Failed to read '{}'", path.display())]
@@ -228,6 +234,62 @@ pub(crate) struct VersionOverflowError {
     version: semver::Version,
 }
 
+/// An `include` / `exclude` pattern is not a valid gitignore rule.
+#[ohno::error]
+#[display("Invalid packaging pattern '{pattern}'")]
+pub(crate) struct InvalidPackagingPatternError {
+    pattern: String,
+}
+
+impl UnwindSafe for InvalidPackagingPatternError {}
+impl RefUnwindSafe for InvalidPackagingPatternError {}
+
+#[cfg(test)]
+impl InvalidPackagingPatternError {
+    pub(crate) fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
+/// A version-group entry is present but is not an array of package names.
+#[ohno::error]
+#[display("Version group '{group}' must be an array of package names")]
+pub(crate) struct MalformedVersionGroupError {
+    group: String,
+}
+
+impl UnwindSafe for MalformedVersionGroupError {}
+impl RefUnwindSafe for MalformedVersionGroupError {}
+
+#[cfg(test)]
+impl MalformedVersionGroupError {
+    pub(crate) fn group(&self) -> &str {
+        &self.group
+    }
+}
+
+/// A version group lists a name that is not a workspace package.
+#[ohno::error]
+#[display("Version group '{group}' lists unknown workspace package '{package}'")]
+pub(crate) struct UnknownGroupMemberError {
+    group: String,
+    package: String,
+}
+
+impl UnwindSafe for UnknownGroupMemberError {}
+impl RefUnwindSafe for UnknownGroupMemberError {}
+
+#[cfg(test)]
+impl UnknownGroupMemberError {
+    pub(crate) fn group(&self) -> &str {
+        &self.group
+    }
+
+    pub(crate) fn package(&self) -> &str {
+        &self.package
+    }
+}
+
 impl UnwindSafe for VersionOverflowError {}
 impl RefUnwindSafe for VersionOverflowError {}
 
@@ -380,6 +442,30 @@ mod tests {
     );
     assert_impl_all!(
         VersionOverflowError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        InvalidPackagingPatternError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        MalformedVersionGroupError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        UnknownGroupMemberError: Send,
         Sync,
         Debug,
         error::Error,

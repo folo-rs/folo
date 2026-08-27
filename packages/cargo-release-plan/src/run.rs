@@ -10,9 +10,9 @@ use crate::{RunInput, RunOutcome};
 ///
 /// # Errors
 ///
-/// Returns an application error if Git, Cargo metadata, filesystem access,
-/// manifest parsing, or plan validation fails. Unreleased changes are a
-/// [`RunOutcome::Check`] with `passed: false`, not an error.
+/// Returns an application error when the requested operation cannot be
+/// completed. Unreleased changes are a [`RunOutcome::Check`] with
+/// `passed: false`, not an error.
 #[doc(hidden)]
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     match input {

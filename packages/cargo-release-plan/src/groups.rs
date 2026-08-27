@@ -110,9 +110,9 @@ impl Groups {
 /// Consistency outcome for one version group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroupVerdict {
-    pub members: Vec<String>,
-    pub consistent: bool,
-    pub version: Option<Version>,
+    pub(crate) members: Vec<String>,
+    pub(crate) consistent: bool,
+    pub(crate) version: Option<Version>,
 }
 
 #[cfg(test)]

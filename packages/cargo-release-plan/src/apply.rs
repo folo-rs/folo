@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ohno::AppError;
-use semver::Version;
+use semver::{Version, VersionReq};
 use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 
 use crate::command::run_capture;
@@ -15,7 +15,7 @@ use crate::plan::{ExpandedPlan, PlanFile, expand_plan};
 use crate::verbose::Verbose;
 use crate::{ParsePlanError, ReadFileError, WriteFileError};
 
-// Cargo's three package-level dependency tables, plus the same names under
+// Cargo's package-level dependency tables, plus the same names under
 // `[target.<spec>]`. These are the only places intra-workspace requirements live.
 const PACKAGE_DEP_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
@@ -32,10 +32,10 @@ pub(crate) fn run_apply(
     manifest_path: &Path,
     verbose: Verbose,
 ) -> Result<String, AppError> {
-    let plan_text = fs::read_to_string(plan_path)
+    let plan = fs::read_to_string(plan_path)
         .map_err(|error| ReadFileError::caused_by(plan_path, error))?;
-    let plan: PlanFile = serde_json::from_str(&plan_text)
-        .map_err(|error| ParsePlanError::caused_by(plan_path, error))?;
+    let plan: PlanFile =
+        serde_json::from_str(&plan).map_err(|error| ParsePlanError::caused_by(plan_path, error))?;
 
     let work_tree = load_work_tree(manifest_path)?;
     let current: BTreeMap<String, Version> = work_tree
@@ -160,7 +160,7 @@ fn rewrite_package_version(doc: &mut DocumentMut, expanded: &ExpandedPlan, verbo
     let Some(package) = doc.get_mut("package").and_then(Item::as_table_like_mut) else {
         return;
     };
-    if set_version_item(package, "version", new_version) {
+    if set_package_version_item(package, new_version) {
         verbose.note(format!(
             "{name}: set package.version to {new_version} because the expanded plan assigns that \
              version to this crate"
@@ -226,25 +226,30 @@ fn rewrite_dep_table(
     verbose: Verbose,
     where_: &str,
 ) {
-    let names: Vec<String> = table.iter().map(|(key, _)| key.to_string()).collect();
-    for name in names {
-        let Some(entry) = table.get(&name) else {
+    for (key, entry) in table.iter_mut() {
+        let name = key.get().to_string();
+        if !dep_has_path(entry) {
             continue;
-        };
+        }
         let crate_name = dep_crate_name(entry, &name);
         let Some(new_version) = expanded.packages.get(&crate_name).cloned() else {
-            continue;
-        };
-        let Some(entry) = table.get_mut(&name) else {
             continue;
         };
         if rewrite_dep_entry(entry, &new_version) {
             verbose.note(format!(
                 "{where_}.{name}: rewrote the version requirement to follow {crate_name} {new_version} \
-                 (exact `=` pins keep the equals sign; other intra-workspace requirements are \
-                 rewritten because they must follow the new version)"
+                 (exact `=` pins keep the equals sign; requirements that already match the new \
+                 version are left unchanged; only path dependencies are rewritten)"
             ));
         }
+    }
+}
+
+fn dep_has_path(entry: &Item) -> bool {
+    match entry {
+        Item::Value(Value::InlineTable(table)) => table.contains_key("path"),
+        Item::Table(table) => table.contains_key("path"),
+        _ => false,
     }
 }
 
@@ -265,10 +270,14 @@ fn dep_crate_name(entry: &Item, table_key: &str) -> String {
 
 fn rewrite_dep_entry(entry: &mut Item, new_version: &Version) -> bool {
     match entry {
-        Item::Value(Value::String(formatted)) => set_formatted(formatted, new_version),
+        Item::Value(Value::String(formatted)) => {
+            let rewritten = rewrite_req(formatted.value(), new_version);
+            set_formatted(formatted, rewritten)
+        }
         Item::Value(Value::InlineTable(table)) => {
             if let Some(Value::String(formatted)) = table.get_mut("version") {
-                set_formatted(formatted, new_version)
+                let rewritten = rewrite_req(formatted.value(), new_version);
+                set_formatted(formatted, rewritten)
             } else {
                 false
             }
@@ -278,17 +287,31 @@ fn rewrite_dep_entry(entry: &mut Item, new_version: &Version) -> bool {
     }
 }
 
-fn set_version_item(table: &mut dyn TableLike, key: &str, new_version: &Version) -> bool {
-    match table.get_mut(key) {
-        Some(Item::Value(Value::String(formatted))) => set_formatted(formatted, new_version),
+fn set_package_version_item(table: &mut dyn TableLike, new_version: &Version) -> bool {
+    match table.get_mut("version") {
+        Some(Item::Value(Value::String(formatted))) => {
+            set_formatted(formatted, new_version.to_string())
+        }
+        Some(item) if crate::inherited::is_workspace_inherit(item) => {
+            *item = Item::Value(Value::from(new_version.to_string()));
+            true
+        }
         _ => false,
     }
 }
 
-fn set_formatted(formatted: &mut Formatted<String>, new_version: &Version) -> bool {
-    let original = formatted.value().as_str();
-    let rewritten = rewrite_req(original, new_version);
-    if rewritten == original {
+fn set_version_item(table: &mut dyn TableLike, key: &str, new_version: &Version) -> bool {
+    match table.get_mut(key) {
+        Some(Item::Value(Value::String(formatted))) => {
+            let rewritten = rewrite_req(formatted.value(), new_version);
+            set_formatted(formatted, rewritten)
+        }
+        _ => false,
+    }
+}
+
+fn set_formatted(formatted: &mut Formatted<String>, rewritten: String) -> bool {
+    if rewritten == formatted.value().as_str() {
         return false;
     }
     let decor = formatted.decor().clone();
@@ -301,10 +324,14 @@ fn set_formatted(formatted: &mut Formatted<String>, new_version: &Version) -> bo
 fn rewrite_req(old: &str, new_version: &Version) -> String {
     let trimmed = old.trim();
     if trimmed.starts_with('=') {
-        format!("={new_version}")
-    } else {
-        new_version.to_string()
+        return format!("={new_version}");
     }
+    if let Ok(req) = VersionReq::parse(trimmed)
+        && req.matches(new_version)
+    {
+        return old.to_string();
+    }
+    new_version.to_string()
 }
 
 // Spawns `cargo update --offline`; lockfile is not released content.
@@ -392,6 +419,51 @@ mod tests {
         let summary = dry_run_summary(&edits, 2);
         assert!(summary.contains("changed.toml"));
         assert!(!summary.contains("unchanged.toml"));
+    }
+
+    #[test]
+    fn rewrite_req_keeps_matching_caret_and_rewrites_equals() {
+        let new = v("0.1.1");
+        assert_eq!(rewrite_req("0.1.0", &new), "0.1.0");
+        assert_eq!(rewrite_req("^0.1", &new), "^0.1");
+        assert_eq!(rewrite_req("=0.1.0", &new), "=0.1.1");
+        assert_eq!(rewrite_req("0.1.0", &v("0.2.0")), "0.2.0");
+    }
+
+    #[test]
+    fn set_version_item_replaces_workspace_inherit() {
+        let mut doc = dep_item(
+            r#"
+[package]
+name = "foo"
+version.workspace = true
+"#,
+        );
+        let package = doc
+            .get_mut("package")
+            .and_then(Item::as_table_like_mut)
+            .unwrap();
+        assert!(set_package_version_item(package, &v("0.2.0")));
+        assert!(doc.to_string().contains("version = \"0.2.0\""));
+        assert!(!doc.to_string().contains("workspace"));
+    }
+
+    #[test]
+    fn dep_has_path_detects_path_tables() {
+        let doc = dep_item("[dependencies]\nfoo = { version = \"0.1.0\", path = \"../foo\" }\n");
+        let entry = doc
+            .get("dependencies")
+            .and_then(Item::as_table_like)
+            .and_then(|table| table.get("foo"))
+            .unwrap();
+        assert!(dep_has_path(entry));
+        let doc = dep_item("[dependencies]\nfoo = \"0.1.0\"\n");
+        let entry = doc
+            .get("dependencies")
+            .and_then(Item::as_table_like)
+            .and_then(|table| table.get("foo"))
+            .unwrap();
+        assert!(!dep_has_path(entry));
     }
 
     #[test]

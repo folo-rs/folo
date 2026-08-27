@@ -19,7 +19,7 @@ pub(crate) fn run_check(
     verbose: Verbose,
 ) -> Result<(bool, String), AppError> {
     let classification = classify(manifest_path, base, verbose)?;
-    let mut message = render_offences(&classification, format);
+    let mut message = render_diagnostics(&classification, format);
 
     if verify_packaging {
         append_packaging_warnings(&mut message, &verify_packaging_rules(&classification));
@@ -46,15 +46,18 @@ fn default_success_message(passed: bool, message: &str) -> Option<&'static str> 
     }
 }
 
-fn render_offences(classification: &Classification, format: CheckFormat) -> String {
+fn render_diagnostics(classification: &Classification, format: CheckFormat) -> String {
     let mut lines = Vec::new();
     for package in &classification.packages {
         if package.status != PackageStatus::UnreleasedChanges {
             continue;
         }
-        let anchor = package.anchor.as_ref();
-        let anchor_text = match anchor {
-            Some(anchor) => format!("{} ({})", short_sha(&anchor.commit), anchor.version),
+        let anchor = match package.anchor.as_ref() {
+            Some(anchor) => format!(
+                "{} ({})",
+                crate::short_commit(&anchor.commit),
+                anchor.version
+            ),
             None => "no base revision".to_string(),
         };
         let group_text = match &package.group {
@@ -70,18 +73,18 @@ fn render_offences(classification: &Classification, format: CheckFormat) -> Stri
         let changed = if package.changed.is_empty() {
             "released content changed".to_string()
         } else {
-            let first = package
-                .changed
-                .iter()
-                .find_map(|item| item.path.as_deref().or(item.field.as_deref()))
-                .unwrap_or("released content");
+            let first = match package.changed.first() {
+                Some(crate::classify::ChangedItem::Package { path, .. }) => path.as_str(),
+                Some(crate::classify::ChangedItem::Inherited { field }) => field.as_str(),
+                None => "released content",
+            };
             format!("{first} (and related paths) changed")
         };
         let skill = format!(
             "Run the {INCREMENT_VERSIONS_SKILL} skill to propose and apply version increments."
         );
         let text = format!(
-            "{}: unreleased-changes since {anchor_text}; {changed}.{group_text} {skill}",
+            "{}: unreleased-changes since {anchor}; {changed}.{group_text} {skill}",
             package.name
         );
         if format == CheckFormat::Github {
@@ -111,10 +114,6 @@ fn render_offences(classification: &Classification, format: CheckFormat) -> Stri
     lines.join("\n")
 }
 
-fn short_sha(commit: &str) -> &str {
-    commit.get(..commit.len().min(12)).unwrap_or(commit)
-}
-
 // Packaging warnings are non-gating advisory text from `cargo package --list`.
 #[cfg_attr(test, mutants::skip)]
 fn append_packaging_warnings(message: &mut String, warnings: &str) {
@@ -132,18 +131,35 @@ fn append_packaging_warnings(message: &mut String, warnings: &str) {
 fn verify_packaging_rules(classification: &Classification) -> String {
     let mut warnings = String::new();
     for package in &classification.work_tree.packages {
-        // Non-gating: a packaging probe that cannot run is skipped.
-        let Ok(listed) = cargo_package_list(
+        let listed = match cargo_package_list(
             &classification.work_tree.workspace_root,
             &package.manifest.name,
-        ) else {
-            continue;
+        ) {
+            Ok(listed) => listed,
+            Err(error) => {
+                writeln!(
+                    warnings,
+                    "warning: packaging probe failed for {}: {error}",
+                    package.manifest.name
+                )
+                .expect("writing to String");
+                continue;
+            }
         };
         let dir = &package.manifest.directory;
-        let tool: BTreeSet<String> = classification
-            .git
-            .ls_files(dir)
-            .unwrap_or_default()
+        let tracked = match classification.git.ls_files(dir) {
+            Ok(files) => files,
+            Err(error) => {
+                writeln!(
+                    warnings,
+                    "warning: listing tracked files failed for {}: {error}",
+                    package.manifest.name
+                )
+                .expect("writing to String");
+                continue;
+            }
+        };
+        let tool: BTreeSet<String> = tracked
             .into_iter()
             .filter_map(|full| {
                 let full = crate::git::git_path(&full);
@@ -206,12 +222,6 @@ fn cargo_package_list(workspace_root: &Path, package: &str) -> Result<Vec<String
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-
-    #[test]
-    fn short_sha_truncates_long_revisions() {
-        assert_eq!(short_sha("abcdefghijklmnop"), "abcdefghijkl");
-        assert_eq!(short_sha("abc"), "abc");
-    }
 
     #[test]
     fn default_success_message_only_when_passed_and_empty() {

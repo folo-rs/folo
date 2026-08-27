@@ -17,7 +17,7 @@ every `git` invocation rather than relying on the user or host config:
 * `commit.gpgsign=false`
 * `gc.auto=0`
 
-Use the helper in `tests/common/mod.rs`. Do not add real-time delays.
+Use the helper in `tests/common/fixture.rs`. Do not add real-time delays.
 
 ## Miri
 
@@ -27,15 +27,14 @@ tests (packaging rules, group verdicts, plan expansion, inherited-value
 comparison, anchor resolution over a synthetic timeline) must keep running
 under Miri.
 
-## Version groups live in the workspace manifest
+## Version groups live in two declarations
 
 Group membership is `[workspace.metadata.release-plan.groups]` in the repo-root
-`Cargo.toml`. `release-plz.toml` `version_group` keys still exist and must be
-kept in lockstep until a later layer drops `release-plz update`. When adding a
-grouped crate, update both.
+`Cargo.toml`. `release-plz.toml` `version_group` keys also participate in
+release automation. When adding or moving a grouped package, update both.
 
-## Do not invert the current release process
+## Release-process ownership
 
-This package implements the agreed versioning tool. It does not change
-`docs/git-workflow.md`, `RELEASING.md`, Validation workflows, or
-`just gh-release`.
+`docs/git-workflow.md`, `RELEASING.md`, Validation workflows, and
+`just gh-release` own the remaining release workflow. Do not change them from
+this package.

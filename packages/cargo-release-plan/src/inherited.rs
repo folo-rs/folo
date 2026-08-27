@@ -4,19 +4,21 @@
 // inherits the changed `[workspace.package]` key or `[workspace.dependencies]`
 // entry. `[workspace.lints]` is out of scope.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 /// One inherited field that changed between the package's anchor and the work tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InheritedChange {
-    pub field: String,
+    pub(crate) field: String,
 }
 
 /// Package-level keys inherited via `.workspace = true`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct InheritedKeys {
-    pub package: Vec<String>,
-    pub dependencies: Vec<String>,
+    pub(crate) package: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
 }
 
 /// Compares inherited workspace values at the package's anchor vs the work tree.
@@ -47,7 +49,7 @@ pub(crate) fn inherited_changes(
             .keys()
             .chain(new.keys())
             .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         for field in &names {
@@ -71,9 +73,9 @@ pub(crate) fn inherited_changes(
 pub(crate) fn collect_inherited_keys(doc: &DocumentMut) -> InheritedKeys {
     let mut keys = InheritedKeys::default();
     if let Some(package) = doc.get("package").and_then(Item::as_table_like) {
-        for (key, item) in table_iter(package) {
+        for (key, item) in package.iter() {
             if is_workspace_inherit(item) {
-                keys.package.push(key);
+                keys.package.push(key.to_string());
             }
         }
     }
@@ -83,7 +85,7 @@ pub(crate) fn collect_inherited_keys(doc: &DocumentMut) -> InheritedKeys {
         }
     }
     if let Some(target) = doc.get("target").and_then(Item::as_table_like) {
-        for (_, spec) in table_iter(target) {
+        for (_, spec) in target.iter() {
             if let Some(spec) = spec.as_table_like() {
                 for table_name in ["dependencies", "dev-dependencies", "build-dependencies"] {
                     if let Some(table) = spec.get(table_name).and_then(Item::as_table_like) {
@@ -101,9 +103,9 @@ pub(crate) fn collect_inherited_keys(doc: &DocumentMut) -> InheritedKeys {
 }
 
 fn collect_inherited_deps(table: &dyn TableLike, out: &mut Vec<String>) {
-    for (name, item) in table_iter(table) {
+    for (name, item) in table.iter() {
         if is_workspace_inherit(item) {
-            out.push(name);
+            out.push(name.to_string());
         }
     }
 }
@@ -140,11 +142,8 @@ fn workspace_package_value(doc: &DocumentMut, key: &str) -> Option<String> {
     Some(fingerprint(package.get(key)?))
 }
 
-fn workspace_dependency_fields(
-    doc: &DocumentMut,
-    name: &str,
-) -> std::collections::BTreeMap<String, String> {
-    let mut fields = std::collections::BTreeMap::new();
+fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
     let Some(deps) = doc
         .get("workspace")
         .and_then(Item::as_table_like)
@@ -175,13 +174,6 @@ fn workspace_dependency_fields(
         }
     }
     fields
-}
-
-fn table_iter(table: &dyn TableLike) -> Vec<(String, &Item)> {
-    table
-        .iter()
-        .map(|(key, item)| (key.to_string(), item))
-        .collect()
 }
 
 fn fingerprint(item: &Item) -> String {

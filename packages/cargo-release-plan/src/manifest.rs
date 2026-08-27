@@ -14,19 +14,19 @@ use crate::{InvalidVersionError, ParseTomlError};
 /// Parsed facts about one package manifest.
 #[derive(Clone, Debug)]
 pub(crate) struct PackageManifest {
-    pub name: String,
-    pub version: Version,
-    pub directory: String,
-    pub packaging: PackagingRules,
-    pub inherited: InheritedKeys,
-    pub publish: bool,
+    pub(crate) name: String,
+    pub(crate) version: Version,
+    pub(crate) directory: String,
+    pub(crate) packaging: PackagingRules,
+    pub(crate) inherited: InheritedKeys,
+    pub(crate) publish: bool,
 }
 
 /// Workspace member glob patterns from the root manifest.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WorkspaceMembers {
-    pub members: Vec<String>,
-    pub exclude: Vec<String>,
+    pub(crate) members: Vec<String>,
+    pub(crate) exclude: Vec<String>,
 }
 
 pub(crate) fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, AppError> {
@@ -70,7 +70,7 @@ pub(crate) fn parse_package_manifest(
         name: name.to_string(),
         version,
         directory,
-        packaging: packaging_from_package(package),
+        packaging: packaging_from_package(package)?,
         inherited: collect_inherited_keys(&doc),
         publish: publish_allowed(package),
     }))
@@ -132,11 +132,10 @@ fn glob_member(pattern: &str, dir: &str) -> bool {
     over.matched(dir, true).is_whitelist()
 }
 
-fn packaging_from_package(package: &dyn TableLike) -> PackagingRules {
-    PackagingRules::new(
-        opt_string_array(package.get("include")),
-        opt_string_array(package.get("exclude")),
-    )
+fn packaging_from_package(package: &dyn TableLike) -> Result<PackagingRules, AppError> {
+    let include = opt_string_array(package.get("include"));
+    let exclude = opt_string_array(package.get("exclude"));
+    PackagingRules::new(include.as_deref(), exclude.as_deref())
 }
 
 fn publish_allowed(package: &dyn TableLike) -> bool {

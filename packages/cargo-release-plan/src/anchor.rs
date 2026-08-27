@@ -13,21 +13,21 @@ use crate::ShallowHistoryError;
 /// The commit that last changed a package's declared version on the base line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Anchor {
-    pub commit: String,
-    pub version: Version,
+    pub(crate) commit: String,
+    pub(crate) version: Version,
 }
 
 /// One first-parent commit in a synthetic or observed timeline, newest first.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TimelineEntry {
-    pub commit: String,
+    pub(crate) commit: String,
     /// Parsed version at this commit, or `None` if the package was absent.
-    pub version: Option<Version>,
+    pub(crate) version: Option<Version>,
     /// Whether this commit has a first parent that is available to the walk.
-    pub parent_available: bool,
+    pub(crate) parent_available: bool,
 }
 
-/// Resolves the anchor from a newest-first first-parent timeline of parsed versions.
+/// Resolves the version-change anchor from a newest-first first-parent timeline.
 ///
 /// The first entry is the base revision. Walking toward the root, the first time
 /// the version differs from the previous (newer) commit, that newer commit is

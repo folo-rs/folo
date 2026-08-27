@@ -44,7 +44,7 @@ pub enum RunInput {
         base: String,
         /// Workspace manifest to classify. Defaults to `Cargo.toml` in the current directory.
         manifest_path: PathBuf,
-        /// How to render offences.
+        /// How to render diagnostics.
         format: CheckFormat,
         /// When set, warn on divergence from `cargo package --list` without failing.
         verify_packaging: bool,
@@ -79,10 +79,9 @@ pub enum RunOutcome {
     },
     /// `check` finished. `passed` is the process-level verdict.
     Check {
-        /// `true` when every publishable package is `releasing` or `released` and
-        /// every version group is consistent.
+        /// Whether every publishable package and version group passed.
         passed: bool,
-        /// Rendered offences or a success summary.
+        /// Rendered diagnostics or a success summary.
         message: String,
     },
     /// `apply` finished (including `--dry-run`).
@@ -99,11 +98,25 @@ pub enum RunOutcome {
 /// both add and hide differences, so it is not a conservative fallback.
 pub(crate) const DEFAULT_BASE: &str = "origin/main";
 
-/// Plan / report schema version this tool reads and writes.
+/// Shared plan and report schema revision.
+///
+/// Plan and report formats advance together. Incompatible field, enum, or
+/// path-layout changes increment this constant. Contract: package README
+/// "Plan and report schema".
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 
 /// Skill named in check failure text so a failing job is a sufficient prompt.
 pub(crate) const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
+
+/// Matches the user-facing short-commit convention in `cbh_detect`.
+/// Ref: `packages/cbh_detect/src/detect/findings.rs`, `short_commit`.
+pub(crate) const SHORT_COMMIT_LEN: usize = 12;
+
+pub(crate) fn short_commit(commit: &str) -> &str {
+    commit
+        .get(..commit.len().min(SHORT_COMMIT_LEN))
+        .unwrap_or(commit)
+}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -117,4 +130,10 @@ mod tests {
     assert_impl_all!(CheckFormat: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(RunInput: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(RunOutcome: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn short_commit_truncates_long_revisions() {
+        assert_eq!(short_commit("abcdefghijklmnop"), "abcdefghijkl");
+        assert_eq!(short_commit("abc"), "abc");
+    }
 }

@@ -34,10 +34,11 @@ files are reported as an advisory and never counted as changes.
 
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace
-member list, keyed by package name, so a moved package is not silently
-unchanged. A path that either end would package participates in the comparison,
-which is how a deleted packaged file or a path dropped from `include` is
-visible.
+member list, keyed by package name, so a relocated package is still compared
+with itself. Comparison is package-relative: a move that leaves released file
+bytes unchanged is `released`. A path that either end would package
+participates in the comparison, which is how a deleted packaged file or a path
+dropped from `include` is visible.
 
 A comment-only or formatting-only edit to a packaged `Cargo.toml` is a released
 content change.
@@ -57,7 +58,7 @@ A global inherited change therefore marks every inheriting package.
 | -------------------- | -------------------------------------------------------- | -------- |
 | `releasing`          | version increased since the anchor                       | pass     |
 | `unreleased-changes` | version unchanged, released content changed since anchor | fail     |
-| `released`           | version unchanged, nothing released-relevant changed     | pass     |
+| `released`           | version unchanged, released content unchanged            | pass     |
 
 `publish = false` packages are excluded. Group consistency is a separate
 group-level verdict: a package may have unreleased changes *and* belong to an
@@ -79,7 +80,7 @@ changes. The report includes intra-workspace dependencies and dependents so
 version decisions can cascade.
 
 `check` exits non-zero on unreleased changes or an inconsistent group, with one
-actionable line per offence that names the `increment-versions` skill.
+actionable diagnostic line that names the `increment-versions` skill.
 `--format github` adds workflow annotations. `--verify-packaging` is non-gating:
 it cross-checks relevance rules against `cargo package --list` and prints
 warnings without failing the check.

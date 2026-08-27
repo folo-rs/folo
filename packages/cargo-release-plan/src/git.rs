@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 
 use crate::UnresolvedBaseError;
-use crate::command::{run_capture, run_capture_ok, run_capture_ok_bytes};
+use crate::command::{run_capture, run_capture_ok};
 
 /// A Git repository rooted at `root`.
 #[derive(Clone, Debug)]
@@ -62,14 +62,64 @@ impl GitRepo {
 
     /// Whether `commit` has a first parent that Git can resolve.
     ///
-    /// A shallow-boundary commit has a parent that was not fetched. Git cannot
-    /// resolve `commit^`, but that is truncated history, not a true root.
+    /// A true root has no `parent` header. A shallow-boundary commit still has
+    /// that header even when Git cannot resolve `commit^`.
     pub(crate) fn has_resolvable_parent(&self, commit: &str) -> Result<bool, AppError> {
+        if !self.commit_has_parent_header(commit)? {
+            return Ok(false);
+        }
         let spec = format!("{commit}^");
         if run_capture_ok("git", &["rev-parse", "--verify", &spec], &self.root)?.is_some() {
             return Ok(true);
         }
         self.is_shallow()
+    }
+
+    fn commit_has_parent_header(&self, commit: &str) -> Result<bool, AppError> {
+        // `cat-file -p` prints the `parent` header even when the parent object
+        // was not fetched (shallow boundary). `rev-list --parents` omits that
+        // parent when it cannot be resolved.
+        let stdout = run_capture("git", &["cat-file", "-p", commit], &self.root)?;
+        Ok(stdout.lines().any(|line| line.starts_with("parent ")))
+    }
+
+    /// First-parent commits reachable from `rev` that touch a `Cargo.toml`.
+    ///
+    /// Version and membership can change only on those commits, so classification
+    /// reconstructs historical workspaces from this subset rather than every
+    /// first-parent commit.
+    pub(crate) fn first_parent_manifest_commits(&self, rev: &str) -> Result<Vec<String>, AppError> {
+        let all = self.first_parent_commits(rev)?;
+        let stdout = run_capture(
+            "git",
+            &[
+                "rev-list",
+                "--first-parent",
+                rev,
+                "--",
+                "Cargo.toml",
+                ":(glob)**/Cargo.toml",
+            ],
+            &self.root,
+        )?;
+        let touching: std::collections::HashSet<&str> = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        // Keep the base revision and the oldest first-parent commit even when they
+        // do not touch a manifest, so the timeline still observes HEAD and can
+        // distinguish a true root from truncated history.
+        let newest = all.first().cloned();
+        let oldest = all.last().cloned();
+        Ok(all
+            .into_iter()
+            .filter(|commit| {
+                touching.contains(commit.as_str())
+                    || newest.as_deref() == Some(commit.as_str())
+                    || oldest.as_deref() == Some(commit.as_str())
+            })
+            .collect())
     }
 
     fn is_shallow(&self) -> Result<bool, AppError> {
@@ -96,7 +146,19 @@ impl GitRepo {
         rel_path: &str,
     ) -> Result<Option<Vec<u8>>, AppError> {
         let spec = format!("{}:{}", commit, git_path(rel_path));
-        run_capture_ok_bytes("git", &["show", &spec], &self.root)
+        match crate::command::run_capture_bytes("git", &["show", &spec], &self.root) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) => {
+                if error
+                    .find_source::<crate::CommandFailedError>()
+                    .is_some_and(|failed| is_absent_git_path(failed.stderr()))
+                {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     /// Git-tracked paths under `pathspec` in the work tree / index.
@@ -183,6 +245,13 @@ pub(crate) fn join_git_rel(git_root: &Path, workspace_root: &Path, workspace_rel
     }
 }
 
+fn is_absent_git_path(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("does not exist")
+        || stderr.contains("exists on disk, but not in")
+        || stderr.contains("did not match")
+}
+
 fn split_z(stdout: &str) -> Vec<String> {
     stdout
         .split('\0')
@@ -196,6 +265,20 @@ fn split_z(stdout: &str) -> Vec<String> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absent_git_path_matches_known_stderr() {
+        assert!(is_absent_git_path(
+            "fatal: path 'x' does not exist in 'abc'"
+        ));
+        assert!(is_absent_git_path(
+            "fatal: path 'x' exists on disk, but not in 'abc'"
+        ));
+        assert!(is_absent_git_path(
+            "fatal: Path 'x' did not match any files"
+        ));
+        assert!(!is_absent_git_path("fatal: bad object abc"));
+    }
 
     #[test]
     fn git_path_normalizes_backslashes() {

@@ -5,18 +5,30 @@
 // `ignore` crate). `Cargo.lock` is never released content: the published lockfile
 // is derived per-crate at pack time and is not a function of the package source.
 
-use ignore::gitignore::GitignoreBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ohno::AppError;
+
+use crate::InvalidPackagingPatternError;
 
 /// Include / exclude rules from a package manifest.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+///
+/// Matchers are compiled once when the rules are parsed so classification can
+/// query many paths without rebuilding gitignore state per file.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct PackagingRules {
-    include: Option<Vec<String>>,
-    exclude: Option<Vec<String>>,
+    include: Option<Gitignore>,
+    exclude: Option<Gitignore>,
 }
 
 impl PackagingRules {
-    pub(crate) fn new(include: Option<Vec<String>>, exclude: Option<Vec<String>>) -> Self {
-        Self { include, exclude }
+    pub(crate) fn new(
+        include: Option<&[String]>,
+        exclude: Option<&[String]>,
+    ) -> Result<Self, AppError> {
+        Ok(Self {
+            include: include.map(compile_gitignore).transpose()?,
+            exclude: exclude.map(compile_gitignore).transpose()?,
+        })
     }
 
     /// Whether `package_relative_path` would be put in the `.crate`.
@@ -32,10 +44,10 @@ impl PackagingRules {
             return true;
         }
         if let Some(include) = &self.include {
-            return matches_gitignore(include, &path);
+            return include.matched(&path, false).is_ignore();
         }
         if let Some(exclude) = &self.exclude {
-            return !matches_gitignore(exclude, &path);
+            return !exclude.matched(&path, false).is_ignore();
         }
         true
     }
@@ -49,17 +61,16 @@ fn normalize_rel(path: &str) -> String {
     path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
-fn matches_gitignore(patterns: &[String], path: &str) -> bool {
+fn compile_gitignore(patterns: &[String]) -> Result<Gitignore, AppError> {
     let mut builder = GitignoreBuilder::new("");
     for pattern in patterns {
-        if builder.add_line(None, pattern).is_err() {
-            continue;
-        }
+        builder
+            .add_line(None, pattern)
+            .map_err(|error| InvalidPackagingPatternError::caused_by(pattern, error))?;
     }
-    let Ok(gitignore) = builder.build() else {
-        return false;
-    };
-    gitignore.matched(path, false).is_ignore()
+    builder
+        .build()
+        .map_err(|error| InvalidPackagingPatternError::caused_by("include/exclude", error).into())
 }
 
 /// Relative path of `full` inside `package_dir`, both repo-relative with `/`.
@@ -79,10 +90,30 @@ pub(crate) fn relativize<'a>(full: &'a str, package_dir: &str) -> Option<&'a str
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::InvalidPackagingPatternError;
+
+    fn rules(
+        include: Option<&[&str]>,
+        exclude: Option<&[&str]>,
+    ) -> Result<PackagingRules, AppError> {
+        let include = include.map(|patterns| {
+            patterns
+                .iter()
+                .map(|pattern| (*pattern).to_string())
+                .collect::<Vec<_>>()
+        });
+        let exclude = exclude.map(|patterns| {
+            patterns
+                .iter()
+                .map(|pattern| (*pattern).to_string())
+                .collect::<Vec<_>>()
+        });
+        PackagingRules::new(include.as_deref(), exclude.as_deref())
+    }
 
     #[test]
     fn cargo_toml_is_always_released() {
-        let rules = PackagingRules::new(Some(vec!["src/**".to_string()]), None);
+        let rules = rules(Some(&["src/**"]), None).unwrap();
         assert!(rules.is_released("Cargo.toml"));
     }
 
@@ -95,10 +126,7 @@ mod tests {
 
     #[test]
     fn include_allow_list_keeps_matching_paths() {
-        let rules = PackagingRules::new(
-            Some(vec!["src/**".to_string(), "README.md".to_string()]),
-            None,
-        );
+        let rules = rules(Some(&["src/**", "README.md"]), None).unwrap();
         assert!(rules.is_released("src/lib.rs"));
         assert!(rules.is_released("README.md"));
         assert!(!rules.is_released("tests/foo.rs"));
@@ -107,28 +135,31 @@ mod tests {
 
     #[test]
     fn include_later_negation_drops_a_subset() {
-        let rules = PackagingRules::new(
-            Some(vec!["src/**".to_string(), "!src/private/**".to_string()]),
-            None,
-        );
+        let rules = rules(Some(&["src/**", "!src/private/**"]), None).unwrap();
         assert!(rules.is_released("src/lib.rs"));
         assert!(!rules.is_released("src/private/x.rs"));
     }
 
     #[test]
     fn exclude_drops_matching_paths_when_include_absent() {
-        let rules = PackagingRules::new(None, Some(vec!["tests/**".to_string()]));
+        let rules = rules(None, Some(&["tests/**"])).unwrap();
         assert!(rules.is_released("src/lib.rs"));
         assert!(!rules.is_released("tests/foo.rs"));
     }
 
     #[test]
     fn include_ignores_exclude() {
-        let rules = PackagingRules::new(
-            Some(vec!["src/**".to_string(), "tests/**".to_string()]),
-            Some(vec!["tests/**".to_string()]),
-        );
+        let rules = rules(Some(&["src/**", "tests/**"]), Some(&["tests/**"])).unwrap();
         assert!(rules.is_released("tests/foo.rs"));
+    }
+
+    #[test]
+    fn invalid_include_pattern_is_an_error() {
+        let error = rules(Some(&["foo.{js,ts"]), None).unwrap_err();
+        let source = error
+            .find_source::<InvalidPackagingPatternError>()
+            .expect("invalid packaging pattern");
+        assert_eq!(source.pattern(), "foo.{js,ts");
     }
 
     #[test]

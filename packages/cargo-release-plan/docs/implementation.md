@@ -6,25 +6,31 @@ package [design](design.md). This guide follows the workspace rules for
 
 The application is organized around a library `run()` entry that the binary and
 the integration tests share. Command-line parsing lives beside that entry so
-help text and parse errors can be exercised without spawning a process. Git is
-reached only by spawning `git`; package discovery for the work tree is reached
-only by spawning `cargo metadata --no-deps`. Historical trees are read with
-`git show` / `git ls-tree` rather than checking out a work tree.
+help text and parse errors can be exercised without spawning a process. The
+compiled binary is also covered by a subprocess test. Git is reached only by
+spawning `git`; package discovery for the work tree is reached only by spawning
+`cargo metadata --no-deps`. `check --verify-packaging` may spawn
+`cargo package --list`. `apply` may spawn `cargo update --offline`. Historical
+trees are read with `git show` / `git ls-tree` rather than checking out a work
+tree.
 
-Classification walks the base revision's first-parent line until a parsed
-version change (or creation) is found, then diffs released paths between that
-commit and the work tree. Packaging rules are gitignore-style matching via the
-`ignore` crate. Inherited-value attribution reads `.workspace = true` keys out
-of each package manifest and compares the corresponding tables in the root
-manifest at the anchor and in the work tree.
+Classification walks the base revision's first-parent commits that touch a
+`Cargo.toml` (always including the base SHA and the oldest first-parent commit)
+until a parsed version change (or creation) is found, then diffs released paths
+between that commit and the work tree. Packaging rules are compiled once from
+gitignore-style `include` / `exclude` patterns. Inherited-value attribution
+reads `.workspace = true` keys out of each package manifest and compares the
+corresponding tables in the root manifest at the anchor and in the work tree.
 
-Plan application is a `toml_edit` rewrite: every affected manifest is parsed
-and patched in memory before writes begin. A later write can still fail after
-earlier files have been updated. Exact `=` pins and any intra-workspace
-requirement that would no longer match the new version are updated in package
-tables and in `[workspace.dependencies]`. The lockfile refresh is a subsequent
-`cargo update --offline -p …` of the rewritten packages, skipped when the plan
-expands to no packages.
+Plan application rewrites manifests structurally so comments and layout
+survive: every affected manifest is parsed and patched in memory before writes
+begin. A later write can still fail after earlier files have been updated.
+Exact `=` pins are rewritten; other path-dependency requirements are rewritten
+only when they would no longer match the new version. Registry dependencies
+that happen to share a crate name are left unchanged. A `version.workspace =
+true` package version is replaced with a literal version string. The lockfile
+refresh is a subsequent `cargo update --offline -p …` of the rewritten
+packages, skipped when the plan expands to no packages.
 
 Operational conditions are private leaves that flow into `ohno::AppError`.
 Command, parse, and filesystem causes remain attached. The package exports

@@ -142,12 +142,14 @@ trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.36", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 
-# Packages that are one logical unit split across crates must share a version.
+# Cargo packages that form one logical unit must share a version.
 # cargo-release-plan expands increments across each group and rewrites
 # intra-workspace `=` pins together. Ref: docs/impl-crate-split.md.
 [workspace.metadata.release-plan.groups]
 cargo-bench-history = [
     "cargo-bench-history",
+    # Test-support package that is not an implementation dependency of the CLI.
+    # It rides this group so a faker-only change may increment the whole family.
     "cargo-bench-history-faker",
     "cbh_analyze",
     "cbh_cli",

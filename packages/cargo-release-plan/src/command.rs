@@ -5,7 +5,7 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use ohno::AppError;
 
@@ -27,8 +27,7 @@ pub(crate) fn run_capture_os(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<String, AppError> {
-    let args: Vec<_> = args.into_iter().collect();
-    let output = spawn(program, args.iter().map(AsRef::as_ref), cwd)?;
+    let output = spawn(program, args, cwd)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -45,8 +44,9 @@ pub(crate) fn run_capture_os(
     }
 }
 
-/// Like [`run_capture`], but a non-zero exit is returned as `Ok(None)` instead
-/// of an error. Spawn failures still error.
+/// Like [`run_capture`], mapping a non-zero exit to `Ok(None)`.
+///
+/// Spawn failures still error.
 pub(crate) fn run_capture_ok(
     program: &str,
     args: &[&str],
@@ -58,6 +58,29 @@ pub(crate) fn run_capture_ok(
     }
 }
 
+/// Runs `program` and returns raw stdout on success.
+pub(crate) fn run_capture_bytes(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+) -> Result<Vec<u8>, AppError> {
+    let output = spawn(program, args.iter().map(OsStr::new), cwd)?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        let status = match output.status.code() {
+            Some(code) => code.to_string(),
+            None => "signal".to_string(),
+        };
+        Err(CommandFailedError::new(
+            program,
+            status,
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        )
+        .into())
+    }
+}
+
 /// Like [`run_capture_ok`], keeping stdout as raw bytes so binary files can be
 /// compared without UTF-8 replacement.
 pub(crate) fn run_capture_ok_bytes(
@@ -65,11 +88,15 @@ pub(crate) fn run_capture_ok_bytes(
     args: &[&str],
     cwd: &Path,
 ) -> Result<Option<Vec<u8>>, AppError> {
-    let output = spawn(program, args.iter().map(OsStr::new), cwd)?;
-    if output.status.success() {
-        Ok(Some(output.stdout))
-    } else {
-        Ok(None)
+    match run_capture_bytes(program, args, cwd) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) => {
+            if error.find_source::<CommandFailedError>().is_some() {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
     }
 }
 
@@ -80,7 +107,7 @@ fn spawn(
     program: &str,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
-) -> Result<std::process::Output, AppError> {
+) -> Result<Output, AppError> {
     Command::new(program)
         .args(args)
         .current_dir(cwd)

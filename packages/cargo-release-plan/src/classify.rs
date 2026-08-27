@@ -1,11 +1,15 @@
 // Classification of publishable packages against their anchors.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use ohno::AppError;
 use semver::Version;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, resolve_anchor};
@@ -29,55 +33,75 @@ pub(crate) enum PackageStatus {
 }
 
 /// A released-content or inherited-value change.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ChangedItem {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    pub source: String,
+///
+/// Serialized as the report.json object with `path`/`change` or `field`, plus
+/// `source`, so callers keep a stable JSON shape without optional nulls.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ChangedItem {
+    Package { path: String, change: String },
+    Inherited { field: String },
 }
 
+impl Serialize for ChangedItem {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Package { path, change } => {
+                let mut state = serializer.serialize_struct("ChangedItem", 3)?;
+                state.serialize_field("path", path)?;
+                state.serialize_field("change", change)?;
+                state.serialize_field("source", "package")?;
+                state.end()
+            }
+            Self::Inherited { field } => {
+                let mut state = serializer.serialize_struct("ChangedItem", 2)?;
+                state.serialize_field("field", field)?;
+                state.serialize_field("source", "inherited")?;
+                state.end()
+            }
+        }
+    }
+}
+
+/// Insertion/deletion counts for one package in `report.json`.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct DiffStat {
-    pub files: usize,
-    pub insertions: usize,
-    pub deletions: usize,
+    pub(crate) files: usize,
+    pub(crate) insertions: usize,
+    pub(crate) deletions: usize,
 }
 
+/// Anchor identity as serialized in `report.json`.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct AnchorJson {
-    pub commit: String,
-    pub version: String,
+    pub(crate) commit: String,
+    pub(crate) version: String,
 }
 
 /// Per-package classification used by `report` and `check`.
 #[derive(Clone, Debug)]
 pub(crate) struct PackageClass {
-    pub name: String,
-    pub declared_version: Version,
-    pub group: Option<String>,
-    pub status: PackageStatus,
-    pub anchor: Option<Anchor>,
-    pub changed: Vec<ChangedItem>,
-    pub stat: DiffStat,
-    pub patch: String,
-    pub untracked: Vec<String>,
-    pub dependencies: Vec<crate::metadata::ReportedDep>,
-    pub dependents: Vec<String>,
-    pub manifest_path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) declared_version: Version,
+    pub(crate) group: Option<String>,
+    pub(crate) status: PackageStatus,
+    pub(crate) anchor: Option<Anchor>,
+    pub(crate) changed: Vec<ChangedItem>,
+    pub(crate) stat: DiffStat,
+    pub(crate) patch: String,
+    pub(crate) untracked: Vec<String>,
+    pub(crate) dependencies: Vec<crate::metadata::ReportedDep>,
+    pub(crate) dependents: Vec<String>,
+    pub(crate) manifest_path: PathBuf,
 }
 
 /// Workspace classification.
 #[derive(Debug)]
 pub(crate) struct Classification {
-    pub head: String,
-    pub packages: Vec<PackageClass>,
-    pub groups: BTreeMap<String, GroupVerdict>,
-    pub work_tree: WorkTree,
-    pub git: GitRepo,
+    pub(crate) head: String,
+    pub(crate) packages: Vec<PackageClass>,
+    pub(crate) groups: BTreeMap<String, GroupVerdict>,
+    pub(crate) work_tree: WorkTree,
+    pub(crate) git: GitRepo,
 }
 
 pub(crate) fn classify(
@@ -104,9 +128,7 @@ pub(crate) fn classify(
     ));
 
     let mut cache = SnapshotCache::new();
-    let base_snapshot = cache
-        .snapshot(&git, &base_sha, &work_tree.workspace_root)?
-        .clone();
+    let base_snapshot = cache.snapshot(&git, &base_sha, &work_tree.workspace_root)?;
     let work_root_path = work_tree.workspace_root.join("Cargo.toml");
     let work_root_doc = parse_document(
         &work_root_path,
@@ -114,7 +136,7 @@ pub(crate) fn classify(
             .map_err(|error| crate::ReadFileError::caused_by(&work_root_path, error))?,
     )?;
 
-    let commits = git.first_parent_commits(&base_sha)?;
+    let commits = git.first_parent_manifest_commits(&base_sha)?;
     let mut classes = Vec::new();
     let mut exempt = HashSet::new();
     let mut versions = BTreeMap::new();
@@ -206,7 +228,7 @@ fn classify_one(
 
     let timeline = build_timeline(git, name, commits, cache, &work_tree.workspace_root)?;
     let anchor = resolve_anchor(name, &timeline)?;
-    let short_anchor = short_sha(&anchor.commit);
+    let short_anchor = crate::short_commit(&anchor.commit);
     verbose.note(format!(
         "{name}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
          requires the work-tree version to be greater than the anchor version (parsed, not textual)",
@@ -214,9 +236,7 @@ fn classify_one(
         package.manifest.version
     ));
 
-    let anchor_snapshot = cache
-        .snapshot(git, &anchor.commit, &work_tree.workspace_root)?
-        .clone();
+    let anchor_snapshot = cache.snapshot(git, &anchor.commit, &work_tree.workspace_root)?;
     let Some(anchor_pkg) = anchor_snapshot.packages.get(name) else {
         verbose.note(format!(
             "{name}: package is missing at its own anchor {}; treating that as a version increase",
@@ -242,7 +262,7 @@ fn classify_one(
         });
     };
 
-    let (changed_files, patch, stat, untracked) = diff_package(
+    let (changed_files, mut patch, stat, untracked) = diff_package(
         git,
         &anchor.commit,
         &anchor_pkg.directory,
@@ -258,18 +278,14 @@ fn classify_one(
     );
 
     let mut changed = changed_files;
+    patch.push_str(&inherited_patch(&inherited));
     for item in inherited {
         verbose.note(format!(
             "{name}: inherited {} changed between the anchor and the work tree, so the root \
              manifest is in scope for this package",
             item.field
         ));
-        changed.push(ChangedItem {
-            path: None,
-            change: None,
-            field: Some(item.field),
-            source: "inherited".to_string(),
-        });
+        changed.push(ChangedItem::Inherited { field: item.field });
     }
 
     log_untracked(verbose, name, untracked.len());
@@ -287,6 +303,10 @@ fn classify_one(
          changed_items={}",
         changed.len()
     ));
+
+    if status != PackageStatus::UnreleasedChanges {
+        patch.clear();
+    }
 
     Ok(PackageClass {
         name: name.clone(),
@@ -350,21 +370,18 @@ fn diff_package(
     let anchor_files = released_at_commit(git, anchor, anchor_dir, anchor_rules)?;
     let work_files = released_in_work_tree(git, work_dir, work_rules)?;
 
-    let mut rels: Vec<String> = anchor_files
+    let rels: BTreeSet<&str> = anchor_files
         .keys()
         .chain(work_files.keys())
-        .cloned()
-        .collect::<HashSet<_>>()
-        .into_iter()
+        .map(String::as_str)
         .collect();
-    rels.sort();
 
     let mut changed = Vec::new();
     let mut patch = String::new();
     let mut insertions = 0_usize;
     let mut deletions = 0_usize;
 
-    for rel in &rels {
+    for rel in rels {
         let old = match anchor_files.get(rel) {
             Some(path) => git.show_file_bytes(anchor, path)?,
             None => None,
@@ -381,11 +398,9 @@ fn diff_package(
             (true, false) => "deleted",
             _ => "modified",
         };
-        changed.push(ChangedItem {
-            path: Some(rel.clone()),
-            change: Some(kind.to_string()),
-            field: None,
-            source: "package".to_string(),
+        changed.push(ChangedItem::Package {
+            path: rel.to_string(),
+            change: kind.to_string(),
         });
         let (file_patch, ins, del) = file_diff(rel, old.as_deref(), new.as_deref());
         insertions = insertions.saturating_add(ins);
@@ -410,8 +425,15 @@ fn diff_package(
     Ok((changed, patch, stat, untracked))
 }
 
-fn short_sha(commit: &str) -> &str {
-    commit.get(..commit.len().min(12)).unwrap_or(commit)
+fn inherited_patch(changes: &[InheritedChange]) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("Inherited workspace values changed:\n");
+    for change in changes {
+        writeln!(out, "- {}", change.field).expect("writing to String");
+    }
+    out
 }
 
 fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> (String, usize, usize) {
@@ -545,7 +567,7 @@ struct CommitSnapshot {
 
 /// Cache of [`CommitSnapshot`] values so a first-parent walk does not re-parse.
 struct SnapshotCache {
-    inner: HashMap<String, CommitSnapshot>,
+    inner: HashMap<String, Rc<CommitSnapshot>>,
 }
 
 impl SnapshotCache {
@@ -560,15 +582,13 @@ impl SnapshotCache {
         git: &GitRepo,
         commit: &str,
         workspace_root: &Path,
-    ) -> Result<&CommitSnapshot, AppError> {
-        if !self.inner.contains_key(commit) {
-            let built = load_snapshot(git, commit, workspace_root)?;
-            self.inner.insert(commit.to_string(), built);
+    ) -> Result<Rc<CommitSnapshot>, AppError> {
+        if let Some(existing) = self.inner.get(commit) {
+            return Ok(Rc::clone(existing));
         }
-        Ok(self
-            .inner
-            .get(commit)
-            .expect("snapshot was just inserted for this commit"))
+        let built = Rc::new(load_snapshot(git, commit, workspace_root)?);
+        self.inner.insert(commit.to_string(), Rc::clone(&built));
+        Ok(built)
     }
 }
 
@@ -669,9 +689,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_sha_truncates_long_revisions() {
-        assert_eq!(short_sha("abcdefghijklmnop"), "abcdefghijkl");
-        assert_eq!(short_sha("abc"), "abc");
+    fn inherited_patch_lists_fields() {
+        let patch = inherited_patch(&[InheritedChange {
+            field: "workspace.package.license".to_string(),
+        }]);
+        assert!(patch.contains("workspace.package.license"));
+        assert!(inherited_patch(&[]).is_empty());
     }
 
     #[test]

@@ -67,6 +67,7 @@ pub(crate) fn write_report(
     classification: &Classification,
 ) -> Result<String, AppError> {
     fs::create_dir_all(out_dir).map_err(|error| WriteFileError::caused_by(out_dir, error))?;
+    // Consumer-facing layout: README "report".
     let diffs_dir = out_dir.join("diffs");
     if diffs_dir.exists() {
         fs::remove_dir_all(&diffs_dir)
@@ -98,9 +99,9 @@ pub(crate) fn write_report(
         packages,
         groups,
     };
-    let json = serde_json::to_string_pretty(&report).expect(
-        "ReportFile is built from strings, maps, and numbers that serde_json can serialize",
-    );
+    // Consumer-facing layout: README "report" (`report.json` and `diffs/`).
+    let json = serde_json::to_string_pretty(&report)
+        .expect("the report body contains only JSON-serializable fields");
     let report_path = out_dir.join("report.json");
     fs::write(&report_path, json.as_bytes())
         .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
@@ -120,6 +121,7 @@ pub(crate) fn write_report(
 // Patch files are a dump of `package.patch`; bytes are covered by `naive_patch`.
 #[cfg_attr(test, mutants::skip)]
 fn write_diff(diffs_dir: &Path, package: &PackageClass) -> Result<Option<String>, AppError> {
+    // Patches are emitted only for `unreleased-changes`; classify clears others.
     if package.patch.is_empty() {
         return Ok(None);
     }
