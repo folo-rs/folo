@@ -95,9 +95,9 @@ pub(crate) fn reintroduction_anchor(
     let Some(present) = timeline.iter().position(|entry| entry.version.is_some()) else {
         return Ok(None);
     };
-    let Some(remainder) = timeline.get(present..) else {
-        return Ok(None);
-    };
+    let remainder = timeline
+        .get(present..)
+        .expect("`position` returned an in-bounds index into this same slice");
     resolve_anchor(package, remainder).map(Some)
 }
 
@@ -116,6 +116,19 @@ mod tests {
             version: version.map(v),
             has_parent,
         }
+    }
+
+    #[test]
+    fn an_empty_timeline_is_truncated_history() {
+        let error = resolve_anchor("foo", &[]).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
+    }
+
+    #[test]
+    fn a_base_revision_without_the_package_is_not_an_anchor_walk() {
+        let timeline = vec![entry("c1", None, true), entry("c0", None, false)];
+        let error = resolve_anchor("foo", &timeline).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
     }
 
     #[test]

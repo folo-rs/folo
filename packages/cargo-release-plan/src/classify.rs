@@ -260,30 +260,10 @@ fn classify_one(
     ));
 
     let anchor_snapshot = cache.snapshot(git, &anchor.commit)?;
-    let Some(anchor_pkg) = anchor_snapshot.packages.get(name) else {
-        verbose.note(format!(
-            "{name}: package is missing at its own anchor {}; treating that as a version increase",
-            anchor.commit
-        ));
-        return Ok(PackageClass {
-            name: name.clone(),
-            declared_version: package.manifest.version.clone(),
-            group,
-            status: PackageStatus::Releasing,
-            anchor: Some(anchor),
-            changed: Vec::new(),
-            stat: DiffStat {
-                files: 0,
-                insertions: 0,
-                deletions: 0,
-            },
-            patch: String::new(),
-            untracked: Vec::new(),
-            dependencies: package.dependencies.clone(),
-            dependents,
-            manifest_path: package.manifest_path.clone(),
-        });
-    };
+    let anchor_pkg = anchor_snapshot
+        .packages
+        .get(name)
+        .expect("the anchor commit is the newest commit at which the anchor version was observed, and both the timeline and this snapshot read that version from the same cache, so the package is present here");
 
     let (changed_files, mut patch, stat, untracked) = diff_package(
         git,
@@ -1016,6 +996,37 @@ mod tests {
         assert_eq!(
             resolved.into_iter().collect::<Vec<_>>(),
             vec!["packages/a".to_string(), "packages/b".to_string()]
+        );
+    }
+
+    /// A path dependency that climbs out of the repository is not a workspace
+    /// member, and following it would name a directory outside the tree.
+    #[test]
+    fn resolve_members_ignores_a_path_dependency_outside_the_repository() {
+        let root = Path::new("Cargo.toml");
+        let members = parse_workspace_members(
+            "[workspace]\nmembers = [\"packages/a\"]\n",
+            root,
+            PathCase::Sensitive,
+        )
+        .unwrap();
+        let mut candidates = BTreeMap::new();
+        candidates.insert(
+            "packages/a".to_string(),
+            parse_package_manifest(
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nout = { path = \"../../../outside\" }\n",
+                "packages/a/Cargo.toml",
+                &WorkspaceInherit::default(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+
+        let resolved = resolve_members(&candidates, &members);
+
+        assert_eq!(
+            resolved.into_iter().collect::<Vec<_>>(),
+            vec!["packages/a".to_string()]
         );
     }
 }

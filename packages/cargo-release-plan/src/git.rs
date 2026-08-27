@@ -398,6 +398,92 @@ mod tests {
         );
     }
 
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn discover_starts_from_the_directory_holding_a_file() {
+        let temp = tempfile::tempdir().unwrap();
+        run_capture("git", &["init", "-q"], temp.path()).unwrap();
+        let nested = temp.path().join("inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        let manifest = nested.join(MANIFEST_FILE_NAME);
+        std::fs::write(&manifest, "").unwrap();
+
+        let repo = GitRepo::discover(&manifest).unwrap();
+
+        assert_eq!(repo.prefix(), "inner");
+    }
+
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn discover_fails_outside_a_repository() {
+        let temp = tempfile::tempdir().unwrap();
+
+        GitRepo::discover(temp.path()).unwrap_err();
+    }
+
+    /// Every listing runs `git` in the repository root, so a root that is not a
+    /// repository must surface the failure rather than an empty listing.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn listings_fail_when_the_root_is_not_a_repository() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = GitRepo {
+            root: temp.path().to_path_buf(),
+            prefix: String::new(),
+        };
+
+        repo.first_parent_commits("HEAD").unwrap_err();
+        repo.ls_files("").unwrap_err();
+        repo.ls_untracked("").unwrap_err();
+        repo.ls_tree("HEAD", "").unwrap_err();
+        repo.ls_tree_manifests("HEAD").unwrap_err();
+        repo.rev_parse("HEAD").unwrap_err();
+    }
+
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn a_commit_with_a_reachable_parent_is_not_a_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_two_commits(temp.path());
+        let head = repo.rev_parse("HEAD").unwrap();
+        let root = repo.rev_parse("HEAD~1").unwrap();
+
+        assert!(repo.has_parent_or_is_shallow_boundary(&head).unwrap());
+        assert!(!repo.has_parent_or_is_shallow_boundary(&root).unwrap());
+    }
+
+    /// A path absent at a commit is an ordinary answer, while any other `git
+    /// show` failure is a real error the caller must see.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn show_file_distinguishes_an_absent_path_from_a_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_two_commits(temp.path());
+
+        assert_eq!(
+            repo.show_file("HEAD", "first.txt").unwrap().as_deref(),
+            Some("one\n")
+        );
+        assert_eq!(repo.show_file("HEAD", "absent.txt").unwrap(), None);
+        repo.show_file("no-such-revision", "first.txt").unwrap_err();
+    }
+
+    fn init_repo_with_two_commits(root: &Path) -> GitRepo {
+        run_capture("git", &["init", "-q"], root).unwrap();
+        run_capture("git", &["config", "user.name", "test"], root).unwrap();
+        run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
+        run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
+        for (name, contents, message) in [
+            ("first.txt", "one\n", "first"),
+            ("second.txt", "two\n", "second"),
+        ] {
+            std::fs::write(root.join(name), contents).unwrap();
+            run_capture("git", &["add", "-A"], root).unwrap();
+            run_capture("git", &["commit", "-q", "-m", message], root).unwrap();
+        }
+        GitRepo::discover(root).unwrap()
+    }
+
     #[test]
     fn split_z_drops_empty_trailing_field() {
         assert_eq!(split_z("a\0b\0"), vec!["a", "b"]);

@@ -83,15 +83,14 @@ fn render_diagnostics(
             }
             None => String::new(),
         };
-        let changed = if package.changed.is_empty() {
-            "released content changed".to_string()
-        } else {
-            let first = match package.changed.first() {
-                Some(ChangedItem::Package { path, .. }) => path.as_str(),
-                Some(ChangedItem::Inherited { field }) => field.as_str(),
-                None => "released content",
-            };
-            format!("{first} (and related paths) changed")
+        let changed = match package.changed.first() {
+            Some(ChangedItem::Package { path, .. }) => {
+                format!("{path} (and related paths) changed")
+            }
+            Some(ChangedItem::Inherited { field }) => {
+                format!("{field} (and related paths) changed")
+            }
+            None => "released content changed".to_string(),
         };
         let text = format!(
             "{}: unreleased-changes since {anchor}; {changed}.{group_text} {}",

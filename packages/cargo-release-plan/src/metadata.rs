@@ -291,6 +291,14 @@ mod tests {
             .find_source::<MalformedVersionGroupError>()
             .expect("malformed group");
         assert_eq!(source.group(), "nm");
+        let non_string = json!({
+            "release-plan": { "groups": { "nm": [1] } }
+        });
+        let error = groups_from_metadata(&non_string, &names).unwrap_err();
+        let source = error
+            .find_source::<MalformedVersionGroupError>()
+            .expect("malformed group member");
+        assert_eq!(source.group(), "nm");
         let unknown = json!({
             "release-plan": { "groups": { "nm": ["ghost"] } }
         });

@@ -59,11 +59,6 @@ pub(crate) fn inherited_changes(
                 });
             }
         }
-        if names.is_empty() {
-            changes.push(InheritedChange {
-                field: format!("workspace.dependencies.{dep}"),
-            });
-        }
     }
 
     changes
@@ -434,6 +429,89 @@ semver = { version = "1.0.0" }
             table.get("default-features"),
             Some(&CanonicalValue::Boolean(false))
         );
+    }
+
+    /// A manifest may omit every table the collector reads, and a table may hold
+    /// a value where a table is expected, without that being an error.
+    #[test]
+    fn a_manifest_without_inheritable_tables_yields_no_keys() {
+        assert!(collect_inherited_keys(&doc("")).package.is_empty());
+
+        let odd_target = doc("[target]\nnot-a-spec = 1\n");
+
+        assert!(collect_inherited_keys(&odd_target).dependencies.is_empty());
+    }
+
+    /// Cargo lets a package inherit a workspace dependency from a target-gated
+    /// table, and those keys must be watched the same as unconditional ones.
+    #[test]
+    fn target_gated_tables_contribute_inherited_dependencies() {
+        let package = doc(r#"
+[package]
+name = "foo"
+
+[target.'cfg(unix)'.dependencies]
+bar.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+baz.workspace = true
+"#);
+        let keys = collect_inherited_keys(&package);
+        assert_eq!(keys.dependencies, vec!["bar", "baz"]);
+    }
+
+    #[test]
+    fn an_unchanged_workspace_dependency_is_not_a_change() {
+        let keys = InheritedKeys {
+            package: vec![],
+            dependencies: vec!["bar".to_string()],
+        };
+        let old = doc("[workspace.dependencies]\nbar = { version = \"1.0.0\" }\n");
+        let new = doc("# a comment\n[workspace.dependencies]\nbar = { version = \"1.0.0\" }\n");
+        assert!(inherited_changes(&keys, &old, &new).is_empty());
+    }
+
+    /// A workspace dependency written in an unexpected shape still carries a
+    /// value a member inherits, so it must canonicalize rather than vanish.
+    #[test]
+    fn an_unusual_workspace_dependency_shape_still_canonicalizes() {
+        let fields = workspace_dependency_fields(
+            &doc("[[workspace.dependencies.bar]]\nversion = \"1.0\"\n"),
+            "bar",
+        );
+
+        assert_eq!(
+            fields.get("value"),
+            Some(&CanonicalValue::ArrayOfTables(vec![CanonicalValue::Table(
+                BTreeMap::from([(
+                    "version".to_string(),
+                    CanonicalValue::Text("1.0".to_string())
+                )])
+            )]))
+        );
+    }
+
+    #[test]
+    fn a_nested_table_inside_a_workspace_dependency_canonicalizes() {
+        let fields = workspace_dependency_fields(
+            &doc(
+                "[workspace.dependencies.bar]\nversion = \"1.0\"\n\n[workspace.dependencies.bar.nested]\nkey = \"value\"\n",
+            ),
+            "bar",
+        );
+
+        assert_eq!(
+            fields.get("nested"),
+            Some(&CanonicalValue::Table(BTreeMap::from([(
+                "key".to_string(),
+                CanonicalValue::Text("value".to_string())
+            )])))
+        );
+    }
+
+    #[test]
+    fn an_empty_item_canonicalizes_as_absent() {
+        assert_eq!(canonical_item(&Item::None), CanonicalValue::Absent);
     }
 
     #[test]

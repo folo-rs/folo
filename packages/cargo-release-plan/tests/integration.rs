@@ -815,6 +815,70 @@ fn apply_refreshes_the_workspace_lockfile() {
     assert!(after.contains("0.2.0"), "{after}");
 }
 
+/// A report directory is reused across runs, so a diff left over from a package
+/// that no longer has one would still be read as current.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn report_replaces_the_diffs_of_an_earlier_run() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    let out_dir = fixture.path().join("out");
+    report_json(&fixture, &base);
+    let stale = out_dir.join("diffs").join("stale.diff");
+    fs::write(&stale, "leftover").unwrap();
+
+    report_json(&fixture, &base);
+
+    assert!(!stale.exists());
+    assert!(out_dir.join("report.json").exists());
+}
+
+/// A plan that expands to nothing is a no-op, not an error: rewriting no
+/// manifests means there is no lockfile drift to refresh either.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_with_an_empty_plan_changes_nothing() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.cargo(&["generate-lockfile", "--offline"]);
+    fixture.commit("seed");
+    let manifest = fixture.path().join("packages/demo/Cargo.toml");
+    let before = fs::read_to_string(&manifest).unwrap();
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(&plan_path, r#"{ "schema_version": 1, "increments": [] }"#).unwrap();
+
+    run(&RunInput::Apply {
+        plan: plan_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: true,
+    })
+    .unwrap();
+
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), before);
+}
+
+/// The packaging probe cross-checks the relevance rules against Cargo itself,
+/// so a package Cargo refuses to enumerate must degrade to a warning rather
+/// than turn a passing check into a failure.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn verify_packaging_warns_when_cargo_cannot_enumerate_a_package() {
+    let fixture = Fixture::new("");
+    // Cargo reads the manifest for `metadata` but only resolves the referenced
+    // file when it packs, so this fails the probe alone.
+    write_package(&fixture, "demo", "0.1.0", "readme = \"missing.md\"");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check_verifying_packaging(&fixture, &base);
+
+    assert!(passed, "{message}");
+    assert!(message.contains("packaging probe failed"), "{message}");
+}
+
 fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
     let plan_path = fixture.path().join("plan.json");
     fs::write(

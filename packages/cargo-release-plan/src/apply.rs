@@ -470,6 +470,13 @@ version.workspace = true
             .and_then(|table| table.get("foo"))
             .unwrap();
         assert!(dep_has_path(entry));
+        let doc = dep_item("[dependencies.foo]\nversion = \"0.1.0\"\npath = \"../foo\"\n");
+        let entry = doc
+            .get("dependencies")
+            .and_then(Item::as_table_like)
+            .and_then(|table| table.get("foo"))
+            .unwrap();
+        assert!(dep_has_path(entry));
         let doc = dep_item("[dependencies]\nfoo = \"0.1.0\"\n");
         let entry = doc
             .get("dependencies")
@@ -576,6 +583,62 @@ version = \"0.1.0\"
             .and_then(|deps| deps.get_mut("demo"))
             .unwrap();
         assert!(!rewrite_dep_entry(inline, &new));
+    }
+
+    /// A rewrite pass runs over every manifest in the workspace, including ones
+    /// that declare no package, no plan target, or no workspace table at all.
+    #[test]
+    fn manifests_outside_the_plan_are_left_untouched() {
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
+        };
+        let verbose = Verbose::new(false);
+        let unchanged = |text: &str| {
+            let mut doc = dep_item(text);
+            rewrite_workspace_dependencies(&mut doc, &expanded, verbose);
+            rewrite_package_version(&mut doc, &expanded, verbose);
+            assert_eq!(doc.to_string(), text);
+        };
+
+        unchanged("[workspace]\nmembers = [\"packages/*\"]\n");
+        unchanged("[package]\nversion = \"0.1.0\"\n");
+        unchanged("[package]\nname = \"other\"\nversion = \"0.1.0\"\n");
+        unchanged("[dependencies]\ndemo = { version = \"0.1.0\" }\n");
+    }
+
+    /// Only path dependencies follow a plan: a registry dependency on a package
+    /// of the same name is a different crate as far as this workspace goes.
+    #[test]
+    fn a_dependency_without_a_path_or_a_plan_entry_is_not_rewritten() {
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
+        };
+        let text = "[dependencies]\ndemo = \"0.1.0\"\nother = { version = \"0.1.0\", path = \"../other\" }\n";
+        let mut doc = dep_item(text);
+
+        rewrite_dependency_tables(&mut doc, &expanded, Verbose::new(false));
+
+        assert_eq!(doc.to_string(), text);
+    }
+
+    #[test]
+    fn a_version_that_is_not_a_string_is_left_alone() {
+        let mut doc = dep_item("[package]\nname = \"demo\"\nversion = 1\n");
+        let package = doc
+            .get_mut("package")
+            .and_then(Item::as_table_like_mut)
+            .unwrap();
+
+        assert!(!set_package_version_item(package, &v("0.2.0")));
+    }
+
+    #[test]
+    fn an_empty_dependency_item_is_not_rewritten() {
+        let mut absent = Item::None;
+
+        assert!(!rewrite_dep_entry(&mut absent, &v("0.2.0")));
+        assert!(!dep_has_path(&absent));
+        assert_eq!(dep_crate_name(&absent, "demo"), "demo");
     }
 
     #[test]

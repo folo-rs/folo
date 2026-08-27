@@ -391,15 +391,11 @@ impl MemberPattern {
 }
 
 // `Override` has no `Clone`, and the compiled matchers are immutable after
-// construction, so cloning a member set recompiles its patterns. Patterns that
-// compiled once compile again, so the fallback is unreachable in practice.
+// construction, so cloning a member set recompiles its patterns.
 impl Clone for MemberPattern {
     fn clone(&self) -> Self {
-        Self::new(&self.literal, self.case).unwrap_or_else(|_| Self {
-            literal: self.literal.clone(),
-            case: self.case,
-            matcher: Override::empty(),
-        })
+        Self::new(&self.literal, self.case)
+            .expect("this pattern already compiled once, and compilation depends only on the literal and the case rules that are copied here")
     }
 }
 
@@ -524,6 +520,113 @@ mod tests {
         let crates = members(&["crates/foo-*"]);
         assert!(is_workspace_member("crates/foo-bar", &crates));
         assert!(!is_workspace_member("crates/foo-bar/nested", &crates));
+    }
+
+    /// A manifest Cargo would not publish is not a package for classification,
+    /// and every incomplete identity reaches that answer without erroring.
+    #[test]
+    fn an_incomplete_package_identity_is_not_a_package() {
+        let inherit = WorkspaceInherit::default();
+        let not_a_package = |content: &str| {
+            parse_package_manifest(content, "packages/foo/Cargo.toml", &inherit).unwrap()
+        };
+
+        assert!(not_a_package("[workspace]\nmembers = []\n").is_none());
+        assert!(not_a_package("[package]\nversion = \"0.1.0\"\n").is_none());
+        assert!(not_a_package("[package]\nname = \"foo\"\n").is_none());
+        assert!(not_a_package("[package]\nname = \"foo\"\nversion = 1\n").is_none());
+        assert!(
+            not_a_package("[package]\nname = \"foo\"\nversion.workspace = true\n").is_none(),
+            "an inherited version with no root value is not a package"
+        );
+    }
+
+    #[test]
+    fn a_manifest_without_a_workspace_table_declares_no_members() {
+        let parsed = parse_workspace_members(
+            "[package]\nname = \"foo\"\n",
+            Path::new("Cargo.toml"),
+            PathCase::Sensitive,
+        )
+        .unwrap();
+
+        assert!(parsed.members.is_empty());
+        assert!(parsed.exclude.is_empty());
+    }
+
+    /// Cargo accepts only a boolean or a registry array for `publish`, so a
+    /// manifest Cargo would reject stays under the release gate rather than
+    /// silently exempting itself from classification.
+    #[test]
+    fn an_unusable_publish_value_keeps_the_package_publishable() {
+        let inherit = WorkspaceInherit::default();
+        let publishable = |content: &str| {
+            parse_package_manifest(content, "packages/foo/Cargo.toml", &inherit)
+                .unwrap()
+                .unwrap()
+                .publish
+        };
+
+        assert!(publishable(
+            "[package]\nname = \"foo\"\nversion = \"0.1.0\"\npublish = \"yes\"\n"
+        ));
+        assert!(
+            publishable(
+                "[package]\nname = \"foo\"\nversion = \"0.1.0\"\npublish.workspace = true\n"
+            ),
+            "an inherited publish key with no root value stays publishable"
+        );
+    }
+
+    /// A member set is cloned into every historical snapshot, and the clone must
+    /// keep matching exactly what the original matched.
+    #[test]
+    fn a_cloned_member_pattern_matches_the_same_directories() {
+        let pattern = MemberPattern::new("packages/*", PathCase::Sensitive).unwrap();
+
+        let cloned = pattern.clone();
+
+        assert_eq!(
+            cloned.matches("packages/foo"),
+            pattern.matches("packages/foo")
+        );
+        assert_eq!(cloned.matches("other/foo"), pattern.matches("other/foo"));
+        assert!(cloned.matches("packages/foo"));
+        assert!(!cloned.matches("other/foo"));
+        assert!(
+            format!("{cloned:?}").contains("packages/*"),
+            "the compiled matcher cannot be shown, so the literal identifies the pattern"
+        );
+    }
+
+    #[test]
+    fn a_manifest_at_the_repository_root_has_an_empty_directory() {
+        assert_eq!(directory_of("Cargo.toml"), "");
+        assert_eq!(directory_of("packages/foo/Cargo.toml"), "packages/foo");
+        assert_eq!(directory_of(r"packages\foo\Cargo.toml"), "packages/foo");
+    }
+
+    /// The probe re-opens an existing entry under a flipped spelling, so a
+    /// directory that offers no flippable entry cannot prove insensitivity and
+    /// must yield the stricter answer.
+    #[cfg_attr(miri, ignore)] // Reads a real directory, which Miri cannot emulate.
+    #[test]
+    fn probing_a_directory_without_cased_names_reports_sensitive() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("123"), "").unwrap();
+
+        assert_eq!(PathCase::probe(temp.path()), PathCase::Sensitive);
+    }
+
+    #[cfg_attr(miri, ignore)] // Reads a real directory, which Miri cannot emulate.
+    #[test]
+    fn probing_an_unreadable_directory_reports_sensitive() {
+        let temp = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            PathCase::probe(&temp.path().join("absent")),
+            PathCase::Sensitive
+        );
     }
 
     #[test]

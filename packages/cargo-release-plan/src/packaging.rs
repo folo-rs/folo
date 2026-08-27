@@ -128,6 +128,32 @@ mod tests {
         PackagingRules::new(include.as_deref(), exclude.as_deref())
     }
 
+    /// Windows hands out `\`-separated paths, and the matchers only understand
+    /// the `/`-separated form Cargo's own patterns are written in.
+    #[test]
+    fn windows_separators_match_the_same_patterns() {
+        let rules = rules(Some(&["src/**"]), None).unwrap();
+        assert!(rules.is_released(r"src\lib.rs"));
+        assert!(rules.is_released("./src/lib.rs"));
+        assert!(!rules.is_released(r"benches\bench.rs"));
+    }
+
+    /// The package directory itself is not a path inside the package, so it has
+    /// no relative form and must not be mistaken for the package root file.
+    #[test]
+    fn a_package_directory_has_no_relative_path_inside_itself() {
+        assert_eq!(relativize("packages/foo", "packages/foo"), None);
+        assert_eq!(
+            relativize("packages/foo/src/lib.rs", "packages/foo"),
+            Some("src/lib.rs")
+        );
+        assert_eq!(
+            relativize("packages/foo/src/lib.rs", ""),
+            Some("packages/foo/src/lib.rs")
+        );
+        assert_eq!(relativize("other/foo.rs", "packages/foo"), None);
+    }
+
     #[test]
     fn cargo_toml_is_always_released() {
         let rules = rules(Some(&["src/**"]), None).unwrap();

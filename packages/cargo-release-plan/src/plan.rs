@@ -289,6 +289,33 @@ mod tests {
     }
 
     #[test]
+    fn only_the_three_semver_levels_are_accepted() {
+        assert_eq!("patch".parse::<IncrementLevel>(), Ok(IncrementLevel::Patch));
+        assert_eq!("minor".parse::<IncrementLevel>(), Ok(IncrementLevel::Minor));
+        assert_eq!("major".parse::<IncrementLevel>(), Ok(IncrementLevel::Major));
+        "Patch".parse::<IncrementLevel>().unwrap_err();
+        "build".parse::<IncrementLevel>().unwrap_err();
+    }
+
+    /// A level has to be applied to some declared version. A group whose members
+    /// have never been published has none, so there is nothing to increment.
+    #[test]
+    fn a_level_on_a_group_with_no_declared_version_expands_to_nothing() {
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            increments: vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: Some("patch".to_string()),
+                version: None,
+            }],
+        };
+
+        let expanded = expand_plan(&plan, &nm_groups(), &BTreeMap::new(), &current()).unwrap();
+
+        assert!(expanded.packages.is_empty());
+    }
+
+    #[test]
     fn expands_group_when_one_member_is_listed() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,

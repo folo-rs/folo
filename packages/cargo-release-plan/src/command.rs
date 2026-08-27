@@ -155,6 +155,16 @@ mod tests {
 
     #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
     #[test]
+    fn run_capture_ok_propagates_a_spawn_failure() {
+        // A non-zero exit means "no answer", but never starting the program at
+        // all is a real error the caller must see.
+        let error =
+            run_capture_ok("cargo-release-plan-no-such-program", &[], Path::new(".")).unwrap_err();
+        assert!(error.find_source::<CommandSpawnError>().is_some());
+    }
+
+    #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
+    #[test]
     fn spawn_failure_maps_to_command_spawn_error() {
         // A program name that cannot exist on PATH cannot be spawned.
         let error = spawn(
