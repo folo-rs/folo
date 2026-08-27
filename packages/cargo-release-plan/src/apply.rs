@@ -534,4 +534,53 @@ version = \"0.1.0\"
             .unwrap();
         assert_eq!(dep_crate_name(entry, "foo-alias"), "foo");
     }
+    /// Cargo accepts a dependency as a bare requirement string, an inline
+    /// table, or a table of its own, and a `=` pin in any of them has to follow
+    /// the package it pins.
+    #[test]
+    fn every_dependency_declaration_form_is_rewritten() {
+        let new = v("0.2.0");
+
+        let mut bare = Item::Value(Value::from("=0.1.0"));
+        assert!(rewrite_dep_entry(&mut bare, &new));
+        assert_eq!(bare.as_str(), Some("=0.2.0"));
+
+        let mut doc = dep_item("[dependencies.demo]\nversion = \"=0.1.0\"\npath = \"../demo\"\n");
+        let entry = doc
+            .get_mut("dependencies")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|deps| deps.get_mut("demo"))
+            .unwrap();
+        assert!(rewrite_dep_entry(entry, &new));
+        assert!(doc.to_string().contains("version = \"=0.2.0\""), "{doc}");
+    }
+
+    /// A path dependency can omit the version entirely, which leaves nothing to
+    /// rewrite rather than being an error.
+    #[test]
+    fn a_dependency_without_a_version_is_left_alone() {
+        let new = v("0.2.0");
+
+        let mut doc = dep_item("[dependencies.demo]\npath = \"../demo\"\n");
+        let entry = doc
+            .get_mut("dependencies")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|deps| deps.get_mut("demo"))
+            .unwrap();
+        assert!(!rewrite_dep_entry(entry, &new));
+
+        let mut inline_doc = dep_item("[dependencies]\ndemo = { path = \"../demo\" }\n");
+        let inline = inline_doc
+            .get_mut("dependencies")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|deps| deps.get_mut("demo"))
+            .unwrap();
+        assert!(!rewrite_dep_entry(inline, &new));
+    }
+
+    #[test]
+    fn a_requirement_that_already_matches_is_not_rewritten() {
+        let mut bare = Item::Value(Value::from("=0.2.0"));
+        assert!(!rewrite_dep_entry(&mut bare, &v("0.2.0")));
+    }
 }

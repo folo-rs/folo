@@ -469,4 +469,25 @@ mod tests {
             "Binary files a/logo.png and b/logo.png differ\n"
         );
     }
+    /// The Myers search gives up rather than overflow on a pathological input,
+    /// and the fallback still has to describe a valid transformation: delete
+    /// every old line, then insert every new one.
+    #[test]
+    fn the_whole_file_fallback_replaces_one_side_with_the_other() {
+        let script = whole_file_script(2, 3);
+
+        let deletes = script
+            .iter()
+            .take_while(|edit| matches!(**edit, Edit::Delete))
+            .count();
+        let inserts = script
+            .iter()
+            .filter(|edit| matches!(**edit, Edit::Insert))
+            .count();
+        assert_eq!(deletes, 2);
+        assert_eq!(inserts, 3);
+        // Deletions come first, so the trailing insertions are all that remain.
+        assert_eq!(script.len(), deletes + inserts);
+        assert!(whole_file_script(0, 0).is_empty());
+    }
 }

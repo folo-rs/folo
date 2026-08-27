@@ -120,9 +120,13 @@ advisory rather than authoritative because `cargo package` needs a clean tree, a
 resolvable dependency graph, and a full pack of every candidate, none of which
 the classification path requires; making the verdict depend on it would turn a
 dirty work tree or an unavailable registry into a release failure and would give
-up the offline, no-resolve guarantee the rest of the tool provides. A reported
-mismatch means the relevance rules and Cargo disagree about released content, so
-it is investigated and fixed in the rules, not tolerated.
+up the offline, no-resolve guarantee the rest of the tool provides. Each warning
+names the paths only the rules claim and the paths only Cargo claims, because
+that is what tells the reader whether a rule is wrong or the tree simply is not
+clean — an untracked file is never released content but Cargo would still pack
+it. A mismatch on a clean tree means the relevance rules and Cargo disagree
+about released content, so it is investigated and fixed in the rules, not
+tolerated.
 
 `apply` reads a plan (`schema_version` 1 with per-target `level` or `version`),
 expands groups, rewrites package versions and intra-workspace requirements that

@@ -639,7 +639,7 @@ fn apply_rewrites_pins_declared_by_a_non_publishable_member() {
     })
     .unwrap();
 
-    // 	ool is never released, but its pin still has to follow demo or the
+    // `tool` is never released, but its pin still has to follow demo or the
     // workspace lockfile can no longer be resolved.
     let tool = fs::read_to_string(fixture.path().join("packages/tool/Cargo.toml")).unwrap();
     assert!(tool.contains("version = \"=0.2.0\""), "{tool}");
@@ -661,6 +661,137 @@ fn inherited_publish_false_excludes_a_package_from_classification() {
     assert!(passed, "{message}");
     assert!(!message.contains("demo"), "{message}");
 }
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn verify_packaging_agrees_with_cargo_on_a_clean_tree() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check_verifying_packaging(&fixture, &base);
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn verify_packaging_warns_without_failing_when_cargo_would_pack_an_untracked_file() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    // Untracked files are advisory only, so they are never released content —
+    // but Cargo would pack this one, and naming that divergence is the whole
+    // job of the cross-check.
+    fixture.write("packages/demo/src/extra.rs", "pub fn g() {}\n");
+
+    let (passed, message) = check_verifying_packaging(&fixture, &base);
+
+    // The cross-check is advisory, so a mismatch must not change the verdict.
+    assert!(passed, "{message}");
+    assert!(
+        message.contains("packaging rule mismatch for demo"),
+        "{message}"
+    );
+    assert!(
+        message.contains("only in `cargo package --list`: src/extra.rs"),
+        "{message}"
+    );
+    assert!(message.contains("only in tool: nothing"), "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn report_records_group_verdicts() {
+    let fixture = Fixture::new(
+        r#"
+[workspace.metadata.release-plan.groups]
+g = ["alpha", "beta"]
+"#,
+    );
+    write_package(&fixture, "alpha", "0.1.0", "");
+    write_package(&fixture, "beta", "0.1.0", "");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let report = report_json(&fixture, &base);
+
+    assert!(report.contains("\"consistent\": true"), "{report}");
+    assert!(report.contains("\"alpha\""), "{report}");
+    assert!(report.contains("\"beta\""), "{report}");
+    assert!(report.contains("\"version\": \"0.1.0\""), "{report}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_rewrites_a_pin_under_a_target_specific_dependency_table() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    write_package(
+        &fixture,
+        "user",
+        "0.1.0",
+        "\n[target.'cfg(windows)'.dependencies]\ndemo = { version = \"=0.1.0\", path = \"../demo\" }\n",
+    );
+    fixture.commit("seed");
+
+    apply_increment(&fixture, "demo", "minor");
+
+    // A pin buried under a target table still has to follow the package it
+    // pins, or the workspace stops resolving on that target alone.
+    let user = fs::read_to_string(fixture.path().join("packages/user/Cargo.toml")).unwrap();
+    assert!(user.contains("version = \"=0.2.0\""), "{user}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_refreshes_the_workspace_lockfile() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.cargo(&["generate-lockfile", "--offline"]);
+    fixture.commit("seed");
+    let before = fs::read_to_string(fixture.path().join("Cargo.lock")).unwrap();
+    assert!(before.contains("0.1.0"), "{before}");
+
+    apply_increment(&fixture, "demo", "minor");
+
+    // `--locked` builds read the lockfile, so leaving the old version there
+    // would fail every build that apply was supposed to unblock.
+    let after = fs::read_to_string(fixture.path().join("Cargo.lock")).unwrap();
+    assert!(after.contains("0.2.0"), "{after}");
+}
+
+fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(
+        &plan_path,
+        format!(
+            r#"{{ "schema_version": 1, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
+        ),
+    )
+    .unwrap();
+
+    run(&RunInput::Apply {
+        plan: plan_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+}
+
+fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool, String) {
+    match run(&RunInput::Check {
+        base: base.to_string(),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: true,
+        verbose: false,
+    }) {
+        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(other) => panic!("expected check, got {other:?}"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
 fn check(fixture: &Fixture, base: &str) -> (bool, String) {
     check_workspace(base, fixture.manifest())
 }

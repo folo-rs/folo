@@ -352,4 +352,121 @@ semver = { version = "1.0.0" }
         let new = doc("[workspace.package]\n  edition = \"2024\"\n");
         assert!(inherited_changes(&keys, &old, &new).is_empty());
     }
+    /// Every TOML shape an inherited value can take must round-trip into a
+    /// distinct canonical form, because comparison of those forms is the only
+    /// thing that decides whether an inherited value changed.
+    #[test]
+    fn every_toml_shape_canonicalizes_distinctly() {
+        let document = doc(concat!(
+            "[workspace.package]\n",
+            "text = \"a\"\n",
+            "integer = 1\n",
+            "float = 1.5\n",
+            "boolean = true\n",
+            "datetime = 1979-05-27T07:32:00Z\n",
+            "array = [1, 2]\n",
+            "inline = { a = 1 }\n",
+        ));
+
+        let value = |key: &str| workspace_package_value(&document, key).unwrap();
+
+        assert_eq!(value("text"), CanonicalValue::Text("a".to_string()));
+        assert_eq!(value("integer"), CanonicalValue::Integer(1));
+        assert_eq!(value("float"), CanonicalValue::Float(1.5_f64.to_bits()));
+        assert_eq!(value("boolean"), CanonicalValue::Boolean(true));
+        assert_eq!(
+            value("datetime"),
+            CanonicalValue::Datetime("1979-05-27T07:32:00Z".to_string())
+        );
+        assert_eq!(
+            value("array"),
+            CanonicalValue::Array(vec![CanonicalValue::Integer(1), CanonicalValue::Integer(2)])
+        );
+        assert_eq!(
+            value("inline"),
+            CanonicalValue::Table(BTreeMap::from([(
+                "a".to_string(),
+                CanonicalValue::Integer(1)
+            )]))
+        );
+        assert_eq!(workspace_package_value(&document, "absent"), None);
+    }
+
+    #[test]
+    fn a_missing_workspace_package_table_yields_no_value() {
+        assert_eq!(workspace_package_value(&doc(""), "edition"), None);
+        assert_eq!(
+            workspace_package_value(&doc("[workspace]\nmembers = []\n"), "edition"),
+            None
+        );
+    }
+
+    /// Cargo accepts a workspace dependency as a bare version string, an inline
+    /// table, or a full table, and all three carry the values a member inherits.
+    #[test]
+    fn workspace_dependencies_canonicalize_in_every_declaration_form() {
+        let bare =
+            workspace_dependency_fields(&doc("[workspace.dependencies]\nbar = \"1.0\"\n"), "bar");
+        assert_eq!(
+            bare.get("version"),
+            Some(&CanonicalValue::Text("1.0".to_string()))
+        );
+
+        let inline = workspace_dependency_fields(
+            &doc("[workspace.dependencies]\nbar = { version = \"1.0\", optional = true }\n"),
+            "bar",
+        );
+        assert_eq!(
+            inline.get("version"),
+            Some(&CanonicalValue::Text("1.0".to_string()))
+        );
+        assert_eq!(inline.get("optional"), Some(&CanonicalValue::Boolean(true)));
+
+        let table = workspace_dependency_fields(
+            &doc("[workspace.dependencies.bar]\nversion = \"1.0\"\ndefault-features = false\n"),
+            "bar",
+        );
+        assert_eq!(
+            table.get("version"),
+            Some(&CanonicalValue::Text("1.0".to_string()))
+        );
+        assert_eq!(
+            table.get("default-features"),
+            Some(&CanonicalValue::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn an_absent_workspace_dependency_has_no_fields() {
+        assert!(workspace_dependency_fields(&doc(""), "bar").is_empty());
+        assert!(workspace_dependency_fields(&doc("[workspace]\nmembers = []\n"), "bar").is_empty());
+        assert!(
+            workspace_dependency_fields(&doc("[workspace.dependencies]\nother = \"1\"\n"), "bar")
+                .is_empty()
+        );
+    }
+
+    /// An array of tables is the one shape whose members are themselves tables,
+    /// so it needs its own arm to stay distinguishable from a plain array.
+    #[test]
+    fn an_array_of_tables_keeps_its_table_structure() {
+        let document =
+            doc("[[workspace.package.entry]]\na = 1\n\n[[workspace.package.entry]]\na = 2\n");
+
+        let value = workspace_package_value(&document, "entry").unwrap();
+
+        assert_eq!(
+            value,
+            CanonicalValue::ArrayOfTables(vec![
+                CanonicalValue::Table(BTreeMap::from([(
+                    "a".to_string(),
+                    CanonicalValue::Integer(1)
+                )])),
+                CanonicalValue::Table(BTreeMap::from([(
+                    "a".to_string(),
+                    CanonicalValue::Integer(2)
+                )])),
+            ])
+        );
+    }
 }

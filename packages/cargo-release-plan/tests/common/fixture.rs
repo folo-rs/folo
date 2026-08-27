@@ -90,6 +90,25 @@ resolver = "2"
         self.git(&["commit", "-m", message]);
     }
 
+    /// Runs Cargo against the fixture workspace.
+    ///
+    /// Offline throughout, since the fixture packages never depend on anything
+    /// outside the workspace and a registry lookup would make tests non-hermetic.
+    pub(crate) fn cargo(&self, args: &[&str]) -> String {
+        let output = Command::new("cargo")
+            .args(args)
+            .arg("--manifest-path")
+            .arg(self.manifest())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "cargo {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
     pub(crate) fn sha(&self, rev: &str) -> String {
         self.git(&["rev-parse", rev]).trim().to_string()
     }
