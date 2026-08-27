@@ -11,8 +11,6 @@
 // `include` and `exclude`. Those are resolved in `classify` rather than here,
 // since they are located by manifest key rather than by pattern.
 
-use std::borrow::Cow;
-
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ohno::AppError;
 
@@ -41,6 +39,9 @@ impl PackagingRules {
 
     /// Whether `package_relative_path` would be put in the `.crate`.
     ///
+    /// The path is Git's, so `/` is the separator and every other byte —
+    /// including `\` — is part of a file's name.
+    ///
     /// `include` is an allow-list (and `exclude` is then ignored, matching Cargo).
     /// `Cargo.toml` is always released. The package's own `Cargo.lock` is never
     /// released; a lockfile in a subdirectory is ordinary package source.
@@ -49,8 +50,7 @@ impl PackagingRules {
     /// directory pattern such as `src/` covers everything beneath it the way it
     /// does in Cargo and in `.gitignore`.
     pub(crate) fn is_released(&self, package_relative_path: &str) -> bool {
-        let path = normalize_rel(package_relative_path);
-        let path = path.as_ref();
+        let path = package_relative_path.trim_start_matches("./");
         if path == "Cargo.lock" {
             return false;
         }
@@ -64,20 +64,6 @@ impl PackagingRules {
             return !exclude.matched_path_or_any_parents(path, false).is_ignore();
         }
         true
-    }
-}
-
-/// Rewrites a path into the `/`-separated form the matchers expect.
-///
-/// Classification queries every tracked path of every package, and paths that
-/// already use `/` are the common case, so the already-normalized input borrows
-/// instead of allocating.
-fn normalize_rel(path: &str) -> Cow<'_, str> {
-    let trimmed = path.trim_start_matches("./");
-    if trimmed.contains('\\') {
-        Cow::Owned(trimmed.replace('\\', "/"))
-    } else {
-        Cow::Borrowed(trimmed)
     }
 }
 
@@ -131,13 +117,14 @@ mod tests {
         PackagingRules::new(include.as_deref(), exclude.as_deref())
     }
 
-    /// Windows hands out `\`-separated paths, and the matchers only understand
-    /// the `/`-separated form Cargo's own patterns are written in.
+    /// Git reports `/`-separated paths on every platform, so a `\` in one is a
+    /// character of a file's name and must not be read as a directory boundary.
+    /// The leading `./` Cargo tolerates in its own listings still comes off.
     #[test]
-    fn windows_separators_match_the_same_patterns() {
+    fn a_backslash_is_part_of_a_file_name() {
         let rules = rules(Some(&["src/**"]), None).unwrap();
-        assert!(rules.is_released(r"src\lib.rs"));
         assert!(rules.is_released("./src/lib.rs"));
+        assert!(rules.is_released(r"src/odd\name.rs"));
         assert!(!rules.is_released(r"benches\bench.rs"));
     }
 

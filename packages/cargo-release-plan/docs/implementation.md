@@ -44,6 +44,16 @@ Package discovery for the work tree is reached only by spawning
 trees are read with `git show` / `git ls-tree` rather than checking out a work
 tree.
 
+Paths live in one of two spaces and cross between them at exactly one place.
+Git names every path relative to the repository root and separates directories
+with `/` on every platform, so a path Git reports is taken verbatim: `\` is an
+ordinary character in a file name, and rewriting one would name a file that does
+not exist or collide two distinct files onto one key. Operating-system paths
+arrive from `cargo metadata`, and the manifest layer converts them into Git's
+space by rewriting only the platform's own separator. Everything downstream of
+that conversion — packaging rules, diffs, plans, diagnostics — is in Git's
+space.
+
 ## Classification
 
 Classification walks the base revision's first-parent commits that touch a

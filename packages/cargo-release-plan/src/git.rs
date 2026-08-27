@@ -4,7 +4,7 @@
 // through this type. Ref: docs/implementation.md, "Subprocess boundaries".
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 use ohno::AppError;
 
@@ -52,7 +52,7 @@ impl GitRepo {
         let prefix = lines.next().unwrap_or_default().trim();
         Ok(Self {
             root: PathBuf::from(root),
-            prefix: git_path(prefix).trim_end_matches('/').to_string(),
+            prefix: prefix.trim_end_matches('/').to_string(),
         })
     }
 
@@ -185,7 +185,7 @@ impl GitRepo {
         commit: &str,
         rel_path: &str,
     ) -> Result<Option<Vec<u8>>, AppError> {
-        let spec = format!("{}:{}", commit, git_path(rel_path));
+        let spec = format!("{commit}:{rel_path}");
         match run_capture_bytes("git", &["show", &spec], &self.root) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) => {
@@ -224,10 +224,7 @@ impl GitRepo {
         let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
         args.extend(paths.iter().map(|path| dir_pathspec(path)));
         let stdout = run_capture_os("git", &args, &self.root)?;
-        Ok(split_z(&stdout)
-            .into_iter()
-            .map(|path| git_path(&path))
-            .collect())
+        Ok(split_z(&stdout).into_iter().collect())
     }
 
     /// Untracked, non-ignored paths under `pathspec`.
@@ -289,9 +286,19 @@ fn is_manifest_path(path: &str) -> bool {
     path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
 }
 
-/// Git pathspecs use `/` even on Windows.
-pub(crate) fn git_path(path: &str) -> String {
-    path.replace('\\', "/")
+/// Rewrites an operating-system path into the `/`-separated form Git reports.
+///
+/// Only the platform's own separator is rewritten. A backslash is an ordinary
+/// character in a file name on Unix, so rewriting one would name a different
+/// file, and paths Git itself reports already use `/` on every platform and are
+/// therefore taken verbatim.
+pub(crate) fn os_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if MAIN_SEPARATOR == '/' {
+        text.into_owned()
+    } else {
+        text.replace(MAIN_SEPARATOR, "/")
+    }
 }
 
 /// Turns a directory into a pathspec Git matches literally.
@@ -305,19 +312,17 @@ pub(crate) fn git_path(path: &str) -> String {
 /// The repository root is the empty string in every path this tool computes,
 /// but Git rejects an empty pathspec, so the root becomes `.`.
 fn dir_pathspec(dir: &str) -> String {
-    let dir = git_path(dir);
-    let dir = if dir.is_empty() { "." } else { dir.as_str() };
+    let dir = if dir.is_empty() { "." } else { dir };
     format!(":(literal){dir}")
 }
 
 /// Joins a workspace-relative path onto the workspace's git prefix.
 ///
 /// The result is a pathspec that `git ls-files` and `git show` resolve against
-/// the repository root.
+/// the repository root. Both operands are already in Git's `/`-separated space.
 pub(crate) fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
     let prefix = prefix.trim_end_matches('/');
-    let rel = git_path(workspace_rel);
-    let rel = rel.trim_end_matches('/');
+    let rel = workspace_rel.trim_end_matches('/');
     if prefix.is_empty() || prefix == "." {
         rel.to_string()
     } else if rel.is_empty() || rel == "." {
@@ -375,12 +380,17 @@ mod tests {
         assert!(!is_manifest_path("packages/Cargo.toml/inner.rs"));
     }
 
+    /// A backslash is an ordinary character in a file name on Unix, so only the
+    /// platform's own separator may be rewritten when an operating-system path
+    /// enters Git's path space.
     #[test]
-    fn git_path_normalizes_backslashes() {
-        assert_eq!(
-            git_path(r"packages\foo\Cargo.toml"),
-            "packages/foo/Cargo.toml"
-        );
+    fn os_path_rewrites_only_the_platform_separator() {
+        let native = PathBuf::from("packages").join("foo").join("Cargo.toml");
+        assert_eq!(os_path(&native), "packages/foo/Cargo.toml");
+
+        if MAIN_SEPARATOR != '\\' {
+            assert_eq!(os_path(Path::new(r"odd\name.rs")), r"odd\name.rs");
+        }
     }
 
     #[test]
@@ -392,7 +402,6 @@ mod tests {
         assert_eq!(join_git_rel("inner/", "packages/foo"), "inner/packages/foo");
         assert_eq!(join_git_rel("", ""), "");
         assert_eq!(join_git_rel(".", "packages/foo"), "packages/foo");
-        assert_eq!(join_git_rel("inner", r"packages\foo"), "inner/packages/foo");
     }
 
     /// Cargo and Git need not spell the same directory identically: Windows
@@ -571,7 +580,6 @@ mod tests {
     fn dir_pathspec_is_literal_and_names_the_repository_root() {
         assert_eq!(dir_pathspec(""), ":(literal).");
         assert_eq!(dir_pathspec("packages/foo"), ":(literal)packages/foo");
-        assert_eq!(dir_pathspec(r"packages\foo"), ":(literal)packages/foo");
         // Without the magic prefix this would select every sibling package.
         assert_eq!(dir_pathspec("packages/foo*"), ":(literal)packages/foo*");
     }

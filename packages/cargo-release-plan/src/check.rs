@@ -9,7 +9,6 @@ use semver::Version;
 
 use crate::classify::{ChangedItem, Classification, PackageClass, PackageStatus, classify};
 use crate::command::run_capture;
-use crate::git::git_path;
 use crate::groups::GroupVerdict;
 use crate::packaging::relativize;
 use crate::verbose::Verbose;
@@ -236,10 +235,9 @@ fn verify_packaging_rules(classification: &Classification) -> String {
             }
         };
         let tool: BTreeSet<String> = tracked
-            .into_iter()
+            .iter()
             .filter_map(|full| {
-                let full = git_path(&full);
-                let rel = relativize(&full, dir)?;
+                let rel = relativize(full, dir)?;
                 package
                     .manifest
                     .packaging

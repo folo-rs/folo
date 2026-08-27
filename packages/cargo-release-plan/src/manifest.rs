@@ -9,6 +9,7 @@ use ohno::AppError;
 use semver::Version;
 use toml_edit::{DocumentMut, Item, TableLike, Value};
 
+use crate::git::os_path;
 use crate::inherited::{InheritedKeys, collect_inherited_keys, is_workspace_inherit};
 use crate::packaging::PackagingRules;
 use crate::{InvalidMemberPatternError, InvalidVersionError, ParseTomlError};
@@ -550,22 +551,25 @@ fn opt_string_array(item: Option<&Item>) -> Option<Vec<String>> {
     )
 }
 
+/// The directory part of a manifest path, in the same path space as the input.
+///
+/// Work-tree callers overwrite the result with [`repo_relative_dir`], which
+/// crosses from the operating system's path space into Git's; historical
+/// callers pass a path Git already reported.
 fn directory_of(manifest_path: &str) -> String {
-    let path = manifest_path.replace('\\', "/");
-    match path.rsplit_once('/') {
+    match manifest_path.rsplit_once('/') {
         Some((dir, _)) => dir.to_string(),
         None => String::new(),
     }
 }
 
 /// Repo-relative directory of a work-tree manifest path.
+///
+/// This is the boundary where an operating-system path enters Git's
+/// `/`-separated path space; everything downstream stays in that space.
 pub(crate) fn repo_relative_dir(workspace_root: &Path, manifest_path: &Path) -> String {
     let parent = manifest_path.parent().unwrap_or(manifest_path);
-    parent
-        .strip_prefix(workspace_root)
-        .unwrap_or(parent)
-        .to_string_lossy()
-        .replace('\\', "/")
+    os_path(parent.strip_prefix(workspace_root).unwrap_or(parent))
 }
 
 #[cfg(test)]
@@ -683,7 +687,6 @@ mod tests {
     fn a_manifest_at_the_repository_root_has_an_empty_directory() {
         assert_eq!(directory_of("Cargo.toml"), "");
         assert_eq!(directory_of("packages/foo/Cargo.toml"), "packages/foo");
-        assert_eq!(directory_of(r"packages\foo\Cargo.toml"), "packages/foo");
     }
 
     /// The probe re-opens an existing entry under a flipped spelling, so a

@@ -14,7 +14,7 @@ use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor};
 use crate::diff::file_diff;
-use crate::git::{GitRepo, git_path, join_git_rel};
+use crate::git::{GitRepo, join_git_rel};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
@@ -570,20 +570,12 @@ fn untracked_released(
     side: &PackageSide<'_>,
     tracked_resources: &HashSet<String>,
 ) -> Result<Vec<String>, AppError> {
-    let listed: Vec<String> = git
-        .ls_untracked(side.dir)?
-        .iter()
-        .map(|full| git_path(full))
-        .collect();
+    let listed: Vec<String> = git.ls_untracked(side.dir)?;
     // The same nested-package boundary the tracked listing observes applies
     // here, or a file under a nested crate would be advertised as content
     // Cargo would pack for the outer one. The manifest drawing that boundary
     // may itself still be untracked, so both listings feed the scan.
-    let tracked: Vec<String> = git
-        .ls_files(side.dir)?
-        .iter()
-        .map(|f| git_path(f))
-        .collect();
+    let tracked: Vec<String> = git.ls_files(side.dir)?;
     let mut boundary_paths = listed.clone();
     boundary_paths.extend_from_slice(&tracked);
     let nested = nested_package_dirs(&boundary_paths, side.dir);
@@ -642,10 +634,9 @@ fn released_in_work_tree(
 /// Keys are package-relative, values are the git-root-relative paths the caller
 /// reads the content back from.
 fn released_from_paths(paths: &[String], side: &PackageSide<'_>) -> HashMap<String, String> {
-    let paths: Vec<String> = paths.iter().map(|path| git_path(path)).collect();
-    let nested = nested_package_dirs(&paths, side.dir);
+    let nested = nested_package_dirs(paths, side.dir);
     let mut map = HashMap::new();
-    for full in &paths {
+    for full in paths {
         if is_inside_any(full, &nested) {
             continue;
         }
@@ -781,7 +772,6 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
 
     let mut manifest_paths: BTreeMap<String, String> = BTreeMap::new();
     for path in git.ls_tree_manifests(commit)? {
-        let path = git_path(&path);
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
             continue;
@@ -1187,6 +1177,35 @@ mod tests {
             BTreeSet::from(["Cargo.toml", "src/lib.rs"])
         );
         assert_eq!(released.get("Cargo.toml").unwrap(), "packages/a/Cargo.toml");
+    }
+
+    /// Git's `-z` listings separate directories with `/` on every platform, so a
+    /// `\` in a reported path belongs to a file's name. Rewriting it would file
+    /// the content under a directory that does not exist and, worse, could make
+    /// two distinct files collide on one package-relative key.
+    #[test]
+    fn a_backslash_in_a_reported_path_is_not_a_directory_boundary() {
+        let rules = PackagingRules::default();
+        let resources = BTreeMap::new();
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: false,
+        };
+        let paths = vec![
+            "packages/a/Cargo.toml".to_string(),
+            r"packages/a/src/odd\name.rs".to_string(),
+        ];
+        let released = released_from_paths(&paths, &side);
+        assert_eq!(
+            released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["Cargo.toml", r"src/odd\name.rs"])
+        );
+        assert_eq!(
+            released.get(r"src/odd\name.rs").unwrap(),
+            r"packages/a/src/odd\name.rs"
+        );
     }
 
     /// Cargo packs the README it detects itself even when `include` omits it, and
