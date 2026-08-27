@@ -3,6 +3,8 @@
 
 #[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 
 #[cfg(unix)]
 use cargo_release_plan::{CheckFormat, RunInput, run};
@@ -146,12 +148,12 @@ fn an_untracked_manifest_resource_is_advisory_only() {
 fn a_released_symbolic_link_stops_the_run() {
     let fixture = seeded_package();
     fixture.write("packages/demo/real.txt", "content\n");
-    std::os::unix::fs::symlink("real.txt", fixture.path().join("packages/demo/link.txt")).unwrap();
+    symlink("real.txt", fixture.path().join("packages/demo/link.txt")).unwrap();
     fixture.commit("add a link into released content");
     let base = fixture.sha("HEAD");
 
     let result = run(&RunInput::Check {
-        base: base.clone(),
+        base,
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -171,11 +173,14 @@ fn a_released_symbolic_link_stops_the_run() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
-    let fixture = seeded_package();
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
     fixture.write("packages/demo/real.txt", "content\n");
     let link = fixture.path().join("packages/demo/link.txt");
-    std::os::unix::fs::symlink("real.txt", &link).unwrap();
-    fixture.commit("add a link into released content");
+    symlink("real.txt", &link).unwrap();
+    // The link has to be part of the commit that declares the version, because
+    // that is the anchor the comparison reads its tree from.
+    fixture.commit("seed");
     let base = fixture.sha("HEAD");
 
     // The work tree no longer holds a link, so only the anchor's tree records

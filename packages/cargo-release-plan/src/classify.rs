@@ -1256,10 +1256,12 @@ mod tests {
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
     fn read_optional_bytes_rejects_a_symbolic_link() {
+        use std::os::unix::fs::symlink;
+
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("real.txt"), "hi").unwrap();
         let link = dir.path().join("link.txt");
-        std::os::unix::fs::symlink("real.txt", &link).unwrap();
+        symlink("real.txt", &link).unwrap();
 
         let error = read_optional_bytes(&link, "pkg", "a/link.txt").unwrap_err();
         let reported = error
