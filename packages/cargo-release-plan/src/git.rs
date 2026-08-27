@@ -250,8 +250,8 @@ impl GitRepo {
 
     /// Manifest paths at `commit`, used to reconstruct historical workspace members.
     ///
-    /// `git ls-tree` takes literal path prefixes and rejects pathspec magic, so
-    /// the tree is listed once and the manifests are selected here.
+    /// `git ls-tree` matches its path arguments literally, so it cannot select
+    /// manifests by pattern: the tree is listed once and filtered here.
     pub(crate) fn ls_tree_manifests(&self, commit: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture(
             "git",
@@ -275,13 +275,20 @@ pub(crate) fn git_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// Turns a directory into a pathspec Git accepts.
+/// Turns a directory into a pathspec Git matches literally.
+///
+/// Directory names come out of the repository, so a name containing pathspec
+/// syntax — a `*`, or a leading `:` Git would read as magic — would otherwise
+/// select a sibling package's files or fail to select the package's own,
+/// producing a release verdict for content that is not the package's.
+/// `:(literal)` turns the whole value back into a plain path.
 ///
 /// The repository root is the empty string in every path this tool computes,
 /// but Git rejects an empty pathspec, so the root becomes `.`.
 fn dir_pathspec(dir: &str) -> String {
     let dir = git_path(dir);
-    if dir.is_empty() { ".".to_string() } else { dir }
+    let dir = if dir.is_empty() { "." } else { dir.as_str() };
+    format!(":(literal){dir}")
 }
 
 /// Joins a workspace-relative path onto the workspace's git prefix.
@@ -507,18 +514,22 @@ mod tests {
     }
 
     fn init_repo_with_two_commits(root: &Path) -> GitRepo {
+        let repo = init_repo(root);
+        std::fs::write(root.join("second.txt"), "two\n").unwrap();
+        run_capture("git", &["add", "-A"], root).unwrap();
+        run_capture("git", &["commit", "-q", "-m", "second"], root).unwrap();
+        repo
+    }
+
+    /// Initialises a hermetic repository and commits whatever `root` holds.
+    fn init_repo(root: &Path) -> GitRepo {
         run_capture("git", &["init", "-q"], root).unwrap();
         run_capture("git", &["config", "user.name", "test"], root).unwrap();
         run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
         run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
-        for (name, contents, message) in [
-            ("first.txt", "one\n", "first"),
-            ("second.txt", "two\n", "second"),
-        ] {
-            std::fs::write(root.join(name), contents).unwrap();
-            run_capture("git", &["add", "-A"], root).unwrap();
-            run_capture("git", &["commit", "-q", "-m", message], root).unwrap();
-        }
+        std::fs::write(root.join("first.txt"), "one\n").unwrap();
+        run_capture("git", &["add", "-A"], root).unwrap();
+        run_capture("git", &["commit", "-q", "-m", "first"], root).unwrap();
         GitRepo::discover(root).unwrap()
     }
 
@@ -536,10 +547,38 @@ mod tests {
             vec![" leading.rs", "trailing.rs ", "mid\nline.rs"]
         );
     }
+
     #[test]
-    fn dir_pathspec_turns_the_repository_root_into_a_usable_pathspec() {
-        assert_eq!(dir_pathspec(""), ".");
-        assert_eq!(dir_pathspec("packages/foo"), "packages/foo");
-        assert_eq!(dir_pathspec(r"packages\foo"), "packages/foo");
+    fn dir_pathspec_is_literal_and_names_the_repository_root() {
+        assert_eq!(dir_pathspec(""), ":(literal).");
+        assert_eq!(dir_pathspec("packages/foo"), ":(literal)packages/foo");
+        assert_eq!(dir_pathspec(r"packages\foo"), ":(literal)packages/foo");
+        // Without the magic prefix this would select every sibling package.
+        assert_eq!(dir_pathspec("packages/foo*"), ":(literal)packages/foo*");
+    }
+
+    /// The literal pathspec must survive the round trip through Git itself: the
+    /// escaping is only correct if Git reads it back as one plain path.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn a_directory_named_like_a_pattern_lists_only_its_own_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        // `de[m]o` is a legal directory name on every supported platform and is
+        // also a glob that matches its sibling `demo`.
+        for dir in ["packages/de[m]o", "packages/demo"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join("lib.rs"), "x").unwrap();
+        }
+        let repo = init_repo(root);
+
+        assert_eq!(
+            repo.ls_files("packages/de[m]o").unwrap(),
+            vec!["packages/de[m]o/lib.rs".to_string()]
+        );
+        assert_eq!(
+            repo.ls_tree("HEAD", "packages/de[m]o").unwrap(),
+            vec!["packages/de[m]o/lib.rs".to_string()]
+        );
     }
 }
