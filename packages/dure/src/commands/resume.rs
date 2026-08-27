@@ -80,11 +80,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
+    use crate::pal::error::{PalError, PalErrorKind};
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
-    use crate::pal::processes::MockProcesses;
-    use crate::pal::session_store::FsSessionStore;
+    use crate::pal::processes::{MockProcesses, ProcessLiveness};
+    use crate::pal::pseudoconsole::WindowSize;
+    use crate::pal::session_store::{FsSessionStore, SessionStore};
     use crate::pal::transport::MemoryTransport;
+    use crate::protocol::Message;
     use crate::session_id::SessionId;
 
     #[test]
@@ -106,5 +111,60 @@ mod tests {
         let console = LocalConsoleFacade::from_mock(MockLocalConsole::new());
         let id = SessionId::from_u32(9).unwrap();
         execute(&store, &processes, &transport, &console, Some(id), false).unwrap_err();
+    }
+
+    #[test]
+    fn unique_launch_directory_attaches() {
+        testing::with_watchdog(|| {
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let cwd = store.current_dir().unwrap();
+            let launch_directory = store.canonicalize(&cwd).unwrap();
+            let id = store.allocate_id().unwrap();
+            let pipe = "resume-unique";
+            store
+                .publish(&SessionRecord {
+                    id: id.get(),
+                    supervisor_pid: 10,
+                    supervisor_creation_time: 100,
+                    pipe_name: pipe.to_string(),
+                    launch_directory,
+                    command: vec!["app.exe".to_string()],
+                    started_at_unix_ms: 1,
+                    attached: false,
+                })
+                .unwrap();
+            let mut processes = MockProcesses::new();
+            processes
+                .expect_probe()
+                .returning(|_| ProcessLiveness::Live);
+            let transport = MemoryTransport::new();
+            let listener = transport.listen(pipe).unwrap();
+            thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    let conn = transport.accept(listener).unwrap();
+                    _ = transport.recv(conn);
+                    _ = transport.send(conn, &Message::Attached { session_id: id });
+                    _ = transport.send(conn, &Message::AppExited { status: 0 });
+                }
+            });
+            let mut console = MockLocalConsole::new();
+            console.expect_has_console().return_const(true);
+            console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
+            console.expect_enter_raw_relay().returning(|| Ok(()));
+            console.expect_leave_raw_relay().returning(|| Ok(()));
+            console
+                .expect_window_size()
+                .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
+            console.expect_read_input().returning(|| {
+                thread::park();
+                Err(PalError::new(PalErrorKind::Disconnected))
+            });
+            console.expect_write_output().returning(|_| Ok(()));
+            let console = LocalConsoleFacade::from_mock(console);
+            let outcome = execute(&store, &processes, &transport, &console, None, false).unwrap();
+            assert!(matches!(outcome, Outcome::AppExit(0)));
+        });
     }
 }

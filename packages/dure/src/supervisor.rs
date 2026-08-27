@@ -249,16 +249,17 @@ where
         stopping: AtomicBool::new(false),
     });
 
+    let store_flag = store_attached_flag(store, session_id, Arc::clone(&record_live));
     thread::spawn({
         let shared = Arc::clone(&shared);
         let transport = transport.clone();
-        let store_flag = store_attached_flag(store, session_id, Arc::clone(&record_live));
+        let store_flag = store_flag.clone();
         move || accept_loop(&shared, &transport, listener, store_flag)
     });
 
     thread::spawn({
         let shared = Arc::clone(&shared);
-        move || pty_output_loop(&shared)
+        move || pty_output_loop(&shared, store_flag)
     });
 
     let status = processes
@@ -435,7 +436,10 @@ where
     }
 }
 
-fn pty_output_loop<T, C>(shared: &Shared<T, C>)
+// Blocking read of pty output. A mutation that drops the stop check hangs
+// unit tests because watchdogs are disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
+fn pty_output_loop<T, C>(shared: &Shared<T, C>, set_attached: impl Fn(bool))
 where
     T: Transport,
     C: Pseudoconsole,
@@ -462,6 +466,8 @@ where
                 .expect("client slot is only copied or replaced, never held across a panic");
             if slot.as_ref() == Some(&conn) {
                 *slot = None;
+                shared.transport.disconnect(conn);
+                set_attached(false);
             }
         }
     }

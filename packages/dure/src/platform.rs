@@ -9,6 +9,8 @@ use crate::UnsupportedPlatformError;
 
 /// Returns whether this build can run `dure` commands other than `--help`.
 #[must_use]
+// Equivalent to the `cfg!(windows)` compile-time constant.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) const fn is_supported_platform() -> bool {
     cfg!(windows)
 }

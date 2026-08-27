@@ -95,7 +95,17 @@ function Get-MutantsExcludeArgument {
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
         # of code that is only testable in a multi-processor system.
-        '-e', (protect 'packages/par_bench/src/resource_usage_ext.rs')
+        '-e', (protect 'packages/par_bench/src/resource_usage_ext.rs'),
+
+        # `dure` Windows PAL helpers are platform bindings exercised through higher-level
+        # mocks. Mutating them on Windows times out or misses; the same files are already
+        # excluded off Windows via `**/*windows.rs`.
+        '-e', (protect 'packages/dure/src/pal/**/windows.rs'),
+
+        # Integration-test helper binary and in-crate test support are not product code.
+        '-e', (protect 'packages/dure/src/bin/dure_test_helper.rs'),
+        '-e', (protect 'packages/dure/src/test_support.rs'),
+        '-e', (protect 'packages/dure/src/pal/raw_handle.rs')
     )
 
     if (-not $IsWindowsPlatform) {

@@ -260,9 +260,18 @@ fn connect_instance(handle: HANDLE) -> Result<(), PalError> {
         close(event);
         return Err(PalError::new(PalErrorKind::Other));
     }
-    let wait = wait_event(event, INFINITE);
+    if let Err(error) = wait_event(event, INFINITE) {
+        // SAFETY: cancel so `overlapped` can drop if the listener was closed.
+        _ = unsafe { CancelIoEx(handle, Some(&raw const overlapped)) };
+        close(event);
+        return Err(error);
+    }
+    let mut transferred = 0_u32;
+    // SAFETY: the wait succeeded; `overlapped` still addresses this connect.
+    let completed =
+        unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, false) };
     close(event);
-    wait
+    completed.map_err(|_error| PalError::new(PalErrorKind::Disconnected))
 }
 
 fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
@@ -427,17 +436,23 @@ impl Transport for BuildTargetTransport {
                 .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
             (listener.pending, listener.name.clone())
         };
-        connect_instance(pending.as_handle())?;
+        let connected = connect_instance(pending.as_handle());
         // After each accept, create the next server instance so another client
         // can connect while this connection is still live (steal). If
-        // close_listener already removed the listener, drop that unused
-        // instance; the accepted connection is still returned.
-        let next = create_instance(&name, false)?;
+        // close_listener already removed the listener, it closed `pending` and
+        // this handle must not be published or closed again.
         let mut table = table().lock().expect("pipe table");
-        if let Some(listener) = table.listeners.get_mut(&listener.0) {
-            listener.pending = RawHandle::from_handle(next);
-        } else {
-            close(next);
+        if !table.listeners.contains_key(&listener.0) {
+            return Err(PalError::new(PalErrorKind::Disconnected));
+        }
+        connected?;
+        let next = create_instance(&name, false)?;
+        {
+            let Some(listener_state) = table.listeners.get_mut(&listener.0) else {
+                close(next);
+                return Err(PalError::new(PalErrorKind::Disconnected));
+            };
+            listener_state.pending = RawHandle::from_handle(next);
         }
         let id = next_id();
         table.conns.insert(

@@ -243,6 +243,19 @@ mod tests {
         assert!(!payload_len_ok(0));
         assert!(!payload_len_ok(MAX_FRAME_LEN.saturating_add(1)));
         assert!(payload_len_ok(1));
+        assert!(payload_len_ok(64 * 1024));
         assert!(payload_len_ok(MAX_FRAME_LEN));
+    }
+
+    #[test]
+    fn displaced_and_startup_err_reject_trailing_bytes() {
+        assert_eq!(
+            decode_payload(&[KIND_DISPLACED, 0]).unwrap_err(),
+            DecodeError::Invalid
+        );
+        assert_eq!(
+            decode_payload(&[KIND_STARTUP_ERR, 1]).unwrap_err(),
+            DecodeError::Invalid
+        );
     }
 }

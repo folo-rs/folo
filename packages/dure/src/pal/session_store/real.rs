@@ -3,7 +3,7 @@
 //! Id allocation uses exclusive file creation so two concurrent `run`
 //! invocations cannot take the same id.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -18,17 +18,45 @@ pub(crate) struct FsSessionStore {
     root: PathBuf,
 }
 
-fn parse_record(bytes: &[u8]) -> Result<Option<SessionRecord>, PalError> {
+fn parse_record(bytes: &[u8], expected: SessionId) -> Result<Option<SessionRecord>, PalError> {
     let record: SessionRecord = serde_json::from_slice(bytes).map_err(|error| {
         PalError::with_source(
             PalErrorKind::Other,
             io::Error::new(io::ErrorKind::InvalidData, error),
         )
     })?;
-    if SessionId::from_u32(record.id).is_none() {
-        return Err(PalError::new(PalErrorKind::Other));
+    if SessionId::from_u32(record.id) != Some(expected) {
+        return Ok(None);
     }
     Ok(Some(record))
+}
+
+fn replace_file(tmp: &Path, dest: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+        use windows::core::PCWSTR;
+
+        let src: Vec<u16> = tmp.as_os_str().encode_wide().chain([0]).collect();
+        let dst: Vec<u16> = dest.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: `src` and `dst` are NUL-terminated paths in the same directory.
+        unsafe {
+            MoveFileExW(
+                PCWSTR(src.as_ptr()),
+                PCWSTR(dst.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        }
+        .map_err(|error| io::Error::other(error.message()))
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(tmp, dest)
+    }
 }
 
 impl FsSessionStore {
@@ -78,20 +106,25 @@ impl SessionStore for FsSessionStore {
         fs::create_dir_all(&self.root).map_err(PalError::from_io)?;
         let id = record.session_id();
         let path = self.record_path(id);
+        let tmp = self.root.join(format!("{}.json.tmp", id.get()));
         let json = serde_json::to_vec_pretty(record).map_err(|error| {
             PalError::with_source(
                 PalErrorKind::Other,
                 io::Error::new(io::ErrorKind::InvalidData, error),
             )
         })?;
-        fs::write(path, json).map_err(PalError::from_io)
+        let mut file = File::create(&tmp).map_err(PalError::from_io)?;
+        file.write_all(&json).map_err(PalError::from_io)?;
+        file.sync_all().map_err(PalError::from_io)?;
+        drop(file);
+        replace_file(&tmp, &path).map_err(PalError::from_io)
     }
 
     fn read(&self, id: SessionId) -> Result<Option<SessionRecord>, PalError> {
         let path = self.record_path(id);
         match fs::read(&path) {
             Ok(bytes) if bytes.is_empty() => Ok(None),
-            Ok(bytes) => parse_record(&bytes),
+            Ok(bytes) => parse_record(&bytes, id),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(PalError::from_io(error)),
         }
@@ -231,5 +264,32 @@ mod tests {
         let rec = record(id, dir.path());
         store.publish(&rec).unwrap();
         assert_eq!(store.list().unwrap(), vec![rec]);
+    }
+
+    #[test]
+    fn read_rejects_filename_id_mismatch() {
+        let (dir, store) = store();
+        let first = store.allocate_id().unwrap();
+        let rec = record(first, dir.path());
+        store.publish(&rec).unwrap();
+        let second = store.allocate_id().unwrap();
+        fs::write(
+            dir.path().join(format!("{}.json", second.get())),
+            serde_json::to_vec(&rec).unwrap(),
+        )
+        .unwrap();
+        assert!(store.read(second).unwrap().is_none());
+        assert_eq!(store.list().unwrap(), vec![rec.clone()]);
+        store.delete(second).unwrap();
+        assert_eq!(store.read(first).unwrap().unwrap(), rec);
+    }
+
+    #[test]
+    fn missing_root_lists_and_reads_empty() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("no-such-store");
+        let store = FsSessionStore::new(missing);
+        assert!(store.list().unwrap().is_empty());
+        assert!(store.read(SessionId::MIN).unwrap().is_none());
     }
 }

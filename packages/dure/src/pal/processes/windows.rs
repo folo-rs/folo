@@ -12,7 +12,7 @@ use std::sync::{Mutex, OnceLock};
 use rand::RngExt;
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-    STILL_ACTIVE, WAIT_OBJECT_0,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows::Win32::System::Console::HPCON;
 use windows::Win32::System::JobObjects::{
@@ -198,14 +198,18 @@ impl Processes for BuildTargetProcesses {
             Err(error) if error.kind() == PalErrorKind::NotFound => return ProcessLiveness::Dead,
             Err(_) => return ProcessLiveness::InspectFailed,
         };
-        let mut code = 0_u32;
-        // SAFETY: `handle` is a process handle we opened and `code` is a stack u32.
-        let result = unsafe { GetExitCodeProcess(handle, &raw mut code) };
+        // SAFETY: `handle` is a process handle opened with SYNCHRONIZE. Zero
+        // timeout distinguishes still-running (`WAIT_TIMEOUT`) from already
+        // exited (`WAIT_OBJECT_0`). Exit code 259 is a valid exited status and
+        // must not be treated as live.
+        let wait = unsafe { WaitForSingleObject(handle, 0) };
         close(handle);
-        match result {
-            Ok(()) if code == STILL_ACTIVE.0 as u32 => ProcessLiveness::Live,
-            Ok(()) => ProcessLiveness::Dead,
-            Err(_) => ProcessLiveness::InspectFailed,
+        if wait == WAIT_TIMEOUT {
+            ProcessLiveness::Live
+        } else if wait == WAIT_OBJECT_0 {
+            ProcessLiveness::Dead
+        } else {
+            ProcessLiveness::InspectFailed
         }
     }
 

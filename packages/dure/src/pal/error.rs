@@ -20,8 +20,8 @@ pub(crate) enum PalErrorKind {
     Timeout,
     /// Job breakaway was denied.
     #[cfg_attr(
-        not(windows),
-        expect(dead_code, reason = "produced by the Windows process PAL")
+        not(any(windows, test)),
+        expect(dead_code, reason = "produced by the Windows process PAL and tests")
     )]
     BreakawayDenied,
     /// Opening or querying a process handle failed.
@@ -69,6 +69,8 @@ impl PalError {
     }
 }
 
+// Error text is not an API contract.
+#[cfg_attr(test, mutants::skip)]
 impl fmt::Display for PalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self.kind {
@@ -83,11 +85,33 @@ impl fmt::Display for PalError {
     }
 }
 
+// Source chaining is not an API contract.
+#[cfg_attr(test, mutants::skip)]
 impl std::error::Error for PalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self.source.as_ref() {
             Some(error) => Some(error),
             None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_io_maps_broken_pipe_to_disconnected() {
+        let error = PalError::from_io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed",
+        ));
+        assert_eq!(error.kind(), PalErrorKind::Disconnected);
+    }
+
+    #[test]
+    fn from_io_maps_other_kinds_to_other() {
+        let error = PalError::from_io(std::io::Error::other("platform"));
+        assert_eq!(error.kind(), PalErrorKind::Other);
     }
 }

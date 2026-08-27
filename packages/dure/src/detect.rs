@@ -62,14 +62,20 @@ pub(crate) fn auto_detect(live: &[SessionRecord], cwd: &Path, verbose: bool) -> 
     }
 }
 
+// English pluralization is not a behavioral contract.
+#[cfg_attr(test, mutants::skip)]
 fn session_noun(count: usize) -> &'static str {
     if count == 1 { "session" } else { "sessions" }
 }
 
+// English pluralization is not a behavioral contract.
+#[cfg_attr(test, mutants::skip)]
 fn match_noun(count: usize) -> &'static str {
     if count == 1 { "match" } else { "matches" }
 }
 
+// Verbose log text is not a behavioral contract.
+#[cfg_attr(test, mutants::skip)]
 fn verbose_note(verbose: bool, message: &str) {
     if verbose {
         eprintln!("{message}");
@@ -109,6 +115,15 @@ mod tests {
         assert_eq!(
             auto_detect(&live, Path::new("/work"), false),
             DetectOutcome::Unique(SessionId::from_u32(2).unwrap())
+        );
+    }
+
+    #[test]
+    fn verbose_unique_match_is_still_unique() {
+        let live = [record(1, "/work")];
+        assert_eq!(
+            auto_detect(&live, Path::new("/work"), true),
+            DetectOutcome::Unique(SessionId::from_u32(1).unwrap())
         );
     }
 

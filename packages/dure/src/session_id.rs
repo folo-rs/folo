@@ -30,6 +30,9 @@ impl SessionId {
     /// Inner positive integer.
     #[inline]
     #[must_use]
+    // A mutation that returns a constant collides every `allocate_id`
+    // reservation and hangs the exclusive-create loop under cargo-mutants.
+    #[cfg_attr(test, mutants::skip)]
     pub const fn get(self) -> u32 {
         self.0.get()
     }

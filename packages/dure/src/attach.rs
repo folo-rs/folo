@@ -92,6 +92,9 @@ impl<C: LocalConsole> Drop for RawRelayGuard<C> {
     }
 }
 
+// Blocking recv. A mutation that drops the disconnect path hangs unit tests
+// because watchdogs are disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
 fn relay<T, C>(transport: &T, console: &C, conn: ConnId) -> Result<Outcome, AppError>
 where
     T: Transport + Clone + Send + Sync + 'static,
@@ -177,13 +180,66 @@ where
 #[cfg(test)]
 mod tests {
     use std::thread;
+    use std::time::Duration;
 
     use super::*;
+    use crate::pal::error::{PalError, PalErrorKind};
+    use crate::pal::ids::{ConnId, ListenerId};
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::pseudoconsole::WindowSize;
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::Message;
     use crate::session_id::SessionId;
+
+    fn attach_console() -> LocalConsoleFacade {
+        let mut console = MockLocalConsole::new();
+        console.expect_has_console().return_const(true);
+        console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
+        console.expect_enter_raw_relay().returning(|| Ok(()));
+        console.expect_leave_raw_relay().returning(|| Ok(()));
+        console
+            .expect_window_size()
+            .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
+        console.expect_read_input().returning(|| {
+            thread::park();
+            Err(PalError::new(PalErrorKind::Disconnected))
+        });
+        console.expect_write_output().returning(|_| Ok(()));
+        LocalConsoleFacade::from_mock(console)
+    }
+
+    #[derive(Clone, Debug)]
+    struct ConnectFails(PalErrorKind);
+
+    impl Transport for ConnectFails {
+        fn listen(&self, _name: &str) -> Result<ListenerId, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn accept(&self, _listener: ListenerId) -> Result<ConnId, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn connect(&self, _name: &str, _timeout: Duration) -> Result<ConnId, PalError> {
+            Err(PalError::new(self.0))
+        }
+
+        fn send(&self, _conn: ConnId, _message: &Message) -> Result<(), PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn recv(&self, _conn: ConnId) -> Result<Message, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn disconnect(&self, _conn: ConnId) {}
+
+        fn close_listener(&self, _listener: ListenerId) {}
+
+        fn pipe_name(&self, nonce: &str) -> String {
+            nonce.to_string()
+        }
+    }
 
     #[test]
     fn attached_id_mismatch_is_startup_failure() {
@@ -197,34 +253,70 @@ mod tests {
                     _ = transport.recv(conn);
                     let other = SessionId::from_u32(2).expect("positive id");
                     _ = transport.send(conn, &Message::Attached { session_id: other });
+                    transport.disconnect(conn);
                 }
             });
-            let mut console = MockLocalConsole::new();
-            console.expect_has_console().return_const(true);
-            console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
-            console.expect_enter_raw_relay().returning(|| Ok(()));
-            console.expect_leave_raw_relay().returning(|| Ok(()));
-            console
-                .expect_window_size()
-                .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
-            let console = LocalConsoleFacade::from_mock(console);
-            attach(&transport, &console, "pipe", SessionId::MIN).unwrap_err();
+            attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+        });
+    }
+
+    #[test]
+    fn matching_attached_then_app_exit_is_success() {
+        testing::with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let listener = transport.listen("pipe").unwrap();
+            let id = SessionId::MIN;
+            thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    let conn = transport.accept(listener).unwrap();
+                    _ = transport.recv(conn);
+                    _ = transport.send(conn, &Message::Attached { session_id: id });
+                    _ = transport.send(conn, &Message::AppExited { status: 3 });
+                }
+            });
+            let outcome = attach(&transport, &attach_console(), "pipe", id).unwrap();
+            assert!(matches!(outcome, Outcome::AppExit(3)));
+        });
+    }
+
+    #[test]
+    fn displaced_handshake_is_displaced() {
+        testing::with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let listener = transport.listen("pipe").unwrap();
+            thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    let conn = transport.accept(listener).unwrap();
+                    _ = transport.recv(conn);
+                    _ = transport.send(conn, &Message::Displaced);
+                    transport.disconnect(conn);
+                }
+            });
+            attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
         });
     }
 
     #[test]
     fn connect_timeout_is_resume_timeout() {
-        let transport = MemoryTransport::new();
-        let mut console = MockLocalConsole::new();
-        console.expect_has_console().return_const(true);
-        console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
-        console.expect_enter_raw_relay().returning(|| Ok(()));
-        console.expect_leave_raw_relay().returning(|| Ok(()));
-        console
-            .expect_window_size()
-            .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
-        let console = LocalConsoleFacade::from_mock(console);
-        let id = SessionId::MIN;
-        attach(&transport, &console, "missing", id).unwrap_err();
+        attach(
+            &ConnectFails(PalErrorKind::Timeout),
+            &attach_console(),
+            "missing",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn connect_other_is_startup_failure() {
+        attach(
+            &ConnectFails(PalErrorKind::Other),
+            &attach_console(),
+            "missing",
+            SessionId::MIN,
+        )
+        .unwrap_err();
     }
 }

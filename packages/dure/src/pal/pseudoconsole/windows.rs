@@ -124,9 +124,15 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
     }
 
     fn resize(&self, pty: PtyId, size: WindowSize) -> Result<(), PalError> {
-        let hpcon = hpcon_for(pty).ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
         let coord = to_coord(size)?;
-        // SAFETY: `hpcon` is a live HPCON stored in the table for `pty`.
+        let table = table().lock().expect("pty table");
+        let hpcon = table
+            .ptys
+            .get(&pty.0)
+            .map(|pty| pty.hpcon)
+            .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
+        // SAFETY: `hpcon` is borrowed from the table entry for `pty`. The guard
+        // is held for this nonblocking call so `close` cannot free it first.
         unsafe { ResizePseudoConsole(hpcon, coord) }
             .map_err(|_error| PalError::new(PalErrorKind::Other))
     }
