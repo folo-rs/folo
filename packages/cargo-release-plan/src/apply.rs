@@ -184,10 +184,12 @@ fn dry_run_summary(edits: &[ManifestEdit], package_count: usize, would_refresh: 
         }
     }
     if would_refresh {
+        // The refresh is workspace-wide, so the count describes the plan that
+        // triggers it rather than the set of lockfile entries Cargo re-resolves.
         write!(
             message,
-            "; lockfile would be refreshed for {}",
-            plural(package_count, "package")
+            "; the workspace lockfile would be refreshed for {}",
+            plural(package_count, "planned package")
         )
         .expect("writing to String");
     } else {
@@ -452,27 +454,31 @@ fn refresh_lockfile(
         verbose.note(reason);
         return Ok(false);
     }
-    let mut args = vec![
-        "update".to_string(),
-        "--offline".to_string(),
-        "--manifest-path".to_string(),
-        work_tree
-            .workspace_root
-            .join("Cargo.toml")
-            .to_string_lossy()
-            .into_owned(),
+    let manifest = work_tree
+        .workspace_root
+        .join("Cargo.toml")
+        .to_string_lossy()
+        .into_owned();
+    // `--workspace` rather than one `-p <name>` per planned package: a bare name is
+    // an ambiguous package-ID spec whenever the lockfile also holds a registry
+    // package of that name, and by this point the manifests are already written, so
+    // a failure would leave the work tree applied but the lockfile stale. `--workspace`
+    // is exactly Cargo's documented answer to "you changed a workspace member's
+    // version"; members outside the plan re-resolve to the same path source, and
+    // non-member packages already in the lockfile are left alone.
+    let args = [
+        "update",
+        "--offline",
+        "--workspace",
+        "--manifest-path",
+        &manifest,
     ];
-    for name in expanded.packages.keys() {
-        args.push("-p".to_string());
-        args.push(name.clone());
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
     verbose.note(format!(
         "refreshing the workspace lockfile with `cargo {}` so --locked builds observe the new \
          path-dependency versions; the lockfile is not released content and cannot re-trigger check",
-        args_ref.join(" ")
+        args.join(" ")
     ));
-    _ = run_capture("cargo", &args_ref, &work_tree.workspace_root)?;
+    _ = run_capture("cargo", &args, &work_tree.workspace_root)?;
     Ok(true)
 }
 
@@ -517,7 +523,7 @@ mod tests {
         let summary = dry_run_summary(&edits, 2, true);
         assert!(summary.contains("changed.toml"));
         assert!(!summary.contains("unchanged.toml"));
-        assert!(summary.contains("lockfile would be refreshed for 2 packages"));
+        assert!(summary.contains("lockfile would be refreshed for 2 planned packages"));
     }
 
     #[test]

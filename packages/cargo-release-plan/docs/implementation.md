@@ -126,8 +126,12 @@ can pin a package the plan increments, and a stale pin left behind would break
 the lockfile refresh. Registry dependencies
 that happen to share a crate name are left unchanged. A `version.workspace =
 true` package version is replaced with a literal version string. The lockfile
-refresh is a subsequent `cargo update --offline -p …` of the rewritten
-packages, skipped when the plan expands to no packages.
+refresh is a subsequent `cargo update --offline --workspace`, skipped when the
+plan expands to no packages or the workspace has no `Cargo.lock`. `--workspace`
+rather than a `-p` spec per rewritten package: a bare package name is an
+ambiguous package-ID spec whenever the lockfile also holds a registry package of
+that name, and the manifests are already written by then, so the failure would
+leave the work tree applied against a stale lockfile.
 
 ## Errors
 
