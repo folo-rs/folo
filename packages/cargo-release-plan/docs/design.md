@@ -57,13 +57,15 @@ whether or not that crate belongs to the workspace, matching the package
 boundary Cargo itself stops at.
 
 The files named by `readme` and `license-file` are released content wherever
-they live, because Cargo copies each into the crate root regardless of `include`
-and `exclude`. A workspace-level README that several packages inherit is
+they live and whatever the packaging rules say, because Cargo packs each
+regardless of `include` and `exclude`. One declared from outside the package
+directory lands at the crate root under its file name, and one from inside keeps
+its own path. A workspace-level README that several packages inherit is
 therefore released content for every one of them, and editing it in place is a
-change to each. A resource that already lives inside the package directory is
-just an ordinary file there. The git-tracked rule applies to a resource as it
-does to anything else: an untracked one is reported as an advisory, under the
-name it would take at the crate root, and never counted as a change.
+change to each; so is editing a README the package's own `include` leaves out.
+The git-tracked rule applies to a resource as it does to anything else: an
+untracked one is reported as an advisory, under the path it would take inside
+the `.crate`, and never counted as a change.
 
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace

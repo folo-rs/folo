@@ -402,21 +402,24 @@ fn build_timeline(
 struct PackageSide<'a> {
     dir: &'a str,
     rules: &'a PackagingRules,
-    /// Files Cargo copies into the `.crate` from outside `dir`, keyed by the path
-    /// each takes at the crate root and valued by its git-root-relative path.
+    /// Files Cargo packs because a manifest key names them, keyed by the path
+    /// each takes inside the `.crate` and valued by its git-root-relative path.
     resources: &'a BTreeMap<String, String>,
 }
 
-/// Resolves the files Cargo copies into the `.crate` from outside `package_dir`.
+/// Resolves the files Cargo copies into the `.crate` because a manifest key
+/// names them.
 ///
-/// Cargo copies the file named by `readme` or `license-file` into the crate
-/// root, so a package's released content is not confined to its own directory: a
-/// workspace-level README that several members inherit is released content for
-/// every one of them, and editing it in place is drift a directory-only listing
-/// would miss. Ref: docs/design.md, "Released content".
+/// Cargo packs the file named by `readme` or `license-file` regardless of
+/// `include` and `exclude`, and from outside `package_dir` if that is where it
+/// lives. A package's released content is therefore neither confined to its own
+/// directory nor fully described by its packaging rules: a workspace-level
+/// README that several members inherit is released content for every one of
+/// them, and so is a README the package's own `include` leaves out.
+/// Ref: docs/design.md, "Released content".
 ///
-/// A resource that already lives inside the package directory is left out,
-/// because the directory listing covers it under its real path. `package_dir`,
+/// A resource that already lives inside the package directory keeps its own
+/// package-relative path, matching where Cargo puts it. `package_dir`,
 /// `workspace_prefix`, and the resolved values are all git-root-relative.
 fn resolve_resources(
     manifest: &PackageManifest,
@@ -439,13 +442,20 @@ fn resolve_resources(
         let Some(full) = join_relative(base, relative) else {
             continue;
         };
-        if relativize(&full, package_dir).is_some() {
-            continue;
-        }
-        let Some(name) = full.rsplit('/').next() else {
-            continue;
+        // Cargo leaves a resource that is already inside the package where it
+        // is and only flattens one from outside into the crate root. Both are
+        // recorded, because `include` and `exclude` do not apply to either: a
+        // README the package excludes is still released content.
+        let key = match relativize(&full, package_dir) {
+            Some(rel) => rel.to_string(),
+            None => {
+                let Some(name) = full.rsplit('/').next() else {
+                    continue;
+                };
+                name.to_string()
+            }
         };
-        resolved.insert(name.to_string(), full);
+        resolved.insert(key, full);
     }
     resolved
 }
@@ -457,10 +467,10 @@ fn diff_package(
     work: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
-    // resource sits outside the package directory where the directory listing
-    // cannot vouch for it. Asking Git directly keeps an untracked README from
-    // being read off disk and reported as a content change. Ref: docs/design.md,
-    // "Released content".
+    // resource may sit outside the package directory or outside its packaging
+    // rules, where the directory listing cannot vouch for it. Asking Git
+    // directly keeps an untracked README from being read off disk and reported
+    // as a content change. Ref: docs/design.md, "Released content".
     let resource_paths: Vec<&str> = work.resources.values().map(String::as_str).collect();
     let tracked_resources = git.tracked_paths(&resource_paths)?;
 
@@ -528,11 +538,12 @@ fn released_at_commit(
     Ok(released)
 }
 
-/// Adds the manifest resources Cargo copies in from outside the package directory.
+/// Adds the files Cargo packs because a manifest key names them.
 ///
-/// The packaging rules are not consulted: Cargo copies these regardless of
-/// `include` and `exclude`. An entry never displaces a real package file of the
-/// same name, because that file is what a reader would see at that path.
+/// The packaging rules are not consulted: Cargo packs these regardless of
+/// `include` and `exclude`. An entry never displaces a file the directory
+/// listing already claimed at that path, matching Cargo, which keeps the first
+/// claim on a path and warns rather than overwriting it.
 fn add_resources<'a>(
     released: &mut HashMap<String, String>,
     resources: impl Iterator<Item = (&'a String, &'a String)>,
@@ -561,15 +572,17 @@ fn untracked_released(
             side.rules.is_released(&rel).then_some(rel)
         })
         .collect();
-    // The listing above stops at the package directory, so an untracked
-    // resource declared from outside it would go unmentioned even though Cargo
-    // would copy it into the `.crate`. It is advisory in exactly the same way,
-    // and it is named by the path it takes at the crate root.
+    // The listing above is filtered by the packaging rules and stops at the
+    // package directory, so a resource that those rules exclude or that is
+    // declared from outside would go unmentioned even though Cargo would pack
+    // it. It is advisory in exactly the same way, and it is named by the path
+    // it takes inside the `.crate`.
     untracked.extend(side.resources.iter().filter_map(|(name, path)| {
         let present = git.root().join(path).symlink_metadata().is_ok();
         (present && !tracked_resources.contains(path)).then(|| name.clone())
     }));
     untracked.sort_unstable();
+    untracked.dedup();
     Ok(untracked)
 }
 
@@ -652,8 +665,8 @@ struct HistoricalPackage {
     directory: String,
     version: Version,
     packaging: PackagingRules,
-    /// Files Cargo copies into the `.crate` from outside `directory`, keyed by the
-    /// path each takes at the crate root.
+    /// Files Cargo packs because a manifest key names them, keyed by the path
+    /// each takes inside the `.crate`.
     resources: BTreeMap<String, String>,
 }
 
@@ -1115,8 +1128,7 @@ mod tests {
     }
 
     /// A resource outside the package directory is released content under the
-    /// name it takes at the crate root; one already inside is left to the
-    /// ordinary directory listing.
+    /// name it takes at the crate root; one already inside keeps its own path.
     #[test]
     fn resources_resolve_against_the_end_that_declared_them() {
         let manifest = manifest_with_resources(
@@ -1132,6 +1144,10 @@ mod tests {
             BTreeMap::from([
                 ("LICENSE".to_string(), "LICENSE".to_string()),
                 ("README.md".to_string(), "README.md".to_string()),
+                (
+                    "docs/GUIDE.md".to_string(),
+                    "packages/a/docs/GUIDE.md".to_string()
+                ),
             ])
         );
     }

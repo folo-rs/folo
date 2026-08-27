@@ -144,3 +144,28 @@ fn verify_packaging_accepts_a_package_whose_readme_is_inherited() {
     assert!(passed, "{message}");
     assert!(!message.contains("packaging rule mismatch"), "{message}");
 }
+
+/// `include` never governs a file the manifest names by key: Cargo packs the
+/// declared README whether or not the allow-list mentions it, so leaving it out
+/// of the allow-list must not hide a change to it.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_readme_excluded_by_include_is_still_released_content() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "readme = \"README.md\"\ninclude = [\"src/**\", \"Cargo.toml\"]",
+    );
+    fixture.write("packages/demo/README.md", "docs\n");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/README.md", "revised docs\n");
+    fixture.commit("revise the readme");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo"), "{message}");
+}

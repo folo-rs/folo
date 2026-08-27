@@ -75,23 +75,25 @@ released. Each side of the comparison reads its own boundaries from its own file
 listing, so a crate that appears or disappears between the anchor and the work
 tree moves the boundary with it.
 
-Released content also reaches outside the package directory, because Cargo copies
-the files named by `readme` and `license-file` into the crate root wherever they
-live. Those are located by manifest key rather than by pattern, so they are
-resolved in classification rather than in the packaging rules, and they bypass
-`include` / `exclude` because Cargo copies them regardless. A locally declared
-value resolves against the package directory and an inherited one against the
-workspace root, matching where each manifest declares it; a value naming a file
-inside the package directory adds nothing, since the ordinary file listing
-already covers it. Keying the resolved set by the file's name reproduces the flat
-crate root Cargo produces, and a real package file of that name always wins.
+Released content also reaches past what the packaging rules describe, because
+Cargo packs the files named by `readme` and `license-file` regardless of
+`include` and `exclude`, and from outside the package directory if that is where
+they live. Those are located by manifest key rather than by pattern, so they are
+resolved in classification rather than in the packaging rules. A locally
+declared value resolves against the package directory and an inherited one
+against the workspace root, matching where each manifest declares it. Cargo
+keeps a resource that is already inside the package at its own path and flattens
+one from outside into the crate root, so the resolved set is keyed the same way
+and reproduces the layout Cargo produces; where the ordinary file listing has
+already claimed a key, that claim wins, as it does in Cargo.
 
-Because a resource sits outside the package directory, the per-directory
+Because a resource may sit outside the package directory, the per-directory
 listing that establishes released content cannot vouch for it, so the work-tree
-side asks Git for its tracked state by exact path in one batched query. Reading
-it off disk instead would let an untracked file decide a release verdict, which
-the git-tracked rule forbids. The anchor side needs no such query: reading a
-resource back from a commit that did not track it yields nothing.
+side asks Git for the tracked state of every resource path in one batched query.
+Reading it off disk instead would let an untracked file decide a release
+verdict, which the git-tracked rule forbids. The anchor side needs no such
+query: reading a resource back from a commit that did not track it already
+yields nothing.
 
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.

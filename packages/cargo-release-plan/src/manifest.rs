@@ -180,13 +180,13 @@ pub(crate) fn parse_package_manifest(
     }))
 }
 
-/// `[package]` keys naming a file Cargo copies into the packaged crate.
+/// `[package]` keys naming a file Cargo packs alongside the sources.
 ///
-/// Cargo rewrites both to a bare file name at the crate root when it normalises
-/// a manifest for packaging, and copies the named file in alongside the sources.
+/// Cargo rewrites both to a bare file name when it normalises a manifest for
+/// packaging, and packs the named file regardless of `include` and `exclude`.
 const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
 
-/// Collects the files Cargo copies into the `.crate` alongside the sources.
+/// Collects the files Cargo packs because a `[package]` key names them.
 ///
 /// A locally declared value is relative to the package directory while an
 /// inherited one is relative to the workspace root, so the two are returned
