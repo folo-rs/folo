@@ -218,7 +218,16 @@ struct Shared<T, C> {
     pty_host: C,
     pty: PtyId,
     session_id: SessionId,
+    /// Holding this across a pseudoconsole write keeps a displaced client from
+    /// reaching the app between its ownership check and the write itself.
+    /// Writes here land in the console host's input buffer, which the host
+    /// drains independently of the app, so the hold is bounded.
     client: Mutex<Option<ConnId>>,
+    /// Serializes an entire attach: acknowledgement, ownership transfer, and
+    /// displacement of the previous client. Without it two attaches can
+    /// acknowledge in one order and install in another, letting an older
+    /// attach displace a newer one.
+    attach: Mutex<()>,
     stopping: AtomicBool,
 }
 
@@ -254,6 +263,7 @@ where
         pty,
         session_id,
         client: Mutex::new(None),
+        attach: Mutex::new(()),
         stopping: AtomicBool::new(false),
     });
 
@@ -265,7 +275,7 @@ where
         move || accept_loop(&shared, &transport, listener, store_flag)
     });
 
-    thread::spawn({
+    let pty_pump = thread::spawn({
         let shared = Arc::clone(&shared);
         move || pty_output_loop(&shared, store_flag)
     });
@@ -274,6 +284,13 @@ where
         .wait_app(app)
         .map_err(|_error| PalFailedError::new())?;
     transport.close_listener(listener);
+
+    // The app has exited, so closing the pseudoconsole flushes what it still
+    // holds and ends the output loop with a read failure. Joining the pump
+    // before announcing the exit is what orders the app's final output ahead
+    // of `AppExited` instead of racing it.
+    pty_host.close(pty);
+    _ = pty_pump.join();
     shared.stopping.store(true, Ordering::SeqCst);
 
     if let Some(client) = shared
@@ -304,7 +321,6 @@ where
             .delete(session_id)
             .map_err(|_error| StoreError::new())?;
     }
-    pty_host.close(pty);
     processes.close_job(job);
     Ok(status)
 }
@@ -368,6 +384,13 @@ where
 {
     match shared.transport.recv(conn) {
         Ok(Message::Attach { cols, rows }) => {
+            // One serialized attach transaction: acknowledge, take ownership,
+            // and displace the previous client without another attach
+            // interleaving between the acknowledgement and the transfer.
+            let _attach = shared
+                .attach
+                .lock()
+                .expect("the attach lock guards no data, so it is never poisoned by its guard");
             // Resize failure means the pty is already gone; wait_app and
             // read_output observe that and stop the relay.
             _ = shared
@@ -386,6 +409,22 @@ where
                 shared.transport.disconnect(conn);
                 return;
             }
+            let previous = {
+                let mut slot = shared
+                    .client
+                    .lock()
+                    .expect("client slot is only copied or replaced, never held across a panic");
+                slot.replace(conn)
+            };
+            if let Some(old) = previous {
+                // Notified outside the client slot so a client that accepts no
+                // writes cannot stall output delivery. The displaced client may
+                // already have disconnected; steal still proceeds, because
+                // last-connect-wins does not depend on this notice.
+                _ = shared.transport.send(old, &Message::Displaced);
+                shared.transport.disconnect(old);
+            }
+            set_attached(true);
         }
         _ => {
             shared.transport.disconnect(conn);
@@ -393,42 +432,31 @@ where
         }
     }
 
-    let previous = {
-        let mut slot = shared
+    while let Ok(message) = shared.transport.recv(conn) {
+        // Ownership is checked and the message applied under one lock: a client
+        // displaced while its receive was in flight must not reach the app
+        // after the new client became the live console.
+        let slot = shared
             .client
             .lock()
             .expect("client slot is only copied or replaced, never held across a panic");
-        slot.replace(conn)
-    };
-    if let Some(old) = previous {
-        // The displaced client may already have disconnected. Steal still
-        // proceeds; last-connect-wins does not depend on this notice.
-        _ = shared.transport.send(old, &Message::Displaced);
-        shared.transport.disconnect(old);
-    }
-    set_attached(true);
-
-    loop {
-        match shared.transport.recv(conn) {
-            Ok(Message::Input(data)) => {
+        if slot.as_ref() != Some(&conn) {
+            break;
+        }
+        match message {
+            Message::Input(data) => {
                 // Input after the app has exited is dropped. wait_app publishes
                 // AppExited to the live client.
                 _ = shared.pty_host.write_input(shared.pty, &data);
             }
-            Ok(Message::Resize { cols, rows }) => {
+            Message::Resize { cols, rows } => {
                 _ = shared
                     .pty_host
                     .resize(shared.pty, WindowSize { cols, rows });
             }
-            Ok(_) | Err(_) => break,
+            _ => break,
         }
-        let current = shared
-            .client
-            .lock()
-            .expect("client slot is only copied or replaced, never held across a panic");
-        if current.as_ref() != Some(&conn) {
-            break;
-        }
+        drop(slot);
     }
     {
         let mut slot = shared
@@ -604,6 +632,77 @@ mod tests {
     #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
+    fn final_output_arrives_before_the_exit_status() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let exit = Arc::new((Mutex::new(false), Condvar::new()));
+            let processes = mock_processes(Arc::clone(&exit));
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                let pty = pty.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            assert!(matches!(
+                transport.recv(startup_conn).unwrap(),
+                Message::StartupOk { .. }
+            ));
+            transport.disconnect(startup_conn);
+
+            let client = transport
+                .connect(
+                    &transport.pipe_name("nonce"),
+                    crate::constants::CONNECT_TIMEOUT,
+                )
+                .unwrap();
+            transport
+                .send(client, &Message::Attach { cols: 80, rows: 24 })
+                .unwrap();
+            assert!(matches!(
+                transport.recv(client).unwrap(),
+                Message::Attached { .. }
+            ));
+
+            // The supervisor creates exactly one pty on this host, so it holds
+            // the first allocated id.
+            pty.push_output(PtyId(1), b"bye");
+            {
+                let (lock, cvar) = &*exit;
+                *lock.lock().expect("exit lock") = true;
+                cvar.notify_all();
+            }
+
+            assert_eq!(
+                transport.recv(client).unwrap(),
+                Message::Output(b"bye".to_vec())
+            );
+            assert_eq!(
+                transport.recv(client).unwrap(),
+                Message::AppExited { status: 7 }
+            );
+            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn init_failure_sends_startup_err_and_closes_job() {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
@@ -665,6 +764,7 @@ mod tests {
             pty: pty_host.create(DEFAULT_PTY_SIZE).unwrap(),
             session_id: SessionId::from_u32(1).unwrap(),
             client: Mutex::new(None),
+            attach: Mutex::new(()),
             stopping: AtomicBool::new(false),
         }
     }
@@ -775,8 +875,7 @@ mod tests {
         let shared = Arc::new(shared_session(&transport, &pty_host));
         let (supervisor, client) = connected_pair(&transport, "pipe");
         // Stands in for a steal that lands between the acknowledgement and the
-        // first relayed message, which the loop can only observe on its own
-        // next pass over the client slot.
+        // first relayed message. The displaced relay must not reach the app.
         let successor = ConnId(u64::MAX);
         let steal = {
             let shared = Arc::clone(&shared);
@@ -796,7 +895,7 @@ mod tests {
 
         client_loop(&shared, supervisor, &steal);
 
-        assert_eq!(pty_host.take_input(shared.pty), b"x");
+        assert!(pty_host.take_input(shared.pty).is_empty());
         assert_eq!(*shared.client.lock().unwrap(), Some(successor));
     }
 

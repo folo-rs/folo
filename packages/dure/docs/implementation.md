@@ -100,8 +100,20 @@ is still alive but never accepts stays listed; resume fails and `kill --id`
 still targets it.
 
 `dure kill --id` opens the recorded pid, verifies the process creation time and
-running state, and terminates that process handle. It never needs the session
-connection.
+running state, and terminates that process handle, then waits for the process to
+signal before reporting success. It never needs the session connection.
+
+An attach is one serialized transaction: acknowledgement, ownership transfer, and
+displacement of the previous client happen under a single lock, so concurrent
+attaches cannot acknowledge in one order and install in another. The relay checks
+ownership and applies each message under the client-slot lock, so a client
+displaced while its receive was in flight cannot reach the pseudoconsole
+afterwards. Pseudoconsole input lands in the console host's buffer, which the
+host drains independently of the app, so that hold is bounded.
+
+Session teardown closes the pseudoconsole and joins the output pump before
+announcing the app's exit status, which is what orders the app's final output
+ahead of it.
 
 ## Transport
 
@@ -115,6 +127,13 @@ The client-supervisor named pipe uses overlapped I/O. The handles supplied to
 [`CreatePseudoConsole`] are restricted to synchronous I/O, so each
 pseudoconsole channel is serviced by its own blocking thread and buffer.
 Process lifetime stays a waitable handle rather than an I/O completion source.
+
+Pipe handles are shared owners. An operation takes a reference out of the pipe
+table before releasing the table lock, so tearing a connection or listener down
+concurrently cannot invalidate a handle that is still in use, nor let Windows
+reuse the handle value for an unrelated object. Teardown cancels the I/O
+outstanding on the handle, which is what unblocks a waiting reader, and the
+handle is closed once the last operation releases it.
 
 [`CreatePseudoConsole`]: https://learn.microsoft.com/windows/console/createpseudoconsole
 

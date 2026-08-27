@@ -44,9 +44,45 @@ struct PipeTable {
     conns: HashMap<u64, Conn>,
 }
 
+/// Shared owner of one pipe handle.
+///
+/// `send`, `recv`, and `accept` use a handle after releasing the table lock, so
+/// closing it on teardown could invalidate a handle another thread is still
+/// operating on, or let Windows reuse the value for an unrelated object.
+/// Ownership is shared instead: teardown cancels the I/O outstanding on the
+/// handle and drops the table's reference, and the handle is closed once the
+/// last in-flight operation releases it.
+/// Ref: docs/implementation.md, "Transport".
+struct PipeHandle(RawHandle);
+
+impl PipeHandle {
+    fn new(handle: HANDLE) -> Arc<Self> {
+        Arc::new(Self(RawHandle::from_handle(handle)))
+    }
+
+    fn as_handle(&self) -> HANDLE {
+        self.0.as_handle()
+    }
+
+    /// Abort the I/O outstanding on this handle so blocked operations return.
+    fn cancel(&self) {
+        // SAFETY: `self` owns the handle and keeps it alive across this call. A
+        // null OVERLAPPED cancels every operation this process has pending on
+        // the handle; all pipe I/O here is overlapped, so a blocked read or
+        // write completes with an aborted status instead of waiting forever.
+        _ = unsafe { CancelIoEx(self.as_handle(), None) };
+    }
+}
+
+impl Drop for PipeHandle {
+    fn drop(&mut self) {
+        close(self.as_handle());
+    }
+}
+
 struct Listener {
     name: Vec<u16>,
-    pending: RawHandle,
+    pending: Arc<PipeHandle>,
 }
 
 /// One accepted or connected pipe end.
@@ -54,7 +90,7 @@ struct Listener {
 /// `write` serializes complete frames so output, displacement, and app-exit
 /// cannot interleave length prefixes on this byte-mode pipe.
 struct Conn {
-    handle: RawHandle,
+    handle: Arc<PipeHandle>,
     write: Arc<Mutex<()>>,
 }
 
@@ -386,23 +422,23 @@ fn write_all(handle: HANDLE, mut buf: &[u8]) -> Result<(), PalError> {
     Ok(())
 }
 
-fn conn_handle(conn: ConnId) -> Result<HANDLE, PalError> {
+fn conn_handle(conn: ConnId) -> Result<Arc<PipeHandle>, PalError> {
     table()
         .lock()
         .expect("pipe table")
         .conns
         .get(&conn.0)
-        .map(|conn| conn.handle.as_handle())
+        .map(|conn| Arc::clone(&conn.handle))
         .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
 }
 
-fn conn_write(conn: ConnId) -> Result<(HANDLE, Arc<Mutex<()>>), PalError> {
+fn conn_write(conn: ConnId) -> Result<(Arc<PipeHandle>, Arc<Mutex<()>>), PalError> {
     table()
         .lock()
         .expect("pipe table")
         .conns
         .get(&conn.0)
-        .map(|conn| (conn.handle.as_handle(), Arc::clone(&conn.write)))
+        .map(|conn| (Arc::clone(&conn.handle), Arc::clone(&conn.write)))
         .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
 }
 
@@ -421,7 +457,7 @@ impl Transport for BuildTargetTransport {
             id,
             Listener {
                 name,
-                pending: RawHandle::from_handle(pending),
+                pending: PipeHandle::new(pending),
             },
         );
         Ok(ListenerId(id))
@@ -434,13 +470,13 @@ impl Transport for BuildTargetTransport {
                 .listeners
                 .get(&listener.0)
                 .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
-            (listener.pending, listener.name.clone())
+            (Arc::clone(&listener.pending), listener.name.clone())
         };
         let connected = connect_instance(pending.as_handle());
         // After each accept, create the next server instance so another client
         // can connect while this connection is still live (steal). If
-        // close_listener already removed the listener, it closed `pending` and
-        // this handle must not be published or closed again.
+        // close_listener already removed the listener, this handle must not be
+        // published; dropping the last reference closes it.
         let mut table = table().lock().expect("pipe table");
         if !table.listeners.contains_key(&listener.0) {
             return Err(PalError::new(PalErrorKind::Disconnected));
@@ -452,7 +488,7 @@ impl Transport for BuildTargetTransport {
                 close(next);
                 return Err(PalError::new(PalErrorKind::Disconnected));
             };
-            listener_state.pending = RawHandle::from_handle(next);
+            listener_state.pending = PipeHandle::new(next);
         }
         let id = next_id();
         table.conns.insert(
@@ -502,7 +538,7 @@ impl Transport for BuildTargetTransport {
         table().lock().expect("pipe table").conns.insert(
             id,
             Conn {
-                handle: RawHandle::from_handle(handle),
+                handle: PipeHandle::new(handle),
                 write: Arc::new(Mutex::new(())),
             },
         );
@@ -513,36 +549,40 @@ impl Transport for BuildTargetTransport {
         let frame = encode(message);
         let (handle, write) = conn_write(conn)?;
         let _guard = write.lock().expect("pipe write lock");
-        write_all(handle, &frame)
+        write_all(handle.as_handle(), &frame)
     }
 
     fn recv(&self, conn: ConnId) -> Result<Message, PalError> {
         let handle = conn_handle(conn)?;
         let mut header = [0_u8; 4];
-        read_exact(handle, &mut header)?;
+        read_exact(handle.as_handle(), &mut header)?;
         let len = u32::from_le_bytes(header);
         if !payload_len_ok(len) {
             return Err(PalError::new(PalErrorKind::Other));
         }
         let mut payload = vec![0_u8; len as usize];
-        read_exact(handle, &mut payload)?;
+        read_exact(handle.as_handle(), &mut payload)?;
         decode_payload(&payload).map_err(|_error| PalError::new(PalErrorKind::Other))
     }
 
     fn disconnect(&self, conn: ConnId) {
-        if let Some(conn) = table().lock().expect("pipe table").conns.remove(&conn.0) {
-            close(conn.handle.as_handle());
+        let removed = table().lock().expect("pipe table").conns.remove(&conn.0);
+        if let Some(conn) = removed {
+            // Aborts a read or write another thread is blocked in, so it fails
+            // and releases its reference; the handle closes with the last one.
+            conn.handle.cancel();
         }
     }
 
     fn close_listener(&self, listener: ListenerId) {
-        if let Some(listener) = table()
+        let removed = table()
             .lock()
             .expect("pipe table")
             .listeners
-            .remove(&listener.0)
-        {
-            close(listener.pending.as_handle());
+            .remove(&listener.0);
+        if let Some(listener) = removed {
+            // Aborts the connect an `accept` is blocked in; see `disconnect`.
+            listener.pending.cancel();
         }
     }
 

@@ -111,10 +111,14 @@ currently attached and independently of whether that client's connection still
 looks healthy.
 
 When a new client completes attach, the previous client is disconnected and the
-new client becomes the sole relay. The supervisor then applies the new client's
+new client becomes the sole relay. Input already in flight from the displaced
+client does not reach the app. The supervisor then applies the new client's
 window size to the app console. Many TUIs redraw on resize. It does not restore
 scrollback, and an app that does not redraw will show an empty or stale screen
 until it paints on its own.
+
+Concurrent attaches are ordered against each other, so the client that attaches
+last is the one left holding the session.
 
 A session is live while the same supervisor process is still running. A record
 is dropped only when that process is gone. If the supervisor is running but
@@ -154,7 +158,8 @@ protocols, console font and selection chrome) stays unavailable.
 attach, `run` and `resume` print the session id so the user can `kill` or
 `resume --id` later. After attach, the funnel is exclusive. A displaced client
 writes one diagnostic once its relay has ended and exits with a failure status.
-When the app exits, an attached client exits with the app's status.
+When the app exits, an attached client receives the app's remaining output
+before the exit status, then exits with that status.
 
 Attaching (`run`, `resume`) requires a console. `list` and `kill` do not. The
 resume id prompt additionally requires a terminal stdin; without one, `resume`
