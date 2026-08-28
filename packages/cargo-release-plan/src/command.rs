@@ -1,7 +1,7 @@
 // Subprocess helper for `git` and `cargo`.
 //
 // Classification is specified to shell out rather than link libgit2/gix or a
-// Cargo library, so this is the only process port.
+// Cargo library, so this is the only subprocess boundary.
 
 use std::ffi::OsStr;
 use std::path::Path;

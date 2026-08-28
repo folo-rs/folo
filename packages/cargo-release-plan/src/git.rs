@@ -29,7 +29,18 @@ const MANIFEST_GLOB_PATHSPEC: &str = ":(glob)**/Cargo.toml";
 /// entry may carry.
 const SYMLINK_TREE_MODE: &str = "120000";
 
-/// A Git repository rooted at `root`.
+/// The tool's access to one Git repository.
+///
+/// Every historical fact a verdict rests on — the commits on the base
+/// first-parent line, the manifests and file contents at a commit, the tracked
+/// state of the work tree — is read through this type by spawning `git`, so it
+/// is the single place where repository state enters classification
+/// (implementation.md, "Subprocess boundaries").
+///
+/// It also owns the translation between the two path spaces the tool works in:
+/// commands run at the repository root, while packages are addressed relative
+/// to it, so `prefix` records where the invoked workspace sits inside the
+/// repository and every query is expressed in repository-relative Git paths.
 #[derive(Clone, Debug)]
 pub(crate) struct GitRepo {
     root: PathBuf,
@@ -217,7 +228,12 @@ impl GitRepo {
         }
     }
 
-    /// Git-tracked paths under `pathspec` in the work tree / index.
+    /// Paths under `pathspec` that Git records in the index.
+    ///
+    /// A recorded path need not exist in the work tree, because a deletion is
+    /// tracked until it is staged. Callers that need work-tree presence check
+    /// for it separately, so that a deleted released file is still recognised
+    /// as one.
     pub(crate) fn ls_files(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture_bytes(
             "git",

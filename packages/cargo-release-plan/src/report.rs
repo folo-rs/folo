@@ -69,6 +69,11 @@ pub(crate) fn write_report(
 ) -> Result<String, AppError> {
     fs::create_dir_all(out_dir).map_err(|error| WriteFileError::caused_by(out_dir, error))?;
     // Consumer-facing layout: README "report".
+    //
+    // The subtree belongs to this tool, and the report contract is that it
+    // holds the patches of the current classification, so it is replaced whole
+    // rather than merged into: a reused output directory would otherwise offer
+    // a patch from an earlier run as evidence for this one.
     let diffs_dir = out_dir.join("diffs");
     if diffs_dir.exists() {
         fs::remove_dir_all(&diffs_dir)

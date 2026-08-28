@@ -53,10 +53,10 @@ which automates that workflow.
 
 `--verify-packaging` cross-checks this tool's released-content rules against
 `cargo package --list`. Divergences are printed as warnings and do not fail the
-check: `cargo package` requires a clean work tree, a resolvable dependency
-graph, and a full pack, so gating on it would trade the tool's offline,
-no-resolve guarantee for false failures. A divergence is evidence that the rules
-need fixing, not a condition to tolerate.
+check: listing a package makes Cargo require a clean work tree, resolve the
+dependency graph, and assemble the package archive, so gating on it would trade
+the tool's offline, no-resolve guarantee for false failures. A divergence is
+evidence that the rules need fixing, not a condition to tolerate.
 
 ### `apply`
 

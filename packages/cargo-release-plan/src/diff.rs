@@ -217,7 +217,7 @@ const MAX_EDIT_DISTANCE: usize = 1024;
 ///
 /// Falls back to replacing the whole file when the sides differ by more than
 /// `max_distance` edits; the result is still a valid unified diff, just a
-/// coarser one.
+/// coarser one. Ref: docs/implementation.md, "Released content".
 fn edit_script(old: &[&str], new: &[&str], max_distance: usize) -> Vec<Edit> {
     // Deleting every old line and inserting every new one is always an edit
     // script, so the distance never exceeds that; searching further is wasted.
@@ -236,6 +236,23 @@ fn whole_file_script(old_len: usize, new_len: usize) -> Vec<Edit> {
 }
 
 /// Records the furthest-reaching path on each diagonal after every edit.
+///
+/// Myers' algorithm treats the two sides as a grid whose diagonals are the runs
+/// of shared lines. A path through the grid is an edit script: moving right
+/// deletes an old line, moving down inserts a new one, and moving along a
+/// diagonal keeps a line that both sides share. Diagonal `k` holds the paths
+/// where the old index exceeds the new index by `k`, so a single number
+/// identifies a diagonal and the old index alone locates a position on it.
+///
+/// The search proceeds by edit count. After `d` edits only diagonals `-d..=d`
+/// are reachable, and on each of those only the path that has advanced furthest
+/// can still lead to a minimal script, so one entry per diagonal suffices.
+/// Extending to `d + 1` edits reaches diagonal `k` either by inserting from
+/// `k + 1` or by deleting from `k - 1`; the furthest-reaching of the two is
+/// taken, and the path then runs freely along the diagonal for as long as the
+/// two sides agree, which costs no edits. Reaching the far corner means an
+/// alignment exists within `d` edits, and the recorded rows are what
+/// [`backtrack`] later replays.
 ///
 /// Positions are held as signed values because a diagonal index is the signed
 /// difference between the two sides' line indexes. Reports nothing when the two
@@ -295,6 +312,14 @@ fn remaining<'a, 'b>(lines: &'b [&'a str], index: isize) -> &'b [&'a str] {
 }
 
 /// Decides whether the furthest path on this diagonal arrives by insertion.
+///
+/// Diagonal `k` is entered from `k + 1` by an insertion or from `k - 1` by a
+/// deletion, and the one that has advanced further along the old side is the
+/// one a minimal script takes. At the two extremes only one predecessor exists:
+/// the lowest reachable diagonal has no `k - 1` to delete from, and the highest
+/// has no `k + 1` to insert from. The same rule decides the step forwards in
+/// [`myers_trace`] and the step backwards in [`backtrack`], so both agree on the
+/// path without recording it.
 fn takes_insertion(reach: &[isize], index: usize, diagonal: isize, edits: isize) -> bool {
     if diagonal == edits.saturating_neg() {
         return true;
@@ -316,6 +341,15 @@ fn takes_insertion(reach: &[isize], index: usize, diagonal: isize, edits: isize)
 }
 
 /// Walks the recorded trace backwards to recover the edit script.
+///
+/// [`myers_trace`] records where each edit step reached but not how it got
+/// there, so the script is recovered by replaying the same choice in reverse.
+/// Starting at the far corner, each step identifies the diagonal the current
+/// position sits on, asks which predecessor that step came from, and reads the
+/// predecessor's recorded position. The gap between the two positions is a run
+/// of lines both sides share, emitted as keeps, and the step itself is the one
+/// insertion or deletion that separates the two diagonals. The script is built
+/// from the end and reversed once at the finish.
 fn backtrack(trace: &[Vec<isize>], budget: usize, old_len: usize, new_len: usize) -> Vec<Edit> {
     let offset = isize::try_from(budget).unwrap_or(0);
     let mut script = Vec::new();

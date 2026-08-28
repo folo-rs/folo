@@ -30,6 +30,12 @@ Put a new type, constant, or helper in the module that owns its subject, and
 re-export it from `lib.rs` if it is public. Do not add a shared module for
 "types", "constants", or "utilities"; there is deliberately none to add to.
 
+A subject-owned module keeps an item next to the code that gives it meaning, so
+a reader who has found the behavior has also found everything that defines it,
+and a change to that behavior touches one module. A category module inverts
+this: it gathers unrelated items that share only a syntactic kind, so it accretes
+dependencies on every subject and every subject depends back on it.
+
 ## Miri
 
 Tests that spawn `git` or `cargo`, or that touch the real filesystem beyond

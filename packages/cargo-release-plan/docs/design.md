@@ -3,8 +3,9 @@
 `cargo-release-plan` classifies every publishable workspace package against its
 version anchor and applies an approved increment plan. A package has unreleased
 changes when its released content differs between its version anchor and the
-work tree without an increase in its declared version; a base revision is valid
-for release when no publishable package is in that state.
+work tree without an increase in its declared version. A base revision is valid
+for release when no publishable package is in that state and every version group
+is consistent, which are the two conditions `check` reports on.
 
 ## The invariant
 
@@ -165,19 +166,19 @@ not, because Cargo strips it when it normalises the manifest for packaging.
 actionable diagnostic line that names the `increment-versions` skill.
 `--format github` adds workflow annotations.
 
-`--verify-packaging` cross-checks the relevance rules against
+`--verify-packaging` cross-checks the released-content rules against
 `cargo package --list` and prints warnings without failing the check. It is
-advisory rather than authoritative because `cargo package` needs a clean tree, a
-resolvable dependency graph, and a full pack of every candidate, none of which
-the classification path requires; making the verdict depend on it would turn a
-dirty work tree or an unavailable registry into a release failure and would give
-up the offline, no-resolve guarantee the rest of the tool provides. Each warning
-names the paths only the rules claim and the paths only Cargo claims, because
-that is what tells the reader whether a rule is wrong or the tree simply is not
-clean — an untracked file is never released content but Cargo would still pack
-it. A mismatch on a clean tree means the relevance rules and Cargo disagree
-about released content, so it is investigated and fixed in the rules, not
-tolerated.
+advisory rather than authoritative because listing a package makes Cargo require
+a clean tree, resolve the dependency graph, and assemble an archive for every
+candidate, none of which the classification path requires; making the verdict
+depend on it would turn a dirty work tree or an unavailable registry into a
+release failure and would give up the offline, no-resolve guarantee the rest of
+the tool provides. Each warning names the paths only the rules claim and the
+paths only Cargo claims, because that is what tells the reader whether a rule is
+wrong or the tree simply is not clean — an untracked file is never released
+content but Cargo would still pack it. A mismatch on a clean tree means the
+released-content rules and Cargo disagree, so it is investigated and fixed in
+the rules, not tolerated.
 
 `apply` reads a plan (`schema_version` 1 with per-target `level` or `version`),
 expands groups, rewrites package versions and intra-workspace requirements that
@@ -203,6 +204,13 @@ deletion, and binary content reported as differing rather than rendered. An
 added or deleted file whose content is empty has no hunk to carry it, so it is
 recorded with Git's extended `new file` / `deleted file` headers, which a patch
 reader applies.
+
+A patch is a readable rendering of a difference the report has already recorded,
+so it is refined only while refining is cheap. Two sides that differ by more
+than a bounded number of lines are rendered as a whole-file replacement — every
+old line removed, every new line added — which remains a correct patch and still
+identifies the file as differing, just without a per-region breakdown. No verdict
+depends on which of the two renderings a file receives.
 
 ## Offline and deterministic
 

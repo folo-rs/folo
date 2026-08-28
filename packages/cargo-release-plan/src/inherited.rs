@@ -3,6 +3,7 @@
 // A root-manifest edit is in scope for a package only when that package actually
 // inherits the changed `[workspace.package]` key or `[workspace.dependencies]`
 // entry. `[workspace.lints]` is out of scope.
+// Ref: docs/design.md, "Inherited workspace values".
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -399,7 +400,8 @@ semver = { version = "1.0.0" }
     }
 
     /// Cargo accepts a workspace dependency as a bare version string, an inline
-    /// table, or a full table, and all three carry the values a member inherits.
+    /// table, or a full table, and each form carries the values a member
+    /// inherits.
     #[test]
     fn workspace_dependencies_canonicalize_in_every_declaration_form() {
         let bare =

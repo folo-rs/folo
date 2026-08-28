@@ -172,7 +172,7 @@ fn a_released_symbolic_link_stops_the_run() {
     let base = fixture.sha("HEAD");
 
     let result = run(&RunInput::Check {
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -209,7 +209,7 @@ fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
     fixture.commit("replace the link with a regular file");
 
     let result = run(&RunInput::Check {
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,

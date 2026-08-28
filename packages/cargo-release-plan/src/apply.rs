@@ -409,6 +409,11 @@ fn set_package_version_item(table: &mut dyn TableLike, new_version: &Version) ->
         Some(Item::Value(Value::String(formatted))) => {
             set_formatted(formatted, new_version.to_string())
         }
+        // A member that inherits its version is given a local literal rather
+        // than having the shared workspace value changed: the plan increments
+        // one package, while the shared value governs every member that
+        // inherits it, so editing it would silently increment them all.
+        // Ref: docs/implementation.md, "Plan application".
         Some(item) if is_workspace_inherit(item) => {
             *item = Item::Value(Value::from(new_version.to_string()));
             true
@@ -438,6 +443,16 @@ fn set_formatted(formatted: &mut Formatted<String>, rewritten: String) -> bool {
     true
 }
 
+/// The requirement a dependent must declare once its target is incremented.
+///
+/// An exact pin names one version and stops matching the moment that version
+/// moves, so it follows the plan; a range that still admits the new version is
+/// already correct and is left exactly as the author wrote it, down to its
+/// spelling. A requirement that neither pins nor admits the new version is
+/// replaced by the bare new version, which is also what an unparsable
+/// requirement gets: Cargo would reject it anyway, so the apply leaves behind a
+/// manifest Cargo can read rather than one it cannot.
+/// Ref: docs/implementation.md, "Plan application".
 fn rewrite_req(old: &str, new_version: &Version) -> String {
     let trimmed = old.trim();
     if trimmed.starts_with('=') {

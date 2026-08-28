@@ -11,8 +11,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# Only the consumer build ships. Tests, the agent notes, and development
-# manifests stay in git. Ref: docs/design.md "Released content".
+# Only the consumer build ships in the published source package. Tests, the
+# agent notes, and development manifests stay in git.
+# Ref: docs/design.md "Released content".
 include = ["src/**", "README.md"]
 
 # Required so feature-gated public items appear in generated documentation.

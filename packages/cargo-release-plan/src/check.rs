@@ -252,8 +252,8 @@ fn verify_packaging_rules(classification: &Classification) -> String {
             continue;
         }
         // Naming the paths is what makes the warning actionable: the reader has
-        // to decide whether a relevance rule is wrong or the tree simply is not
-        // clean, and only the differing paths distinguish those.
+        // to decide whether a released-content rule is wrong or the tree simply
+        // is not clean, and only the differing paths distinguish those.
         let only_in_tool = difference_text(&tool, &cargo);
         let only_in_cargo = difference_text(&cargo, &tool);
         writeln!(
@@ -283,16 +283,17 @@ fn difference_text(left: &BTreeSet<String>, right: &BTreeSet<String>) -> String 
 
 /// Whether `cargo package --list` produced this entry rather than the package source.
 ///
-/// The list mixes the crate's own files with entries Cargo synthesizes while
-/// packing: it always writes a lockfile into the `.crate`, records the VCS state
-/// in `.cargo_vcs_info.json`, and preserves the pre-normalization manifest as
-/// `Cargo.toml.orig`. None of those exist in the work tree, so comparing them
-/// against the tool's released-content set would report a mismatch on every
-/// package. The lockfile in particular is excluded by design because it is
-/// derived at pack time rather than being a function of the package source; only
-/// the package-root path is synthesized, so a lockfile nested deeper stays in
-/// the comparison as the ordinary source file it is.
-/// Ref: docs/design.md, "Released content".
+/// The list mixes the package's own files with entries Cargo synthesizes while
+/// building the archive: a resolved lockfile, a record of the version-control
+/// state, and the pre-normalization copy of the manifest. None of those exist in
+/// the work tree, so comparing them against the tool's released-content set
+/// would report a mismatch on every package. The lockfile is additionally
+/// excluded by policy, because it is derived when the archive is built rather
+/// than being a function of the package source; only the archive-root path is
+/// synthesized, so a lockfile nested deeper stays in the comparison as the
+/// ordinary source file it is.
+/// Ref: docs/design.md, "Released content"; Cargo's `cargo package` reference
+/// for the entries it adds to an archive.
 fn is_packaging_artifact(path: &str) -> bool {
     path == "Cargo.lock" || path == ".cargo_vcs_info.json" || path == "Cargo.toml.orig"
 }

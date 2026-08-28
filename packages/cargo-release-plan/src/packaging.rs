@@ -30,10 +30,11 @@ impl PackagingRules {
         include: Option<&[String]>,
         exclude: Option<&[String]>,
     ) -> Result<Self, AppError> {
-        // Cargo consults `exclude` only when there is no `include`, so the mode
-        // is decided here rather than at every query. Compiling an `exclude`
-        // that an `include` overrides would retain a matcher nothing may use,
-        // and a later consumer that applied it would drop a path Cargo packs.
+        // Cargo consults `exclude` only when there is no `include`, so the
+        // selection is decided once here rather than at every query. Compiling
+        // an `exclude` that an `include` overrides would retain a matcher that
+        // must never be consulted, and consulting it would drop a path Cargo
+        // packs.
         let selection = match (include, exclude) {
             (Some(include), _) => Selection::AllowList(compile_gitignore(include)?),
             (None, Some(exclude)) => Selection::DenyList(compile_gitignore(exclude)?),

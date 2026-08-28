@@ -9,12 +9,12 @@ the integration tests share. Command-line parsing lives beside that entry so
 help text and parse errors can be exercised without spawning a process. The
 compiled binary is also covered by a subprocess test.
 
-Every module owns a subject rather than a category, so the crate has no shared
-bag of types or constants: the run input and outcome sit with `run()`, the check
-format and the skill named in failure text sit with the check command, the schema
-revision sits with plan parsing, and the default base revision sits with argument
-parsing. The public surface is re-exported from the crate root, so where an item
-is defined is free to follow its subject.
+Every module owns a subject rather than a category, so the crate has no module
+of shared types or constants: the run input and outcome sit with `run()`, the
+check format and the skill named in failure text sit with the check command, the
+schema revision sits with plan parsing, and the default base revision sits with
+argument parsing. The public surface is re-exported from the crate root, so an
+item is defined next to its subject regardless of where callers reach it.
 
 ## Subprocess boundaries
 
@@ -33,10 +33,9 @@ in-process call, output must be parsed from text (NUL-delimited wherever Git
 offers it), and `git` must be on `PATH`. The cost is proportional to the work
 rather than fixed — reading historical content spawns one `git show` per file,
 so it grows with the size of the released content and the length of the walked
-history. Batching those reads through a single long-lived `git cat-file --batch`
-process would remove that growth and is the optimization to reach for first if
-invocation time becomes a problem; it is not taken today because the per-file
-form is the one whose failure modes map directly onto Git's own diagnostics.
+history. That per-file form is chosen because its failure modes map directly
+onto Git's own diagnostics: a file that cannot be read names itself in the
+error, which a batched reader would have to reconstruct.
 
 Package discovery for the work tree is reached only by spawning
 `cargo metadata --no-deps`. `check --verify-packaging` may spawn
@@ -120,12 +119,13 @@ resolved in classification rather than in the packaging rules. A locally
 declared value resolves against the package directory and an inherited one
 against the workspace root, matching where each manifest declares it. Cargo
 keeps a resource that is already inside the package at its own path and flattens
-one from outside into the crate root, so the resolved set is keyed the same way
-and reproduces the layout Cargo produces; where the ordinary file listing has
-already claimed a key, that claim wins, as it does in Cargo.
+one from outside into the package root, so the resolved set is keyed the same
+way and reproduces the layout Cargo produces. When the ordinary file listing has
+already produced an entry under that key, that entry is kept, matching Cargo's
+own precedence.
 
 Because a resource may sit outside the package directory, the per-directory
-listing that establishes released content cannot vouch for it, so the work-tree
+listing that establishes released content does not cover it, so the work-tree
 side asks Git for the tracked state of every resource path in one batched query.
 Reading it off disk instead would let an untracked file decide a release
 verdict, which the git-tracked rule forbids. The anchor side needs no such
@@ -149,6 +149,16 @@ work tree's from hashing the released files, which applies the same conversion
 staging them would. Delegating the question that way means no conversion has to
 be understood, reimplemented, or kept in step with Git. Bytes are then read only
 for the paths whose ids differ, to render the patch.
+
+Patches are rendered with Myers' line-level difference algorithm under a fixed
+edit-distance budget. The algorithm's working set is one row per edit step
+holding one entry per reachable diagonal, so its cost follows the number of
+differing lines rather than the size of the files; a large file that differs in
+a few lines stays cheap, while two unrelated files of the same size would not.
+The budget draws that line: beyond it the renderer stops refining and emits a
+whole-file replacement instead, which is a correct patch of a coarser shape. The
+choice is confined to presentation because the verdict is decided by object
+identity before any patch is rendered.
 
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.

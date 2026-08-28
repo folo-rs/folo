@@ -644,9 +644,9 @@ fn diff_package(
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
-    // rules, where the directory listing cannot vouch for it. Asking Git
-    // directly keeps an untracked README from being read off disk and reported
-    // as a content change. Ref: docs/design.md, "Released content".
+    // rules, so the directory listing does not cover it. Querying Git for those
+    // paths keeps an untracked README from being read off disk and reported as
+    // a content change. Ref: docs/design.md, "Released content".
     let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
     let tracked_resources = git.tracked_paths(&resource_paths)?;
 
