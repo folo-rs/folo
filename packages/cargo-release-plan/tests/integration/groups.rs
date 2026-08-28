@@ -5,6 +5,12 @@ use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use crate::fixture::{Fixture, write_package};
 use crate::harness::check;
 
+/// A group member absent from the base leaves the group consistent.
+///
+/// Consistency compares the versions members were released under, and a member
+/// the base does not carry has none yet, so requiring it to match would fail a
+/// group for a package no consumer can have seen.
+/// Ref: docs/design.md, "Version groups".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn group_closure_with_member_absent_from_base_is_consistent() {

@@ -59,6 +59,13 @@ shell_impl = { workspace = true }
     assert!(passed, "{message}");
 }
 
+/// Apply replaces a workspace-inherited version.
+///
+/// The alternative would be to raise the shared `[workspace.package] version`,
+/// which every inheriting member reads, so one approved target would silently
+/// increment packages the plan never named. Localizing the value keeps the
+/// increment inside the approved plan.
+/// Ref: docs/implementation.md, "Plan application".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_replaces_workspace_inherited_version() {

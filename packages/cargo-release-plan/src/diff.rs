@@ -70,6 +70,8 @@ fn unified_diff(
     let new: Vec<&str> = new.split_inclusive('\n').collect();
     let regions = changed_regions(&old, &new, MAX_EDIT_DISTANCE);
 
+    // The hunks accumulate into one buffer that the final text takes ownership
+    // of, so rendering a patch does not build a per-hunk string.
     let mut hunks = String::new();
     let mut insertions = 0_usize;
     let mut deletions = 0_usize;
@@ -209,8 +211,13 @@ enum Edit {
 /// entry per reachable diagonal, so its cost grows with the number of differing
 /// lines rather than with file size. Bounding the distance keeps a pair of large
 /// unrelated files from costing quadratic memory while still rendering ordinary
-/// hunks for a large file that differs in only a few lines. A single released
-/// file changes by far less than this within a release cycle.
+/// hunks for a large file that differs in only a few lines.
+///
+/// The bound is a memory ceiling, not a correctness limit: exceeding it renders
+/// a coarser patch rather than a wrong one. It is set to the largest distance
+/// whose worst-case trace - one row per step, one entry per reachable diagonal -
+/// still costs a few tens of megabytes, which leaves ample room above the
+/// distance a released file accumulates within a release cycle.
 const MAX_EDIT_DISTANCE: usize = 1024;
 
 /// Computes a minimal line-level edit script with Myers' algorithm.

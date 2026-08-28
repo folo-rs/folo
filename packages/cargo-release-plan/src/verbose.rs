@@ -33,6 +33,10 @@ impl Verbose {
         // abort a run that would otherwise succeed, which is what the `println`
         // family does on a write failure. Assembling the whole line first also
         // keeps it a single write, so notes cannot interleave mid-line.
+        // The prefix is the subcommand name a user types, so a note in a
+        // combined build log is attributable to the tool that emitted it
+        // without the reader knowing this crate's internal naming.
+        // Ref: docs/implementation.md, "Diagnostics".
         let line = format!("[release-plan] {}\n", message());
         drop(io::stderr().lock().write_all(line.as_bytes()));
     }

@@ -32,6 +32,9 @@ pub enum CheckFormat {
 }
 
 /// Skill named in check failure text so a failing job is a sufficient prompt.
+///
+/// The name is the directory under `.github/skills` that an agent loads, so it
+/// must track that directory rather than any prose description of the recovery.
 const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
 
 pub(crate) fn run_check(
@@ -166,8 +169,8 @@ fn render_diagnostics(
 ///
 /// A workflow command ends at the first newline and treats `%` as the escape
 /// introducer, so a message carrying either would be truncated or would let
-/// repository-controlled text start a second command. GitHub's own toolkit
-/// applies exactly these three replacements.
+/// repository-controlled text start a second command. The substitutions match
+/// GitHub's own toolkit, which is what the runner decodes.
 fn escape_data(value: &str) -> String {
     value
         .replace('%', "%25")
@@ -482,8 +485,10 @@ mod tests {
         let groups = BTreeMap::from([(
             "g".to_string(),
             GroupVerdict::new(
-                // `absent` is not among the classified packages, so it has no
+                // One member is not among the classified packages, so it has no
                 // declared version to report and must still appear in the list.
+                // The versions here are arbitrary; only the presence of a member
+                // without a classification matters.
                 &["demo".to_string(), "absent".to_string()],
                 &BTreeMap::from([
                     ("demo".to_string(), Version::new(0, 2, 0)),

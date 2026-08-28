@@ -350,11 +350,13 @@ semver = { version = "1.0.0" }
         let new = doc("[workspace.package]\n  edition = \"2024\"\n");
         assert!(inherited_changes(&keys, &old, &new).is_empty());
     }
+
     /// Every toml shape canonicalizes distinctly.
     ///
     /// Every TOML shape an inherited value can take must round-trip into a distinct canonical form,
     /// because comparison of those forms is the only thing that decides whether an inherited value
-    /// changed.
+    /// changed. The sample payloads are arbitrary representatives: only the TOML type of each entry
+    /// selects the canonical form under test.
     #[test]
     fn every_toml_shape_canonicalizes_distinctly() {
         let document = doc(concat!(

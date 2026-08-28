@@ -11,6 +11,12 @@ use tempfile::TempDir;
 use crate::fixture::{Fixture, hermetic_git, write_package};
 use crate::harness::{check, seeded_package};
 
+/// A merge commit on the base first-parent line is the anchor.
+///
+/// The anchor walk follows first parents, which makes each merged pull request
+/// one step in the base's history. Following the topic commit that carried the
+/// increment instead would anchor on a revision the base line never reached.
+/// Ref: docs/design.md, "The invariant".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn merge_commit_on_base_first_parent_line_is_the_anchor() {

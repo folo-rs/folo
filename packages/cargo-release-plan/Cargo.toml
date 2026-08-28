@@ -33,10 +33,12 @@ allowed_external_types = [
 ]
 
 [package.metadata.binstall]
-# Prebuilt binaries are published by .github/workflows/release.yml (see
-# docs/release-automation.md). release-plz tags releases as `<crate>-v<version>`,
-# which cargo-binstall's auto-detection does not derive, so the URL is explicit.
-# Archives are `.zip` on every platform and the binary sits at the archive root.
+# Prebuilt binaries are published by .github/workflows/release.yml, and these
+# keys must resolve to exactly the assets that workflow uploads: cargo-binstall
+# cannot derive them, because release-plz tags releases under a scheme its
+# auto-detection does not know and the release matrix uses one archive format on
+# every platform. Ref: docs/release-automation.md, asset-naming contract.
+# `bin-dir` is spelled out because the archive has no versioned inner directory.
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"

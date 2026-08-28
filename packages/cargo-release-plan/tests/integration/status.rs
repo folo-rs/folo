@@ -137,6 +137,13 @@ fn moved_package_directory_is_compared_by_name() {
     assert!(!passed, "{message}");
 }
 
+/// A reformatted manifest without a version change has unreleased changes.
+///
+/// A packaged `Cargo.toml` is released content like any other file, so a
+/// consumer would receive the reformatted bytes. Comparing manifests for
+/// semantic equivalence instead would let a published package differ from the
+/// version it was released under.
+/// Ref: docs/design.md, "Released content".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn manifest_reformat_without_version_change_has_unreleased_changes() {

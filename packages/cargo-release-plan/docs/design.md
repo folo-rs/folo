@@ -144,6 +144,8 @@ A global inherited change therefore marks every inheriting package.
 group-level verdict: a package may have unreleased changes *and* belong to an
 inconsistent group, and both are reported.
 
+### Version groups
+
 Members of a version group share a declared version. If any member needs an
 increment, all members increment. The new version is the highest version
 declared by any member, raised by the highest required level. Members that do

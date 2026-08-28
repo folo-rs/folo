@@ -143,6 +143,10 @@ impl fmt::Display for Plural<'_> {
 mod tests {
     use super::*;
 
+    /// The rendering agrees with the count.
+    ///
+    /// Only the singular is special, so zero and any larger count must both
+    /// take the plural form.
     #[test]
     fn agrees_with_the_count() {
         assert_eq!(plural(0, "package").to_string(), "0 packages");
@@ -150,6 +154,10 @@ mod tests {
         assert_eq!(plural(2, "manifest").to_string(), "2 manifests");
     }
 
+    /// A short commit truncates a long revision and leaves a short one alone.
+    ///
+    /// A revision shorter than the display width has nothing to truncate, so
+    /// truncation must be a maximum rather than a fixed length.
     #[test]
     fn short_commit_truncates_long_revisions() {
         assert_eq!(short_commit("abcdefghijklmnop"), "abcdefghijkl");
@@ -167,10 +175,15 @@ mod tests {
         assert_eq!(short_type_name::<str>(), "str");
     }
 
+    /// An ordinary path is not quoted.
+    ///
+    /// Quoting exists to keep a path from being misread, so a path that needs
+    /// no escape must survive unchanged rather than gain decoration.
     #[test]
     fn an_ordinary_path_is_not_quoted() {
         assert_eq!(quote_path("a/src/lib.rs"), "a/src/lib.rs");
-        // Non-ASCII is ordinary here even though Git would escape it by default.
+        // A path outside ASCII still needs no escape, because this rendering
+        // targets a UTF-8 log rather than Git's default ASCII-only output.
         assert_eq!(quote_path("a/src/lïb.rs"), "a/src/lïb.rs");
     }
 

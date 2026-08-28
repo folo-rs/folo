@@ -216,6 +216,11 @@ mod tests {
         assert!(rules.is_released("tests/foo.rs"));
     }
 
+    /// An invalid include pattern is an error.
+    ///
+    /// The sample leaves a brace alternation unterminated, which the glob
+    /// syntax cannot complete, so it exercises rejection rather than any
+    /// particular malformed spelling.
     #[test]
     fn invalid_include_pattern_is_an_error() {
         let error = rules(Some(&["foo.{js,ts"]), None).unwrap_err();

@@ -99,14 +99,17 @@ pub(crate) fn write_report(
         );
     }
 
+    // The emitted field names are part of the consumer-facing layout documented
+    // in the README, so they are compatibility-sensitive rather than incidental.
     let report = ReportFile {
         schema_version: SCHEMA_VERSION,
         head: classification.head.clone(),
         packages,
         groups,
     };
-    // These emitted names are part of the consumer-facing layout documented in
-    // the README, so they are compatibility-sensitive rather than incidental.
+    // Rendering to a string before writing keeps serialization failure - which
+    // this body makes impossible - separate from the I/O failure the caller must
+    // handle, and leaves a half-written report impossible on a failed write.
     let report = serde_json::to_string_pretty(&report)
         .expect("the report body contains only JSON-serializable fields");
     let report_path = out_dir.join("report.json");

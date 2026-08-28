@@ -187,8 +187,9 @@ mod tests {
 
     #[test]
     fn merge_commit_on_first_parent_line_is_visible() {
-        // First-parent walk sees the merge (m) then mainline (c0), never the
-        // merged branch's intermediate commits.
+        // A first-parent walk sees the merge commit and then its mainline
+        // parent, so an increment made on a merged topic branch is observed at
+        // the merge rather than at the commit that wrote it.
         let timeline = vec![
             entry("m", Some("0.1.1"), true),
             entry("c0", Some("0.1.0"), false),
@@ -200,8 +201,10 @@ mod tests {
 
     #[test]
     fn reintroduction_anchor_walks_on_to_the_last_version_change() {
-        // c2 changed content without an increment before the deletion, so the
-        // anchor is c1, where 0.3.0 first appeared, not c2.
+        // The newest commit that carried the package changed content without
+        // incrementing, so the anchor is the older commit where that version
+        // first appeared. Anchoring on the newest carrier instead would hide
+        // the unreleased change that preceded the deletion.
         let timeline = vec![
             entry("c4", None, true),
             entry("c3", None, true),
@@ -251,8 +254,9 @@ mod tests {
 
     #[test]
     fn reintroduction_anchor_rejects_truncated_history() {
-        // Every sampled commit carried 0.3.0 and the oldest still has a parent,
-        // so the version change that would anchor it was never observed.
+        // Every sampled commit declares the same version and the oldest still
+        // has a parent, so the version change that would anchor the package
+        // lies beyond the sampled history and was never observed.
         let timeline = vec![
             entry("c3", None, true),
             entry("c2", Some("0.3.0"), true),
