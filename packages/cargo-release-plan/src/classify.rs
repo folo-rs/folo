@@ -1,6 +1,5 @@
 // Classification of publishable packages against their anchors.
 
-use std::any::type_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
@@ -24,7 +23,7 @@ use crate::manifest::{
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
-use crate::text::{plural, quote_path};
+use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
 use crate::{ReadFileError, SymlinkReleasedError, VersionRegressionError, short_commit};
 
@@ -44,20 +43,173 @@ pub(crate) struct Classification {
 }
 
 /// Per-package classification: its status and the evidence behind it.
+///
+/// The status, anchor, and change evidence are not independent: a package that
+/// does not exist on the base line has no anchor and no evidence, while an
+/// anchored package always has one and carries a patch only when it failed. The
+/// classifier produces only those combinations, so they are held in one closed
+/// [`Verdict`] rather than as separately writable fields. `check` gates the
+/// process exit on the status while `report` emits the anchor and evidence
+/// beside it, and the two must never disagree.
+/// Ref: `docs/design.md`, "Package status".
 #[derive(Clone, Debug)]
 pub(crate) struct PackageClass {
     pub(crate) name: String,
     pub(crate) declared_version: Version,
     pub(crate) group: Option<String>,
-    pub(crate) status: PackageStatus,
-    pub(crate) anchor: Option<Anchor>,
-    pub(crate) changed: Vec<ChangedItem>,
+    verdict: Verdict,
     pub(crate) stat: DiffStat,
-    pub(crate) patch: String,
     pub(crate) untracked: Vec<String>,
     pub(crate) dependencies: Vec<ReportedDep>,
     pub(crate) dependents: Vec<String>,
     pub(crate) manifest_path: PathBuf,
+}
+
+impl PackageClass {
+    /// Classification status, as reported and as gated on.
+    pub(crate) fn status(&self) -> PackageStatus {
+        match &self.verdict {
+            Verdict::New | Verdict::Releasing { .. } => PackageStatus::Releasing,
+            Verdict::Released { .. } => PackageStatus::Released,
+            Verdict::UnreleasedChanges { .. } => PackageStatus::UnreleasedChanges,
+        }
+    }
+
+    /// The commit the released content was compared against, if there is one.
+    pub(crate) fn anchor(&self) -> Option<&Anchor> {
+        match &self.verdict {
+            Verdict::New => None,
+            Verdict::Releasing { anchor, .. }
+            | Verdict::Released { anchor }
+            | Verdict::UnreleasedChanges { anchor, .. } => Some(anchor),
+        }
+    }
+
+    /// Released-content and inherited-value differences against the anchor.
+    pub(crate) fn changed(&self) -> &[ChangedItem] {
+        match &self.verdict {
+            Verdict::New | Verdict::Released { .. } => &[],
+            Verdict::Releasing { changed, .. } | Verdict::UnreleasedChanges { changed, .. } => {
+                changed
+            }
+        }
+    }
+
+    /// The rendered patch, empty unless the package has unreleased changes.
+    pub(crate) fn patch(&self) -> &str {
+        match &self.verdict {
+            Verdict::UnreleasedChanges { patch, .. } => patch,
+            Verdict::New | Verdict::Releasing { .. } | Verdict::Released { .. } => "",
+        }
+    }
+}
+
+/// Constructors for tests in other modules, which cannot name [`Verdict`].
+///
+/// They take only the evidence their outcome admits, so a test cannot assemble
+/// a state the classifier would never produce. Everything the assertions do not
+/// observe is left empty.
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl PackageClass {
+    pub(crate) fn released(
+        name: &str,
+        declared_version: Version,
+        anchor: Anchor,
+        manifest_path: PathBuf,
+    ) -> Self {
+        Self::with_verdict(
+            name,
+            declared_version,
+            Verdict::Released { anchor },
+            manifest_path,
+        )
+    }
+
+    pub(crate) fn releasing(
+        name: &str,
+        declared_version: Version,
+        anchor: Anchor,
+        manifest_path: PathBuf,
+    ) -> Self {
+        Self::with_verdict(
+            name,
+            declared_version,
+            Verdict::Releasing {
+                anchor,
+                changed: Vec::new(),
+            },
+            manifest_path,
+        )
+    }
+
+    pub(crate) fn unreleased_changes(
+        name: &str,
+        declared_version: Version,
+        anchor: Anchor,
+        changed: Vec<ChangedItem>,
+        manifest_path: PathBuf,
+    ) -> Self {
+        Self::with_verdict(
+            name,
+            declared_version,
+            Verdict::UnreleasedChanges {
+                anchor,
+                changed,
+                patch: String::new(),
+            },
+            manifest_path,
+        )
+    }
+
+    fn with_verdict(
+        name: &str,
+        declared_version: Version,
+        verdict: Verdict,
+        manifest_path: PathBuf,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            declared_version,
+            group: None,
+            verdict,
+            stat: DiffStat {
+                files: 0,
+                insertions: 0,
+                deletions: 0,
+            },
+            untracked: Vec::new(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
+            manifest_path,
+        }
+    }
+}
+
+/// The classifier's outcome for one package, with the evidence it implies.
+///
+/// Each alternative carries exactly what that outcome can be justified by, so
+/// there is no way to express an anchorless failure or a released package that
+/// still holds a patch. Ref: `docs/design.md`, "Package status".
+#[derive(Clone, Debug)]
+enum Verdict {
+    /// The package is absent from the base line and from its earlier
+    /// first-parent history, so its creation counts as a version increase and
+    /// there is nothing to compare against.
+    New,
+    /// The declared version increased over the anchor's.
+    Releasing {
+        anchor: Anchor,
+        changed: Vec<ChangedItem>,
+    },
+    /// The declared version did not increase, and neither did the content.
+    Released { anchor: Anchor },
+    /// Released content differs from the anchor without a version increase.
+    UnreleasedChanges {
+        anchor: Anchor,
+        changed: Vec<ChangedItem>,
+        patch: String,
+    },
 }
 
 /// Classification status of one publishable package.
@@ -83,10 +235,7 @@ impl Serialize for ChangedItem {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // The struct name reaches self-describing formats, so derive it from the
         // type rather than repeating its spelling in a literal.
-        let name = type_name::<Self>()
-            .rsplit("::")
-            .next()
-            .unwrap_or("ChangedItem");
+        let name = short_type_name::<Self>();
         match self {
             Self::Package { path, change } => {
                 let mut state = serializer.serialize_struct(name, 3)?;
@@ -122,10 +271,11 @@ pub(crate) struct AnchorJson {
 
 pub(crate) fn classify(
     manifest_path: &Path,
-    base: &str,
+    base: Option<&str>,
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
     let mut work_tree = load_work_tree(manifest_path)?;
+    let base = base.unwrap_or(&work_tree.default_base).to_owned();
     let git = GitRepo::discover(&work_tree.workspace_root)?;
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
@@ -133,14 +283,16 @@ pub(crate) fn classify(
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
     let head = git.head()?;
-    let base_sha = git.rev_parse(base)?;
-    verbose.note(format!(
-        "classifying {} against base {} ({base_sha}); \
+    let base_sha = git.rev_parse(&base)?;
+    verbose.note(|| {
+        format!(
+            "classifying {} against base {} ({base_sha}); \
          anchors are the last parsed version change on that revision's first-parent line, \
          not on the work tree's branch",
-        plural(work_tree.packages.len(), "publishable package"),
-        quote_path(base)
-    ));
+            plural(work_tree.packages.len(), "publishable package"),
+            quote_path(&base)
+        )
+    });
 
     let mut cache = SnapshotCache::new(&work_tree.workspace_root);
     let base_snapshot = cache.snapshot(&git, &base_sha)?;
@@ -184,14 +336,16 @@ pub(crate) fn classify(
 
     let group_verdicts = work_tree.groups.verdicts(&versions, &exempt);
     for (name, verdict) in &group_verdicts {
-        let members: Vec<String> = verdict.members.iter().map(|m| quote_path(m)).collect();
-        verbose.note(format!(
-            "version group {}: members [{}]; consistent={} (members that do not exist on \
+        let members: Vec<String> = verdict.members().iter().map(|m| quote_path(m)).collect();
+        verbose.note(|| {
+            format!(
+                "version group {}: members [{}]; consistent={} (members that do not exist on \
              the base revision are exempt from matching declared versions)",
-            quote_path(name),
-            members.join(", "),
-            verdict.consistent
-        ));
+                quote_path(name),
+                members.join(", "),
+                verdict.is_consistent()
+            )
+        });
     }
 
     Ok(Classification {
@@ -227,55 +381,53 @@ fn classify_one(
     let dependents = dependents_of(&work_tree.packages, name);
 
     let timeline = build_timeline(git, name, commits, cache)?;
-    let anchor = if base_snapshot.packages.contains_key(name) {
-        resolve_anchor(name, &timeline)?
-    } else {
-        match reintroduction_anchor(name, &timeline)? {
-            Some(anchor) => {
-                verbose.note(format!(
+    let anchor =
+        if base_snapshot.packages.contains_key(name) {
+            resolve_anchor(name, &timeline)?
+        } else {
+            match reintroduction_anchor(name, &timeline)? {
+                Some(anchor) => {
+                    verbose.note(|| format!(
                     "{shown}: absent from base {base_sha} but carried earlier on its first-parent \
                      history, so this branch reintroduces a package rather than creating one and \
                      the last version change on that history ({} declaring {}) is the anchor",
                     short_commit(&anchor.commit),
                     anchor.version
                 ));
-                anchor
-            }
-            None => {
-                verbose.note(format!(
+                    anchor
+                }
+                None => {
+                    verbose.note(|| format!(
                     "{shown}: absent from base {base_sha} and from every sampled commit on its \
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
                 ));
-                let side = work_tree_side(package, cache.case());
-                let resource_paths: Vec<&str> =
-                    side.resources.values().map(String::as_str).collect();
-                let tracked_resources = git.tracked_paths(&resource_paths)?;
-                let untracked = untracked_released(git, &side, &tracked_resources)?;
-                log_untracked(verbose, name, untracked.len());
-                return Ok(PackageClass {
-                    name: name.clone(),
-                    declared_version: package.manifest.version.clone(),
-                    group,
-                    status: PackageStatus::Releasing,
-                    anchor: None,
-                    changed: Vec::new(),
-                    stat: DiffStat {
-                        files: 0,
-                        insertions: 0,
-                        deletions: 0,
-                    },
-                    patch: String::new(),
-                    untracked,
-                    dependencies: package.dependencies.clone(),
-                    dependents,
-                    manifest_path: package.manifest_path.clone(),
-                });
+                    let side = work_tree_side(package, cache.case());
+                    let resource_paths: Vec<&str> =
+                        side.resources.values().map(String::as_str).collect();
+                    let tracked_resources = git.tracked_paths(&resource_paths)?;
+                    let untracked = untracked_released(git, &side, &tracked_resources)?;
+                    log_untracked(verbose, name, untracked.len());
+                    return Ok(PackageClass {
+                        name: name.clone(),
+                        declared_version: package.manifest.version.clone(),
+                        group,
+                        verdict: Verdict::New,
+                        stat: DiffStat {
+                            files: 0,
+                            insertions: 0,
+                            deletions: 0,
+                        },
+                        untracked,
+                        dependencies: package.dependencies.clone(),
+                        dependents,
+                        manifest_path: package.manifest_path.clone(),
+                    });
+                }
             }
-        }
-    };
+        };
     let short_anchor = short_commit(&anchor.commit);
-    verbose.note(format!(
+    verbose.note(|| format!(
         "{shown}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
          requires the work-tree version to be greater than the anchor version (parsed, not textual)",
         anchor.version,
@@ -288,7 +440,7 @@ fn classify_one(
         .get(name)
         .expect("the anchor commit is the newest commit at which the anchor version was observed, and both the timeline and this snapshot read that version from the same cache, so the package is present here");
 
-    let (changed_files, mut patch, stat, untracked) = diff_package(
+    let (changed_files, patch, stat, untracked) = diff_package(
         git,
         name,
         &anchor.commit,
@@ -309,11 +461,13 @@ fn classify_one(
         work_root_doc,
     );
     for item in inherited {
-        verbose.note(format!(
-            "{shown}: inherited {} changed between the anchor and the work tree, so the root \
+        verbose.note(|| {
+            format!(
+                "{shown}: inherited {} changed between the anchor and the work tree, so the root \
              manifest is in scope for this package",
-            quote_path(&item.field)
-        ));
+                quote_path(&item.field)
+            )
+        });
         changed.push(ChangedItem::Inherited { field: item.field });
     }
 
@@ -334,37 +488,38 @@ fn classify_one(
     }
 
     let version_increased = package.manifest.version > anchor.version;
-    let status = if version_increased {
-        PackageStatus::Releasing
+    let verdict = if version_increased {
+        Verdict::Releasing { anchor, changed }
     } else if changed.is_empty() {
-        PackageStatus::Released
+        Verdict::Released { anchor }
     } else {
-        PackageStatus::UnreleasedChanges
+        Verdict::UnreleasedChanges {
+            anchor,
+            changed,
+            patch,
+        }
     };
-    verbose.note(format!(
-        "{shown}: status {status:?} because version_increased={version_increased} and \
-         changed_items={}",
-        changed.len()
-    ));
-
-    if status != PackageStatus::UnreleasedChanges {
-        patch.clear();
-    }
-
-    Ok(PackageClass {
+    let class = PackageClass {
         name: name.clone(),
         declared_version: package.manifest.version.clone(),
         group,
-        status,
-        anchor: Some(anchor),
-        changed,
+        verdict,
         stat,
-        patch,
         untracked,
         dependencies: package.dependencies.clone(),
         dependents,
         manifest_path: package.manifest_path.clone(),
-    })
+    };
+    verbose.note(|| {
+        format!(
+            "{shown}: status {:?} because version_increased={version_increased} and \
+         changed_items={}",
+            class.status(),
+            class.changed().len()
+        )
+    });
+
+    Ok(class)
 }
 
 fn build_timeline(
@@ -1128,14 +1283,16 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
     if count == 0 {
         return;
     }
-    verbose.note(format!(
-        "{}: {} match packaging rules and are advisory only; released content is defined as \
+    verbose.note(|| {
+        format!(
+            "{}: {} match packaging rules and are advisory only; released content is defined as \
          the git-tracked files under the package, so untracked paths are never counted as changes \
          even where Cargo would pack them (an untracked nested manifest therefore does not draw a \
          package boundary either, and `cargo package` refuses a dirty tree in any case)",
-        quote_path(name),
-        plural(count, "untracked path")
-    ));
+            quote_path(name),
+            plural(count, "untracked path")
+        )
+    });
 }
 
 // Early-exit is equivalent to walking the rest of first-parent history.

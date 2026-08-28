@@ -22,9 +22,53 @@ use crate::manifest::{
 #[cfg(test)]
 use crate::packaging::PackagingRules;
 use crate::{
-    GroupNameCollisionError, InvalidVersionError, MalformedVersionGroupError,
-    NonPublishableGroupMemberError, ParseMetadataError, ReadFileError, UnknownGroupMemberError,
+    GroupNameCollisionError, InvalidVersionError, MalformedDefaultBaseError,
+    MalformedVersionGroupError, NonPublishableGroupMemberError, ParseMetadataError, ReadFileError,
+    UnknownGroupMemberError,
 };
+
+/// Work-tree snapshot from `cargo metadata --no-deps`.
+#[derive(Debug)]
+pub(crate) struct WorkTree {
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) packages: Vec<WorkPackage>,
+    /// Manifest paths of every member, publishable or not.
+    ///
+    /// `apply` rewrites dependency requirements in all of them, because a
+    /// non-publishable member can still pin a package the plan increments.
+    pub(crate) member_manifests: Vec<PathBuf>,
+    /// Declared package name of every member, keyed by its manifest directory.
+    ///
+    /// `apply` rewrites a `path` dependency only after resolving that path to a
+    /// member directory declaring the same package, so a same-named package
+    /// living outside the workspace is left alone.
+    pub(crate) members_by_dir: BTreeMap<PathBuf, String>,
+    pub(crate) groups: Groups,
+    /// Base revision to classify against when the caller passes no `--base`.
+    pub(crate) default_base: String,
+}
+
+/// One publishable workspace member in the work tree.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkPackage {
+    pub(crate) manifest: PackageManifest,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) dependencies: Vec<ReportedDep>,
+    /// Files Cargo packs because a manifest key names them, keyed by the path
+    /// each takes inside the `.crate`.
+    ///
+    /// Resolution needs the repository layout, which `cargo metadata` does not
+    /// describe, so classification fills this in once the repository is known.
+    pub(crate) resources: BTreeMap<String, String>,
+}
+
+/// Intra-workspace dependency as exposed in `report.json`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ReportedDep {
+    pub(crate) name: String,
+    pub(crate) req: String,
+    pub(crate) exact_pin: bool,
+}
 
 /// Raw `cargo metadata` document before conversion to [`WorkTree`].
 #[derive(Debug, Deserialize)]
@@ -60,47 +104,6 @@ struct MetadataDep {
     kind: Option<String>,
 }
 
-/// One publishable workspace member in the work tree.
-#[derive(Clone, Debug)]
-pub(crate) struct WorkPackage {
-    pub(crate) manifest: PackageManifest,
-    pub(crate) manifest_path: PathBuf,
-    pub(crate) dependencies: Vec<ReportedDep>,
-    /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the `.crate`.
-    ///
-    /// Resolution needs the repository layout, which `cargo metadata` does not
-    /// describe, so classification fills this in once the repository is known.
-    pub(crate) resources: BTreeMap<String, String>,
-}
-
-/// Intra-workspace dependency as exposed in `report.json`.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub(crate) struct ReportedDep {
-    pub(crate) name: String,
-    pub(crate) req: String,
-    pub(crate) exact_pin: bool,
-}
-
-/// Work-tree snapshot from `cargo metadata --no-deps`.
-#[derive(Debug)]
-pub(crate) struct WorkTree {
-    pub(crate) workspace_root: PathBuf,
-    pub(crate) packages: Vec<WorkPackage>,
-    /// Manifest paths of every member, publishable or not.
-    ///
-    /// `apply` rewrites dependency requirements in all of them, because a
-    /// non-publishable member can still pin a package the plan increments.
-    pub(crate) member_manifests: Vec<PathBuf>,
-    /// Declared package name of every member, keyed by its manifest directory.
-    ///
-    /// `apply` rewrites a `path` dependency only after resolving that path to a
-    /// member directory declaring the same package, so a same-named package
-    /// living outside the workspace is left alone.
-    pub(crate) members_by_dir: BTreeMap<PathBuf, String>,
-    pub(crate) groups: Groups,
-}
-
 pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError> {
     // Cargo resolves a relative `--manifest-path` against the child's working
     // directory, so the child inherits this process's directory and the path is
@@ -110,8 +113,8 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     // `--no-deps` is the classification Cargo invocation: no graph resolve and
     // no crates.io. `--offline` is omitted so a workspace without a lockfile
     // can still be classified; no registry packages are consulted.
-    // `--format-version 1` is Cargo's only documented metadata schema; the
-    // `MetadataJson` projections in this module deserialize that contract.
+    // The requested schema version is pinned because the `Metadata*`
+    // projections in this module deserialize exactly that documented contract.
     let metadata = run_capture(
         "cargo",
         &[
@@ -151,10 +154,10 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         })
         .collect();
     let root_manifest_path = workspace_root.join("Cargo.toml");
-    let root_content = fs::read_to_string(&root_manifest_path)
+    let root_manifest = fs::read_to_string(&root_manifest_path)
         .map_err(|error| ReadFileError::caused_by(&root_manifest_path, error))?;
-    let root_doc = parse_document(&root_manifest_path, &root_content)?;
-    let workspace = WorkspaceInherit::from_root(&root_doc);
+    let root_manifest = parse_document(&root_manifest_path, &root_manifest)?;
+    let workspace = WorkspaceInherit::from_root(&root_manifest);
     let mut packages = Vec::new();
 
     for package in &metadata.packages {
@@ -215,6 +218,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         .map(|package| package.manifest.name.as_str())
         .collect();
     let groups = groups_from_metadata(&metadata.metadata, &workspace_names, &publishable_names)?;
+    let default_base = default_base_from_metadata(&metadata.metadata)?;
 
     Ok(WorkTree {
         workspace_root,
@@ -222,7 +226,33 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         member_manifests,
         members_by_dir,
         groups,
+        default_base,
     })
+}
+
+/// Base revision used when neither `--base` nor workspace metadata names one.
+///
+/// A repository that follows the common GitHub layout releases from the default
+/// remote branch, so its tip is the revision a local run wants to compare
+/// against. A repository that does not can say so in workspace metadata.
+const FALLBACK_BASE: &str = "origin/main";
+
+/// Reads the workspace-declared default base revision.
+///
+/// A repository whose mainline is not the fallback would otherwise have to pass
+/// `--base` on every local invocation, and a stale default silently both adds
+/// and hides differences.
+fn default_base_from_metadata(metadata: &Value) -> Result<String, AppError> {
+    let Some(base) = metadata
+        .get("release-plan")
+        .and_then(|plan| plan.get("base"))
+    else {
+        return Ok(FALLBACK_BASE.to_owned());
+    };
+    let Some(base) = base.as_str().filter(|base| !base.is_empty()) else {
+        return Err(MalformedDefaultBaseError::new().into());
+    };
+    Ok(base.to_owned())
 }
 
 fn groups_from_metadata(
@@ -321,6 +351,37 @@ mod tests {
         let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
         let groups = groups_from_metadata(&json, &names, &all_publishable(&names)).unwrap();
         assert_eq!(groups.group_of("nm_impl"), Some("nm"));
+    }
+
+    #[test]
+    fn default_base_falls_back_when_the_workspace_declares_none() {
+        assert_eq!(
+            default_base_from_metadata(&json!({})).unwrap(),
+            FALLBACK_BASE
+        );
+        assert_eq!(
+            default_base_from_metadata(&json!({ "release-plan": {} })).unwrap(),
+            FALLBACK_BASE
+        );
+    }
+
+    #[test]
+    fn default_base_reads_the_workspace_declaration() {
+        let json = json!({ "release-plan": { "base": "origin/trunk" } });
+        assert_eq!(default_base_from_metadata(&json).unwrap(), "origin/trunk");
+    }
+
+    /// A base that is not a usable revision name would otherwise surface as a
+    /// confusing `git rev-parse` failure much later.
+    #[test]
+    fn default_base_rejects_a_non_revision_declaration() {
+        for json in [
+            json!({ "release-plan": { "base": 1 } }),
+            json!({ "release-plan": { "base": "" } }),
+        ] {
+            let error = default_base_from_metadata(&json).unwrap_err();
+            assert!(error.find_source::<MalformedDefaultBaseError>().is_some());
+        }
     }
 
     /// A version group keeps released versions in lockstep, so a member that is

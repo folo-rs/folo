@@ -20,7 +20,9 @@ pub enum RunInput {
         /// Directory that receives `report.json` and `diffs/`.
         out_dir: PathBuf,
         /// Base revision whose first-parent line supplies anchors.
-        base: String,
+        ///
+        /// `None` defers to the base the workspace declares.
+        base: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
         /// When set, print explanatory decision notes to stderr.
@@ -29,7 +31,9 @@ pub enum RunInput {
     /// `check` — fail on unreleased changes or an inconsistent group.
     Check {
         /// Base revision whose first-parent line supplies anchors.
-        base: String,
+        ///
+        /// `None` defers to the base the workspace declares.
+        base: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
         /// How to render diagnostics.
@@ -95,7 +99,12 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             manifest_path,
             verbose,
         } => {
-            let message = run_report(out_dir, base, manifest_path, Verbose::new(*verbose))?;
+            let message = run_report(
+                out_dir,
+                base.as_deref(),
+                manifest_path,
+                Verbose::new(*verbose),
+            )?;
             Ok(RunOutcome::Report { message })
         }
         RunInput::Check {
@@ -106,7 +115,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             verbose,
         } => {
             let (passed, message) = run_check(
-                base,
+                base.as_deref(),
                 manifest_path,
                 *format,
                 *verify_packaging,

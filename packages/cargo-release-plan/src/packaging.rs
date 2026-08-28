@@ -22,8 +22,7 @@ use crate::InvalidPackagingPatternError;
 /// query many paths without rebuilding gitignore state per file.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PackagingRules {
-    include: Option<Gitignore>,
-    exclude: Option<Gitignore>,
+    selection: Selection,
 }
 
 impl PackagingRules {
@@ -31,10 +30,16 @@ impl PackagingRules {
         include: Option<&[String]>,
         exclude: Option<&[String]>,
     ) -> Result<Self, AppError> {
-        Ok(Self {
-            include: include.map(compile_gitignore).transpose()?,
-            exclude: exclude.map(compile_gitignore).transpose()?,
-        })
+        // Cargo consults `exclude` only when there is no `include`, so the mode
+        // is decided here rather than at every query. Compiling an `exclude`
+        // that an `include` overrides would retain a matcher nothing may use,
+        // and a later consumer that applied it would drop a path Cargo packs.
+        let selection = match (include, exclude) {
+            (Some(include), _) => Selection::AllowList(compile_gitignore(include)?),
+            (None, Some(exclude)) => Selection::DenyList(compile_gitignore(exclude)?),
+            (None, None) => Selection::Everything,
+        };
+        Ok(Self { selection })
     }
 
     /// Whether `package_relative_path` would be put in the `.crate`.
@@ -42,7 +47,6 @@ impl PackagingRules {
     /// The path is Git's, so `/` is the separator and every other byte —
     /// including `\` — is part of a file's name.
     ///
-    /// `include` is an allow-list (and `exclude` is then ignored, matching Cargo).
     /// `Cargo.toml` is always released. The package's own `Cargo.lock` is never
     /// released; a lockfile in a subdirectory is ordinary package source.
     ///
@@ -57,14 +61,33 @@ impl PackagingRules {
         if path == "Cargo.toml" {
             return true;
         }
-        if let Some(include) = &self.include {
-            return include.matched_path_or_any_parents(path, false).is_ignore();
+        match &self.selection {
+            Selection::AllowList(include) => {
+                include.matched_path_or_any_parents(path, false).is_ignore()
+            }
+            Selection::DenyList(exclude) => {
+                !exclude.matched_path_or_any_parents(path, false).is_ignore()
+            }
+            Selection::Everything => true,
         }
-        if let Some(exclude) = &self.exclude {
-            return !exclude.matched_path_or_any_parents(path, false).is_ignore();
-        }
-        true
     }
+}
+
+/// The one file-selection mode a manifest's packaging keys resolve to.
+///
+/// Cargo's `include` and `exclude` are not independent filters: an `include`
+/// list is an allow-list that supersedes `exclude` entirely. Storing the
+/// resolved mode rather than both inputs keeps that precedence in one place and
+/// leaves no inactive matcher for a later consumer to apply by mistake.
+#[derive(Clone, Debug, Default)]
+enum Selection {
+    /// `include` is present: only what it matches is released.
+    AllowList(Gitignore),
+    /// Only `exclude` is present: everything it does not match is released.
+    DenyList(Gitignore),
+    /// Neither key is present: every path under the package is released.
+    #[default]
+    Everything,
 }
 
 fn compile_gitignore(patterns: &[String]) -> Result<Gitignore, AppError> {

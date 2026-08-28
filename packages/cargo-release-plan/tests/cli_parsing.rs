@@ -3,12 +3,13 @@
 //! These exercise the library-housed [`Cli`] directly (no subprocess), covering
 //! subcommand requiredness, option defaults, and help/error early-exit.
 
+use std::iter;
 use std::path::PathBuf;
 
 use cargo_release_plan::{CheckFormat, Cli, EarlyExit, RunInput};
 
 fn parse(args: &[&str]) -> Result<Cli, EarlyExit> {
-    Cli::from_args(&["cargo-release-plan"], args)
+    Cli::from_args_os(iter::once("cargo-release-plan").chain(args.iter().copied()))
 }
 
 #[test]
@@ -41,7 +42,7 @@ fn report_requires_out_dir() {
 }
 
 #[test]
-fn report_defaults_base_and_manifest_path() {
+fn report_defers_base_and_defaults_the_manifest_path() {
     let input = parse(&["report", "--out-dir", "out"]).unwrap().into_input();
     match input {
         RunInput::Report {
@@ -51,7 +52,7 @@ fn report_defaults_base_and_manifest_path() {
             verbose,
         } => {
             assert_eq!(out_dir, PathBuf::from("out"));
-            assert_eq!(base, "origin/main");
+            assert_eq!(base, None, "an unset --base defers to workspace metadata");
             assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
             assert!(!verbose);
         }
@@ -80,7 +81,7 @@ fn check_parses_github_format_and_verify_packaging() {
             verbose,
             ..
         } => {
-            assert_eq!(base, "HEAD");
+            assert_eq!(base.as_deref(), Some("HEAD"));
             assert_eq!(format, CheckFormat::Github);
             assert!(verify_packaging);
             assert!(verbose);

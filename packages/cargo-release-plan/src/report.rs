@@ -55,7 +55,7 @@ struct ReportGroup {
 
 pub(crate) fn run_report(
     out_dir: &Path,
-    base: &str,
+    base: Option<&str>,
     manifest_path: &Path,
     verbose: Verbose,
 ) -> Result<String, AppError> {
@@ -87,9 +87,9 @@ pub(crate) fn write_report(
         groups.insert(
             name.clone(),
             ReportGroup {
-                members: verdict.members.clone(),
-                consistent: verdict.consistent,
-                version: verdict.version.as_ref().map(ToString::to_string),
+                members: verdict.members().to_vec(),
+                consistent: verdict.is_consistent(),
+                version: verdict.version().map(ToString::to_string),
             },
         );
     }
@@ -111,7 +111,7 @@ pub(crate) fn write_report(
     let unreleased = classification
         .packages
         .iter()
-        .filter(|package| package.status == PackageStatus::UnreleasedChanges)
+        .filter(|package| package.status() == PackageStatus::UnreleasedChanges)
         .count();
     Ok(format!(
         "Wrote {} ({} with unreleased changes)",
@@ -124,12 +124,12 @@ pub(crate) fn write_report(
 #[cfg_attr(test, mutants::skip)]
 fn write_diff(diffs_dir: &Path, package: &PackageClass) -> Result<Option<String>, AppError> {
     // Patches are emitted only for `unreleased-changes`; classify clears others.
-    if package.patch.is_empty() {
+    if package.patch().is_empty() {
         return Ok(None);
     }
     let rel = format!("diffs/{}.patch", package.name);
     let path = diffs_dir.join(format!("{}.patch", package.name));
-    fs::write(&path, package.patch.as_bytes())
+    fs::write(&path, package.patch().as_bytes())
         .map_err(|error| WriteFileError::caused_by(&path, error))?;
     Ok(Some(rel))
 }
@@ -139,12 +139,12 @@ fn report_package(package: &PackageClass, diff_path: Option<String>) -> ReportPa
         name: package.name.clone(),
         declared_version: package.declared_version.to_string(),
         group: package.group.clone(),
-        status: package.status,
-        anchor: package.anchor.as_ref().map(|anchor| AnchorJson {
+        status: package.status(),
+        anchor: package.anchor().map(|anchor| AnchorJson {
             commit: anchor.commit.clone(),
             version: anchor.version.to_string(),
         }),
-        changed: package.changed.clone(),
+        changed: package.changed().to_vec(),
         stat: package.stat.clone(),
         diff_path,
         dependencies: package.dependencies.clone(),

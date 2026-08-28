@@ -21,9 +21,11 @@ cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
 
-`--base` defaults to `origin/main`. CI should pass an explicit SHA of the
-merge-base or target-branch tip (the **base revision**). `--manifest-path`
-defaults to `Cargo.toml` in the current directory.
+Without `--base`, the base revision comes from the workspace's
+`[workspace.metadata.release-plan] base` key, falling back to `origin/main`. CI
+should pass an explicit SHA of the merge-base or target-branch tip (the **base
+revision**). `--manifest-path` defaults to `Cargo.toml` in the current
+directory.
 
 ### `report`
 

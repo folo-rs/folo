@@ -370,6 +370,13 @@ pub(crate) struct InvalidMemberPatternError {
 impl UnwindSafe for InvalidMemberPatternError {}
 impl RefUnwindSafe for InvalidMemberPatternError {}
 
+#[cfg(test)]
+impl InvalidMemberPatternError {
+    pub(crate) fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
 /// Released content contains a symbolic link.
 ///
 /// Cargo dereferences a link when it packs a `.crate`, so the released bytes are
@@ -393,12 +400,13 @@ pub(crate) struct SymlinkReleasedError {
 impl UnwindSafe for SymlinkReleasedError {}
 impl RefUnwindSafe for SymlinkReleasedError {}
 
-#[cfg(test)]
-impl InvalidMemberPatternError {
-    pub(crate) fn pattern(&self) -> &str {
-        &self.pattern
-    }
-}
+/// The workspace declares a `release-plan` base that is not a revision name.
+#[ohno::error]
+#[display("Workspace metadata key 'release-plan.base' must be a non-empty revision name")]
+pub(crate) struct MalformedDefaultBaseError {}
+
+impl UnwindSafe for MalformedDefaultBaseError {}
+impl RefUnwindSafe for MalformedDefaultBaseError {}
 
 /// A version-group entry is present but is not an array of package names.
 #[ohno::error]

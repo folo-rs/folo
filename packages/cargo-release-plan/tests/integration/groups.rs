@@ -43,7 +43,7 @@ g = ["alpha", "beta"]
     let base = fixture.sha("HEAD");
 
     let error = run(&RunInput::Check {
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -76,7 +76,7 @@ g = ["alpha", "beta"]
     assert!(message.contains("increment-versions"));
 
     let outcome = run(&RunInput::Check {
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Github,
         verify_packaging: false,

@@ -13,6 +13,7 @@ use toml_edit::{DocumentMut, Item, TableLike, Value};
 use crate::git::os_path;
 use crate::inherited::{InheritedKeys, collect_inherited_keys, is_workspace_inherit};
 use crate::packaging::PackagingRules;
+use crate::text::short_type_name;
 use crate::{InvalidMemberPatternError, InvalidVersionError, ParseTomlError};
 
 /// Parsed facts about one package manifest.
@@ -522,7 +523,9 @@ impl Clone for MemberPattern {
 
 impl fmt::Debug for MemberPattern {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MemberPattern")
+        // Derived rather than spelled out, so a rename cannot leave the label
+        // behind.
+        f.debug_struct(short_type_name::<Self>())
             .field("literal", &self.literal)
             .finish_non_exhaustive()
     }

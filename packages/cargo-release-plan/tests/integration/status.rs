@@ -39,7 +39,7 @@ fn content_already_on_base_has_unreleased_changes() {
     let out_dir = fixture.path().join("out");
     let outcome = run(&RunInput::Report {
         out_dir: out_dir.clone(),
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
@@ -197,7 +197,7 @@ fn declared_version_below_the_anchor_is_an_error() {
     fixture.commit("downgrade");
 
     let result = run(&RunInput::Check {
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,

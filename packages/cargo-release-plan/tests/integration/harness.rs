@@ -43,7 +43,7 @@ pub(crate) fn check(fixture: &Fixture, base: &str) -> (bool, String) {
 
 pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, String) {
     match run(&RunInput::Check {
-        base: base.to_string(),
+        base: Some(base.to_string()),
         manifest_path,
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -57,7 +57,7 @@ pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, Stri
 
 pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool, String) {
     match run(&RunInput::Check {
-        base: base.to_string(),
+        base: Some(base.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: true,
@@ -73,7 +73,7 @@ pub(crate) fn report_json(fixture: &Fixture, base: &str) -> String {
     let out_dir = fixture.path().join("out");
     run(&RunInput::Report {
         out_dir: out_dir.clone(),
-        base: base.to_string(),
+        base: Some(base.to_string()),
         manifest_path: fixture.manifest(),
         verbose: false,
     })

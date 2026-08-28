@@ -65,51 +65,101 @@ impl Groups {
         versions: &BTreeMap<String, Version>,
         exempt: &HashSet<String>,
     ) -> BTreeMap<String, GroupVerdict> {
-        let mut out = BTreeMap::new();
-        for (name, members) in &self.by_name {
-            let present: Vec<&str> = members
-                .iter()
-                .map(String::as_str)
-                .filter(|member| versions.contains_key(*member))
-                .collect();
-            let compared: Vec<&str> = present
-                .iter()
-                .copied()
-                .filter(|member| !exempt.contains(*member))
-                .collect();
-            let compared_versions: BTreeSet<&Version> = compared
-                .iter()
-                .filter_map(|member| versions.get(*member))
-                .collect();
-            let consistent = compared_versions.len() <= 1;
-            // Exemption governs consistency only. The group version is the
-            // highest declared by any present member, including exempt ones, so
-            // that it matches the increment base `expand_plan` computes and no
-            // member is ever moved backwards.
-            let version = present
-                .iter()
-                .filter_map(|member| versions.get(*member))
-                .max()
-                .cloned();
-            out.insert(
-                name.clone(),
-                GroupVerdict {
-                    members: present.into_iter().map(ToOwned::to_owned).collect(),
-                    consistent,
-                    version,
-                },
-            );
-        }
-        out
+        self.by_name
+            .iter()
+            .map(|(name, members)| (name.clone(), GroupVerdict::new(members, versions, exempt)))
+            .collect()
     }
 }
 
 /// Consistency outcome for one version group.
+///
+/// The outcome is derived once, at construction, from the declared versions and
+/// the exemption set; there is no way to assemble a verdict that contradicts
+/// those facts. That matters because `check` gates the process exit on
+/// consistency while `report` and `apply` use the group version as the
+/// increment base, so a verdict that reported one without the other would let
+/// the two disagree. Ref: `docs/design.md`, "Version groups".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroupVerdict {
-    pub(crate) members: Vec<String>,
-    pub(crate) consistent: bool,
-    pub(crate) version: Option<Version>,
+    members: Vec<String>,
+    state: GroupState,
+}
+
+impl GroupVerdict {
+    /// Derives the verdict for one group from the work tree's declared versions.
+    ///
+    /// `members` is the group as declared in the manifest; only members that
+    /// have a declared version participate. `exempt` names members that do not
+    /// exist on the base revision.
+    pub(crate) fn new(
+        members: &[String],
+        versions: &BTreeMap<String, Version>,
+        exempt: &HashSet<String>,
+    ) -> Self {
+        let members: Vec<String> = members
+            .iter()
+            .filter(|member| versions.contains_key(*member))
+            .cloned()
+            .collect();
+        let compared: BTreeSet<&Version> = members
+            .iter()
+            .filter(|member| !exempt.contains(*member))
+            .filter_map(|member| versions.get(member))
+            .collect();
+        // Exemption governs consistency only. The group version is the highest
+        // declared by any present member, including exempt ones, so that it
+        // matches the increment base `expand_plan` computes and no member is
+        // ever moved backwards.
+        let highest = members
+            .iter()
+            .filter_map(|member| versions.get(member))
+            .max()
+            .cloned();
+        let state = match highest {
+            None => GroupState::Empty,
+            Some(version) if compared.len() <= 1 => GroupState::Consistent { version },
+            Some(version) => GroupState::Inconsistent { version },
+        };
+        Self { members, state }
+    }
+
+    /// Members that declare a version, in manifest order.
+    pub(crate) fn members(&self) -> &[String] {
+        &self.members
+    }
+
+    /// Whether every non-exempt member declares the same version.
+    pub(crate) fn is_consistent(&self) -> bool {
+        !matches!(self.state, GroupState::Inconsistent { .. })
+    }
+
+    /// The highest version any member declares, absent only for an empty group.
+    pub(crate) fn version(&self) -> Option<&Version> {
+        match &self.state {
+            GroupState::Consistent { version } | GroupState::Inconsistent { version } => {
+                Some(version)
+            }
+            GroupState::Empty => None,
+        }
+    }
+}
+
+/// The outcomes a group can actually have.
+///
+/// A group with no participating member has no version to report; every other
+/// group has one, whether or not its members agree. Keeping that as a closed set
+/// of alternatives — rather than a flag beside an optional version — leaves no
+/// way to express an inconsistency without the baseline version that planning
+/// needs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum GroupState {
+    /// No member of the group declares a version.
+    Empty,
+    /// Every non-exempt member declares the same version.
+    Consistent { version: Version },
+    /// Non-exempt members declare more than one version.
+    Inconsistent { version: Version },
 }
 
 #[cfg(test)]
@@ -157,8 +207,8 @@ mod tests {
         ]);
         let verdicts = groups().verdicts(&versions, &HashSet::new());
         let nm = verdicts.get("nm").unwrap();
-        assert!(nm.consistent);
-        assert_eq!(nm.version.as_ref().unwrap(), &v("0.1.0"));
+        assert!(nm.is_consistent());
+        assert_eq!(nm.version().unwrap(), &v("0.1.0"));
     }
 
     #[test]
@@ -168,13 +218,10 @@ mod tests {
             ("nm_impl".to_string(), v("0.1.1")),
         ]);
         let verdicts = groups().verdicts(&versions, &HashSet::new());
-        assert!(!verdicts.get("nm").unwrap().consistent);
+        assert!(!verdicts.get("nm").unwrap().is_consistent());
         // The reported version is the highest declared by any present member,
         // so it can serve as the increment base for the whole group.
-        assert_eq!(
-            verdicts.get("nm").unwrap().version.as_ref().unwrap(),
-            &v("0.1.1")
-        );
+        assert_eq!(verdicts.get("nm").unwrap().version().unwrap(), &v("0.1.1"));
     }
 
     #[test]
@@ -186,8 +233,8 @@ mod tests {
         let exempt = HashSet::from(["nm_impl".to_string()]);
         let verdicts = groups().verdicts(&versions, &exempt);
         let nm = verdicts.get("nm").unwrap();
-        assert!(nm.consistent);
-        assert_eq!(nm.version.as_ref().unwrap(), &v("0.2.0"));
+        assert!(nm.is_consistent());
+        assert_eq!(nm.version().unwrap(), &v("0.2.0"));
     }
 
     #[test]
@@ -201,8 +248,8 @@ mod tests {
         let exempt = HashSet::from(["nm_impl".to_string()]);
         let verdicts = groups().verdicts(&versions, &exempt);
         let nm = verdicts.get("nm").unwrap();
-        assert!(nm.consistent);
-        assert_eq!(nm.version.as_ref().unwrap(), &v("0.3.0"));
+        assert!(nm.is_consistent());
+        assert_eq!(nm.version().unwrap(), &v("0.3.0"));
     }
 
     #[test]
@@ -210,5 +257,16 @@ mod tests {
         assert_eq!(groups().closure("nm_impl"), vec!["nm", "nm_impl"]);
         let empty = Groups::default();
         assert_eq!(empty.closure("events"), vec!["events"]);
+    }
+
+    /// A group whose members are all unpublishable or absent from the work tree
+    /// has nothing to compare and no version to offer as an increment base.
+    #[test]
+    fn a_group_with_no_declared_member_is_consistent_and_versionless() {
+        let verdicts = groups().verdicts(&BTreeMap::new(), &HashSet::new());
+        let nm = verdicts.get("nm").unwrap();
+        assert!(nm.is_consistent());
+        assert_eq!(nm.version(), None);
+        assert!(nm.members().is_empty());
     }
 }

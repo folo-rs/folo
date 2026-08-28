@@ -16,7 +16,7 @@ fn github_format_emits_workflow_annotations() {
     let base = fixture.sha("HEAD");
 
     let outcome = run(&RunInput::Check {
-        base,
+        base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Github,
         verify_packaging: false,

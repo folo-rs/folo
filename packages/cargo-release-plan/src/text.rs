@@ -1,5 +1,6 @@
 // Shared message formatting helpers.
 
+use std::any::type_name;
 use std::fmt;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -29,8 +30,8 @@ pub(crate) fn quote_path(label: &str) -> String {
             '\t' => quoted.push_str("\\t"),
             control if control.is_control() => {
                 // Git escapes a control character as the octal value of each of
-                // its UTF-8 bytes, which for an ASCII control is the single
-                // familiar `\033` form.
+                // its UTF-8 bytes, so the rendering is per-byte rather than per
+                // scalar and stays byte-for-byte comparable with Git's own.
                 let mut buffer = [0_u8; 4];
                 for byte in control.encode_utf8(&mut buffer).as_bytes() {
                     write!(quoted, "\\{byte:03o}").expect("writing to String");
@@ -98,6 +99,22 @@ pub(crate) fn short_commit(commit: &str) -> &str {
         .unwrap_or(commit)
 }
 
+/// The unqualified name of a type, for a `Debug` or serializer label.
+///
+/// Deriving the label keeps it in step with a rename; a string literal cannot
+/// be, and no tooling would flag the drift.
+pub(crate) fn short_type_name<T: ?Sized>() -> &'static str {
+    type_name::<T>()
+        .rsplit("::")
+        .next()
+        .expect("splitting any string yields at least one segment")
+}
+
+/// Display adapter that renders a count together with its inflected noun.
+///
+/// It owns both halves of the phrase so a diagnostic cannot render the noun
+/// without the count that governs its form, which is what [`plural`] exists to
+/// guarantee. It is reachable only as the opaque return of that function.
 struct Plural {
     count: usize,
     singular: String,
@@ -132,6 +149,14 @@ mod tests {
         assert_eq!(short_commit("abc"), "abc");
     }
 
+    /// A `Debug` or serializer label must be the bare type name, without the
+    /// module path a fully qualified name carries.
+    #[test]
+    fn a_short_type_name_drops_the_module_path() {
+        assert_eq!(short_type_name::<Plural>(), "Plural");
+        assert_eq!(short_type_name::<str>(), "str");
+    }
+
     #[test]
     fn an_ordinary_path_is_not_quoted() {
         assert_eq!(quote_path("a/src/lib.rs"), "a/src/lib.rs");
@@ -152,8 +177,9 @@ mod tests {
     /// is escaped too, one octal escape per UTF-8 byte the way Git renders it.
     #[test]
     fn a_non_ascii_control_is_escaped_byte_by_byte() {
-        // U+009B is the single-character form of the escape sequence that
-        // introduces a terminal control, and U+0085 breaks a line.
+        // Both samples are multi-byte C1 controls, chosen so the per-byte
+        // rendering is observable: one introduces a terminal control sequence
+        // and one breaks a line.
         assert_eq!(quote_path("a/csi\u{9b}here"), r#""a/csi\302\233here""#);
         assert_eq!(quote_path("a/nel\u{85}here"), r#""a/nel\302\205here""#);
     }

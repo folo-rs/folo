@@ -34,7 +34,7 @@ pub enum CheckFormat {
 const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
 
 pub(crate) fn run_check(
-    base: &str,
+    base: Option<&str>,
     manifest_path: &Path,
     format: CheckFormat,
     verify_packaging: bool,
@@ -50,8 +50,11 @@ pub(crate) fn run_check(
     let passed = classification
         .packages
         .iter()
-        .all(|package| package.status != PackageStatus::UnreleasedChanges)
-        && classification.groups.values().all(|group| group.consistent);
+        .all(|package| package.status() != PackageStatus::UnreleasedChanges)
+        && classification
+            .groups
+            .values()
+            .all(GroupVerdict::is_consistent);
 
     if let Some(success) = default_success_message(passed, &message) {
         message = success.to_string();
@@ -85,23 +88,23 @@ fn render_diagnostics(
         .collect();
     let mut lines = Vec::new();
     for package in packages {
-        if package.status != PackageStatus::UnreleasedChanges {
+        if package.status() != PackageStatus::UnreleasedChanges {
             continue;
         }
-        let anchor = match package.anchor.as_ref() {
-            Some(anchor) => format!("{} ({})", short_commit(&anchor.commit), anchor.version),
-            None => "no base revision".to_string(),
-        };
+        let anchor = package.anchor().expect(
+            "a package can only fail against an anchor, so an unreleased-changes verdict always carries the commit it was compared with",
+        );
+        let anchor = format!("{} ({})", short_commit(&anchor.commit), anchor.version);
         let group_text = match &package.group {
             Some(group) => {
                 let members = groups
                     .get(group)
-                    .map_or_else(|| group.clone(), |verdict| verdict.members.join(", "));
+                    .map_or_else(|| group.clone(), |verdict| verdict.members().join(", "));
                 format!(" Group {} also includes {members}.", quote_path(group))
             }
             None => String::new(),
         };
-        let changed = match package.changed.first() {
+        let changed = match package.changed().first() {
             Some(ChangedItem::Package { path, .. }) => {
                 format!("{} (and related paths) changed", quote_path(path))
             }
@@ -127,13 +130,13 @@ fn render_diagnostics(
     }
 
     for (name, verdict) in groups {
-        if verdict.consistent {
+        if verdict.is_consistent() {
             continue;
         }
         // Naming the version each member declares is what makes the mismatch
         // actionable; a bare member list only restates the group definition.
         let listed = verdict
-            .members
+            .members()
             .iter()
             .map(|member| match declared.get(member.as_str()) {
                 Some(version) => format!("{}@{version}", quote_path(member)),
@@ -318,6 +321,7 @@ fn cargo_package_list(workspace_root: &Path, package: &str) -> Result<Vec<String
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::collections::HashSet;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::path::PathBuf;
 
@@ -325,7 +329,6 @@ mod tests {
 
     use super::*;
     use crate::anchor::Anchor;
-    use crate::classify::DiffStat;
 
     assert_impl_all!(CheckFormat: UnwindSafe, RefUnwindSafe);
 
@@ -342,47 +345,33 @@ mod tests {
     /// Only status, name, anchor, group, and changed items reach the rendered
     /// text, so every other field carries a value the assertions never observe.
     fn failing(name: &str, changed: Vec<ChangedItem>) -> PackageClass {
-        PackageClass {
-            name: name.to_string(),
-            declared_version: Version::new(0, 1, 0),
-            group: None,
-            status: PackageStatus::UnreleasedChanges,
-            anchor: Some(Anchor {
+        PackageClass::unreleased_changes(
+            name,
+            Version::new(0, 1, 0),
+            Anchor {
                 commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
                 version: Version::new(0, 1, 0),
-            }),
-            changed,
-            stat: DiffStat {
-                files: 0,
-                insertions: 0,
-                deletions: 0,
             },
-            patch: String::new(),
-            untracked: Vec::new(),
-            dependencies: Vec::new(),
-            dependents: Vec::new(),
-            manifest_path: PathBuf::from("packages/demo/Cargo.toml"),
-        }
+            changed,
+            PathBuf::from("packages/demo/Cargo.toml"),
+        )
     }
 
     #[test]
     fn released_packages_produce_no_diagnostics() {
-        let mut package = failing("demo", Vec::new());
-        package.status = PackageStatus::Released;
+        let package = PackageClass::released(
+            "demo",
+            Version::new(0, 1, 0),
+            Anchor {
+                commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                version: Version::new(0, 1, 0),
+            },
+            PathBuf::from("packages/demo/Cargo.toml"),
+        );
 
         let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
 
         assert_eq!(text, "");
-    }
-
-    #[test]
-    fn a_package_without_an_anchor_says_so() {
-        let mut package = failing("demo", Vec::new());
-        package.anchor = None;
-
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
-
-        assert!(text.contains("since no base revision"), "{text}");
     }
 
     #[test]
@@ -442,11 +431,14 @@ mod tests {
         package.group = Some("g".to_string());
         let groups = BTreeMap::from([(
             "g".to_string(),
-            GroupVerdict {
-                members: vec!["demo".to_string(), "sibling".to_string()],
-                consistent: true,
-                version: Some(Version::new(0, 1, 0)),
-            },
+            GroupVerdict::new(
+                &["demo".to_string(), "sibling".to_string()],
+                &BTreeMap::from([
+                    ("demo".to_string(), Version::new(0, 1, 0)),
+                    ("sibling".to_string(), Version::new(0, 1, 0)),
+                ]),
+                &HashSet::new(),
+            ),
         )]);
 
         let text = render_diagnostics(&[package], &groups, CheckFormat::Text);
@@ -472,18 +464,27 @@ mod tests {
 
     #[test]
     fn an_inconsistent_group_names_the_version_each_member_declares() {
-        let mut member = failing("demo", Vec::new());
-        member.status = PackageStatus::Releasing;
-        member.declared_version = Version::new(0, 2, 0);
+        let member = PackageClass::releasing(
+            "demo",
+            Version::new(0, 2, 0),
+            Anchor {
+                commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                version: Version::new(0, 1, 0),
+            },
+            PathBuf::from("packages/demo/Cargo.toml"),
+        );
         let groups = BTreeMap::from([(
             "g".to_string(),
-            GroupVerdict {
-                // `absent` is never published, so it has no declared version to
-                // report and must still appear in the member list.
-                members: vec!["demo".to_string(), "absent".to_string()],
-                consistent: false,
-                version: None,
-            },
+            GroupVerdict::new(
+                // `absent` is not among the classified packages, so it has no
+                // declared version to report and must still appear in the list.
+                &["demo".to_string(), "absent".to_string()],
+                &BTreeMap::from([
+                    ("demo".to_string(), Version::new(0, 2, 0)),
+                    ("absent".to_string(), Version::new(0, 1, 0)),
+                ]),
+                &HashSet::new(),
+            ),
         )]);
 
         let text = render_diagnostics(&[member], &groups, CheckFormat::Text);

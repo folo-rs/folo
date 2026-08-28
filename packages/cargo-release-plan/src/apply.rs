@@ -77,7 +77,10 @@ pub(crate) fn run_apply(
         serde_json::from_str(&plan).map_err(|error| ParsePlanError::caused_by(plan_path, error))?;
 
     let work_tree = load_work_tree(manifest_path)?;
-    let current: BTreeMap<String, Version> = work_tree
+    // Every workspace member `apply` may edit, at the version it declares today.
+    // Membership decides which plan targets are valid; the versions are the
+    // increment base. Ref: docs/implementation.md, "Plan application".
+    let publishable: BTreeMap<String, Version> = work_tree
         .packages
         .iter()
         .map(|package| {
@@ -87,12 +90,14 @@ pub(crate) fn run_apply(
             )
         })
         .collect();
-    let expanded = expand_plan(&plan, &work_tree.groups, &current, &current)?;
-    verbose.note(format!(
-        "plan expands to {}; group members are included even when the plan named only one of \
+    let expanded = expand_plan(&plan, &work_tree.groups, &publishable)?;
+    verbose.note(|| {
+        format!(
+            "plan expands to {}; group members are included even when the plan named only one of \
          them, and never-published members on this branch are included in apply",
-        plural(expanded.packages.len(), "package version")
-    ));
+            plural(expanded.packages.len(), "package version")
+        )
+    });
 
     let edits = compute_edits(&work_tree, &expanded, verbose)?;
     let changed = changed_edit_count(&edits);
@@ -100,7 +105,7 @@ pub(crate) fn run_apply(
     if dry_run {
         let skip = lockfile_refresh_skip_reason(&work_tree.workspace_root, &expanded);
         if let Some(reason) = skip {
-            verbose.note(reason);
+            verbose.note(|| reason.to_string());
         }
         return Ok(dry_run_summary(
             &edits,
@@ -115,7 +120,7 @@ pub(crate) fn run_apply(
         }
         fs::write(&edit.path, edit.updated.as_bytes())
             .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
-        verbose.note(format!(
+        verbose.note(|| format!(
             "wrote {} after computing the full edit set in memory; remaining writes can still fail",
             quote_path(&edit.path.to_string_lossy())
         ));
@@ -236,11 +241,13 @@ fn rewrite_package_version(doc: &mut DocumentMut, expanded: &ExpandedPlan, verbo
         return;
     };
     if set_package_version_item(package, new_version) {
-        verbose.note(format!(
-            "{}: set package.version to {new_version} because the expanded plan assigns that \
+        verbose.note(|| {
+            format!(
+                "{}: set package.version to {new_version} because the expanded plan assigns that \
              version to this package",
-            quote_path(&name)
-        ));
+                quote_path(&name)
+            )
+        });
     }
 }
 
@@ -323,15 +330,17 @@ fn rewrite_dep_table(
             continue;
         }
         if rewrite_dep_entry(entry, &new_version) {
-            verbose.note(format!(
-                "{}.{}: rewrote the version requirement to follow {} {new_version} \
+            verbose.note(|| {
+                format!(
+                    "{}.{}: rewrote the version requirement to follow {} {new_version} \
                  (exact `=` pins keep the equals sign; requirements that already match the new \
                  version are left unchanged; only path dependencies resolving to that workspace \
                  member are rewritten)",
-                quote_path(where_),
-                quote_path(&name),
-                quote_path(&crate_name)
-            ));
+                    quote_path(where_),
+                    quote_path(&name),
+                    quote_path(&crate_name)
+                )
+            });
         }
     }
 }
@@ -456,7 +465,7 @@ fn refresh_lockfile(
     verbose: Verbose,
 ) -> Result<bool, AppError> {
     if let Some(reason) = lockfile_refresh_skip_reason(&work_tree.workspace_root, expanded) {
-        verbose.note(reason);
+        verbose.note(|| reason.to_string());
         return Ok(false);
     }
     let manifest = work_tree
@@ -478,7 +487,7 @@ fn refresh_lockfile(
         "--manifest-path",
         &manifest,
     ];
-    verbose.note(format!(
+    verbose.note(|| format!(
         "refreshing the workspace lockfile with `cargo {}` so --locked builds observe the new \
          path-dependency versions; the lockfile is not released content and cannot re-trigger check",
         rendered_arguments(&args)

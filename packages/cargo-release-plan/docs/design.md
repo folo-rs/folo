@@ -25,8 +25,10 @@ declared before the deletion may already be published, so its anchor is the last
 version change on that history and the ordinary monotonicity and content
 comparisons apply.
 
-The base revision defaults to `origin/main`. CI should pass an explicit SHA of
-the merge-base or target-branch tip. A stale default can both add and hide
+A run without `--base` takes the base revision from the workspace's
+`[workspace.metadata.release-plan] base` key, and falls back to `origin/main`
+when the workspace declares none. CI should pass an explicit SHA of the
+merge-base or target-branch tip. A stale default can both add and hide
 differences, so it is not a conservative fallback.
 
 A truncated history that never reveals a version change (including creation) is
