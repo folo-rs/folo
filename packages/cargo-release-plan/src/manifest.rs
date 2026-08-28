@@ -33,12 +33,12 @@ pub(crate) struct PackageManifest {
     /// root, so these cannot be joined onto the member directory the way a
     /// locally declared path is.
     pub(crate) inherited_path_dependencies: Vec<String>,
-    /// Files Cargo copies into the `.crate`, relative to this package's directory.
+    /// Files Cargo copies into the package archive, relative to this package's directory.
     ///
     /// Cargo packs the file named by `readme` or `license-file` into the crate
     /// root, so released content is not confined to the tree beneath the package.
     pub(crate) resource_paths: Vec<String>,
-    /// Files Cargo copies into the `.crate` that this package inherits, relative
+    /// Files Cargo copies into the package archive that this package inherits, relative
     /// to the workspace root.
     ///
     /// `[workspace.package]` declares its paths relative to the workspace root,
@@ -533,7 +533,7 @@ impl fmt::Debug for MemberPattern {
 ///
 /// Cargo resolves `members` and `exclude` globs against the workspace root, but
 /// a gitignore pattern with no separator matches a basename at any depth, so
-/// `foo*` would otherwise pull in `packages/foo` and attribute a nested crate's
+/// `foo*` would otherwise pull in `packages/foo` and attribute a nested package's
 /// files to a workspace that never declared it. A leading `/` restores Cargo's
 /// meaning; a pattern that already carries a separator is anchored either way.
 fn anchored(literal: &str) -> String {
@@ -659,7 +659,7 @@ mod tests {
 
     /// Cargo resolves `members` and `exclude` globs against the workspace root,
     /// where the gitignore matcher backing them would otherwise let a pattern
-    /// with no separator match a directory at any depth — pulling a nested crate
+    /// with no separator match a directory at any depth — pulling a nested package
     /// into a workspace that never declared it and anchoring the wrong package
     /// directory at that end of the comparison.
     #[test]

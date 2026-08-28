@@ -74,6 +74,8 @@ same reason colour is disabled there.
 
 ## Classification
 
+### Anchor and change set
+
 Classification walks the base revision's first-parent commits that touch a
 `Cargo.toml` (always including the base SHA and the oldest first-parent commit)
 until a parsed version change (or creation) is found, then diffs released paths
@@ -85,6 +87,8 @@ Comparison is on canonically typed TOML values rather than rendered text, so a
 reformatted table is not mistaken for a changed value and two differently shaped
 values never collapse into the same representation.
 
+### Workspace membership
+
 Historical workspace membership is reconstructed from the root manifest at each
 commit. `members` and `exclude` globs are matched root-anchored, as Cargo
 resolves them against the workspace root. Beyond the declared `members` patterns,
@@ -94,14 +98,19 @@ member as well, so that closure is followed to a fixed point and still honours
 followed too, resolved against the workspace root rather than the member
 directory, because that is where the root manifest declares it.
 
+A non-virtual root's own package is a member whatever `members` and `exclude`
+say, so that case is decided before the patterns are consulted.
+
+### Package boundaries
+
 A package's released content stops at a nested package boundary, and those
 boundaries are read off the tracked manifests beneath the package rather than off
 the member list. Cargo stops packing at any directory that carries its own
-`Cargo.toml`, whether or not the workspace claims it, so a fixture crate the
+`Cargo.toml`, whether or not the workspace claims it, so a fixture package the
 workspace excludes would otherwise have its files attributed to the enclosing
 package and produce unreleased-change verdicts for content that is never
 released. Each side of the comparison reads its own boundaries from its own file
-listing, so a crate that appears or disappears between the anchor and the work
+listing, so a package that appears or disappears between the anchor and the work
 tree moves the boundary with it.
 
 The work-tree side narrows that listing further. Git keeps reporting a tracked
@@ -110,6 +119,8 @@ manifest that is gone no longer stops packing, and a deleted default README is
 no longer there to detect. Eligibility still comes from the tracked listing —
 released content is defined from git-tracked files — while these structural
 questions are answered from the paths that still exist.
+
+### Manifest-named resources
 
 Released content also reaches past what the packaging rules describe, because
 Cargo packs the files named by `readme` and `license-file` regardless of
@@ -132,6 +143,8 @@ verdict, which the git-tracked rule forbids. The anchor side needs no such
 query: reading a resource back from a commit that did not track it already
 yields nothing.
 
+### Symbolic links
+
 A symbolic link is refused rather than compared, because neither reading is
 right at both ends: Cargo dereferences a link when it packs, while Git stores
 the target's path as the blob. The work-tree side detects one from the file
@@ -139,6 +152,8 @@ type, and the anchor side from the tree's mode, which is the only place the
 distinction survives once a blob is read. Both look at the released paths only,
 and the anchor listing covers the manifest resources alongside the package
 directory, so a link that only history holds is caught as well as one on disk.
+
+### Content comparison
 
 Content is compared by Git object identity rather than by bytes. Git converts
 content on its way into the object database — line-ending rules and clean
@@ -150,6 +165,8 @@ staging them would. Delegating the question that way means no conversion has to
 be understood, reimplemented, or kept in step with Git. Bytes are then read only
 for the paths whose ids differ, to render the patch.
 
+### Patch rendering
+
 Patches are rendered with Myers' line-level difference algorithm under a fixed
 edit-distance budget. The algorithm's working set is one row per edit step
 holding one entry per reachable diagonal, so its cost follows the number of
@@ -160,11 +177,15 @@ whole-file replacement instead, which is a correct patch of a coarser shape. The
 choice is confined to presentation because the verdict is decided by object
 identity before any patch is rendered.
 
+### Historical manifests
+
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.
 `version`, `include`, `exclude`, and `publish` all matter to classification: with
 them unresolved a member would be read with Cargo's defaults and get the wrong
 anchor, the wrong released-file set, or no exclusion at all.
+
+### Path case
 
 Because Cargo opens member directories through the filesystem while Git reports
 the spelling recorded in the tree, member matching follows the case rules the
@@ -182,6 +203,8 @@ a workspace whose subdirectories disagree about case. Manifest discovery reads
 Git's own spellings and matches `Cargo.toml` exactly, which is the spelling
 Cargo requires of a manifest and so needs no case model of its own.
 
+### Path spaces
+
 Manifest-declared relative paths — a path dependency, a `readme`, a
 `license-file`, a member pattern — are resolved with the host's own separator
 rules, so a backslash divides components only where the platform says it does.
@@ -189,8 +212,6 @@ Rewriting it unconditionally would resolve a legal Unix file name such as
 `odd\name.md` to a directory that does not exist and attribute its content
 elsewhere.
 
-A non-virtual root's own package is a member whatever `members` and `exclude`
-say, so that case is decided before the patterns are consulted.
 
 Package directories reported by `cargo metadata` are workspace-relative, but
 every pathspec handed to Git is repository-relative, so directories are rebased
@@ -205,6 +226,8 @@ from the repository-root manifest. Git rejects an empty pathspec, so
 the repository root — which every one of these paths spells as the empty string —
 becomes `.` inside the Git wrapper rather than at each call site.
 
+### Restored packages
+
 A package that is absent from the base revision is only treated as newly created
 once the first-parent walk shows no sampled commit carried it. When some earlier
 commit did, the branch is restoring a package, so the walk resumes at the newest
@@ -215,11 +238,13 @@ a package restored at the same version would look released. Treating every
 absence as creation would instead let a restored package re-publish a version
 that is already on crates.io.
 
+### Packaging cross-check
+
 The non-gating packaging cross-check compares Cargo's own `cargo package --list`
 against exactly the released-content selection classification uses, rather than
 against a set rebuilt from `include` and `exclude`. A second implementation of
 the same rules would drift from the first and warn about packages whose rules are
-right — a README Cargo detects for itself, or a crate nested inside the package —
+right — a README Cargo detects for itself, or a package nested inside the package —
 which is the opposite of what the cross-check exists to surface.
 
 ## Diagnostics
@@ -256,7 +281,7 @@ only when they would no longer match the new version. Every workspace member's
 manifest is visited, not just the publishable ones: a `publish = false` member
 can pin a package the plan increments, and a stale pin left behind would break
 the lockfile refresh. Registry dependencies
-that happen to share a crate name are left unchanged. A `version.workspace =
+that happen to share a package name are left unchanged. A `version.workspace =
 true` package version is replaced with a literal version string. The lockfile
 refresh is a subsequent `cargo update --offline --workspace`, skipped when the
 plan expands to no packages or the workspace has no `Cargo.lock`. `--workspace`

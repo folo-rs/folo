@@ -217,7 +217,7 @@ const MAX_EDIT_DISTANCE: usize = 1024;
 ///
 /// Falls back to replacing the whole file when the sides differ by more than
 /// `max_distance` edits; the result is still a valid unified diff, just a
-/// coarser one. Ref: docs/implementation.md, "Released content".
+/// coarser one. Ref: docs/implementation.md, "Patch rendering".
 fn edit_script(old: &[&str], new: &[&str], max_distance: usize) -> Vec<Edit> {
     // Deleting every old line and inserting every new one is always an edit
     // script, so the distance never exceeds that; searching further is wasted.

@@ -229,7 +229,7 @@ fn verify_packaging_rules(classification: &Classification) -> String {
         };
         // The released-content selection has to come from classification itself:
         // rebuilding it from `include` and `exclude` would miss a README Cargo
-        // detects for itself and take in a nested crate's files, warning about a
+        // detects for itself and take in a nested package's files, warning about a
         // package whose rules are right.
         let tool = match released_work_tree_paths(&classification.git, package, classification.case)
         {

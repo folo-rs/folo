@@ -83,7 +83,11 @@ pub enum RunOutcome {
     },
 }
 
-/// Core entry point of the tool, extracted for direct testability.
+/// Executes one requested operation and reports its outcome.
+///
+/// Selects the command named by `input` and returns what that command produced:
+/// the report directory, the check verdict and its diagnostics, or the apply
+/// summary.
 ///
 /// # Errors
 ///

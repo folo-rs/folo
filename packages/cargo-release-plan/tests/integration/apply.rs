@@ -29,7 +29,7 @@ shell_impl = { workspace = true }
 ",
     );
     write_package(&fixture, "shell_impl", "0.1.0", "");
-    fixture.commit("grouped crates");
+    fixture.commit("grouped packages");
     let base = fixture.sha("HEAD");
 
     let plan_path = fixture.path().join("plan.json");

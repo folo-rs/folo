@@ -68,9 +68,11 @@ Reads an approved plan and:
   `=` pins
 * refreshes the workspace lockfile so `--locked` builds keep working
 
-Manifests are edited structurally so comments and layout are preserved. Every
-edit is computed before any file is written. `--dry-run` lists the manifests
-that would change.
+Manifests are edited structurally, so comments and layout are preserved. A plan
+that cannot be applied in full changes no manifest: an unknown target, a version
+that would move backwards, or an unreadable manifest is reported before anything
+is written. `--dry-run` reports the manifests that would change and writes
+nothing.
 
 The plan schema is:
 

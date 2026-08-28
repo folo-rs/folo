@@ -45,49 +45,65 @@ target already declares is rejected.
 
 ## Released content
 
-Released content is the git-tracked files Cargo would put in the `.crate`: the
-`git ls-files` set filtered by the package's `include` / `exclude` using
-gitignore-style matching, so a directory pattern covers everything beneath it.
-Those keys are honoured whether the package declares them itself or inherits
-them from `[workspace.package]`, as is `publish`: an inherited `publish = false`
-excludes a package from classification exactly as a locally declared one does.
-The package's own `Cargo.lock` is never released content, because Cargo derives
-the published lockfile at pack time; a lockfile nested deeper in the package is
-ordinary source. Untracked
-files are reported as an advisory and never counted as changes. A package
-releases nothing from inside a directory that carries its own `Cargo.toml`,
-whether or not that crate belongs to the workspace, matching the package
-boundary Cargo itself stops at.
+Released content is the git-tracked source a package publishes. Three rules
+define it:
 
-A symbolic link among a package's released content stops the run. Cargo
-dereferences a link when it packs a `.crate`, so the published bytes are the
-target's content, while Git records only the target's path; comparing what Git
-stores would call a package unchanged after an edit to the file it points at.
-Replace the link with a regular file, or keep it out of the released content
-with `exclude`.
+* **Git decides what exists.** Only git-tracked files are released content, and
+  they are compared as Git itself stores them, so the line-ending rules and
+  clean filters a repository configures — Git LFS among them — never make an
+  untouched package look changed and never hide an edit. Untracked files are
+  reported as an advisory and never counted as changes.
+* **The package's own rules decide what is selected.** The package's `include` /
+  `exclude` keys select from the files under its directory using gitignore-style
+  matching, so a directory pattern covers everything beneath it. Those keys are
+  honoured whether the package declares them itself or inherits them from
+  `[workspace.package]`, as is `publish`: an inherited `publish = false` excludes
+  a package from classification exactly as a locally declared one does.
+* **A nested manifest ends the package.** A package releases nothing from inside
+  a directory that carries its own `Cargo.toml`, whether or not that directory
+  is a workspace member, matching the package boundary Cargo itself stops at.
 
-Released content is compared as Git itself stores it, so the line-ending rules
-and clean filters a repository configures — Git LFS among them — never make an
-untouched package look changed, and never hide an edit.
+The change set is a diff from the anchor to the work tree. The package directory
+is resolved independently at each end from that end's workspace member list,
+keyed by package name, so a relocated package is still compared with itself.
+Comparison is package-relative: a move that leaves released file bytes unchanged
+is `released`. A path that either end would package participates in the
+comparison, which is how a deleted packaged file or a path dropped from
+`include` is visible. Every released file counts, so a comment-only or
+formatting-only edit to a packaged `Cargo.toml` is a released content change.
 
-The files named by `readme` and `license-file` are released content wherever
-they live and whatever the packaging rules say, because Cargo packs each
-regardless of `include` and `exclude`. One declared from outside the package
-directory lands at the crate root under its file name, and one from inside keeps
-its own path. A workspace-level README that several packages inherit is
-therefore released content for every one of them, and editing it in place is a
-change to each; so is editing a README the package's own `include` leaves out.
-The git-tracked rule applies to a resource as it does to anything else: an
-untracked one is reported as an advisory, under the path it would take inside
-the `.crate`, and never counted as a change.
+### Where Cargo departs from those rules
 
-A package that declares no `readme` at all still releases one: Cargo probes the
-package directory for its own default names and packs the first it finds, so
-that file is released content on the same terms as a declared one and an
-`include` that omits it changes nothing. `readme = false` opts out, and
-`readme = true` names Cargo's preferred default. That probe goes through the
-filesystem, so on a volume that ignores path case a differently cased spelling
-answers a default name and is released.
+Cargo packages a few things the general rules would not select, and
+classification follows it in each case:
+
+* **Manifest-named resources.** The files named by `readme` and `license-file`
+  are released content wherever they live and whatever the packaging rules say,
+  because Cargo packs each regardless of `include` and `exclude`. One declared
+  from outside the package directory lands at the archive root under its file
+  name, and one from inside keeps its own path. A workspace-level README that
+  several packages inherit is therefore released content for every one of them,
+  and editing it in place is a change to each; so is editing a README the
+  package's own `include` leaves out. The git-tracked rule still applies: an
+  untracked resource is reported as an advisory, under the path it would take
+  inside the package archive, and never counted as a change.
+* **The default README.** A package that declares no `readme` at all still
+  releases one, because Cargo probes the package directory for its own default
+  names and packs the first it finds. That file is released content on the same
+  terms as a declared one, and an `include` that omits it changes nothing.
+  `readme = false` opts out, and `readme = true` names Cargo's preferred
+  default.
+* **The package's own `Cargo.lock`.** It is never released content, because
+  Cargo derives the published lockfile when it builds the archive. A lockfile
+  nested deeper in the package is ordinary source.
+* **Symbolic links.** A link among a package's released content stops the run.
+  Cargo dereferences a link when it builds a package archive, so the published
+  bytes are the target's content, while Git records only the target's path;
+  comparing what Git stores would call a package unchanged after an edit to the
+  file it points at. Replace the link with a regular file, or keep it out of the
+  released content with `exclude`.
+
+### Path case
 
 Path case is modelled once per workspace, from the volume holding the workspace
 root, and applied to member resolution and default-README probing everywhere
@@ -98,21 +114,10 @@ uses the exact spelling Git recorded, so the model only decides which spellings
 a workspace member or a default README may answer to, never which bytes are
 compared.
 
-The change set is a diff from the anchor to the work tree. The package
-directory is resolved independently at each end from that end's workspace
-member list, keyed by package name, so a relocated package is still compared
-with itself. Comparison is package-relative: a move that leaves released file
-bytes unchanged is `released`. A path that either end would package
-participates in the comparison, which is how a deleted packaged file or a path
-dropped from `include` is visible.
-
-A comment-only or formatting-only edit to a packaged `Cargo.toml` is a released
-content change.
-
 ### Inherited workspace values
 
 An inherited value participates in classification when it can change what a
-consumer receives in the published `.crate`. Cargo resolves
+consumer receives in the published package archive. Cargo resolves
 `[workspace.package]` and `[workspace.dependencies]` inheritance at package
 time, so those values are baked into the published manifest and a change to them
 is a change to released content. `[workspace.lints]` is out of scope by the same
@@ -181,12 +186,13 @@ released-content rules and Cargo disagree, so it is investigated and fixed in
 the rules, not tolerated.
 
 `apply` reads a plan (`schema_version` 1 with per-target `level` or `version`),
-expands groups, rewrites package versions and intra-workspace requirements that
-must follow (including `=` pins in non-publishable members), and refreshes the
-workspace lockfile.
-Manifests are edited structurally so comments and layout survive. The complete
-edit set is computed before any write. `--dry-run` lists the manifests that
-would change, without writing.
+expands version groups, rewrites package versions and intra-workspace
+requirements that must follow (including `=` pins in non-publishable members),
+and refreshes the workspace lockfile.
+Manifests are edited structurally so comments and layout survive. A plan that
+cannot be applied in full leaves every manifest untouched, so a rejected target
+or an unreadable manifest never produces a half-applied workspace. `--dry-run`
+reports the manifests that would change and writes nothing.
 
 ### Report artifacts
 
@@ -214,8 +220,9 @@ depends on which of the two renderings a file receives.
 
 ## Offline and deterministic
 
-Classification uses only `git` and `cargo metadata --no-deps`. It does not
-contact crates.io, resolve a dependency graph, or compile. Verbose logging
-explains the inputs and rules behind each decision, not merely the conclusion.
+Classification never contacts a registry, never resolves a dependency graph, and
+never compiles anything, so it produces the same verdict without a network and
+without a warm build. Verbose logging explains the inputs and rules behind each
+decision, not merely the conclusion.
 
 Internal ownership is documented in the [implementation guide](implementation.md).

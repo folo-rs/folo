@@ -154,7 +154,7 @@ fn an_untracked_auto_detected_readme_is_advisory_even_when_the_rules_exclude_it(
     assert!(report.contains("README.md"), "{report}");
 }
 
-/// Cargo dereferences a symbolic link when it packs a `.crate`, so the released
+/// Cargo dereferences a symbolic link when it builds a package archive, so the released
 /// bytes are the target's content while Git stores only the target's path.
 /// Comparing the stored paths would call the package unchanged after an edit to
 /// the file the link points at, so the run stops instead of answering wrongly.
@@ -348,7 +348,7 @@ fn a_readme_cargo_detects_itself_is_released_content() {
 
 /// The cross-check has to select released content by the same rules
 /// classification uses, or a package with a README Cargo detects for itself and
-/// a crate nested beneath it reports a mismatch it cannot act on.
+/// a package nested beneath it reports a mismatch it cannot act on.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn verify_packaging_accepts_a_detected_readme_beside_a_nested_crate() {
@@ -379,7 +379,7 @@ fn an_untracked_file_under_a_nested_package_is_not_advertised_for_the_outer_one(
         "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n",
     );
     fixture.write("packages/demo/inner/src/lib.rs", "pub fn g() {}\n");
-    fixture.commit("add a nested crate");
+    fixture.commit("add a nested package");
     fixture.write("packages/demo/inner/src/extra.rs", "pub fn h() {}\n");
     fixture.write("packages/demo/src/extra.rs", "pub fn i() {}\n");
 

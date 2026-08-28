@@ -573,7 +573,7 @@ struct PackageSide<'a> {
     dir: &'a str,
     rules: &'a PackagingRules,
     /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the `.crate` and valued by its git-root-relative path.
+    /// each takes inside the package archive and valued by its git-root-relative path.
     resources: &'a BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
@@ -582,7 +582,7 @@ struct PackageSide<'a> {
     case: PathCase,
 }
 
-/// Resolves the files Cargo copies into the `.crate` because a manifest key
+/// Resolves the files Cargo copies into the package archive because a manifest key
 /// names them.
 ///
 /// Cargo packs the file named by `readme` or `license-file` regardless of
@@ -724,7 +724,7 @@ fn diff_package(
 }
 
 /// Object ids the released work-tree files would be stored under, by the path
-/// each takes inside the `.crate`.
+/// each takes inside the package archive.
 ///
 /// A tracked path the work tree no longer holds is left out, which is what makes
 /// it read as deleted. A symbolic link stops the run here rather than being
@@ -841,7 +841,7 @@ fn untracked_released(
 ) -> Result<Vec<String>, AppError> {
     let listed: Vec<String> = git.ls_untracked(side.dir)?;
     // The same nested-package boundary the tracked listing observes applies
-    // here, or a file under a nested crate would be advertised as content
+    // here, or a file under a nested package would be advertised as content
     // Cargo would pack for the outer one. The manifest drawing that boundary
     // may itself still be untracked, so both listings feed the scan.
     let mut boundary_paths = listed.clone();
@@ -860,7 +860,7 @@ fn untracked_released(
     // package directory, so a resource that those rules exclude or that is
     // declared from outside would go unmentioned even though Cargo would pack
     // it. It is advisory in exactly the same way, and it is named by the path
-    // it takes inside the `.crate`.
+    // it takes inside the package archive.
     untracked.extend(side.resources.iter().filter_map(|(name, path)| {
         let present = git.root().join(path).symlink_metadata().is_ok();
         (present && !tracked_resources.contains(path)).then(|| name.clone())
@@ -887,7 +887,7 @@ fn untracked_released(
 /// The packaging verifier compares Cargo's own listing against this, so it has
 /// to be the very selection classification compares — reconstructing the set
 /// from `include` and `exclude` alone would drop a README Cargo detects for
-/// itself and take in the files of a nested crate, reporting a mismatch on a
+/// itself and take in the files of a nested package, reporting a mismatch on a
 /// package whose rules are in fact right.
 pub(crate) fn released_work_tree_paths(
     git: &GitRepo,
@@ -1000,7 +1000,7 @@ fn released_from_paths(
     map
 }
 
-/// The default README this end holds for `dir`, keyed by its name in the `.crate`.
+/// The default README this end holds for `dir`, keyed by its name in the package archive.
 ///
 /// Cargo probes the package directory for its default names in order and packs
 /// the first that exists without consulting `include` or `exclude`, so a package
@@ -1038,7 +1038,7 @@ fn detected_readme(dir: &str, present: &HashSet<&str>, case: PathCase) -> Option
 /// membership or of an explicit `include`. Reading the boundaries off the
 /// manifests tracked on the side being examined therefore matches Cargo, where
 /// reading them off the member list would attribute the files of an excluded or
-/// otherwise non-member nested crate to the outer package and report changes it
+/// otherwise non-member nested package to the outer package and report changes it
 /// will never release.
 fn nested_package_dirs(paths: &[String], dir: &str) -> Vec<String> {
     let prefix = if dir.is_empty() {
@@ -1072,7 +1072,7 @@ struct HistoricalPackage {
     version: Version,
     packaging: PackagingRules,
     /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the `.crate`.
+    /// each takes inside the package archive.
     resources: BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
@@ -1335,7 +1335,7 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
 /// Reads a tracked work-tree path the way Cargo would pack it.
 ///
 /// A symbolic link stops the run rather than being compared. Cargo dereferences
-/// a link when it packs a `.crate`, while Git stores the link as a blob holding
+/// a link when it builds a package archive, while Git stores the link as a blob holding
 /// the target path, so neither reading the target text nor following the link
 /// yields a comparison that is right at both ends. Ref: docs/design.md,
 /// "Released content".
@@ -1556,7 +1556,7 @@ mod tests {
             auto_readme: false,
             case: PathCase::Sensitive,
         };
-        // `fixture` is a crate of its own, so Cargo packs none of its files with
+        // `fixture` is a package of its own, so Cargo packs none of its files with
         // `packages/a` even though the workspace never lists it as a member.
         let paths = vec![
             "packages/a/Cargo.toml".to_string(),

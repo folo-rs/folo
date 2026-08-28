@@ -411,7 +411,7 @@ impl InvalidMemberPatternError {
 
 /// Released content contains a symbolic link.
 ///
-/// Cargo dereferences a link when it packs a `.crate`, so the released bytes are
+/// Cargo dereferences a link when it builds a package archive, so the released bytes are
 /// the target's content, while Git stores the link as a blob holding the target
 /// path. Comparing the blobs would call a package unchanged after an edit to the
 /// file it points at, and reconstructing the target's historical content is only
@@ -488,7 +488,7 @@ impl UnknownGroupMemberError {
 
 /// A version group lists a workspace package that is never published.
 ///
-/// A version group keeps the versions crates are released under in lockstep, so
+/// A version group keeps the versions its members are released under in lockstep, so
 /// a package that is never released has no such version to keep in step. Naming
 /// one is a configuration mistake rather than a member the tool can quietly
 /// leave behind.

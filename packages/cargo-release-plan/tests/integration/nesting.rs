@@ -139,7 +139,7 @@ fn nested_package_boundary_holds_for_a_crate_that_is_not_a_member() {
         "packages/demo/fixture/src/lib.rs",
         "pub fn g() { let _ = 7; }\n",
     );
-    fixture.commit("change the excluded nested crate");
+    fixture.commit("change the excluded nested package");
 
     let (passed, message) = check(&fixture, &base);
     assert!(passed, "{message}");

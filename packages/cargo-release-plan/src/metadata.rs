@@ -55,7 +55,7 @@ pub(crate) struct WorkPackage {
     pub(crate) manifest_path: PathBuf,
     pub(crate) dependencies: Vec<ReportedDep>,
     /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the `.crate`.
+    /// each takes inside the package archive.
     ///
     /// Resolution needs the repository layout, which `cargo metadata` does not
     /// describe, so classification fills this in once the repository is known.

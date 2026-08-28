@@ -3,7 +3,7 @@
 // A package's released files are git-tracked paths under its directory, filtered
 // by the manifest `include` / `exclude` using gitignore-style matching (the
 // `ignore` crate). The package's own `Cargo.lock` is never released content: the
-// published lockfile is derived per-crate at pack time and is not a function of
+// published lockfile is derived per package when the archive is built and is not a function of
 // the package source. A lockfile nested deeper in the package is ordinary source.
 //
 // The files named by `readme` and `license-file` are released content wherever
@@ -43,7 +43,7 @@ impl PackagingRules {
         Ok(Self { selection })
     }
 
-    /// Whether `package_relative_path` would be put in the `.crate`.
+    /// Whether `package_relative_path` would be put in the package archive.
     ///
     /// The path is Git's, so `/` is the separator and every other byte —
     /// including `\` — is part of a file's name.

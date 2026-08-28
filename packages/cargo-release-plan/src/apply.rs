@@ -27,7 +27,7 @@ struct ManifestEdit {
 
 /// What a `path` dependency has to resolve to before `apply` rewrites it.
 ///
-/// A `path` key plus a matching crate name is not enough: a member may depend on
+/// A `path` key plus a matching package name is not enough: a member may depend on
 /// a package outside the workspace, or on an excluded one, that happens to carry
 /// the same package name. Rewriting such a requirement would corrupt an
 /// unrelated dependency, so the declared path is resolved against the manifest
@@ -38,10 +38,10 @@ struct DepTargets<'a> {
 }
 
 impl DepTargets<'_> {
-    fn declares(&self, dep_path: &str, crate_name: &str) -> bool {
+    fn declares(&self, dep_path: &str, package_name: &str) -> bool {
         let joined = self.manifest_dir.join(dep_path);
         if let Some(declared) = self.members_by_dir.get(&normalize_lexically(&joined)) {
-            return declared == crate_name;
+            return declared == package_name;
         }
 
         // Cargo resolves a dependency path through the filesystem, so a symbolic
@@ -53,7 +53,7 @@ impl DepTargets<'_> {
             return false;
         };
         self.members_by_dir.iter().any(|(dir, declared)| {
-            declared == crate_name && fs::canonicalize(dir).is_ok_and(|member| member == resolved)
+            declared == package_name && fs::canonicalize(dir).is_ok_and(|member| member == resolved)
         })
     }
 }
@@ -342,7 +342,7 @@ fn rewrite_dep_table(
                  member are rewritten)",
                     quote_path(where_),
                     quote_path(key.get()),
-                    quote_path(dep_crate_name(entry, key.get()))
+                    quote_path(dep_package_name(entry, key.get()))
                 )
             });
         }
@@ -361,10 +361,10 @@ fn planned_version<'p>(
     expanded: &'p ExpandedPlan,
 ) -> Option<&'p Version> {
     let dep_path = dep_path(entry)?;
-    let crate_name = dep_crate_name(entry, table_key);
-    let new_version = expanded.packages.get(crate_name)?;
+    let package_name = dep_package_name(entry, table_key);
+    let new_version = expanded.packages.get(package_name)?;
     targets
-        .declares(dep_path, crate_name)
+        .declares(dep_path, package_name)
         .then_some(new_version)
 }
 
@@ -376,7 +376,7 @@ fn dep_path(entry: &Item) -> Option<&str> {
     }
 }
 
-fn dep_crate_name<'e>(entry: &'e Item, table_key: &'e str) -> &'e str {
+fn dep_package_name<'e>(entry: &'e Item, table_key: &'e str) -> &'e str {
     let package = match entry {
         Item::Value(Value::InlineTable(table)) => table.get("package").and_then(Value::as_str),
         Item::Table(table) => table.get("package").and_then(Item::as_str),
@@ -695,7 +695,7 @@ version = \"0.1.0\"
     }
 
     #[test]
-    fn dep_crate_name_reads_package_alias() {
+    fn dep_package_name_reads_package_alias() {
         let doc =
             dep_item("[dependencies]\nfoo-alias = { package = \"foo\", version = \"0.1.0\" }\n");
         let entry = doc
@@ -703,14 +703,14 @@ version = \"0.1.0\"
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("foo-alias"))
             .unwrap();
-        assert_eq!(dep_crate_name(entry, "foo-alias"), "foo");
+        assert_eq!(dep_package_name(entry, "foo-alias"), "foo");
         let doc = dep_item("[dependencies]\nfoo = \"0.1.0\"\n");
         let entry = doc
             .get("dependencies")
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("foo"))
             .unwrap();
-        assert_eq!(dep_crate_name(entry, "foo"), "foo");
+        assert_eq!(dep_package_name(entry, "foo"), "foo");
         let doc = dep_item(
             "
 [dependencies.foo-alias]
@@ -723,7 +723,7 @@ version = \"0.1.0\"
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("foo-alias"))
             .unwrap();
-        assert_eq!(dep_crate_name(entry, "foo-alias"), "foo");
+        assert_eq!(dep_package_name(entry, "foo-alias"), "foo");
     }
     /// Cargo accepts a dependency as a bare requirement string, an inline
     /// table, or a table of its own, and a `=` pin in any of them has to follow
@@ -793,7 +793,7 @@ version = \"0.1.0\"
     }
 
     /// Only path dependencies follow a plan: a registry dependency on a package
-    /// of the same name is a different crate as far as this workspace goes.
+    /// of the same name is a different package as far as this workspace goes.
     #[test]
     fn a_dependency_without_a_path_or_a_plan_entry_is_not_rewritten() {
         let expanded = ExpandedPlan {
@@ -810,7 +810,7 @@ version = \"0.1.0\"
     }
 
     /// A path dependency is rewritten only when its path resolves to the member
-    /// directory that declares that package, so a same-named crate living
+    /// directory that declares that package, so a same-named package living
     /// outside the workspace keeps its own requirement.
     #[test]
     fn only_a_path_resolving_to_the_declaring_member_is_rewritten() {
@@ -960,7 +960,7 @@ version = \"0.1.0\"
 
         assert!(!rewrite_dep_entry(&mut absent, &v("0.2.0")));
         assert_eq!(dep_path(&absent), None);
-        assert_eq!(dep_crate_name(&absent, "demo"), "demo");
+        assert_eq!(dep_package_name(&absent, "demo"), "demo");
     }
 
     #[test]
