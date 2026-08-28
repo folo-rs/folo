@@ -206,7 +206,9 @@ mod tests {
         let orphan = store.allocate_id(&ProcessIdentity::for_test(12)).unwrap();
 
         let mut processes = MockProcesses::new();
-        processes.expect_probe().returning(|_| ProcessLiveness::Dead);
+        processes
+            .expect_probe()
+            .returning(|_| ProcessLiveness::Dead);
 
         assert!(live_sessions(&store, &processes).unwrap().is_empty());
         assert!(store.list_reservations().unwrap().is_empty());
@@ -227,7 +229,9 @@ mod tests {
         let claimed = store.allocate_id(&owner).unwrap();
 
         let mut processes = MockProcesses::new();
-        processes.expect_probe().returning(|_| ProcessLiveness::Live);
+        processes
+            .expect_probe()
+            .returning(|_| ProcessLiveness::Live);
 
         assert!(live_sessions(&store, &processes).unwrap().is_empty());
         assert_eq!(store.list_reservations().unwrap(), vec![(claimed, owner)]);

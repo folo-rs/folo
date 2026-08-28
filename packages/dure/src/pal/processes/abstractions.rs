@@ -17,10 +17,6 @@ pub(crate) enum ProcessLiveness {
     )]
     Live,
     /// Missing, exited, or pid reused by a different process.
-    #[cfg_attr(
-        not(any(windows, test)),
-        expect(dead_code, reason = "produced by the Windows process PAL and tests")
-    )]
     Dead,
     /// The process could not be inspected; the record must be kept.
     InspectFailed,

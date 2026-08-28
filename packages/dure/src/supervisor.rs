@@ -267,7 +267,7 @@ impl<T: Transport> Clone for Client<T> {
 /// finishes attaching, losing both its output and its exit status. The
 /// supervisor therefore holds the session open after the app exits until either
 /// the first client attaches or the process that started the session goes away.
-/// Ref: docs/design.md, "Run".
+/// Ref: docs/design.md, "Commands"; docs/implementation.md, "Process split".
 #[derive(Debug, Default)]
 struct FirstAttach {
     attached: bool,
@@ -975,9 +975,7 @@ mod tests {
     }
 
     /// Connection the client slot currently holds, if any.
-    fn client_conn(
-        shared: &Shared<MemoryTransport, MemoryPseudoconsole>,
-    ) -> Option<ConnId> {
+    fn client_conn(shared: &Shared<MemoryTransport, MemoryPseudoconsole>) -> Option<ConnId> {
         shared.client().as_ref().map(|client| client.conn)
     }
 
@@ -1087,17 +1085,25 @@ mod tests {
         let shared = Arc::new(shared_session(&transport, &pty_host));
         let (supervisor, client) = connected_pair(&transport, "pipe");
         let (successor, _successor_client) = connected_pair(&transport, "successor");
+        let successor_outbox = Outbox::start(transport.clone(), successor);
+        let displaced = Arc::new(Mutex::new(None));
         // Stands in for a steal that lands between the acknowledgement and the
         // first relayed message. The displaced relay must not reach the app.
         let steal = {
             let shared = Arc::clone(&shared);
-            let transport = transport.clone();
+            let successor_outbox = Arc::clone(&successor_outbox);
+            let displaced = Arc::clone(&displaced);
             move |attached: bool| {
                 if attached {
-                    *shared.client() = Some(Client {
+                    let previous = shared.client().replace(Client {
                         conn: successor,
-                        outbox: Outbox::start(transport.clone(), successor),
+                        outbox: Arc::clone(&successor_outbox),
                     });
+                    // What the real steal does to the client it replaces.
+                    if let Some(previous) = previous {
+                        previous.outbox.finish();
+                        *displaced.lock().unwrap() = Some(previous.outbox);
+                    }
                 }
             }
         };
@@ -1113,6 +1119,15 @@ mod tests {
 
         assert!(pty_host.take_input(shared.pty).is_empty());
         assert_eq!(client_conn(&shared), Some(successor));
+
+        displaced
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the steal displaced the first client")
+            .flush();
+        successor_outbox.finish();
+        successor_outbox.flush();
     }
 
     #[test]

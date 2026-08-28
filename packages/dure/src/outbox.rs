@@ -24,8 +24,10 @@ pub(crate) struct Outbox<T: Transport> {
     transport: T,
     conn: ConnId,
     state: Mutex<OutboxState>,
-    /// Signals a queued message, a state change, or the writer having drained.
+    /// Signals a queued message or a state change.
     changed: Condvar,
+    /// Taken by whoever flushes, so the writer is joined exactly once.
+    writer: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 /// Queue and lifecycle of one outbox.
@@ -39,8 +41,6 @@ struct OutboxState {
     abandoned: bool,
     /// No further messages will be queued; the writer stops once it drains.
     finished: bool,
-    /// The writer has stopped and dropped the connection.
-    drained: bool,
 }
 
 impl<T: Transport + Clone> Outbox<T> {
@@ -51,11 +51,17 @@ impl<T: Transport + Clone> Outbox<T> {
             conn,
             state: Mutex::new(OutboxState::default()),
             changed: Condvar::new(),
+            writer: Mutex::new(None),
         });
-        thread::spawn({
+        let writer = thread::spawn({
             let outbox = Arc::clone(&outbox);
             move || outbox.write_loop()
         });
+        *outbox
+            .writer
+            .lock()
+            .expect("the writer handle is only taken by a flush, never across a panic") =
+            Some(writer);
         outbox
     }
 
@@ -63,7 +69,7 @@ impl<T: Transport + Clone> Outbox<T> {
     ///
     /// A client that falls far enough behind is abandoned instead: `dure` keeps
     /// no screen buffer, so output that cannot be delivered has no later value,
-    /// and the user recovers the session with `dure resume --force`.
+    /// and the user recovers the session with a fresh `dure resume`.
     pub(crate) fn send(&self, message: Message) {
         let overflowed = {
             let mut state = self.lock();
@@ -110,13 +116,18 @@ impl<T: Transport + Clone> Outbox<T> {
     /// Only the final exit-status delivery waits for this: by then the session
     /// owns no store record, job, or pseudoconsole, so a client that never
     /// drains its pipe delays nothing beyond this process outliving it.
+    ///
+    /// The caller is responsible for having finished or abandoned the outbox;
+    /// otherwise the writer has no reason to stop.
     pub(crate) fn flush(&self) {
-        let mut state = self.lock();
-        while !state.drained {
-            state = self
-                .changed
-                .wait(state)
-                .expect("the outbox lock is only held for queue bookkeeping, never across a panic");
+        let mut writer = self
+            .writer
+            .lock()
+            .expect("the writer handle is only taken by a flush, never across a panic");
+        if let Some(handle) = writer.take() {
+            handle
+                .join()
+                .expect("the outbox writer thread cannot panic");
         }
     }
 
@@ -133,9 +144,6 @@ impl<T: Transport + Clone> Outbox<T> {
             }
         }
         self.transport.disconnect(self.conn);
-        let mut state = self.lock();
-        state.drained = true;
-        self.changed.notify_all();
     }
 
     /// Next message to write, or `None` once the outbox is done.

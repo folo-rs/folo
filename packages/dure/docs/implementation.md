@@ -19,6 +19,13 @@ failure closes the lifetime job, removes any provisional state, reports
 non-`StartupOk` response as a failed start. A client never reports a successful start
 for a session that cannot be resumed.
 
+The startup channel stays open past that acknowledgement, as the supervisor's
+signal that `dure run` still intends to attach. An app that exits immediately
+would otherwise be torn down before the client finishes attaching, losing its
+output and exit status to the race. So once the app has exited, the supervisor
+holds the session open — listener included — until either a client has attached
+or the initiator has dropped the channel.
+
 Windows APIs sit behind a PAL so logic does not depend on a real console host,
 named pipe, or job object. The PAL is the only place that talks to the operating
 system. Logic consumes it through facades that select the real implementation, or
@@ -112,8 +119,9 @@ afterwards. Pseudoconsole input lands in the console host's buffer, which the
 host drains independently of the app, so that hold is bounded.
 
 Session teardown closes the pseudoconsole and joins the output pump before
-announcing the app's exit status, which is what orders the app's final output
-ahead of it.
+queueing the app's exit status, which is what orders the app's final output
+ahead of it. Nothing is torn down until the initiator has attached or given up,
+so a session whose app exits immediately still reports.
 
 ## Transport
 
@@ -133,7 +141,20 @@ table before releasing the table lock, so tearing a connection or listener down
 concurrently cannot invalidate a handle that is still in use, nor let Windows
 reuse the handle value for an unrelated object. Teardown cancels the I/O
 outstanding on the handle, which is what unblocks a waiting reader, and the
-handle is closed once the last operation releases it.
+handle is closed once the last operation releases it. The pseudoconsole PAL owns
+its host pipe handles the same way, for the same reason.
+
+Every supervisor-side write to a client is queued and delivered by a thread that
+owns that connection. A pipe write blocks while the peer is not draining, so
+writing directly would let one wedged client hold whichever supervisor path made
+the write: the output pump, the steal that is trying to replace it, or the exit
+teardown. Queueing confines the block to the owning thread, and FIFO delivery is
+also what orders `Attached` ahead of the app's output and `AppExited` behind it.
+
+A client that falls further behind than `MAX_CLIENT_BACKLOG_BYTES` is
+disconnected rather than buffered without bound. `dure` keeps no screen buffer,
+so output that cannot be delivered has no later value, and the user recovers the
+session with a fresh `dure resume`.
 
 [`CreatePseudoConsole`]: https://learn.microsoft.com/windows/console/createpseudoconsole
 
@@ -148,6 +169,19 @@ mismatched process makes the record stale; failure to inspect the process is an
 error and does not delete the record. A connect or pipe failure is not evidence
 of process death. Id allocation is filesystem-coordinated so two concurrent
 `run` invocations cannot take the same id.
+
+One file holds either a claim or a published session, and either way it names
+the process it belongs to. The claim is what a supervisor takes before it has
+everything a record needs; naming its owner is what lets a claim left behind by
+a supervisor that died mid-initialization be reaped instead of occupying the id
+forever. A claim is reported as absent to everything except that reaping.
+
+Ids are reused, so every delete is conditional on the file still naming the
+process the caller means to remove. Without that, a stale read could reap the
+session that took the id in the meantime. A claim written by a supervisor killed
+between creating the file and writing its owner names nobody and is not reaped;
+that window is a single unbuffered write wide and is accepted rather than
+designed around.
 
 ## Pseudoconsole
 
@@ -166,6 +200,11 @@ the same class as SSH plus a pseudoconsole.
 
 The client disables its own Ctrl+C handler and forwards the key. Console close
 on the client does not propagate a kill into the supervisor's pseudoconsole.
+
+Teardown closes the lifetime job before the pseudoconsole. Descendants of the
+app stay attached to the pseudoconsole until the job ends them, and closing a
+pseudoconsole waits for its attached clients, so the other order can stall on a
+grandchild that outlived the app.
 
 ## Crates and concurrency
 

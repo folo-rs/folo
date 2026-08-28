@@ -56,6 +56,10 @@ that launch directory.
 If the process cannot be kept alive across SSH disconnect, `dure run` fails
 instead of starting a session that would die on disconnect.
 
+An app that exits before `dure run` has finished attaching still reports its
+output and exit status. Only if the `dure run` process itself goes away first is
+such a session discarded unreported.
+
 `dure resume` attaches using auto-detect. `dure resume --id <id>` attaches to
 that live session and skips auto-detect.
 
@@ -128,6 +132,11 @@ session stays listed; `dure kill --id` still reaches it.
 While detached, the app's console stays open. Input is not closed (end of stdin
 would terminate many apps). Output is drained and discarded so the app cannot
 block on a full pipe.
+
+An attached client that stops reading its connection is disconnected once it
+falls far enough behind, rather than being allowed to stall the session. Since
+`dure` keeps no screen contents, nothing recoverable is lost; a fresh `dure
+resume` takes the session back.
 
 Closing the terminal window detaches. It does not stop the app. Ctrl+C while
 attached is delivered to the app, not to the client.
