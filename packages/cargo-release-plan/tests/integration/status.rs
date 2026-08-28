@@ -1,5 +1,7 @@
-//! Status verdicts: which released-content and manifest changes make a
-//! package releasing, carrying unreleased changes, or already released.
+//! Status verdicts.
+//!
+//! Covers which released-content and manifest changes make a package releasing,
+//! carrying unreleased changes, or already released.
 
 use std::fs;
 

@@ -570,8 +570,10 @@ mod tests {
         assert_eq!(common_prefix(&old, -1, &new, 0), 0);
     }
 
-    /// Two entirely unrelated files exceed the edit-distance budget, so the
-    /// renderer stops refining and replaces one side with the other.
+    /// Exceeding the edit distance budget falls back to a whole file replacement.
+    ///
+    /// Two entirely unrelated files exceed the edit-distance budget, so the renderer stops refining
+    /// and replaces one side with the other.
     #[test]
     fn exceeding_the_edit_distance_budget_falls_back_to_a_whole_file_replacement() {
         // Disjoint sides of four lines each need eight edits, which the budget
@@ -584,9 +586,11 @@ mod tests {
         assert_eq!(count(&script, Edit::Keep), 0);
     }
 
-    /// A file far larger than the budget but differing in a single line has a
-    /// tiny edit distance, so it is still rendered as one small hunk. The budget
-    /// bounds the distance, not the input size.
+    /// A file much larger than the budget with one changed line stays a small hunk.
+    ///
+    /// A file far larger than the budget but differing in a single line has a tiny edit distance,
+    /// so it is still rendered as one small hunk. The budget bounds the distance, not the input
+    /// size.
     #[test]
     fn a_file_much_larger_than_the_budget_with_one_changed_line_stays_a_small_hunk() {
         let old = ["a\n"; 40];
@@ -629,9 +633,11 @@ mod tests {
             "Binary files a/logo.png and b/logo.png differ\n"
         );
     }
-    /// The Myers search gives up rather than overflow on a pathological input,
-    /// and the fallback still has to describe a valid transformation: delete
-    /// every old line, then insert every new one.
+    /// The whole file fallback replaces one side with the other.
+    ///
+    /// The Myers search gives up rather than overflow on a pathological input, and the fallback
+    /// still has to describe a valid transformation: delete every old line, then insert every new
+    /// one.
     #[test]
     fn the_whole_file_fallback_replaces_one_side_with_the_other() {
         let script = whole_file_script(2, 3);

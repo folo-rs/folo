@@ -24,10 +24,12 @@ g = ["alpha", "beta"]
     assert!(passed, "{message}");
 }
 
-/// A version group keeps released versions in lockstep, so a member that is
-/// never published has no released version to keep in step. Accepting one would
-/// leave it out of both the consistency verdict and the versions `apply`
-/// rewrites, so the group's declared versions would silently drift apart.
+/// A non publishable group member is rejected.
+///
+/// A version group keeps released versions in lockstep, so a member that is never published has no
+/// released version to keep in step. Accepting one would leave it out of both the consistency
+/// verdict and the versions `apply` rewrites, so the group's declared versions would silently drift
+/// apart.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_non_publishable_group_member_is_rejected() {

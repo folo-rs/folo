@@ -482,8 +482,10 @@ pub(crate) fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
     }
 }
 
-/// Whether Git reported that a path is simply absent from the revision asked
-/// about, rather than failing for an operational reason.
+/// Whether Git reported a path as absent from the revision.
+///
+/// The alternative is an operational failure, which the caller must not mistake
+/// for an absent path.
 ///
 /// Git has no machine-readable signal for this, so the wording is matched. That
 /// is only sound because [`crate::command`] pins the child locale to `C`; a
@@ -551,8 +553,10 @@ mod tests {
         assert!(!is_manifest_path("packages/Cargo.toml/inner.rs"));
     }
 
-    /// The mode and object id are read off the record's own fields, so a path
-    /// that itself looks like a mode cannot be mistaken for one.
+    /// Tree records are parsed into mode and object.
+    ///
+    /// The mode and object id are read off the record's own fields, so a path that itself looks
+    /// like a mode cannot be mistaken for one.
     #[test]
     fn tree_records_are_parsed_into_mode_and_object() {
         let link = TreeEntry::parse("120000 blob abc\tpackages/foo/link.txt").unwrap();
@@ -575,9 +579,10 @@ mod tests {
         assert!(TreeEntry::parse("120000 blob\tpackages/foo").is_none());
     }
 
-    /// A backslash is an ordinary character in a file name on Unix, so only the
-    /// platform's own separator may be rewritten when an operating-system path
-    /// enters Git's path space.
+    /// Os path rewrites only the platform separator.
+    ///
+    /// A backslash is an ordinary character in a file name on Unix, so only the platform's own
+    /// separator may be rewritten when an operating-system path enters Git's path space.
     #[test]
     fn os_path_rewrites_only_the_platform_separator() {
         let native = PathBuf::from("packages").join("foo").join("Cargo.toml");
@@ -588,8 +593,10 @@ mod tests {
         }
     }
 
-    /// Ordinary packages must still take one subprocess, or every classification
-    /// would pay for extra round trips.
+    /// Short paths all fit one batch.
+    ///
+    /// Ordinary packages must still take one subprocess, or every classification would pay for
+    /// extra round trips.
     #[test]
     fn short_paths_all_fit_one_batch() {
         let paths: Vec<&str> = vec!["packages/foo/src/lib.rs"; 256];
@@ -615,8 +622,10 @@ mod tests {
         assert!(command_line_batches(&[]).unwrap().is_empty());
     }
 
-    /// A path that cannot fit alone would otherwise loop or fail to spawn with
-    /// an operating-system message that names no path.
+    /// A path longer than the budget is rejected.
+    ///
+    /// A path that cannot fit alone would otherwise loop or fail to spawn with an operating-system
+    /// message that names no path.
     #[test]
     fn a_path_longer_than_the_budget_is_rejected() {
         let huge = "x".repeat(PATH_ARG_BUDGET);
@@ -635,10 +644,11 @@ mod tests {
         assert_eq!(join_git_rel(".", "packages/foo"), "packages/foo");
     }
 
-    /// Cargo and Git need not spell the same directory identically: Windows
-    /// hands out 8.3 short names for some paths and both tools accept
-    /// uncanonical spellings, so the prefix must come from Git rather than from
-    /// subtracting one reported path from the other.
+    /// Discover reports a prefix for an uncanonical directory.
+    ///
+    /// Cargo and Git need not spell the same directory identically: Windows hands out 8.3 short
+    /// names for some paths and both tools accept uncanonical spellings, so the prefix must come
+    /// from Git rather than from subtracting one reported path from the other.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn discover_reports_a_prefix_for_an_uncanonical_directory() {
@@ -693,8 +703,10 @@ mod tests {
         GitRepo::discover(temp.path()).unwrap_err();
     }
 
-    /// Every listing runs `git` in the repository root, so a root that is not a
-    /// repository must surface the failure rather than an empty listing.
+    /// Listings fail when the root is not a repository.
+    ///
+    /// Every listing runs `git` in the repository root, so a root that is not a repository must
+    /// surface the failure rather than an empty listing.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn listings_fail_when_the_root_is_not_a_repository() {
@@ -725,8 +737,10 @@ mod tests {
         assert!(!repo.has_parent_or_is_shallow_boundary(&root).unwrap());
     }
 
-    /// The commit message follows the headers in `cat-file -p` output, so a
-    /// message body that mentions a parent must not be read as a header.
+    /// A root commit whose message mentions a parent is still a root.
+    ///
+    /// The commit message follows the headers in `cat-file -p` output, so a message body that
+    /// mentions a parent must not be read as a header.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_root_commit_whose_message_mentions_a_parent_is_still_a_root() {
@@ -757,8 +771,10 @@ mod tests {
         assert!(!repo.has_parent_or_is_shallow_boundary(&head).unwrap());
     }
 
-    /// A path absent at a commit is an ordinary answer, while any other `git
-    /// show` failure is a real error the caller must see.
+    /// Show file distinguishes an absent path from a failure.
+    ///
+    /// A path absent at a commit is an ordinary answer, while any other `git show` failure is a
+    /// real error the caller must see.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn show_file_distinguishes_an_absent_path_from_a_failure() {
@@ -824,8 +840,10 @@ mod tests {
         assert_eq!(dir_pathspec("packages/foo*"), ":(literal)packages/foo*");
     }
 
-    /// The literal pathspec must survive the round trip through Git itself: the
-    /// escaping is only correct if Git reads it back as one plain path.
+    /// A directory named like a pattern lists only its own files.
+    ///
+    /// The literal pathspec must survive the round trip through Git itself: the escaping is only
+    /// correct if Git reads it back as one plain path.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_directory_named_like_a_pattern_lists_only_its_own_files() {
@@ -853,10 +871,11 @@ mod tests {
         );
     }
 
-    /// Git converts content on its way into the object database, so the id a
-    /// work-tree file hashes to is the representation both ends of a comparison
-    /// have to be expressed in. It must agree with the id the tree records for
-    /// an unmodified file.
+    /// A work tree file hashes to the id its tree entry records.
+    ///
+    /// Git converts content on its way into the object database, so the id a work-tree file hashes
+    /// to is the representation both ends of a comparison have to be expressed in. It must agree
+    /// with the id the tree records for an unmodified file.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_work_tree_file_hashes_to_the_id_its_tree_entry_records() {

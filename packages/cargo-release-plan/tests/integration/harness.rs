@@ -1,6 +1,7 @@
-//! Scaffolding shared by the integration modules: fixture workspaces that
-//! are already seeded, and thin wrappers that drive one run and reduce its
-//! outcome to what a test asserts on.
+//! Scaffolding shared by the integration modules.
+//!
+//! Provides fixture workspaces that are already seeded, and thin wrappers that
+//! drive one run and reduce its outcome to what a test asserts on.
 
 use std::fs;
 use std::path::PathBuf;

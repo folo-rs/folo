@@ -54,8 +54,9 @@ pub(crate) struct WorkPackage {
     pub(crate) manifest: PackageManifest,
     pub(crate) manifest_path: PathBuf,
     pub(crate) dependencies: Vec<ReportedDep>,
-    /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the package archive.
+    /// Files Cargo packs because a manifest key names them.
+    ///
+    /// Keyed by the path each takes inside the package archive.
     ///
     /// Resolution needs the repository layout, which `cargo metadata` does not
     /// describe, so classification fills this in once the repository is known.
@@ -332,6 +333,8 @@ mod tests {
 
     use super::*;
 
+    /// The publishable set these cases check against.
+    ///
     /// Group configuration is checked against the publishable set, which for
     /// most cases is simply every workspace member.
     fn all_publishable(names: &HashSet<String>) -> HashSet<&str> {
@@ -370,8 +373,10 @@ mod tests {
         assert_eq!(default_base_from_metadata(&json).unwrap(), "origin/trunk");
     }
 
-    /// A base that is not a usable revision name would otherwise surface as a
-    /// confusing `git rev-parse` failure much later.
+    /// Default base rejects a non revision declaration.
+    ///
+    /// A base that is not a usable revision name would otherwise surface as a confusing `git
+    /// rev-parse` failure much later.
     #[test]
     fn default_base_rejects_a_non_revision_declaration() {
         for json in [
@@ -383,9 +388,11 @@ mod tests {
         }
     }
 
-    /// A version group keeps released versions in lockstep, so a member that is
-    /// never published has no version to keep in step and would otherwise be
-    /// dropped from every decision without a word.
+    /// Groups from metadata rejects a non publishable member.
+    ///
+    /// A version group keeps released versions in lockstep, so a member that is never published has
+    /// no version to keep in step and would otherwise be dropped from every decision without a
+    /// word.
     #[test]
     fn groups_from_metadata_rejects_a_non_publishable_member() {
         let json = json!({

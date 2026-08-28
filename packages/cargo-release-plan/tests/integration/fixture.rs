@@ -102,9 +102,11 @@ resolver = "2"
     }
 }
 
-/// Git settings pinned for every invocation, so no test inherits host or user
-/// configuration: an unset identity, a signing key, or a background `gc` would
-/// all make a test depend on the machine it runs on.
+/// Git settings pinned for every invocation.
+///
+/// No test may inherit host or user configuration: an unset identity, a signing
+/// key, or a background `gc` would all make a test depend on the machine it
+/// runs on.
 const HERMETIC_CONFIG: &[&str] = &[
     "-c",
     "user.email=release-plan@example.invalid",

@@ -1,5 +1,7 @@
-//! The non-gating packaging cross-check against what Cargo would pack, and the
-//! manifest resources Cargo packs from outside the package directory.
+//! The non-gating packaging cross-check against what Cargo would pack.
+//!
+//! Also covers the manifest resources Cargo packs from outside the package
+//! directory.
 
 #[cfg(unix)]
 use std::fs;
@@ -49,9 +51,10 @@ fn verify_packaging_warns_without_failing_when_cargo_would_pack_an_untracked_fil
     assert!(message.contains("only in tool: nothing"), "{message}");
 }
 
-/// The packaging probe cross-checks the relevance rules against Cargo itself,
-/// so a package Cargo refuses to enumerate must degrade to a warning rather
-/// than turn a passing check into a failure.
+/// Verify packaging warns when cargo cannot enumerate a package.
+///
+/// The packaging probe cross-checks the relevance rules against Cargo itself, so a package Cargo
+/// refuses to enumerate must degrade to a warning rather than turn a passing check into a failure.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn verify_packaging_warns_when_cargo_cannot_enumerate_a_package() {
@@ -68,9 +71,10 @@ fn verify_packaging_warns_when_cargo_cannot_enumerate_a_package() {
     assert!(message.contains("packaging probe failed"), "{message}");
 }
 
-/// Cargo copies the file named by `readme` into the crate root even when it
-/// lives outside the package directory, so editing a shared README republishes
-/// every package that names it.
+/// An inherited readme is released content for every inheriting package.
+///
+/// Cargo copies the file named by `readme` into the crate root even when it lives outside the
+/// package directory, so editing a shared README republishes every package that names it.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn an_inherited_readme_is_released_content_for_every_inheriting_package() {
@@ -91,8 +95,10 @@ fn an_inherited_readme_is_released_content_for_every_inheriting_package() {
     assert!(!message.contains("other"), "{message}");
 }
 
-/// A locally declared resource resolves against the package directory, so a
-/// license file shared from a sibling directory is released content too.
+/// A license file outside the package directory is released content.
+///
+/// A locally declared resource resolves against the package directory, so a license file shared
+/// from a sibling directory is released content too.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_license_file_outside_the_package_directory_is_released_content() {
@@ -115,9 +121,11 @@ fn a_license_file_outside_the_package_directory_is_released_content() {
     assert!(message.contains("demo"), "{message}");
 }
 
-/// Released content is defined from git-tracked files wherever they live, so a
-/// manifest resource that is not tracked is advisory in the same way as an
-/// untracked file inside the package directory.
+/// An untracked manifest resource is advisory only.
+///
+/// Released content is defined from git-tracked files wherever they live, so a manifest resource
+/// that is not tracked is advisory in the same way as an untracked file inside the package
+/// directory.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn an_untracked_manifest_resource_is_advisory_only() {
@@ -135,9 +143,11 @@ fn an_untracked_manifest_resource_is_advisory_only() {
     assert!(report.contains("README.md"), "{report}");
 }
 
-/// Cargo packs a README it detects for itself whatever the packaging rules say,
-/// so an untracked one is worth naming even when an `include` list excludes it —
-/// the rules would otherwise keep it out of the advisory listing entirely.
+/// An untracked auto detected readme is advisory even when the rules exclude it.
+///
+/// Cargo packs a README it detects for itself whatever the packaging rules say, so an untracked one
+/// is worth naming even when an `include` list excludes it — the rules would otherwise keep it out
+/// of the advisory listing entirely.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn an_untracked_auto_detected_readme_is_advisory_even_when_the_rules_exclude_it() {
@@ -154,10 +164,12 @@ fn an_untracked_auto_detected_readme_is_advisory_even_when_the_rules_exclude_it(
     assert!(report.contains("README.md"), "{report}");
 }
 
-/// Cargo dereferences a symbolic link when it builds a package archive, so the released
-/// bytes are the target's content while Git stores only the target's path.
-/// Comparing the stored paths would call the package unchanged after an edit to
-/// the file the link points at, so the run stops instead of answering wrongly.
+/// A released symbolic link stops the run.
+///
+/// Cargo dereferences a symbolic link when it builds a package archive, so the released bytes are
+/// the target's content while Git stores only the target's path. Comparing the stored paths would
+/// call the package unchanged after an edit to the file the link points at, so the run stops
+/// instead of answering wrongly.
 ///
 /// Windows cannot create a link without additional privileges, so the scenario
 /// is exercised on Unix only.
@@ -185,9 +197,11 @@ fn a_released_symbolic_link_stops_the_run() {
     assert!(message.contains("symbolic link"), "{message}");
 }
 
-/// The refusal has to hold when the link is only in history: it is the anchor
-/// side that Git answers from the object database, where a link's blob is
-/// indistinguishable from a small text file without consulting the tree's mode.
+/// A symbolic link released only at the anchor stops the run.
+///
+/// The refusal has to hold when the link is only in history: it is the anchor side that Git answers
+/// from the object database, where a link's blob is indistinguishable from a small text file
+/// without consulting the tree's mode.
 #[cfg(unix)]
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -222,10 +236,12 @@ fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
     assert!(message.contains("symbolic link"), "{message}");
 }
 
-/// Git converts content on its way into the object database, so a work-tree
-/// file and the blob recording it need not hold the same bytes. Comparing the
-/// two representations directly would report every such file as modified on a
-/// clean checkout, which would mark whole packages `unreleased-changes` forever.
+/// A file git converts on the way in is not reported as changed.
+///
+/// Git converts content on its way into the object database, so a work-tree file and the blob
+/// recording it need not hold the same bytes. Comparing the two representations directly would
+/// report every such file as modified on a clean checkout, which would mark whole packages
+/// `unreleased-changes` forever.
 ///
 /// The divergence is provoked here with a line-ending rule, which needs no
 /// external tooling, but it is the same divergence Git LFS produces: this
@@ -248,8 +264,10 @@ fn a_file_git_converts_on_the_way_in_is_not_reported_as_changed() {
     assert!(passed, "{message}");
 }
 
-/// Conversion must not hide a real edit either: the comparison moves to Git's
-/// own representation, it does not stop comparing.
+/// An edit to a converted file is still reported as changed.
+///
+/// Conversion must not hide a real edit either: the comparison moves to Git's own representation,
+/// it does not stop comparing.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn an_edit_to_a_converted_file_is_still_reported_as_changed() {
@@ -264,9 +282,10 @@ fn an_edit_to_a_converted_file_is_still_reported_as_changed() {
     assert!(message.contains("demo: unreleased-changes"), "{message}");
 }
 
-/// Package whose released content includes a file Git rewrites as it stores it,
-/// so the anchor's blob and the work-tree file hold different bytes from the
-/// creation commit onwards.
+/// Package whose released content includes a file Git rewrites as it stores it.
+///
+/// The anchor's blob and the work-tree file therefore hold different bytes from
+/// the creation commit onwards.
 fn converted_content_package() -> Fixture {
     let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");
@@ -278,9 +297,11 @@ fn converted_content_package() -> Fixture {
     fixture
 }
 
-/// The cross-check compares the tool's released-content set against Cargo's own
-/// list, so it has to account for the resources Cargo copies in from outside the
-/// package directory or every inheriting package looks like a mismatch.
+/// Verify packaging accepts a package whose readme is inherited.
+///
+/// The cross-check compares the tool's released-content set against Cargo's own list, so it has to
+/// account for the resources Cargo copies in from outside the package directory or every inheriting
+/// package looks like a mismatch.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn verify_packaging_accepts_a_package_whose_readme_is_inherited() {
@@ -296,9 +317,11 @@ fn verify_packaging_accepts_a_package_whose_readme_is_inherited() {
     assert!(!message.contains("packaging rule mismatch"), "{message}");
 }
 
-/// `include` never governs a file the manifest names by key: Cargo packs the
-/// declared README whether or not the allow-list mentions it, so leaving it out
-/// of the allow-list must not hide a change to it.
+/// A readme excluded by include is still released content.
+///
+/// `include` never governs a file the manifest names by key: Cargo packs the declared README
+/// whether or not the allow-list mentions it, so leaving it out of the allow-list must not hide a
+/// change to it.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_readme_excluded_by_include_is_still_released_content() {
@@ -321,9 +344,10 @@ fn a_readme_excluded_by_include_is_still_released_content() {
     assert!(message.contains("demo"), "{message}");
 }
 
-/// Cargo picks a package's README off disk when the manifest names none, and
-/// packs it regardless of `include`, so an allow-list that omits it must not
-/// hide a change to it either.
+/// A readme cargo detects itself is released content.
+///
+/// Cargo picks a package's README off disk when the manifest names none, and packs it regardless of
+/// `include`, so an allow-list that omits it must not hide a change to it either.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_readme_cargo_detects_itself_is_released_content() {
@@ -346,9 +370,11 @@ fn a_readme_cargo_detects_itself_is_released_content() {
     assert!(message.contains("demo"), "{message}");
 }
 
-/// The cross-check has to select released content by the same rules
-/// classification uses, or a package with a README Cargo detects for itself and
-/// a package nested beneath it reports a mismatch it cannot act on.
+/// Verify packaging accepts a detected readme beside a nested crate.
+///
+/// The cross-check has to select released content by the same rules classification uses, or a
+/// package with a README Cargo detects for itself and a package nested beneath it reports a
+/// mismatch it cannot act on.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn verify_packaging_accepts_a_detected_readme_beside_a_nested_crate() {

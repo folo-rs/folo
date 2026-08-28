@@ -506,7 +506,7 @@ pub(crate) struct NonPublishableGroupMemberError {
 impl UnwindSafe for NonPublishableGroupMemberError {}
 impl RefUnwindSafe for NonPublishableGroupMemberError {}
 
-/// A version group is named after a workspace package that is not one of its members.
+/// A version group is named after a package outside it.
 #[ohno::error]
 #[display(
     "Version group '{}' shares its name with a workspace package that is not one of its members",
@@ -839,9 +839,11 @@ mod tests {
         assert_eq!(error.package(), "nm");
     }
 
-    /// A manifest can name a package or a pattern with a newline in it, and the
-    /// message would otherwise carry that newline into a log where the tail
-    /// reads as a fresh line of the tool's own output.
+    /// A repository controlled value is escaped in the message.
+    ///
+    /// A manifest can name a package or a pattern with a newline in it, and the message would
+    /// otherwise carry that newline into a log where the tail reads as a fresh line of the tool's
+    /// own output.
     ///
     /// The condition renders on the first line, followed by its cause and, when
     /// backtraces are enabled, a captured backtrace. Escaping is therefore

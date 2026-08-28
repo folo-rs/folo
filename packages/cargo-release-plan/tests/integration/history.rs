@@ -1,5 +1,7 @@
-//! Anchor resolution over real Git history: merges on the first-parent
-//! line, truncated clones, and packages that leave and return.
+//! Anchor resolution over real Git history.
+//!
+//! Covers merges on the first-parent line, truncated clones, and packages that
+//! leave and return.
 
 use std::fs;
 

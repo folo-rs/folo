@@ -174,8 +174,10 @@ fn apply_refreshes_the_workspace_lockfile() {
     assert!(after.contains("0.2.0"), "{after}");
 }
 
-/// A plan that expands to nothing is a no-op, not an error: rewriting no
-/// manifests means there is no lockfile drift to refresh either.
+/// Apply with an empty plan changes nothing.
+///
+/// A plan that expands to nothing is a no-op, not an error: rewriting no manifests means there is
+/// no lockfile drift to refresh either.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_with_an_empty_plan_changes_nothing() {

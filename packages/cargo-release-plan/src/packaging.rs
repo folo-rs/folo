@@ -141,9 +141,11 @@ mod tests {
         PackagingRules::new(include.as_deref(), exclude.as_deref())
     }
 
-    /// Git reports `/`-separated paths on every platform, so a `\` in one is a
-    /// character of a file's name and must not be read as a directory boundary.
-    /// The leading `./` Cargo tolerates in its own listings still comes off.
+    /// A backslash is part of a file name.
+    ///
+    /// Git reports `/`-separated paths on every platform, so a `\` in one is a character of a
+    /// file's name and must not be read as a directory boundary. The leading `./` Cargo tolerates
+    /// in its own listings still comes off.
     #[test]
     fn a_backslash_is_part_of_a_file_name() {
         let rules = rules(Some(&["src/**"]), None).unwrap();
@@ -152,8 +154,10 @@ mod tests {
         assert!(!rules.is_released(r"benches\bench.rs"));
     }
 
-    /// The package directory itself is not a path inside the package, so it has
-    /// no relative form and must not be mistaken for the package root file.
+    /// A package directory has no relative path inside itself.
+    ///
+    /// The package directory itself is not a path inside the package, so it has no relative form
+    /// and must not be mistaken for the package root file.
     #[test]
     fn a_package_directory_has_no_relative_path_inside_itself() {
         assert_eq!(relativize("packages/foo", "packages/foo"), None);

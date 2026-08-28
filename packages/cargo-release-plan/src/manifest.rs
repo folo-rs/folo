@@ -33,13 +33,13 @@ pub(crate) struct PackageManifest {
     /// root, so these cannot be joined onto the member directory the way a
     /// locally declared path is.
     pub(crate) inherited_path_dependencies: Vec<String>,
-    /// Files Cargo copies into the package archive, relative to this package's directory.
+    /// Packaged files named by a manifest key, package-relative.
     ///
-    /// Cargo packs the file named by `readme` or `license-file` into the crate
-    /// root, so released content is not confined to the tree beneath the package.
+    /// Cargo packs the file named by `readme` or `license-file` into the package
+    /// root, so released content is not confined to the tree beneath the
+    /// package.
     pub(crate) resource_paths: Vec<String>,
-    /// Files Cargo copies into the package archive that this package inherits, relative
-    /// to the workspace root.
+    /// Packaged files this package inherits, relative to the workspace root.
     ///
     /// `[workspace.package]` declares its paths relative to the workspace root,
     /// so a shared README several members inherit is released content for each of
@@ -657,11 +657,12 @@ mod tests {
         assert!(!is_workspace_member("crates/foo-bar/nested", &crates));
     }
 
-    /// Cargo resolves `members` and `exclude` globs against the workspace root,
-    /// where the gitignore matcher backing them would otherwise let a pattern
-    /// with no separator match a directory at any depth — pulling a nested package
-    /// into a workspace that never declared it and anchoring the wrong package
-    /// directory at that end of the comparison.
+    /// A member pattern matches only at the workspace root.
+    ///
+    /// Cargo resolves `members` and `exclude` globs against the workspace root, where the gitignore
+    /// matcher backing them would otherwise let a pattern with no separator match a directory at
+    /// any depth — pulling a nested package into a workspace that never declared it and anchoring
+    /// the wrong package directory at that end of the comparison.
     #[test]
     fn a_member_pattern_matches_only_at_the_workspace_root() {
         let bare = members(&["foo*"]);
@@ -676,8 +677,10 @@ mod tests {
         assert!(!is_workspace_excluded("packages/skip", &excluded));
     }
 
-    /// A manifest Cargo would not publish is not a package for classification,
-    /// and every incomplete identity reaches that answer without erroring.
+    /// An incomplete package identity is not a package.
+    ///
+    /// A manifest Cargo would not publish is not a package for classification, and every incomplete
+    /// identity reaches that answer without erroring.
     #[test]
     fn an_incomplete_package_identity_is_not_a_package() {
         let inherit = WorkspaceInherit::default();
@@ -708,9 +711,11 @@ mod tests {
         assert!(parsed.exclude.is_empty());
     }
 
-    /// Cargo accepts only a boolean or a registry array for `publish`, so a
-    /// manifest Cargo would reject stays under the release gate rather than
-    /// silently exempting itself from classification.
+    /// An unusable publish value keeps the package publishable.
+    ///
+    /// Cargo accepts only a boolean or a registry array for `publish`, so a manifest Cargo would
+    /// reject stays under the release gate rather than silently exempting itself from
+    /// classification.
     #[test]
     fn an_unusable_publish_value_keeps_the_package_publishable() {
         let inherit = WorkspaceInherit::default();
@@ -732,9 +737,10 @@ mod tests {
         );
     }
 
-    /// A member pattern that already anchors itself against the workspace root
-    /// keeps that meaning, and one that does not is anchored for it. Ref: the
-    /// `anchored` documentation.
+    /// A member pattern matches from the workspace root however it is spelled.
+    ///
+    /// A member pattern that already anchors itself against the workspace root keeps that meaning,
+    /// and one that does not is anchored for it. Ref: the `anchored` documentation.
     #[test]
     fn a_member_pattern_matches_from_the_workspace_root_however_it_is_spelled() {
         for literal in ["packages/*", "/packages/*"] {
@@ -745,8 +751,10 @@ mod tests {
         }
     }
 
-    /// A member set is cloned into every historical snapshot, and the clone must
-    /// keep matching exactly what the original matched.
+    /// A cloned member pattern matches the same directories.
+    ///
+    /// A member set is cloned into every historical snapshot, and the clone must keep matching
+    /// exactly what the original matched.
     #[test]
     fn a_cloned_member_pattern_matches_the_same_directories() {
         let pattern = MemberPattern::new("packages/*", PathCase::Sensitive).unwrap();
@@ -772,9 +780,10 @@ mod tests {
         assert_eq!(directory_of("packages/foo/Cargo.toml"), "packages/foo");
     }
 
-    /// The probe re-opens an existing entry under a flipped spelling, so a
-    /// directory that offers no flippable entry cannot prove insensitivity and
-    /// must yield the stricter answer.
+    /// Probing a directory without cased names reports sensitive.
+    ///
+    /// The probe re-opens an existing entry under a flipped spelling, so a directory that offers no
+    /// flippable entry cannot prove insensitivity and must yield the stricter answer.
     #[cfg_attr(miri, ignore)] // Reads a real directory, which Miri cannot emulate.
     #[test]
     fn probing_a_directory_without_cased_names_reports_sensitive() {
@@ -795,10 +804,11 @@ mod tests {
         );
     }
 
-    /// Cargo resolves a manifest-declared path with the host's own rules, so a
-    /// backslash is a separator on Windows and a legal file name character
-    /// elsewhere. Both spellings are asserted directly because only one of them
-    /// is the native one on any given host.
+    /// Only the native separator is rewritten.
+    ///
+    /// Cargo resolves a manifest-declared path with the host's own rules, so a backslash is a
+    /// separator on Windows and a legal file name character elsewhere. Both spellings are asserted
+    /// directly because only one of them is the native one on any given host.
     #[test]
     fn only_the_native_separator_is_rewritten() {
         assert_eq!(to_git_separators(r"..\b", '\\'), "../b");
@@ -893,9 +903,11 @@ exclude = ["packages/skip"]
         assert!(!is_workspace_excluded("examples/foo", &declared));
     }
 
-    /// A backslash is an ordinary character in a directory name on Unix, and
-    /// both Git and Cargo treat it that way, so a pattern written with one names
-    /// a single component there rather than a nested directory.
+    /// A directory name containing a backslash is one component.
+    ///
+    /// A backslash is an ordinary character in a directory name on Unix, and both Git and Cargo
+    /// treat it that way, so a pattern written with one names a single component there rather than
+    /// a nested directory.
     ///
     /// Windows cannot hold such a name and does separate at a backslash, so the
     /// distinction is only observable on Unix.
@@ -956,9 +968,11 @@ e = { path = "../e" }
         assert_eq!(paths, vec!["../b", "../c", "../d", "../e"]);
     }
 
-    /// Cargo reads dependency tables at the manifest root and under
-    /// `[target.<spec>]` only, so a look-alike table elsewhere carries no
-    /// dependency semantics and must not contribute membership edges.
+    /// A dependency look alike table is not a dependency table.
+    ///
+    /// Cargo reads dependency tables at the manifest root and under `[target.<spec>]` only, so a
+    /// look-alike table elsewhere carries no dependency semantics and must not contribute
+    /// membership edges.
     #[test]
     fn a_dependency_look_alike_table_is_not_a_dependency_table() {
         let parsed = parse_package_manifest(
@@ -1132,9 +1146,11 @@ publish.workspace = true
         assert!(!parsed.packaging.is_released("README.md"));
     }
 
-    /// Cargo copies `readme` and `license-file` into the crate root, so both are
-    /// released content, and an inherited value names a path relative to the
-    /// workspace root rather than to the package.
+    /// Manifest resources are split by where they are declared.
+    ///
+    /// Cargo copies `readme` and `license-file` into the crate root, so both are released content,
+    /// and an inherited value names a path relative to the workspace root rather than to the
+    /// package.
     #[test]
     fn manifest_resources_are_split_by_where_they_are_declared() {
         let root = root_doc("[workspace.package]\nreadme = \"README.md\"\n");
@@ -1156,8 +1172,10 @@ license-file = "../../LICENSE"
         assert!(!parsed.auto_readme);
     }
 
-    /// `readme = false` disables the key rather than naming a file, and an
-    /// inherited key with no root value names nothing either.
+    /// A manifest resource that names no file is skipped.
+    ///
+    /// `readme = false` disables the key rather than naming a file, and an inherited key with no
+    /// root value names nothing either.
     #[test]
     fn a_manifest_resource_that_names_no_file_is_skipped() {
         let parsed = parse_package_manifest(
@@ -1178,8 +1196,10 @@ license-file.workspace = true
         assert!(!parsed.auto_readme);
     }
 
-    /// Cargo probes the package directory only when the key is absent, and reads
-    /// `readme = true` as naming its preferred default.
+    /// An undeclared readme is left for cargo to detect.
+    ///
+    /// Cargo probes the package directory only when the key is absent, and reads `readme = true` as
+    /// naming its preferred default.
     #[test]
     fn an_undeclared_readme_is_left_for_cargo_to_detect() {
         let detected = parse_package_manifest(
@@ -1229,8 +1249,10 @@ c = { path = "../c" }
         assert_eq!(parsed.path_dependencies, vec!["../c"]);
     }
 
-    /// Inherited-key attribution reads the same dependency tables as membership,
-    /// so a look-alike table must not add an inherited edge either.
+    /// A dependency look alike table declares no inherited dependency.
+    ///
+    /// Inherited-key attribution reads the same dependency tables as membership, so a look-alike
+    /// table must not add an inherited edge either.
     #[test]
     fn a_dependency_look_alike_table_declares_no_inherited_dependency() {
         let root = root_doc(

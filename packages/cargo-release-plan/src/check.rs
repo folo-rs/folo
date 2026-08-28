@@ -417,8 +417,10 @@ mod tests {
         );
     }
 
-    /// A package can reach `unreleased-changes` through an inherited value
-    /// alone, which leaves no changed path to name.
+    /// A package without changed items still reports.
+    ///
+    /// A package can reach `unreleased-changes` through an inherited value alone, which leaves no
+    /// changed path to name.
     #[test]
     fn a_package_without_changed_items_still_reports() {
         let package = failing("demo", Vec::new());
@@ -452,9 +454,10 @@ mod tests {
         );
     }
 
-    /// Group membership is read from the manifest while verdicts are computed
-    /// only for groups that have publishable members, so a package can name a
-    /// group that has no verdict.
+    /// A grouped package without a verdict falls back to the group name.
+    ///
+    /// Group membership is read from the manifest while verdicts are computed only for groups that
+    /// have publishable members, so a package can name a group that has no verdict.
     #[test]
     fn a_grouped_package_without_a_verdict_falls_back_to_the_group_name() {
         let mut package = failing("demo", Vec::new());
@@ -530,9 +533,11 @@ mod tests {
         assert_eq!(difference_text(&tool, &tool), "nothing");
     }
 
-    /// Diagnostics are read from a CI log, where a name carrying a newline would
-    /// let the tail of a repository-controlled path pose as a fresh workflow
-    /// command and a terminal escape could rewrite what a reader sees.
+    /// A repository controlled name cannot break out of a diagnostic.
+    ///
+    /// Diagnostics are read from a CI log, where a name carrying a newline would let the tail of a
+    /// repository-controlled path pose as a fresh workflow command and a terminal escape could
+    /// rewrite what a reader sees.
     #[test]
     fn a_repository_controlled_name_cannot_break_out_of_a_diagnostic() {
         let package = failing(

@@ -259,8 +259,10 @@ mod tests {
         assert_eq!(empty.closure("events"), vec!["events"]);
     }
 
-    /// A group whose members are all unpublishable or absent from the work tree
-    /// has nothing to compare and no version to offer as an increment base.
+    /// A group with no declared member is consistent and versionless.
+    ///
+    /// A group whose members are all unpublishable or absent from the work tree has nothing to
+    /// compare and no version to offer as an increment base.
     #[test]
     fn a_group_with_no_declared_member_is_consistent_and_versionless() {
         let verdicts = groups().verdicts(&BTreeMap::new(), &HashSet::new());

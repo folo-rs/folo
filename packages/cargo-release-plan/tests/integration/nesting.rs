@@ -64,10 +64,11 @@ fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root
     assert!(!message.contains("outer: unreleased-changes"), "{message}");
 }
 
-/// A path dependency is followed to reconstruct membership at the anchor, where
-/// the target directory may not have carried a manifest yet. The directory's
-/// files then belonged to the depending package, so turning it into a package
-/// takes them out of what the outer one releases.
+/// A path dependency without a manifest at the anchor is not a member there.
+///
+/// A path dependency is followed to reconstruct membership at the anchor, where the target
+/// directory may not have carried a manifest yet. The directory's files then belonged to the
+/// depending package, so turning it into a package takes them out of what the outer one releases.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_path_dependency_without_a_manifest_at_the_anchor_is_not_a_member_there() {

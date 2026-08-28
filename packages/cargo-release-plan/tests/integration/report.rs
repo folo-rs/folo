@@ -55,8 +55,10 @@ g = ["alpha", "beta"]
     assert!(report.contains("\"version\": \"0.1.0\""), "{report}");
 }
 
-/// A report directory is reused across runs, so a diff left over from a package
-/// that no longer has one would still be read as current.
+/// Report replaces the diffs of an earlier run.
+///
+/// A report directory is reused across runs, so a diff left over from a package that no longer has
+/// one would still be read as current.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn report_replaces_the_diffs_of_an_earlier_run() {

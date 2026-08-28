@@ -38,8 +38,10 @@ pub(crate) struct Classification {
     pub(crate) groups: BTreeMap<String, GroupVerdict>,
     pub(crate) work_tree: WorkTree,
     pub(crate) git: GitRepo,
-    /// The case rules probed for the volume hosting the work tree, carried so a
-    /// later packaging probe resolves paths exactly as classification did.
+    /// The case rules probed for the volume hosting the work tree.
+    ///
+    /// Carried so a later packaging probe resolves paths exactly as
+    /// classification did.
     pub(crate) case: PathCase,
 }
 
@@ -194,9 +196,11 @@ impl PackageClass {
 /// still holds a patch. Ref: `docs/design.md`, "Package status".
 #[derive(Clone, Debug)]
 enum Verdict {
-    /// The package is absent from the base line and from its earlier
-    /// first-parent history, so its creation counts as a version increase and
-    /// there is nothing to compare against.
+    /// The package was created on this branch.
+    ///
+    /// It is absent from the base line and from its earlier first-parent
+    /// history, so its creation counts as a version increase and there is
+    /// nothing to compare against.
     New,
     /// The declared version increased over the anchor's.
     Releasing {
@@ -572,18 +576,21 @@ fn build_timeline(
 struct PackageSide<'a> {
     dir: &'a str,
     rules: &'a PackagingRules,
-    /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the package archive and valued by its git-root-relative path.
+    /// Files Cargo packs because a manifest key names them.
+    ///
+    /// Keyed by the path each takes inside the package archive and valued by
+    /// its git-root-relative path.
     resources: &'a BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
-    /// How the volume hosting the workspace resolves path case, which decides
-    /// whether a tracked spelling answers a README candidate Cargo probes for.
+    /// How the volume hosting the workspace resolves path case.
+    ///
+    /// This decides whether a tracked spelling answers a README candidate Cargo
+    /// probes for.
     case: PathCase,
 }
 
-/// Resolves the files Cargo copies into the package archive because a manifest key
-/// names them.
+/// Resolves the files a manifest key names for packaging.
 ///
 /// Cargo packs the file named by `readme` or `license-file` regardless of
 /// `include` and `exclude`, and from outside `package_dir` if that is where it
@@ -723,8 +730,9 @@ fn diff_package(
     Ok((changed, patch, stat, untracked))
 }
 
-/// Object ids the released work-tree files would be stored under, by the path
-/// each takes inside the package archive.
+/// Object ids the released work-tree files would be stored under.
+///
+/// Keyed by the path each takes inside the package archive.
 ///
 /// A tracked path the work tree no longer holds is left out, which is what makes
 /// it read as deleted. A symbolic link stops the run here rather than being
@@ -827,8 +835,9 @@ fn add_resources<'a>(
     }
 }
 
-/// Lists the untracked paths beneath a package that its packaging rules would
-/// release, package-relative.
+/// Lists the untracked paths a package's rules would release.
+///
+/// Paths are package-relative.
 ///
 /// These are advisory only: released content is defined from git-tracked files,
 /// so an untracked path is never a change. Ref: docs/design.md, "Released
@@ -1000,7 +1009,9 @@ fn released_from_paths(
     map
 }
 
-/// The default README this end holds for `dir`, keyed by its name in the package archive.
+/// The default README this end holds for `dir`.
+///
+/// Keyed by the name it takes in the package archive.
 ///
 /// Cargo probes the package directory for its default names in order and packs
 /// the first that exists without consulting `include` or `exclude`, so a package
@@ -1071,8 +1082,9 @@ struct HistoricalPackage {
     directory: String,
     version: Version,
     packaging: PackagingRules,
-    /// Files Cargo packs because a manifest key names them, keyed by the path
-    /// each takes inside the package archive.
+    /// Files Cargo packs because a manifest key names them.
+    ///
+    /// Keyed by the path each takes inside the package archive.
     resources: BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
@@ -1460,8 +1472,10 @@ mod tests {
         let _ = read_optional_bytes(dir.path(), "pkg", "dir").unwrap_err();
     }
 
-    /// A link cannot be compared against history, because Cargo would pack the
-    /// target's bytes while Git stores the target's path.
+    /// Read optional bytes rejects a symbolic link.
+    ///
+    /// A link cannot be compared against history, because Cargo would pack the target's bytes while
+    /// Git stores the target's path.
     #[cfg(unix)]
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
@@ -1572,10 +1586,12 @@ mod tests {
         assert_eq!(released.get("Cargo.toml").unwrap(), "packages/a/Cargo.toml");
     }
 
-    /// Git's `-z` listings separate directories with `/` on every platform, so a
-    /// `\` in a reported path belongs to a file's name. Rewriting it would file
-    /// the content under a directory that does not exist and, worse, could make
-    /// two distinct files collide on one package-relative key.
+    /// A backslash in a reported path is not a directory boundary.
+    ///
+    /// Git's `-z` listings separate directories with `/` on every platform, so a `\` in a reported
+    /// path belongs to a file's name. Rewriting it would file the content under a directory that
+    /// does not exist and, worse, could make two distinct files collide on one package-relative
+    /// key.
     #[test]
     fn a_backslash_in_a_reported_path_is_not_a_directory_boundary() {
         let rules = PackagingRules::default();
@@ -1602,8 +1618,10 @@ mod tests {
         );
     }
 
-    /// Cargo packs the README it detects itself even when `include` omits it, and
-    /// prefers the first of its default names that the end being examined holds.
+    /// A detected readme outranks the packaging rules.
+    ///
+    /// Cargo packs the README it detects itself even when `include` omits it, and prefers the first
+    /// of its default names that the end being examined holds.
     #[test]
     fn a_detected_readme_outranks_the_packaging_rules() {
         let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
@@ -1641,10 +1659,11 @@ mod tests {
         );
     }
 
-    /// Cargo probes the filesystem for its default README names, so on a
-    /// case-insensitive volume a tracked `readme.md` answers the `README.md`
-    /// candidate and its content is released. Matching the spelling exactly
-    /// there would report such a package as having released nothing.
+    /// A detected readme follows the probed case rules.
+    ///
+    /// Cargo probes the filesystem for its default README names, so on a case-insensitive volume a
+    /// tracked `readme.md` answers the `README.md` candidate and its content is released. Matching
+    /// the spelling exactly there would report such a package as having released nothing.
     #[test]
     fn a_detected_readme_follows_the_probed_case_rules() {
         let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
@@ -1682,9 +1701,11 @@ mod tests {
         assert_eq!(released.get("readme.md").unwrap(), "packages/a/readme.md");
     }
 
-    /// Git still lists a tracked file the work tree has deleted, but Cargo
-    /// packages what is on disk: a nested manifest that is gone no longer stops
-    /// packing, and a deleted default README is no longer detected.
+    /// A deleted path no longer shapes the released content.
+    ///
+    /// Git still lists a tracked file the work tree has deleted, but Cargo packages what is on
+    /// disk: a nested manifest that is gone no longer stops packing, and a deleted default README
+    /// is no longer detected.
     #[test]
     fn a_deleted_path_no_longer_shapes_the_released_content() {
         let resources = BTreeMap::new();
@@ -1736,8 +1757,10 @@ mod tests {
         );
     }
 
-    /// A resource outside the package directory is released content under the
-    /// name it takes at the crate root; one already inside keeps its own path.
+    /// Resources resolve against the end that declared them.
+    ///
+    /// A resource outside the package directory is released content under the name it takes at the
+    /// crate root; one already inside keeps its own path.
     #[test]
     fn resources_resolve_against_the_end_that_declared_them() {
         let manifest = manifest_with_resources(
@@ -1761,8 +1784,10 @@ mod tests {
         );
     }
 
-    /// A nested workspace declares inherited resources relative to its own root,
-    /// not to the git root.
+    /// Inherited resources resolve against the workspace prefix.
+    ///
+    /// A nested workspace declares inherited resources relative to its own root, not to the git
+    /// root.
     #[test]
     fn inherited_resources_resolve_against_the_workspace_prefix() {
         let manifest = manifest_with_resources("inner/packages/a", &[], &["README.md"]);
@@ -1775,8 +1800,10 @@ mod tests {
         );
     }
 
-    /// A path climbing above the git root names no file in the repository, so it
-    /// contributes no released content rather than failing classification.
+    /// A resource outside the repository is dropped.
+    ///
+    /// A path climbing above the git root names no file in the repository, so it contributes no
+    /// released content rather than failing classification.
     #[test]
     fn a_resource_outside_the_repository_is_dropped() {
         let manifest = manifest_with_resources("packages/a", &["../../../elsewhere/LICENSE"], &[]);
@@ -1849,8 +1876,9 @@ mod tests {
         assert!(!is_inside_any("packages/ab/src/lib.rs", &dirs));
     }
 
-    /// Serves pre-parsed manifests so membership resolution can be exercised
-    /// without a repository.
+    /// Serves pre-parsed manifests.
+    ///
+    /// Membership resolution can then be exercised without a repository.
     struct FakeManifests {
         manifests: BTreeMap<String, PackageManifest>,
         /// Directories whose manifest was actually read, in order of first read.
@@ -1922,8 +1950,10 @@ mod tests {
         );
     }
 
-    /// A manifest Cargo would never load for this workspace is never parsed, so
-    /// an unrelated nested workspace cannot fail classification.
+    /// Resolve members does not read unreachable manifests.
+    ///
+    /// A manifest Cargo would never load for this workspace is never parsed, so an unrelated nested
+    /// workspace cannot fail classification.
     #[test]
     fn resolve_members_does_not_read_unreachable_manifests() {
         let root = Path::new("Cargo.toml");
@@ -1953,8 +1983,10 @@ mod tests {
         assert_eq!(manifests.read, vec!["packages/a".to_string()]);
     }
 
-    /// A path dependency that climbs out of the repository is not a workspace
-    /// member, and following it would name a directory outside the tree.
+    /// Resolve members ignores a path dependency outside the repository.
+    ///
+    /// A path dependency that climbs out of the repository is not a workspace member, and following
+    /// it would name a directory outside the tree.
     #[test]
     fn resolve_members_ignores_a_path_dependency_outside_the_repository() {
         let root = Path::new("Cargo.toml");

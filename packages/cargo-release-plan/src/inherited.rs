@@ -350,9 +350,11 @@ semver = { version = "1.0.0" }
         let new = doc("[workspace.package]\n  edition = \"2024\"\n");
         assert!(inherited_changes(&keys, &old, &new).is_empty());
     }
-    /// Every TOML shape an inherited value can take must round-trip into a
-    /// distinct canonical form, because comparison of those forms is the only
-    /// thing that decides whether an inherited value changed.
+    /// Every toml shape canonicalizes distinctly.
+    ///
+    /// Every TOML shape an inherited value can take must round-trip into a distinct canonical form,
+    /// because comparison of those forms is the only thing that decides whether an inherited value
+    /// changed.
     #[test]
     fn every_toml_shape_canonicalizes_distinctly() {
         let document = doc(concat!(
@@ -399,9 +401,10 @@ semver = { version = "1.0.0" }
         );
     }
 
-    /// Cargo accepts a workspace dependency as a bare version string, an inline
-    /// table, or a full table, and each form carries the values a member
-    /// inherits.
+    /// Workspace dependencies canonicalize in every declaration form.
+    ///
+    /// Cargo accepts a workspace dependency as a bare version string, an inline table, or a full
+    /// table, and each form carries the values a member inherits.
     #[test]
     fn workspace_dependencies_canonicalize_in_every_declaration_form() {
         let bare =
@@ -435,11 +438,12 @@ semver = { version = "1.0.0" }
         );
     }
 
-    /// A manifest may omit every table the collector reads, and a table may hold
-    /// a value where a table is expected, without that being an error.
-    /// Moving a workspace dependency's `path` does not alter what an inheriting
-    /// package publishes, in either declaration form. Ref: docs/design.md,
-    /// "Inherited values".
+    /// Moving a workspace dependency path is not a change.
+    ///
+    /// A manifest may omit every table the collector reads, and a table may hold a value where a
+    /// table is expected, without that being an error. Moving a workspace dependency's `path` does
+    /// not alter what an inheriting package publishes, in either declaration form. Ref:
+    /// docs/design.md, "Inherited values".
     #[test]
     fn moving_a_workspace_dependency_path_is_not_a_change() {
         let keys = InheritedKeys {
@@ -469,8 +473,10 @@ semver = { version = "1.0.0" }
         assert!(collect_inherited_keys(&odd_target).dependencies.is_empty());
     }
 
-    /// Cargo lets a package inherit a workspace dependency from a target-gated
-    /// table, and those keys must be watched the same as unconditional ones.
+    /// Target gated tables contribute inherited dependencies.
+    ///
+    /// Cargo lets a package inherit a workspace dependency from a target-gated table, and those
+    /// keys must be watched the same as unconditional ones.
     #[test]
     fn target_gated_tables_contribute_inherited_dependencies() {
         let package = doc(r#"
@@ -498,8 +504,10 @@ baz.workspace = true
         assert!(inherited_changes(&keys, &old, &new).is_empty());
     }
 
-    /// A workspace dependency written in an unexpected shape still carries a
-    /// value a member inherits, so it must canonicalize rather than vanish.
+    /// An unusual workspace dependency shape still canonicalizes.
+    ///
+    /// A workspace dependency written in an unexpected shape still carries a value a member
+    /// inherits, so it must canonicalize rather than vanish.
     #[test]
     fn an_unusual_workspace_dependency_shape_still_canonicalizes() {
         let fields = workspace_dependency_fields(
@@ -551,8 +559,10 @@ baz.workspace = true
         );
     }
 
-    /// An array of tables is the one shape whose members are themselves tables,
-    /// so it needs its own arm to stay distinguishable from a plain array.
+    /// An array of tables keeps its table structure.
+    ///
+    /// An array of tables is the one shape whose members are themselves tables, so it needs its own
+    /// arm to stay distinguishable from a plain array.
     #[test]
     fn an_array_of_tables_keeps_its_table_structure() {
         let document =

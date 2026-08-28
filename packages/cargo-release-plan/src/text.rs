@@ -156,8 +156,10 @@ mod tests {
         assert_eq!(short_commit("abc"), "abc");
     }
 
-    /// A `Debug` or serializer label must be the bare type name, without the
-    /// module path a fully qualified name carries.
+    /// A short type name drops the module path.
+    ///
+    /// A `Debug` or serializer label must be the bare type name, without the module path a fully
+    /// qualified name carries.
     #[test]
     fn a_short_type_name_drops_the_module_path() {
         assert_eq!(short_type_name::<Plural<'_>>(), "Plural");
@@ -181,8 +183,10 @@ mod tests {
         assert_eq!(quote_path("a/bell\u{7}"), r#""a/bell\007""#);
     }
 
-    /// A C1 control drives a terminal just as its ASCII counterpart does, so it
-    /// is escaped too, one octal escape per UTF-8 byte the way Git renders it.
+    /// A non ascii control is escaped byte by byte.
+    ///
+    /// A C1 control drives a terminal just as its ASCII counterpart does, so it is escaped too, one
+    /// octal escape per UTF-8 byte the way Git renders it.
     #[test]
     fn a_non_ascii_control_is_escaped_byte_by_byte() {
         // Both samples are multi-byte C1 controls, chosen so the per-byte

@@ -725,9 +725,10 @@ version = \"0.1.0\"
             .unwrap();
         assert_eq!(dep_package_name(entry, "foo-alias"), "foo");
     }
-    /// Cargo accepts a dependency as a bare requirement string, an inline
-    /// table, or a table of its own, and a `=` pin in any of them has to follow
-    /// the package it pins.
+    /// Every dependency declaration form is rewritten.
+    ///
+    /// Cargo accepts a dependency as a bare requirement string, an inline table, or a table of its
+    /// own, and a `=` pin in any of them has to follow the package it pins.
     #[test]
     fn every_dependency_declaration_form_is_rewritten() {
         let new = v("0.2.0");
@@ -746,8 +747,10 @@ version = \"0.1.0\"
         assert!(doc.to_string().contains("version = \"=0.2.0\""), "{doc}");
     }
 
-    /// A path dependency can omit the version entirely, which leaves nothing to
-    /// rewrite rather than being an error.
+    /// A dependency without a version is left alone.
+    ///
+    /// A path dependency can omit the version entirely, which leaves nothing to rewrite rather than
+    /// being an error.
     #[test]
     fn a_dependency_without_a_version_is_left_alone() {
         let new = v("0.2.0");
@@ -769,8 +772,10 @@ version = \"0.1.0\"
         assert!(!rewrite_dep_entry(inline, &new));
     }
 
-    /// A rewrite pass runs over every manifest in the workspace, including ones
-    /// that declare no package, no plan target, or no workspace table at all.
+    /// Manifests outside the plan are left untouched.
+    ///
+    /// A rewrite pass runs over every manifest in the workspace, including ones that declare no
+    /// package, no plan target, or no workspace table at all.
     #[test]
     fn manifests_outside_the_plan_are_left_untouched() {
         let expanded = ExpandedPlan {
@@ -792,8 +797,10 @@ version = \"0.1.0\"
         unchanged("[dependencies]\ndemo = { version = \"0.1.0\" }\n");
     }
 
-    /// Only path dependencies follow a plan: a registry dependency on a package
-    /// of the same name is a different package as far as this workspace goes.
+    /// A dependency without a path or a plan entry is not rewritten.
+    ///
+    /// Only path dependencies follow a plan: a registry dependency on a package of the same name is
+    /// a different package as far as this workspace goes.
     #[test]
     fn a_dependency_without_a_path_or_a_plan_entry_is_not_rewritten() {
         let expanded = ExpandedPlan {
@@ -809,9 +816,11 @@ version = \"0.1.0\"
         assert_eq!(doc.to_string(), text);
     }
 
-    /// A path dependency is rewritten only when its path resolves to the member
-    /// directory that declares that package, so a same-named package living
-    /// outside the workspace keeps its own requirement.
+    /// Only a path resolving to the declaring member is rewritten.
+    ///
+    /// A path dependency is rewritten only when its path resolves to the member directory that
+    /// declares that package, so a same-named package living outside the workspace keeps its own
+    /// requirement.
     #[test]
     fn only_a_path_resolving_to_the_declaring_member_is_rewritten() {
         let expanded = ExpandedPlan {
@@ -832,8 +841,10 @@ version = \"0.1.0\"
         assert_eq!(outside.to_string(), outside_text);
     }
 
-    /// The helper folds `.` and `..` itself because the filesystem is not
-    /// consulted, so both must be recognised wherever a manifest spells them.
+    /// A path is folded lexically.
+    ///
+    /// The helper folds `.` and `..` itself because the filesystem is not consulted, so both must
+    /// be recognised wherever a manifest spells them.
     #[test]
     fn a_path_is_folded_lexically() {
         assert_eq!(
@@ -846,9 +857,10 @@ version = \"0.1.0\"
         );
     }
 
-    /// A manifest may spell the same member directory with `./` or a redundant
-    /// `..` hop, which the filesystem would accept and a plain string comparison
-    /// would not.
+    /// A path spelled with redundant components still resolves to the member.
+    ///
+    /// A manifest may spell the same member directory with `./` or a redundant `..` hop, which the
+    /// filesystem would accept and a plain string comparison would not.
     #[test]
     fn a_path_spelled_with_redundant_components_still_resolves_to_the_member() {
         let expanded = ExpandedPlan {
@@ -869,9 +881,10 @@ version = \"0.1.0\"
         }
     }
 
-    /// Cargo resolves a dependency path through the filesystem, so a link that
-    /// reaches a workspace member declares that member and its requirement must
-    /// follow the member's new version.
+    /// A path reaching a member through a link still resolves to the member.
+    ///
+    /// Cargo resolves a dependency path through the filesystem, so a link that reaches a workspace
+    /// member declares that member and its requirement must follow the member's new version.
     #[cfg(unix)]
     #[cfg_attr(miri, ignore)] // tempdir and symlinks are host filesystem, which Miri cannot emulate.
     #[test]
@@ -898,8 +911,10 @@ version = \"0.1.0\"
         assert!(item.to_string().contains("=0.2.0"), "{item}");
     }
 
-    /// A path that reaches nothing on disk names no member, whatever its
-    /// spelling, so an outside dependency stays untouched.
+    /// A path that does not exist declares no member.
+    ///
+    /// A path that reaches nothing on disk names no member, whatever its spelling, so an outside
+    /// dependency stays untouched.
     #[cfg_attr(miri, ignore)] // tempdir is host filesystem, which Miri cannot emulate.
     #[test]
     fn a_path_that_does_not_exist_declares_no_member() {
@@ -912,9 +927,11 @@ version = \"0.1.0\"
 
         assert!(!targets.declares("../gone", "demo"));
     }
-    /// The workspace path reaches a verbose note through this rendering, and a
-    /// directory name holding a newline or an escape sequence is legal, so it
-    /// must not be able to forge a further line.
+    /// Rendered arguments escapes a repository controlled path.
+    ///
+    /// The workspace path reaches a verbose note through this rendering, and a directory name
+    /// holding a newline or an escape sequence is legal, so it must not be able to forge a further
+    /// line.
     #[test]
     fn rendered_arguments_escapes_a_repository_controlled_path() {
         let rendered =
@@ -927,8 +944,10 @@ version = \"0.1.0\"
         assert!(!rendered.contains('\n'));
     }
 
-    /// A workspace whose only member is `demo`, laid out under a shared root so
-    /// the rewrite tests can express both in-workspace and outside paths.
+    /// A workspace whose only member is `demo`.
+    ///
+    /// It is laid out under a shared root so the rewrite tests can express both
+    /// in-workspace and outside paths.
     fn demo_members() -> BTreeMap<PathBuf, String> {
         BTreeMap::from([(PathBuf::from("/ws/packages/demo"), "demo".to_string())])
     }

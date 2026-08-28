@@ -43,16 +43,20 @@ impl Verbose {
 mod tests {
     use super::*;
 
-    /// Notes are explanatory diagnostics with no return value, so the contract
-    /// this can assert is that emitting one is infallible in either mode.
+    /// A note is emitted in either mode without panicking.
+    ///
+    /// Notes are explanatory diagnostics with no return value, so the contract this can assert is
+    /// that emitting one is infallible in either mode.
     #[test]
     fn a_note_is_emitted_in_either_mode_without_panicking() {
         Verbose::new(true).note(|| "enabled".to_string());
         Verbose::new(false).note(|| "disabled".to_string());
     }
 
-    /// A disabled toggle must not run the closure, since building an
-    /// explanation is the cost the closure exists to avoid.
+    /// A disabled note does not build its message.
+    ///
+    /// A disabled toggle must not run the closure, since building an explanation is the cost the
+    /// closure exists to avoid.
     #[test]
     fn a_disabled_note_does_not_build_its_message() {
         let mut built = false;
