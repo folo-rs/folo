@@ -198,7 +198,8 @@ which is the opposite of what the cross-check exists to surface.
 
 Every repository-controlled name a diagnostic prints — a path, a package or group
 name, an inherited field, a dependency table a plan rewrites, a manifest a plan
-writes, a value an error condition names — goes through one shared quoting helper
+writes, an argument of a command a note echoes, a value an error condition names
+— goes through one shared quoting helper
 that borrows Git's `core.quotePath` rendering: a name carrying a quote,
 backslash, or control character is wrapped in quotes with those bytes escaped.
 Control means every Unicode control, not only the ASCII ones, because a C1

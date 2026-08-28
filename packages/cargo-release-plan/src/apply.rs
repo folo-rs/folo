@@ -481,10 +481,22 @@ fn refresh_lockfile(
     verbose.note(format!(
         "refreshing the workspace lockfile with `cargo {}` so --locked builds observe the new \
          path-dependency versions; the lockfile is not released content and cannot re-trigger check",
-        args.join(" ")
+        rendered_arguments(&args)
     ));
     _ = run_capture("cargo", &args, &work_tree.workspace_root)?;
     Ok(true)
+}
+
+/// Renders command arguments for a diagnostic.
+///
+/// One of them is a workspace path, which a repository controls, so every
+/// argument goes through the same escaping as any other path a diagnostic
+/// names. Ref: docs/implementation.md, "Diagnostics".
+fn rendered_arguments(args: &[&str]) -> String {
+    args.iter()
+        .map(|arg| quote_path(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -811,6 +823,21 @@ version = \"0.1.0\"
                 "path {path} did not resolve to the member"
             );
         }
+    }
+
+    /// The workspace path reaches a verbose note through this rendering, and a
+    /// directory name holding a newline or an escape sequence is legal, so it
+    /// must not be able to forge a further line.
+    #[test]
+    fn rendered_arguments_escapes_a_repository_controlled_path() {
+        let rendered =
+            rendered_arguments(&["update", "--manifest-path", "/ws\nnote: forged/Cargo.toml"]);
+
+        assert_eq!(
+            rendered,
+            "update --manifest-path \"/ws\\nnote: forged/Cargo.toml\""
+        );
+        assert!(!rendered.contains('\n'));
     }
 
     /// A workspace whose only member is `demo`, laid out under a shared root so
