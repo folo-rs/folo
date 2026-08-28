@@ -30,6 +30,35 @@ g = ["alpha", "beta"]
     assert!(passed, "{message}");
 }
 
+/// A group member withdrawn on the base is still held to its group.
+///
+/// The base carries it, and it may already have been released before it was
+/// withdrawn, so restoring it at a version its group does not share has to fail
+/// the group rather than be waved through as a brand new member.
+/// Ref: docs/design.md, "Version groups".
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn group_member_withdrawn_on_the_base_is_still_held_to_the_group() {
+    let fixture = Fixture::new(
+        r#"
+[workspace.metadata.release-plan.groups]
+g = ["alpha", "beta"]
+"#,
+    );
+    write_package(&fixture, "alpha", "0.1.0", "");
+    write_package(&fixture, "beta", "0.1.0", "");
+    fixture.commit("release both members");
+    write_package(&fixture, "beta", "0.1.0", "\npublish = false");
+    fixture.commit("withdraw beta");
+    let base = fixture.sha("HEAD");
+    write_package(&fixture, "beta", "0.2.0", "");
+    fixture.commit("restore beta at a version the group does not share");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("beta"), "{message}");
+}
+
 /// A non publishable group member is rejected.
 ///
 /// A version group keeps released versions in lockstep, so a member that is never published has no

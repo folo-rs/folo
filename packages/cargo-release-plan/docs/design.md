@@ -153,7 +153,9 @@ Members of a version group share a declared version. If any member needs an
 increment, all members increment. The new version is the highest version
 declared by any member, raised by the highest required level. Members that do
 not exist on the base revision are exempt from the consistency rule, so a new
-package can join a group before it has been published.
+package can join a group before it has been published. A member the base
+revision carries but does not publish is not exempt: it exists there and may
+already have been released before it was withdrawn.
 
 Group membership is `[workspace.metadata.release-plan.groups]` in the workspace
 root manifest. A plan entry names either a package or a group, so a group named

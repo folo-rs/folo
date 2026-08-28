@@ -335,11 +335,7 @@ pub(crate) fn classify(
             &mut cache,
             verbose,
         )?;
-        // The exemption is base membership, not anchor presence: a reintroduced
-        // package is absent from the base yet still resolves an older anchor, and
-        // the documented rule exempts every member that does not exist on the base
-        // revision from matching its group's declared version.
-        if !base_snapshot.packages.contains_key(&package.manifest.name) {
+        if is_new_on_base(&base_snapshot, &package.manifest.name) {
             exempt.insert(package.manifest.name.clone());
         }
         classes.push(class);
@@ -952,7 +948,7 @@ fn released_in_work_tree(
     tracked_resources: &HashSet<String>,
 ) -> Result<WorkTreeContent, AppError> {
     let tracked = git.ls_files(side.dir)?;
-    let present = present_in_work_tree(git, &tracked);
+    let present = present_in_work_tree(git, &tracked)?;
     let mut released = released_from_paths(&tracked, &present, side);
     add_resources(
         &mut released,
@@ -981,12 +977,33 @@ fn released_in_work_tree(
 /// classification (docs/design.md, "Released content"), and `cargo package`
 /// refuses a dirty tree, so the artifact this models is always built from a tree
 /// where no untracked file exists.
-fn present_in_work_tree(git: &GitRepo, paths: &[String]) -> Vec<String> {
-    paths
-        .iter()
-        .filter(|path| fs::symlink_metadata(git.root().join(path)).is_ok())
-        .cloned()
-        .collect()
+/// Whether a group member is too new on the base revision to be held to its
+/// group's declared version.
+///
+/// The exemption is base membership, not anchor presence: a reintroduced package
+/// is absent from the base yet still resolves an older anchor, and the documented
+/// rule exempts every member that does not exist on the base revision from
+/// matching its group (docs/design.md, "Version groups"). A member the base
+/// carries but does not publish does exist there, and may well have been released
+/// before it was withdrawn, so it stays bound to its group.
+fn is_new_on_base(base: &CommitSnapshot, name: &str) -> bool {
+    !base.packages.contains_key(name) && !base.unpublished.contains(name)
+}
+
+/// Only a path that is not there is absent; any other failure stops the run,
+/// because reading it as a deletion would silently change what the package
+/// releases.
+fn present_in_work_tree(git: &GitRepo, paths: &[String]) -> Result<Vec<String>, AppError> {
+    let mut present = Vec::with_capacity(paths.len());
+    for path in paths {
+        let full = git.root().join(path);
+        match fs::symlink_metadata(&full) {
+            Ok(_) => present.push(path.clone()),
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => return Err(ReadFileError::caused_by(&full, error).into()),
+        }
+    }
+    Ok(present)
 }
 
 /// Selects one package's released content from the tracked paths beneath it.
@@ -1463,6 +1480,31 @@ mod tests {
         // Outside the nested workspace root, so not a member of this workspace.
         assert_eq!(workspace_relative_dir("dotnet/packages/a", "rust/"), None);
         assert_eq!(workspace_relative_dir("", "rust/"), None);
+    }
+
+    #[test]
+    fn only_a_package_the_base_never_carried_is_new_on_it() {
+        let mut base = CommitSnapshot {
+            packages: BTreeMap::new(),
+            unpublished: BTreeSet::new(),
+            root_doc: DocumentMut::new(),
+        };
+        base.packages.insert(
+            "released".to_string(),
+            HistoricalPackage {
+                directory: "packages/released".to_string(),
+                version: Version::new(0, 1, 0),
+                packaging: PackagingRules::default(),
+                resources: BTreeMap::new(),
+                auto_readme: false,
+            },
+        );
+        base.unpublished.insert("withdrawn".to_string());
+
+        assert!(!is_new_on_base(&base, "released"));
+        // Withdrawn on the base is still present on it, so the group binds it.
+        assert!(!is_new_on_base(&base, "withdrawn"));
+        assert!(is_new_on_base(&base, "added"));
     }
 
     #[test]
