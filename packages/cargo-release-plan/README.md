@@ -29,15 +29,17 @@ directory.
 
 ### `report`
 
-Writes `<dir>/report.json` plus one `<dir>/diffs/<package>.patch` per package
-with unreleased changes. The JSON names each package's status, anchor, changed
-paths, inherited workspace fields, intra-workspace dependencies, and version
-groups.
+Writes `<dir>/report.json` plus a `<dir>/diffs/<package>.patch` for each package
+whose unreleased changes include a file difference. The JSON names each
+package's status, anchor, changed paths, inherited workspace fields,
+intra-workspace dependencies, and version groups, and is the complete verdict.
 
 Each `.patch` is a zero-context unified diff in the shape `diff -U0` produces,
 so it can be piped into standard tooling. Inherited workspace value changes are
-not diffs and appear only as `changed` entries with `source: "inherited"` in
-`report.json`.
+not diffs and appear only as `changed` entries with `source: "inherited"`, so a
+package that fails on an inherited value alone has no patch. Enumerate `status`
+in `report.json` rather than the `diffs/` directory to find every package that
+needs an increment.
 
 ### `check`
 

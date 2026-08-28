@@ -1,5 +1,6 @@
 // Classification of publishable packages against their anchors.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
@@ -336,7 +337,12 @@ pub(crate) fn classify(
 
     let group_verdicts = work_tree.groups.verdicts(&versions, &exempt);
     for (name, verdict) in &group_verdicts {
-        let members: Vec<String> = verdict.members().iter().map(|m| quote_path(m)).collect();
+        let members: Vec<Cow<'_, str>> = verdict
+            .members()
+            .iter()
+            .map(String::as_str)
+            .map(quote_path)
+            .collect();
         verbose.note(|| {
             format!(
                 "version group {}: members [{}]; consistent={} (members that do not exist on \

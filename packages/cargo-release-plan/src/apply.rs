@@ -39,18 +39,30 @@ struct DepTargets<'a> {
 
 impl DepTargets<'_> {
     fn declares(&self, dep_path: &str, crate_name: &str) -> bool {
-        let resolved = normalize_lexically(&self.manifest_dir.join(dep_path));
-        self.members_by_dir
-            .get(&resolved)
-            .is_some_and(|declared| declared == crate_name)
+        let joined = self.manifest_dir.join(dep_path);
+        if let Some(declared) = self.members_by_dir.get(&normalize_lexically(&joined)) {
+            return declared == crate_name;
+        }
+
+        // Cargo resolves a dependency path through the filesystem, so a symbolic
+        // link or a case-variant spelling can name a workspace member that the
+        // lexical form above cannot match. Asking the filesystem is deferred to
+        // this point because it costs a system call per candidate, and only a
+        // path dependency whose package the plan already names reaches here.
+        let Ok(resolved) = fs::canonicalize(&joined) else {
+            return false;
+        };
+        self.members_by_dir.iter().any(|(dir, declared)| {
+            declared == crate_name && fs::canonicalize(dir).is_ok_and(|member| member == resolved)
+        })
     }
 }
 
 /// Resolves `.` and `..` without touching the filesystem.
 ///
-/// Both sides of the comparison come from the same `cargo metadata` document and
-/// so already agree on casing and path prefix; only the relative `path` read out
-/// of a manifest needs folding before the two can be compared.
+/// Most manifests spell a member directory the same way `cargo metadata`
+/// reports it once dot components are folded, so this form answers the common
+/// case without a system call.
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -318,18 +330,10 @@ fn rewrite_dep_table(
     where_: &str,
 ) {
     for (key, entry) in table.iter_mut() {
-        let name = key.get().to_string();
-        let Some(dep_path) = dep_path(entry).map(ToOwned::to_owned) else {
+        let Some(new_version) = planned_version(entry, key.get(), targets, expanded) else {
             continue;
         };
-        let crate_name = dep_crate_name(entry, &name);
-        let Some(new_version) = expanded.packages.get(&crate_name).cloned() else {
-            continue;
-        };
-        if !targets.declares(&dep_path, &crate_name) {
-            continue;
-        }
-        if rewrite_dep_entry(entry, &new_version) {
+        if rewrite_dep_entry(entry, new_version) {
             verbose.note(|| {
                 format!(
                     "{}.{}: rewrote the version requirement to follow {} {new_version} \
@@ -337,12 +341,31 @@ fn rewrite_dep_table(
                  version are left unchanged; only path dependencies resolving to that workspace \
                  member are rewritten)",
                     quote_path(where_),
-                    quote_path(&name),
-                    quote_path(&crate_name)
+                    quote_path(key.get()),
+                    quote_path(dep_crate_name(entry, key.get()))
                 )
             });
         }
     }
+}
+
+/// The version a dependency entry must be rewritten to, if the plan names it.
+///
+/// Borrowed throughout: `apply` inspects every dependency of every workspace
+/// member, while a plan usually names a handful of packages, so an unrelated
+/// dependency must not cost an allocation to reject.
+fn planned_version<'p>(
+    entry: &Item,
+    table_key: &str,
+    targets: &DepTargets<'_>,
+    expanded: &'p ExpandedPlan,
+) -> Option<&'p Version> {
+    let dep_path = dep_path(entry)?;
+    let crate_name = dep_crate_name(entry, table_key);
+    let new_version = expanded.packages.get(crate_name)?;
+    targets
+        .declares(dep_path, crate_name)
+        .then_some(new_version)
 }
 
 fn dep_path(entry: &Item) -> Option<&str> {
@@ -353,19 +376,13 @@ fn dep_path(entry: &Item) -> Option<&str> {
     }
 }
 
-fn dep_crate_name(entry: &Item, table_key: &str) -> String {
+fn dep_crate_name<'e>(entry: &'e Item, table_key: &'e str) -> &'e str {
     let package = match entry {
-        Item::Value(Value::InlineTable(table)) => table
-            .get("package")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        Item::Table(table) => table
-            .get("package")
-            .and_then(Item::as_str)
-            .map(str::to_owned),
+        Item::Value(Value::InlineTable(table)) => table.get("package").and_then(Value::as_str),
+        Item::Table(table) => table.get("package").and_then(Item::as_str),
         _ => None,
     };
-    package.unwrap_or_else(|| table_key.to_string())
+    package.unwrap_or(table_key)
 }
 
 fn rewrite_dep_entry(entry: &mut Item, new_version: &Version) -> bool {
@@ -511,7 +528,10 @@ fn rendered_arguments(args: &[&str]) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use tempfile::TempDir;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
 
@@ -834,6 +854,49 @@ version = \"0.1.0\"
         }
     }
 
+    /// Cargo resolves a dependency path through the filesystem, so a link that
+    /// reaches a workspace member declares that member and its requirement must
+    /// follow the member's new version.
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore)] // tempdir and symlinks are host filesystem, which Miri cannot emulate.
+    #[test]
+    fn a_path_reaching_a_member_through_a_link_still_resolves_to_the_member() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("packages/demo")).unwrap();
+        fs::create_dir_all(root.join("packages/caller")).unwrap();
+        symlink(root.join("packages/demo"), root.join("packages/demo-link")).unwrap();
+
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
+        };
+        let members = BTreeMap::from([(root.join("packages/demo"), "demo".to_string())]);
+        let targets = DepTargets {
+            manifest_dir: root.join("packages/caller"),
+            members_by_dir: &members,
+        };
+
+        let mut item =
+            dep_item("[dependencies]\ndemo = { version = \"=0.1.0\", path = \"../demo-link\" }\n");
+        rewrite_dependency_tables(&mut item, &targets, &expanded, Verbose::new(false));
+
+        assert!(item.to_string().contains("=0.2.0"), "{item}");
+    }
+
+    /// A path that reaches nothing on disk names no member, whatever its
+    /// spelling, so an outside dependency stays untouched.
+    #[cfg_attr(miri, ignore)] // tempdir is host filesystem, which Miri cannot emulate.
+    #[test]
+    fn a_path_that_does_not_exist_declares_no_member() {
+        let dir = tempdir().unwrap();
+        let members = BTreeMap::from([(dir.path().join("packages/demo"), "demo".to_string())]);
+        let targets = DepTargets {
+            manifest_dir: dir.path().join("packages/caller"),
+            members_by_dir: &members,
+        };
+
+        assert!(!targets.declares("../gone", "demo"));
+    }
     /// The workspace path reaches a verbose note through this rendering, and a
     /// directory name holding a newline or an escape sequence is legal, so it
     /// must not be able to forge a further line.

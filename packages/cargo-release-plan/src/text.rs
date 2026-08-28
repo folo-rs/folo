@@ -1,6 +1,7 @@
 // Shared message formatting helpers.
 
 use std::any::type_name;
+use std::borrow::Cow;
 use std::fmt;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -15,9 +16,11 @@ use std::path::PathBuf;
 /// it is wrapped in the C-style quoting `git apply` and `patch` already
 /// understand. Every rendering of a path a repository controls goes through
 /// this.
-pub(crate) fn quote_path(label: &str) -> String {
+pub(crate) fn quote_path(label: &str) -> Cow<'_, str> {
     if !label.chars().any(needs_quoting) {
-        return label.to_string();
+        // Most paths need nothing done to them, and this helper sits on every
+        // rendering of a path, so the ordinary case borrows its input.
+        return Cow::Borrowed(label);
     }
     let mut quoted = String::with_capacity(label.len().saturating_add(2));
     quoted.push('"');
@@ -41,7 +44,7 @@ pub(crate) fn quote_path(label: &str) -> String {
         }
     }
     quoted.push('"');
-    quoted
+    Cow::Owned(quoted)
 }
 
 /// Whether a character forces the whole path into quoted form.
@@ -66,13 +69,13 @@ pub(crate) trait Quotable {
 
 impl Quotable for String {
     fn quoted(&self) -> String {
-        quote_path(self)
+        quote_path(self).into_owned()
     }
 }
 
 impl Quotable for PathBuf {
     fn quoted(&self) -> String {
-        quote_path(&self.to_string_lossy())
+        quote_path(&self.to_string_lossy()).into_owned()
     }
 }
 
@@ -82,10 +85,9 @@ impl Quotable for PathBuf {
 /// prefers agreeing prose over `package(s)` forms, so every such message routes
 /// through this helper instead of choosing a form at the call site.
 pub(crate) fn plural(count: usize, singular: &str) -> impl fmt::Display {
-    Plural {
-        count,
-        singular: singular.to_string(),
-    }
+    // The noun is borrowed: every call site names it with a literal that
+    // outlives the rendering.
+    Plural { count, singular }
 }
 
 /// Matches the user-facing short-commit convention in `cbh_detect`.
@@ -104,23 +106,28 @@ pub(crate) fn short_commit(commit: &str) -> &str {
 /// Deriving the label keeps it in step with a rename; a string literal cannot
 /// be, and no tooling would flag the drift.
 pub(crate) fn short_type_name<T: ?Sized>() -> &'static str {
-    type_name::<T>()
-        .rsplit("::")
+    let name = type_name::<T>();
+    // Generic arguments carry their own module paths and lifetimes, so the
+    // module path is stripped from the base name only, after the arguments are
+    // cut away. Taking the last `::` segment first would otherwise return the
+    // tail of an argument.
+    let base = name.split_once('<').map_or(name, |(base, _)| base);
+    base.rsplit("::")
         .next()
         .expect("splitting any string yields at least one segment")
 }
 
 /// Display adapter that renders a count together with its inflected noun.
 ///
-/// It owns both halves of the phrase so a diagnostic cannot render the noun
+/// It carries both halves of the phrase so a diagnostic cannot render the noun
 /// without the count that governs its form, which is what [`plural`] exists to
 /// guarantee. It is reachable only as the opaque return of that function.
-struct Plural {
+struct Plural<'a> {
     count: usize,
-    singular: String,
+    singular: &'a str,
 }
 
-impl fmt::Display for Plural {
+impl fmt::Display for Plural<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}", self.count, self.singular)?;
         if self.count != 1 {
@@ -153,7 +160,8 @@ mod tests {
     /// module path a fully qualified name carries.
     #[test]
     fn a_short_type_name_drops_the_module_path() {
-        assert_eq!(short_type_name::<Plural>(), "Plural");
+        assert_eq!(short_type_name::<Plural<'_>>(), "Plural");
+        assert_eq!(short_type_name::<Vec<String>>(), "Vec");
         assert_eq!(short_type_name::<str>(), "str");
     }
 

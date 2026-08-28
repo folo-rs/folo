@@ -42,23 +42,25 @@ pub(crate) fn resolve_anchor(
     let Some(first) = timeline.first() else {
         return Err(ShallowHistoryError::new(package).into());
     };
-    let Some(mut prev_version) = first.version.clone() else {
+    let Some(mut prev_version) = first.version.as_ref() else {
         // Absent on the base revision: not an anchor walk. Callers treat this as
         // a new package (version increased from absent).
         return Err(ShallowHistoryError::new(package).into());
     };
-    let mut prev_commit = first.commit.clone();
+    // The walk carries borrowed candidates, because only the one it stops on is
+    // retained and the timeline outlives the search.
+    let mut prev_commit = first.commit.as_str();
 
     for entry in timeline.iter().skip(1) {
-        if entry.version.as_ref() != Some(&prev_version) {
+        if entry.version.as_ref() != Some(prev_version) {
             return Ok(Anchor {
-                commit: prev_commit,
-                version: prev_version,
+                commit: prev_commit.to_string(),
+                version: prev_version.clone(),
             });
         }
-        prev_commit.clone_from(&entry.commit);
+        prev_commit = entry.commit.as_str();
         if let Some(version) = &entry.version {
-            prev_version.clone_from(version);
+            prev_version = version;
         }
     }
 
@@ -67,8 +69,8 @@ pub(crate) fn resolve_anchor(
         return Err(ShallowHistoryError::new(package).into());
     }
     Ok(Anchor {
-        commit: prev_commit,
-        version: prev_version,
+        commit: prev_commit.to_string(),
+        version: prev_version.clone(),
     })
 }
 

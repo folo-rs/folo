@@ -50,9 +50,10 @@ with `/` on every platform, so a path Git reports is taken verbatim: `\` is an
 ordinary character in a file name, and rewriting one would name a file that does
 not exist or collide two distinct files onto one key. Operating-system paths
 arrive from `cargo metadata`, and the manifest layer converts them into Git's
-space by rewriting only the platform's own separator. Everything downstream of
-that conversion — packaging rules, diffs, plans, diagnostics — is in Git's
-space.
+space by rewriting only the platform's own separator. That conversion happens
+before a manifest is parsed, so a parsed manifest never holds a path in the
+other space and no caller has to remember to correct one. Everything downstream
+— packaging rules, diffs, plans, diagnostics — is in Git's space.
 
 Path listings are decoded from Git's raw bytes and any name that is not valid
 UTF-8 stops the run. A file name on Unix is an arbitrary byte string, so this is
@@ -164,6 +165,12 @@ probed rules decide default-README detection at both ends of a comparison, which
 is the other place Cargo reaches the filesystem while this tool reads Git. A
 detected README is keyed by the tracked spelling rather than by the default name
 that matched it, so a re-spelling stays visible as the content change it is.
+
+One probe covers the whole workspace, because a per-directory probe would cost a
+system call for every directory a snapshot walks while buying an answer only for
+a workspace whose subdirectories disagree about case. Manifest discovery reads
+Git's own spellings and matches `Cargo.toml` exactly, which is the spelling
+Cargo requires of a manifest and so needs no case model of its own.
 
 Manifest-declared relative paths — a path dependency, a `readme`, a
 `license-file`, a member pattern — are resolved with the host's own separator

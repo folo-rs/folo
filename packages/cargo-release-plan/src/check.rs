@@ -1,5 +1,6 @@
 // `check` command: fail on unreleased changes or an inconsistent group.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
@@ -139,7 +140,7 @@ fn render_diagnostics(
             .members()
             .iter()
             .map(|member| match declared.get(member.as_str()) {
-                Some(version) => format!("{}@{version}", quote_path(member)),
+                Some(version) => Cow::Owned(format!("{}@{version}", quote_path(member))),
                 None => quote_path(member),
             })
             .collect::<Vec<_>>()
@@ -268,9 +269,10 @@ fn verify_packaging_rules(classification: &Classification) -> String {
 
 /// Renders the paths in `left` that `right` does not have.
 fn difference_text(left: &BTreeSet<String>, right: &BTreeSet<String>) -> String {
-    let paths: Vec<String> = left
+    let paths: Vec<Cow<'_, str>> = left
         .difference(right)
-        .map(|path| quote_path(path))
+        .map(String::as_str)
+        .map(quote_path)
         .collect();
     if paths.is_empty() {
         "nothing".to_string()

@@ -88,6 +88,15 @@ that file is released content on the same terms as a declared one and an
 filesystem, so on a volume that ignores path case a differently cased spelling
 answers a default name and is released.
 
+Path case is modelled once per workspace, from the volume holding the workspace
+root, and applied to member resolution and default-README probing everywhere
+beneath it. A workspace whose subdirectories disagree about case — a
+per-directory setting on Windows, or a case-insensitive mount grafted under a
+case-sensitive root — is outside that model. Content read out of history always
+uses the exact spelling Git recorded, so the model only decides which spellings
+a workspace member or a default README may answer to, never which bytes are
+compared.
+
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace
 member list, keyed by package name, so a relocated package is still compared
@@ -145,8 +154,8 @@ rather than quietly left out of every decision.
 
 ## Commands
 
-`report` writes `report.json` and per-package unified diffs for unreleased
-changes. The report includes intra-workspace dependencies and dependents so
+`report` writes `report.json` and a unified diff for each package whose
+unreleased changes include a file difference. The report includes intra-workspace dependencies and dependents so
 version decisions can cascade. Only edges that survive into the published
 manifest are reported: normal and build dependencies cascade, as do dev
 dependencies that declare a version requirement. A path-only dev dependency does
@@ -181,9 +190,11 @@ would change, without writing.
 ### Report artifacts
 
 `report.json` records every classified package, its status, its anchor, its
-change set, and the group verdicts. Each entry in `changed[]` carries the source
-of the change, so an inherited-value change is recorded there rather than in a
-diff.
+change set, and the group verdicts, and is the complete verdict on its own. Each
+entry in `changed[]` carries the source of the change, so an inherited-value
+change is recorded there rather than in a diff. A package whose only change is
+an inherited value therefore has no patch, which is why the report rather than
+the `diffs/` directory is what a consumer enumerates.
 
 The per-package `.patch` files are zero-context unified diffs in the shape
 `diff -U0` produces, so consumers can pipe them into standard tooling: one hunk

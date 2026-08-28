@@ -136,8 +136,8 @@ fn empty_file_header(path: &str, old_present: bool) -> String {
     let change = if old_present { "deleted" } else { "new" };
     // Each side is quoted the way the `---` and `+++` labels quote theirs, with
     // the prefix inside the quotes, so one reader handles every header here.
-    let old_name = quote_path(&format!("a/{path}"));
-    let new_name = quote_path(&format!("b/{path}"));
+    let old_name = quote_path(&format!("a/{path}")).into_owned();
+    let new_name = quote_path(&format!("b/{path}")).into_owned();
     format!("diff --git {old_name} {new_name}\n{change} file mode {EMPTY_FILE_MODE}\n")
 }
 
@@ -375,7 +375,7 @@ fn hunk_start(zero_based: usize, len: usize) -> usize {
 fn side_label(present: bool, prefix: &str, path: &str) -> String {
     if present {
         // Git quotes the prefixed name as a unit, so `a/` sits inside the quotes.
-        quote_path(&format!("{prefix}/{path}"))
+        quote_path(&format!("{prefix}/{path}")).into_owned()
     } else {
         // The unified-diff placeholder for the absent side of an add or delete.
         "/dev/null".to_string()

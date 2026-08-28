@@ -116,7 +116,14 @@ impl PathCase {
     pub(crate) fn same_path(self, left: &str, right: &str) -> bool {
         match self {
             Self::Sensitive => left == right,
-            Self::Insensitive => left.to_lowercase() == right.to_lowercase(),
+            // Compared as lowercase character streams rather than lowercase
+            // strings: this runs once per member pattern per candidate
+            // directory, and the streams give the same answer as
+            // `to_lowercase` without allocating for either side.
+            Self::Insensitive => left
+                .chars()
+                .flat_map(char::to_lowercase)
+                .eq(right.chars().flat_map(char::to_lowercase)),
         }
     }
 }
@@ -157,6 +164,11 @@ pub(crate) fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, 
         .map_err(|error| ParseTomlError::caused_by(path, error).into())
 }
 
+/// Reads a `[package]` manifest, resolving what it inherits from the root.
+///
+/// `manifest_path` is repository-relative and `/`-separated, as Git reports it,
+/// so the parsed manifest is in one path space from the moment it exists rather
+/// than needing a caller to correct it afterwards.
 pub(crate) fn parse_package_manifest(
     content: &str,
     manifest_path: &str,
@@ -594,11 +606,7 @@ fn opt_string_array(item: Option<&Item>) -> Option<Vec<String>> {
     )
 }
 
-/// The directory part of a manifest path, in the same path space as the input.
-///
-/// Work-tree callers overwrite the result with [`repo_relative_dir`], which
-/// crosses from the operating system's path space into Git's; historical
-/// callers pass a path Git already reported.
+/// The directory part of a repository-relative manifest path.
 fn directory_of(manifest_path: &str) -> String {
     match manifest_path.rsplit_once('/') {
         Some((dir, _)) => dir.to_string(),
@@ -606,13 +614,13 @@ fn directory_of(manifest_path: &str) -> String {
     }
 }
 
-/// Repo-relative directory of a work-tree manifest path.
+/// Repo-relative form of a work-tree path, in Git's `/`-separated path space.
 ///
-/// This is the boundary where an operating-system path enters Git's
-/// `/`-separated path space; everything downstream stays in that space.
-pub(crate) fn repo_relative_dir(workspace_root: &Path, manifest_path: &Path) -> String {
-    let parent = manifest_path.parent().unwrap_or(manifest_path);
-    os_path(parent.strip_prefix(workspace_root).unwrap_or(parent))
+/// This is the boundary where an operating-system path enters that space, and
+/// it is crossed before a manifest is parsed, so a parsed manifest only ever
+/// holds paths Git can be asked about.
+pub(crate) fn repo_relative_path(workspace_root: &Path, path: &Path) -> String {
+    os_path(path.strip_prefix(workspace_root).unwrap_or(path))
 }
 
 #[cfg(test)]

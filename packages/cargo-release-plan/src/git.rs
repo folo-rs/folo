@@ -301,9 +301,10 @@ impl GitRepo {
     pub(crate) fn hash_objects(&self, rel_paths: &[&str]) -> Result<Vec<String>, AppError> {
         let mut ids = Vec::with_capacity(rel_paths.len());
         for chunk in command_line_batches(rel_paths)? {
-            let mut args = vec!["hash-object".to_string(), "--".to_string()];
-            args.extend(chunk.iter().map(|path| (*path).to_string()));
-            let stdout = run_capture_os_bytes("git", &args, &self.root)?;
+            // The paths are handed to the child borrowed: they outlive the call
+            // and copying them would duplicate every path in the request.
+            let args = ["hash-object", "--"].into_iter().chain(chunk);
+            let stdout = run_capture_os_bytes("git", args, &self.root)?;
             ids.extend(
                 String::from_utf8_lossy(&stdout)
                     .lines()

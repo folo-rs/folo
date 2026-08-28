@@ -17,7 +17,7 @@ use crate::groups::Groups;
 #[cfg(test)]
 use crate::inherited::InheritedKeys;
 use crate::manifest::{
-    PackageManifest, WorkspaceInherit, parse_document, parse_package_manifest, repo_relative_dir,
+    PackageManifest, WorkspaceInherit, parse_document, parse_package_manifest, repo_relative_path,
 };
 #[cfg(test)]
 use crate::packaging::PackagingRules;
@@ -170,15 +170,14 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         let path = PathBuf::from(&package.manifest_path);
         let manifest =
             fs::read_to_string(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
-        let Some(mut manifest) =
-            parse_package_manifest(&manifest, &path.to_string_lossy(), &workspace)?
+        let git_manifest_path = repo_relative_path(&workspace_root, &path);
+        let Some(mut manifest) = parse_package_manifest(&manifest, &git_manifest_path, &workspace)?
         else {
             continue;
         };
         if !manifest.publish {
             continue;
         }
-        manifest.directory = repo_relative_dir(&workspace_root, &path);
         manifest.version = package.version.parse::<Version>().map_err(|error| {
             InvalidVersionError::caused_by(&package.name, &package.version, error)
         })?;
