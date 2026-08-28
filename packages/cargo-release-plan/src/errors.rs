@@ -440,6 +440,14 @@ pub(crate) struct MalformedDefaultBaseError {}
 impl UnwindSafe for MalformedDefaultBaseError {}
 impl RefUnwindSafe for MalformedDefaultBaseError {}
 
+/// The workspace declares `release-plan.groups` as something other than a table.
+#[ohno::error]
+#[display("Workspace metadata key 'release-plan.groups' must be a table of version groups")]
+pub(crate) struct MalformedVersionGroupsError {}
+
+impl UnwindSafe for MalformedVersionGroupsError {}
+impl RefUnwindSafe for MalformedVersionGroupsError {}
+
 /// A version-group entry is present but is not an array of package names.
 #[ohno::error]
 #[display(
@@ -741,6 +749,14 @@ mod tests {
     );
     assert_impl_all!(
         PlanVersionRegressionError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        MalformedVersionGroupsError: Send,
         Sync,
         Debug,
         error::Error,

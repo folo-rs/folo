@@ -23,8 +23,8 @@ use crate::manifest::{
 use crate::packaging::PackagingRules;
 use crate::{
     GroupNameCollisionError, InvalidVersionError, MalformedDefaultBaseError,
-    MalformedVersionGroupError, NonPublishableGroupMemberError, ParseMetadataError, ReadFileError,
-    UnknownGroupMemberError,
+    MalformedVersionGroupError, MalformedVersionGroupsError, NonPublishableGroupMemberError,
+    ParseMetadataError, ReadFileError, UnknownGroupMemberError,
 };
 
 /// Work-tree snapshot from `cargo metadata --no-deps`.
@@ -263,9 +263,14 @@ fn groups_from_metadata(
     let Some(groups) = metadata
         .get("release-plan")
         .and_then(|plan| plan.get("groups"))
-        .and_then(Value::as_object)
     else {
         return Ok(Groups::default());
+    };
+    // Declaring no groups and declaring them wrongly must not look the same: a
+    // silently ignored table would disable every consistency check and let
+    // lockstep packages drift apart with nothing reported.
+    let Some(groups) = groups.as_object() else {
+        return Err(MalformedVersionGroupsError::new().into());
     };
     let mut map = BTreeMap::new();
     for (name, members) in groups {
@@ -408,6 +413,20 @@ mod tests {
             .expect("a non-publishable member is refused")
             .to_string();
         assert!(reported.contains("nm_impl"), "{reported}");
+    }
+
+    #[test]
+    fn groups_from_metadata_rejects_a_groups_key_that_is_not_a_table() {
+        // Silently ignoring it would read as "no groups configured", which
+        // disables every consistency check the groups exist to enforce.
+        let names = HashSet::from(["nm".to_string()]);
+        let json = json!({
+            "release-plan": { "groups": ["nm"] }
+        });
+
+        let error = groups_from_metadata(&json, &names, &all_publishable(&names)).unwrap_err();
+
+        assert!(error.find_source::<MalformedVersionGroupsError>().is_some());
     }
 
     #[test]
