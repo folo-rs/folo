@@ -96,6 +96,9 @@ classification follows it in each case:
 * **The package's own `Cargo.lock`.** It is never released content, because
   Cargo derives the published lockfile when it builds the archive. A lockfile
   nested deeper in the package is ordinary source.
+* **The build directory.** A `target` directory at the package root is never
+  released content, because Cargo drops it before it reads `include` or
+  `exclude`. A directory of that name deeper in the package is ordinary source.
 * **Symbolic links.** A link among a package's released content stops the run.
   Cargo dereferences a link when it builds a package archive, so the published
   bytes are the target's content, while Git records only the target's path;

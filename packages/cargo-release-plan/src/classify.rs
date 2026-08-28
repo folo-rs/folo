@@ -12,7 +12,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
-use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor};
+use crate::anchor::{Anchor, Presence, TimelineEntry, reintroduction_anchor, resolve_anchor};
 use crate::diff::file_diff;
 use crate::git::{GitRepo, TreeEntry, join_git_rel};
 use crate::groups::GroupVerdict;
@@ -34,6 +34,12 @@ use crate::{ReadFileError, SymlinkReleasedError, VersionRegressionError, short_c
 #[derive(Debug)]
 pub(crate) struct Classification {
     pub(crate) head: String,
+    /// The revision every anchor was resolved against.
+    ///
+    /// Retained as the revision the caller named - or the configured default
+    /// when it named none - rather than the commit it resolved to, so a
+    /// diagnostic can quote a command that reproduces this run.
+    pub(crate) base: String,
     pub(crate) packages: Vec<PackageClass>,
     pub(crate) groups: BTreeMap<String, GroupVerdict>,
     pub(crate) work_tree: WorkTree,
@@ -360,6 +366,7 @@ pub(crate) fn classify(
 
     Ok(Classification {
         head,
+        base,
         packages: classes,
         groups: group_verdicts,
         work_tree,
@@ -544,7 +551,16 @@ fn build_timeline(
     let mut timeline = Vec::with_capacity(commits.len());
     for (index, commit) in commits.iter().enumerate() {
         let snapshot = cache.snapshot(git, commit)?;
-        let version = snapshot.packages.get(name).map(|pkg| pkg.version.clone());
+        let presence = snapshot.packages.get(name).map_or_else(
+            || {
+                if snapshot.unpublished.contains(name) {
+                    Presence::Unpublished
+                } else {
+                    Presence::Absent
+                }
+            },
+            |pkg| Presence::Published(pkg.version.clone()),
+        );
         let is_last = index
             .checked_add(1)
             .is_some_and(|next| next == commits.len());
@@ -555,7 +571,7 @@ fn build_timeline(
         };
         timeline.push(TimelineEntry {
             commit: commit.clone(),
-            version,
+            presence,
             has_parent,
         });
         // Stop once we have observed a version different from the base (the
@@ -1094,6 +1110,12 @@ struct HistoricalPackage {
 #[derive(Clone, Debug)]
 struct CommitSnapshot {
     packages: BTreeMap<String, HistoricalPackage>,
+    /// Members that declared `publish = false` at this commit.
+    ///
+    /// Nothing could be released from them, so they carry no packaging facts,
+    /// but the anchor walk still has to tell "withdrawn here" from "absent
+    /// here". Ref: docs/implementation.md, "Anchor and change set".
+    unpublished: BTreeSet<String>,
     root_doc: DocumentMut,
 }
 
@@ -1162,11 +1184,13 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
     };
     let member_dirs = resolve_members(&mut manifests, &members)?;
     let mut packages = BTreeMap::new();
+    let mut unpublished = BTreeSet::new();
     for member_dir in &member_dirs {
         let Some(parsed) = manifests.manifest(member_dir)? else {
             continue;
         };
         if !parsed.publish {
+            unpublished.insert(parsed.name.clone());
             continue;
         }
         packages.insert(
@@ -1180,7 +1204,11 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
             },
         );
     }
-    Ok(CommitSnapshot { packages, root_doc })
+    Ok(CommitSnapshot {
+        packages,
+        unpublished,
+        root_doc,
+    })
 }
 
 /// Supplies historical member manifests to membership resolution.
@@ -1333,15 +1361,21 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
     let [.., last] = timeline else {
         return false;
     };
-    // The anchor walk starts at the newest commit that carried the package: the
-    // base itself when the base carries it, the reintroduction point otherwise.
+    // The anchor walk starts at the newest commit that released the package: the
+    // base itself when the base releases it, the reintroduction point otherwise.
     // Until an older commit declares a different version the anchor is still
-    // undetermined, and a package no commit has carried yet needs the whole
+    // undetermined, and a package no commit has released yet needs the whole
     // history to tell creation from truncation.
-    let Some(reference) = timeline.iter().find_map(|entry| entry.version.as_ref()) else {
+    let Some(reference) = timeline
+        .iter()
+        .find_map(|entry| entry.presence.released_version())
+    else {
         return false;
     };
-    last.version.as_ref() != Some(reference)
+    // A commit at which the package was withdrawn is invisible to the walk, so
+    // it can never be the change that ends it. An absent package is visible: its
+    // reappearance is itself a version change.
+    !last.presence.is_unpublished() && last.presence.released_version() != Some(reference)
 }
 
 /// Reads a tracked work-tree path the way Cargo would pack it.
@@ -1836,7 +1870,17 @@ mod tests {
         fn entry(commit: &str, version: Option<&str>) -> TimelineEntry {
             TimelineEntry {
                 commit: commit.to_string(),
-                version: version.map(|text| text.parse().unwrap()),
+                presence: version.map_or(Presence::Absent, |text| {
+                    Presence::Published(text.parse().unwrap())
+                }),
+                has_parent: true,
+            }
+        }
+
+        fn unpublished(commit: &str) -> TimelineEntry {
+            TimelineEntry {
+                commit: commit.to_string(),
+                presence: Presence::Unpublished,
                 has_parent: true,
             }
         }
@@ -1866,6 +1910,13 @@ mod tests {
             entry("c2", Some("0.3.0")),
             entry("c1", Some("0.2.0")),
         ]));
+        // A withdrawn commit releases nothing, so the walk must continue past it
+        // to find the version change that actually ends the search.
+        assert!(!can_stop_timeline(&[
+            entry("c2", Some("0.3.0")),
+            unpublished("c1"),
+        ]));
+        assert!(!can_stop_timeline(&[unpublished("c1")]));
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::classify::{
 };
 use crate::metadata::ReportedDep;
 use crate::plan::SCHEMA_VERSION;
+use crate::text::quote_path;
 use crate::verbose::Verbose;
 
 /// On-disk `report.json` body.
@@ -109,7 +110,9 @@ pub(crate) fn write_report(
     };
     // Rendering to a string before writing keeps serialization failure - which
     // this body makes impossible - separate from the I/O failure the caller must
-    // handle, and leaves a half-written report impossible on a failed write.
+    // handle, so the only error this step can report is one the caller can act
+    // on. A failed write can still leave a partial file behind; the run fails
+    // with it, so no consumer is told the artifact is complete.
     let report = serde_json::to_string_pretty(&report)
         .expect("the report body contains only JSON-serializable fields");
     let report_path = out_dir.join("report.json");
@@ -123,7 +126,7 @@ pub(crate) fn write_report(
         .count();
     Ok(format!(
         "Wrote {} ({} with unreleased changes)",
-        report_path.display(),
+        quote_path(&report_path.display().to_string()),
         unreleased
     ))
 }

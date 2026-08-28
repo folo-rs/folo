@@ -55,24 +55,22 @@ impl GitRepo {
         } else {
             start
         };
-        // Both answers come from one invocation so they describe the same
-        // directory. Deriving the prefix instead, by stripping the root from a
-        // path Cargo reported, compares two spellings of the same directory
-        // that need not match: Windows hands out 8.3 short names for some
-        // paths, and symlinked or substituted roots differ on every platform.
-        let stdout = run_capture(
-            "git",
-            &["rev-parse", "--show-toplevel", "--show-prefix"],
-            dir,
-        )?;
-        let mut lines = stdout.lines();
-        let root = lines.next().unwrap_or_default().trim();
-        // The prefix line is empty when the repository root is the directory
-        // itself, and Git may drop the trailing newline that would carry it.
-        let prefix = lines.next().unwrap_or_default().trim();
+        // Both answers are asked of the same directory rather than derived from
+        // one another: stripping the root from a path Cargo reported would
+        // compare two spellings of the same directory that need not match, since
+        // Windows hands out 8.3 short names for some paths and symlinked or
+        // substituted roots differ on every platform.
+        //
+        // Each answer is read from its own invocation because `git` separates
+        // them with a newline, which is a legal character in a path name and so
+        // cannot be told apart from one inside an answer.
+        let root = run_capture("git", &["rev-parse", "--show-toplevel"], dir)?;
+        // Empty when the repository root is the directory itself.
+        let prefix = run_capture("git", &["rev-parse", "--show-prefix"], dir)?;
+        let prefix = strip_terminator(&prefix);
         Ok(Self {
-            root: PathBuf::from(root),
-            prefix: prefix.trim_end_matches('/').to_string(),
+            root: PathBuf::from(strip_terminator(&root)),
+            prefix: prefix.strip_suffix('/').unwrap_or(prefix).to_string(),
         })
     }
 
@@ -349,6 +347,14 @@ impl GitRepo {
     }
 }
 
+/// Strips the single record terminator `git` writes after a value.
+///
+/// Only the terminator goes: a path may legitimately begin or end with a space,
+/// so trimming whitespace would silently rename it.
+fn strip_terminator(value: &str) -> &str {
+    value.strip_suffix('\n').unwrap_or(value)
+}
+
 /// Whether a repository-relative tree path names a Cargo manifest.
 fn is_manifest_path(path: &str) -> bool {
     path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
@@ -529,6 +535,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn only_the_record_terminator_is_stripped() {
+        assert_eq!(strip_terminator("packages/demo\n"), "packages/demo");
+        // A path may end in a space, so only the terminator goes.
+        assert_eq!(strip_terminator("packages/demo \n"), "packages/demo ");
+        // Git omits the terminator on the last record of some outputs.
+        assert_eq!(strip_terminator("packages/demo"), "packages/demo");
+        // A newline is a legal character in a path, so an inner one stays.
+        assert_eq!(strip_terminator("odd\nname\n"), "odd\nname");
+    }
 
     #[test]
     fn absent_git_path_matches_known_stderr() {

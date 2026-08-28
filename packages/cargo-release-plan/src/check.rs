@@ -45,7 +45,12 @@ pub(crate) fn run_check(
     verbose: Verbose,
 ) -> Result<(bool, String), AppError> {
     let classification = classify(manifest_path, base, verbose)?;
-    let mut message = render_diagnostics(&classification.packages, &classification.groups, format);
+    let mut message = render_diagnostics(
+        &classification.packages,
+        &classification.groups,
+        &classification.base,
+        format,
+    );
 
     if verify_packaging {
         append_packaging_warnings(&mut message, &verify_packaging_rules(&classification));
@@ -84,6 +89,7 @@ fn default_success_message(passed: bool, message: &str) -> Option<&'static str> 
 fn render_diagnostics(
     packages: &[PackageClass],
     groups: &BTreeMap<String, GroupVerdict>,
+    base: &str,
     format: CheckFormat,
 ) -> String {
     let declared: BTreeMap<&str, &Version> = packages
@@ -120,7 +126,7 @@ fn render_diagnostics(
         let text = format!(
             "{}: unreleased-changes since {anchor}; {changed}.{group_text} {}",
             quote_path(&package.name),
-            remedy()
+            remedy(base)
         );
         if format == CheckFormat::Github {
             let file = os_path(&package.manifest_path);
@@ -151,7 +157,7 @@ fn render_diagnostics(
         let text = format!(
             "group {}: members declare different versions ({listed}). {}",
             quote_path(name),
-            remedy()
+            remedy(base)
         );
         if format == CheckFormat::Github {
             lines.push(format!(
@@ -190,11 +196,15 @@ fn escape_property(value: &str) -> String {
 ///
 /// The self-contained path comes first so the message stays actionable without
 /// any tooling beyond this binary; the skill is named as the assisted route.
-fn remedy() -> String {
+/// The base is spelled out even when it came from configuration rather than the
+/// command line, because a report run against a different base does not explain
+/// the failure being reported.
+fn remedy(base: &str) -> String {
     format!(
-        "Run `cargo release-plan report --out-dir <dir>` to inspect the changes, then \
+        "Run `cargo release-plan report --out-dir <dir> --base {}` to inspect the changes, then \
          `cargo release-plan apply --plan <plan.json>` with an increment plan, or run the \
-         {INCREMENT_VERSIONS_SKILL} skill to do both."
+         {INCREMENT_VERSIONS_SKILL} skill to do both.",
+        quote_path(base)
     )
 }
 
@@ -338,6 +348,20 @@ mod tests {
 
     assert_impl_all!(CheckFormat: UnwindSafe, RefUnwindSafe);
 
+    /// Stands in for whichever revision a run classified against.
+    const BASE: &str = "origin/main";
+
+    #[test]
+    fn the_remedy_names_the_base_the_run_used() {
+        // Following the remediation against a different base would report a
+        // different set of packages than the one that failed.
+        let package = failing("demo", Vec::new());
+
+        let text = render_diagnostics(&[package], &BTreeMap::new(), "deadbeef", CheckFormat::Text);
+
+        assert!(text.contains("--base deadbeef"));
+    }
+
     #[test]
     fn default_success_message_only_when_passed_and_empty() {
         assert!(default_success_message(true, "").is_some());
@@ -375,7 +399,7 @@ mod tests {
             PathBuf::from("packages/demo/Cargo.toml"),
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
 
         assert_eq!(text, "");
     }
@@ -395,7 +419,7 @@ mod tests {
             ],
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
 
         assert!(
             text.contains("src/lib.rs (and related paths) changed"),
@@ -412,7 +436,7 @@ mod tests {
             }],
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
 
         assert!(
             text.contains("package.rust-version (and related paths) changed"),
@@ -428,7 +452,7 @@ mod tests {
     fn a_package_without_changed_items_still_reports() {
         let package = failing("demo", Vec::new());
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
 
         assert!(text.contains("released content changed"), "{text}");
     }
@@ -449,7 +473,7 @@ mod tests {
             ),
         )]);
 
-        let text = render_diagnostics(&[package], &groups, CheckFormat::Text);
+        let text = render_diagnostics(&[package], &groups, BASE, CheckFormat::Text);
 
         assert!(
             text.contains("Group g also includes demo, sibling."),
@@ -466,7 +490,7 @@ mod tests {
         let mut package = failing("demo", Vec::new());
         package.group = Some("g".to_string());
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Text);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
 
         assert!(text.contains("Group g also includes g."), "{text}");
     }
@@ -498,7 +522,7 @@ mod tests {
             ),
         )]);
 
-        let text = render_diagnostics(&[member], &groups, CheckFormat::Text);
+        let text = render_diagnostics(&[member], &groups, BASE, CheckFormat::Text);
 
         assert!(text.contains("demo@0.2.0"), "{text}");
         assert!(text.contains("absent"), "{text}");
@@ -509,7 +533,7 @@ mod tests {
     fn github_format_precedes_each_diagnostic_with_an_annotation() {
         let package = failing("demo", Vec::new());
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Github);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Github);
 
         let mut lines = text.lines();
         assert!(
@@ -553,7 +577,7 @@ mod tests {
             }],
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Github);
+        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Github);
 
         assert_eq!(text.lines().count(), 2, "{text}");
         assert!(text.contains(r#""src/\n::error::spoofed""#), "{text}");

@@ -25,6 +25,9 @@ pub(crate) struct PackagingRules {
     selection: Selection,
 }
 
+/// The build directory Cargo never packs, relative to the package root.
+const BUILD_DIR: &str = "target";
+
 impl PackagingRules {
     pub(crate) fn new(
         include: Option<&[String]>,
@@ -49,7 +52,9 @@ impl PackagingRules {
     /// including `\` — is part of a file's name.
     ///
     /// `Cargo.toml` is always released. The package's own `Cargo.lock` is never
-    /// released; a lockfile in a subdirectory is ordinary package source.
+    /// released; a lockfile in a subdirectory is ordinary package source. The
+    /// build directory at the package root is never released either, whatever
+    /// the manifest keys say.
     ///
     /// Matching consults each parent directory as well as the path itself, so a
     /// directory pattern such as `src/` covers everything beneath it the way it
@@ -61,6 +66,14 @@ impl PackagingRules {
         }
         if path == "Cargo.toml" {
             return true;
+        }
+        // Ref: docs/design.md, "Where Cargo departs from those rules".
+        if path == BUILD_DIR
+            || path
+                .strip_prefix(BUILD_DIR)
+                .is_some_and(|rest| rest.starts_with('/'))
+        {
+            return false;
         }
         match &self.selection {
             Selection::AllowList(include) => {
@@ -185,6 +198,27 @@ mod tests {
         // A lockfile below the package root belongs to something the package
         // ships, such as a test fixture workspace, so it is ordinary source.
         assert!(rules.is_released("fixtures/Cargo.lock"));
+    }
+
+    #[test]
+    fn the_build_directory_is_never_released() {
+        // Cargo drops it before reading either manifest key, so neither the
+        // default selection nor an `include` naming it can pack build output.
+        let default = PackagingRules::default();
+        assert!(!default.is_released("target"));
+        assert!(!default.is_released("target/debug/demo"));
+
+        let included = rules(Some(&["target/**", "src/**"]), None).unwrap();
+        assert!(!included.is_released("target/debug/demo"));
+        assert!(included.is_released("src/lib.rs"));
+
+        let excluded = rules(None, Some(&["tests/**"])).unwrap();
+        assert!(!excluded.is_released("target/debug/demo"));
+
+        // Only the directory itself is special; a name that merely starts with
+        // the same letters is ordinary source.
+        assert!(default.is_released("targets.rs"));
+        assert!(default.is_released("src/target/mod.rs"));
     }
 
     #[test]

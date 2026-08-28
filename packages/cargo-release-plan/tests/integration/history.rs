@@ -108,6 +108,37 @@ fn reintroduced_package_is_anchored_to_the_version_it_carried_before_deletion() 
     assert!(passed, "{message}");
 }
 
+/// A package withdrawn and restored keeps the anchor it had before withdrawal.
+///
+/// The alternative - reading a withdrawn commit as an absence, the way a
+/// deleted package is read - would make the restoring commit look like a
+/// creation, so everything released before the withdrawal would stop
+/// constraining the version and content committed since would silently pass.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_withdrawn_package_is_still_anchored_to_its_last_release() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "keeper", "0.1.0", "");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.commit("seed");
+
+    write_package(&fixture, "demo", "0.1.0", "publish = false");
+    fixture.commit("withdraw demo from publication");
+
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 9; }\n");
+    fixture.commit("restore demo with changed content at the same version");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo: unreleased-changes"), "{message}");
+
+    write_package(&fixture, "demo", "0.2.0", "");
+    let (passed, message) = check(&fixture, &base);
+    assert!(passed, "{message}");
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn reintroduced_package_is_anchored_to_its_last_version_change() {

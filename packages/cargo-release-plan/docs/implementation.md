@@ -87,6 +87,17 @@ Comparison is on canonically typed TOML values rather than rendered text, so a
 reformatted table is not mistaken for a changed value and two differently shaped
 values never collapse into the same representation.
 
+Each commit on that walk records one of three states for a package: absent, a
+member that declares `publish = false`, and a publishable member at a version.
+The three are not interchangeable. An absent package makes its reappearance a
+version change, because a package that was not there released nothing under the
+version it comes back with. A member that is present but not publishable is
+skipped instead: nothing was released from it either, but the release it had
+before it was withdrawn still governs, so the walk must reach past the withdrawn
+stretch rather than stop at the commit that restored publication. A package that
+is not publishable anywhere in the sampled history has never released anything,
+so it is new.
+
 ### Workspace membership
 
 Historical workspace membership is reconstructed from the root manifest at each

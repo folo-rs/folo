@@ -21,13 +21,44 @@ pub(crate) struct Anchor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TimelineEntry {
     pub(crate) commit: String,
-    /// Parsed version at this commit, or `None` if the package was absent.
-    pub(crate) version: Option<Version>,
+    /// What this commit's workspace says about the package.
+    pub(crate) presence: Presence,
     /// Whether this commit has a parent, so reaching it does not prove a root.
     ///
     /// A shallow-boundary commit sets this even though its parent is not
     /// fetched, which is what distinguishes truncated history from a true root.
     pub(crate) has_parent: bool,
+}
+
+/// What one commit's workspace says about a package.
+///
+/// The anchor is the last state a consumer could have received, so the three
+/// cases are not interchangeable. An absent package makes its reappearance a
+/// version change, while a package that is present but not publishable released
+/// nothing and so neither anchors a version nor interrupts an older one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Presence {
+    /// The commit's workspace does not carry the package.
+    Absent,
+    /// The package is a member but declares `publish = false`.
+    Unpublished,
+    /// The package is a publishable member declaring this version.
+    Published(Version),
+}
+
+impl Presence {
+    /// The version a consumer could have received at this commit.
+    pub(crate) fn released_version(&self) -> Option<&Version> {
+        match self {
+            Self::Published(version) => Some(version),
+            Self::Absent | Self::Unpublished => None,
+        }
+    }
+
+    /// Whether this commit is invisible to the anchor walk.
+    pub(crate) fn is_unpublished(&self) -> bool {
+        matches!(self, Self::Unpublished)
+    }
 }
 
 /// Resolves the version-change anchor from a newest-first first-parent timeline.
@@ -39,10 +70,19 @@ pub(crate) fn resolve_anchor(
     package: &str,
     timeline: &[TimelineEntry],
 ) -> Result<Anchor, AppError> {
-    let Some(first) = timeline.first() else {
+    // A commit at which the package was not publishable released nothing, so it
+    // is skipped rather than read as an absence: treating it as absent would
+    // make the next publishable commit look like a creation and hide everything
+    // released before the package was withdrawn.
+    let observable: Vec<&TimelineEntry> = timeline
+        .iter()
+        .filter(|entry| !entry.presence.is_unpublished())
+        .collect();
+
+    let Some(first) = observable.first() else {
         return Err(ShallowHistoryError::new(package).into());
     };
-    let Some(mut prev_version) = first.version.as_ref() else {
+    let Some(mut prev_version) = first.presence.released_version() else {
         // Absent on the base revision: not an anchor walk. Callers treat this as
         // a new package (version increased from absent).
         return Err(ShallowHistoryError::new(package).into());
@@ -51,19 +91,21 @@ pub(crate) fn resolve_anchor(
     // retained and the timeline outlives the search.
     let mut prev_commit = first.commit.as_str();
 
-    for entry in timeline.iter().skip(1) {
-        if entry.version.as_ref() != Some(prev_version) {
+    for entry in observable.iter().skip(1) {
+        if entry.presence.released_version() != Some(prev_version) {
             return Ok(Anchor {
                 commit: prev_commit.to_string(),
                 version: prev_version.clone(),
             });
         }
         prev_commit = entry.commit.as_str();
-        if let Some(version) = &entry.version {
+        if let Some(version) = entry.presence.released_version() {
             prev_version = version;
         }
     }
 
+    // Whether history ran out is a property of the walk over real commits, so it
+    // is read from the oldest commit rather than the oldest observable one.
     let last = timeline.last().unwrap_or(first);
     if last.has_parent {
         return Err(ShallowHistoryError::new(package).into());
@@ -96,9 +138,13 @@ pub(crate) fn reintroduction_anchor(
     package: &str,
     timeline: &[TimelineEntry],
 ) -> Result<Option<Anchor>, AppError> {
-    let Some(present) = timeline.iter().position(|entry| entry.version.is_some()) else {
-        // Absent everywhere. Only a walk that ran out of history at a root can
-        // rule out an earlier, already-published incarnation of this package.
+    let Some(present) = timeline
+        .iter()
+        .position(|entry| entry.presence.released_version().is_some())
+    else {
+        // Never publishable anywhere in the sampled history, so nothing was ever
+        // released under this name. Only a walk that ran out of history at a
+        // root can rule out an earlier, already-published incarnation.
         return match timeline.last() {
             Some(last) if !last.has_parent => Ok(None),
             _ => Err(ShallowHistoryError::new(package).into()),
@@ -122,7 +168,15 @@ mod tests {
     fn entry(commit: &str, version: Option<&str>, has_parent: bool) -> TimelineEntry {
         TimelineEntry {
             commit: commit.to_string(),
-            version: version.map(v),
+            presence: version.map_or(Presence::Absent, |text| Presence::Published(v(text))),
+            has_parent,
+        }
+    }
+
+    fn unpublished(commit: &str, has_parent: bool) -> TimelineEntry {
+        TimelineEntry {
+            commit: commit.to_string(),
+            presence: Presence::Unpublished,
             has_parent,
         }
     }
@@ -186,6 +240,50 @@ mod tests {
     }
 
     #[test]
+    fn a_withdrawn_period_does_not_hide_the_older_release() {
+        // Withdrawing a package and later restoring it at the same version does
+        // not make that version free: the earlier release still governs, so the
+        // anchor must reach past the withdrawal instead of stopping at the
+        // commit that restored the package.
+        let timeline = vec![
+            entry("c2", Some("0.1.0"), true),
+            unpublished("c1", true),
+            entry("c0", Some("0.1.0"), false),
+        ];
+        let anchor = resolve_anchor("foo", &timeline).unwrap();
+        assert_eq!(anchor.commit, "c0");
+        assert_eq!(anchor.version, v("0.1.0"));
+    }
+
+    #[test]
+    fn a_withdrawn_period_does_not_move_a_newer_anchor() {
+        let timeline = vec![
+            entry("c2", Some("0.2.0"), true),
+            unpublished("c1", true),
+            entry("c0", Some("0.1.0"), false),
+        ];
+        let anchor = resolve_anchor("foo", &timeline).unwrap();
+        assert_eq!(anchor.commit, "c2");
+        assert_eq!(anchor.version, v("0.2.0"));
+    }
+
+    #[test]
+    fn history_ending_in_a_withdrawn_period_still_resolves() {
+        // The oldest commit carries no release, so the walk stops on the oldest
+        // published commit while the root proves history was not truncated.
+        let timeline = vec![entry("c1", Some("0.1.0"), true), unpublished("c0", false)];
+        let anchor = resolve_anchor("foo", &timeline).unwrap();
+        assert_eq!(anchor.commit, "c1");
+    }
+
+    #[test]
+    fn truncated_history_ending_in_a_withdrawn_period_is_an_error() {
+        let timeline = vec![entry("c1", Some("0.1.0"), true), unpublished("c0", true)];
+        let error = resolve_anchor("foo", &timeline).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
+    }
+
+    #[test]
     fn merge_commit_on_first_parent_line_is_visible() {
         // A first-parent walk sees the merge commit and then its mainline
         // parent, so an increment made on a merged topic branch is observed at
@@ -234,6 +332,21 @@ mod tests {
     fn reintroduction_anchor_is_absent_for_a_genuinely_new_package() {
         let timeline = vec![entry("c2", None, true), entry("c1", None, false)];
         assert!(reintroduction_anchor("foo", &timeline).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_package_that_was_never_publishable_is_new() {
+        // The name exists in history but nothing was ever released under it, so
+        // the branch is free to choose any version.
+        let timeline = vec![unpublished("c2", true), unpublished("c1", false)];
+        assert!(reintroduction_anchor("foo", &timeline).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_package_never_publishable_in_truncated_history_is_an_error() {
+        let timeline = vec![unpublished("c2", true), unpublished("c1", true)];
+        let error = reintroduction_anchor("foo", &timeline).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
     }
 
     #[test]
