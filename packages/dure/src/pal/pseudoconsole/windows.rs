@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
@@ -14,12 +14,18 @@ use windows::Win32::System::Pipes::CreatePipe;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::PtyId;
 use crate::pal::pseudoconsole::{Pseudoconsole, WindowSize};
-use crate::pal::raw_handle::RawHandle;
+use crate::pal::raw_handle::PipeHandle;
 
+/// One live pseudoconsole and the host ends of its pipes.
+///
+/// The pipe ends are shared owners because `read_output` and `write_input`
+/// release the table lock before their blocking I/O, so a concurrent `close`
+/// must not free a handle they are still using.
+/// Ref: docs/implementation.md, "Pseudoconsole".
 struct Pty {
     hpcon: HPCON,
-    host_input: RawHandle,
-    host_output: RawHandle,
+    host_input: Arc<PipeHandle>,
+    host_output: Arc<PipeHandle>,
 }
 
 struct PtyTable {
@@ -116,8 +122,8 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
             id,
             Pty {
                 hpcon,
-                host_input: RawHandle::from_handle(input_write),
-                host_output: RawHandle::from_handle(output_read),
+                host_input: PipeHandle::new(input_write),
+                host_output: PipeHandle::new(output_read),
             },
         );
         Ok(PtyId(id))
@@ -138,21 +144,31 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
     }
 
     fn write_input(&self, pty: PtyId, data: &[u8]) -> Result<(), PalError> {
+        // Cloned out of the table so a concurrent `close` cannot free the
+        // handle while the write below is blocked on it.
         let handle = table()
             .lock()
             .expect("pty table")
             .ptys
             .get(&pty.0)
-            .map(|pty| pty.host_input.as_handle())
+            .map(|pty| Arc::clone(&pty.host_input))
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
         let mut remaining = data;
         while !remaining.is_empty() {
             let mut transferred = 0_u32;
-            // SAFETY: `handle` is the host input pipe for a live pty; `remaining`
-            // is exclusive for this call. Closing this handle is reserved for
-            // `close`, so detach never sends EOF.
-            unsafe { WriteFile(handle, Some(remaining), Some(&raw mut transferred), None) }
-                .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+            // SAFETY: `handle` is the host input pipe for a pty and this
+            // reference keeps it open across the call; `remaining` is exclusive
+            // for this call. Closing this handle is reserved for `close`, so
+            // detach never sends EOF.
+            unsafe {
+                WriteFile(
+                    handle.as_handle(),
+                    Some(remaining),
+                    Some(&raw mut transferred),
+                    None,
+                )
+            }
+            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
             if transferred == 0 {
                 return Err(PalError::new(PalErrorKind::Other));
             }
@@ -164,20 +180,22 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
     }
 
     fn read_output(&self, pty: PtyId) -> Result<Vec<u8>, PalError> {
+        // Cloned out of the table so a concurrent `close` cannot free the
+        // handle while the read below is blocked on it.
         let handle = table()
             .lock()
             .expect("pty table")
             .ptys
             .get(&pty.0)
-            .map(|pty| pty.host_output.as_handle())
+            .map(|pty| Arc::clone(&pty.host_output))
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
         let mut buf = vec![0_u8; 4096];
         let mut transferred = 0_u32;
-        // SAFETY: `handle` is the host output pipe for a live pty; `buf` is
-        // exclusive for this call.
+        // SAFETY: `handle` is the host output pipe for a pty and this reference
+        // keeps it open across the call; `buf` is exclusive for this call.
         unsafe {
             ReadFile(
-                handle,
+                handle.as_handle(),
                 Some(buf.as_mut_slice()),
                 Some(&raw mut transferred),
                 None,
@@ -197,7 +215,10 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
         unsafe {
             ClosePseudoConsole(entry.hpcon);
         }
-        close_handle(entry.host_input.as_handle());
-        close_handle(entry.host_output.as_handle());
+        // A relay thread may be blocked reading or writing these handles.
+        // Cancelling releases it; the handles close once it drops its
+        // references, which is what keeps this from freeing a handle in use.
+        entry.host_input.cancel();
+        entry.host_output.cancel();
     }
 }

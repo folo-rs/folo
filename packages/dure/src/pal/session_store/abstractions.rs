@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::pal::error::PalError;
 use crate::session_id::SessionId;
-use crate::session_record::SessionRecord;
+use crate::session_record::{ProcessIdentity, SessionRecord};
 
 /// Per-user filesystem of live-session records.
 ///
@@ -18,19 +18,31 @@ pub(crate) trait SessionStore: Send + Sync + std::fmt::Debug + 'static {
     fn root(&self) -> PathBuf;
 
     /// Smallest unused positive integer, filesystem-coordinated.
-    fn allocate_id(&self) -> Result<SessionId, PalError>;
+    ///
+    /// The claim names `owner` so that a reservation whose owner died before
+    /// publishing can be reaped rather than occupying the id forever.
+    fn allocate_id(&self, owner: &ProcessIdentity) -> Result<SessionId, PalError>;
 
     /// Overwrites the record file for this id.
     fn publish(&self, record: &SessionRecord) -> Result<(), PalError>;
 
-    /// Reads one record, or `None` if the file is absent.
+    /// Reads one record, or `None` if the file is absent or still reserved.
     fn read(&self, id: SessionId) -> Result<Option<SessionRecord>, PalError>;
 
     /// Every parseable record in the store, including stale ones.
     fn list(&self) -> Result<Vec<SessionRecord>, PalError>;
 
+    /// Ids that are claimed but not published, with the process that claimed them.
+    fn list_reservations(&self) -> Result<Vec<(SessionId, ProcessIdentity)>, PalError>;
+
     /// Removes the record file. Missing files succeed.
     fn delete(&self, id: SessionId) -> Result<(), PalError>;
+
+    /// Removes the record file only while it still describes `owner`.
+    ///
+    /// Ids are reused, so an unconditional delete can reap a session that
+    /// happens to have claimed the id since the caller last read it.
+    fn delete_owned_by(&self, id: SessionId, owner: &ProcessIdentity) -> Result<(), PalError>;
 
     /// Canonical absolute form used as the launch-directory key.
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, PalError>;

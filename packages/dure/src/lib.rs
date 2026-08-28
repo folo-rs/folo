@@ -14,6 +14,7 @@ mod detect;
 mod errors;
 mod gc;
 mod list_fmt;
+mod outbox;
 mod pal;
 mod platform;
 mod protocol;

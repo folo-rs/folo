@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::session_store::SessionStore;
 use crate::session_id::SessionId;
-use crate::session_record::SessionRecord;
+use crate::session_record::{ProcessIdentity, SessionRecord, StoredSession};
 
 /// Session store rooted at a caller-supplied directory.
 #[derive(Clone, Debug)]
@@ -18,13 +18,19 @@ pub(crate) struct FsSessionStore {
     root: PathBuf,
 }
 
-fn parse_record(bytes: &[u8], expected: SessionId) -> Result<Option<SessionRecord>, PalError> {
-    let record: SessionRecord = serde_json::from_slice(bytes).map_err(|error| {
+fn parse_stored(bytes: &[u8]) -> Result<StoredSession, PalError> {
+    serde_json::from_slice(bytes).map_err(|error| {
         PalError::with_source(
             PalErrorKind::Other,
             io::Error::new(io::ErrorKind::InvalidData, error),
         )
-    })?;
+    })
+}
+
+fn parse_record(bytes: &[u8], expected: SessionId) -> Result<Option<SessionRecord>, PalError> {
+    let StoredSession::Published(record) = parse_stored(bytes)? else {
+        return Ok(None);
+    };
     if SessionId::from_u32(record.id) != Some(expected) {
         return Ok(None);
     }
@@ -52,6 +58,44 @@ impl FsSessionStore {
     fn record_path(&self, id: SessionId) -> PathBuf {
         self.root.join(format!("{}.json", id.get()))
     }
+
+    /// Every readable record file, paired with the id its name encodes.
+    ///
+    /// Foreign, torn, and unparseable files are skipped: one bad file must not
+    /// hide every session in the store from `dure list`.
+    fn stored(&self) -> Result<Vec<(SessionId, StoredSession)>, PalError> {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(PalError::from_io(error)),
+        };
+        let mut stored = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(PalError::from_io)?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(stem) = name.strip_suffix(".json") else {
+                continue;
+            };
+            let Ok(raw) = stem.parse::<u32>() else {
+                continue;
+            };
+            let Some(id) = SessionId::from_u32(raw) else {
+                continue;
+            };
+            let Ok(bytes) = fs::read(entry.path()) else {
+                continue;
+            };
+            let Ok(parsed) = parse_stored(&bytes) else {
+                continue;
+            };
+            stored.push((id, parsed));
+        }
+        stored.sort_by_key(|(id, _stored)| id.get());
+        Ok(stored)
+    }
 }
 
 impl SessionStore for FsSessionStore {
@@ -60,22 +104,37 @@ impl SessionStore for FsSessionStore {
         self.root.clone()
     }
 
-    fn allocate_id(&self) -> Result<SessionId, PalError> {
+    fn allocate_id(&self, owner: &ProcessIdentity) -> Result<SessionId, PalError> {
         fs::create_dir_all(&self.root).map_err(PalError::from_io)?;
+        let claim = serde_json::to_vec(&StoredSession::Reserved { owner: *owner }).map_err(
+            #[cfg_attr(coverage_nightly, coverage(off))]
+            |error| {
+                PalError::with_source(
+                    PalErrorKind::Other,
+                    io::Error::new(io::ErrorKind::InvalidData, error),
+                )
+            },
+        )?;
         let mut n: u32 = 1;
         loop {
             let Some(id) = SessionId::from_u32(n) else {
                 return Err(PalError::new(PalErrorKind::Other));
             };
             let path = self.record_path(id);
-            // Exclusive create of `{id}.json` is the reservation. The empty
-            // file occupies the id until `publish` overwrites it. `list` and
-            // `read` skip empty files, so a crash before publish leaves an id
-            // that is not listed as live and is not reused until deleted.
+            // Exclusive create of `{id}.json` is the claim, and the claim names
+            // the process making it. `read` and `list` report a claimed id as
+            // absent, while `gc` reaps one whose owner died before publishing.
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(mut file) => {
-                    file.write_all(b"").map_err(PalError::from_io)?;
-                    return Ok(id);
+                    return write_claim(&mut file, &claim).map_or_else(
+                        |error| {
+                            // A claim nobody owns would occupy the id forever.
+                            drop(file);
+                            _ = fs::remove_file(&path);
+                            Err(PalError::from_io(error))
+                        },
+                        |()| Ok(id),
+                    );
                 }
                 Err(error) => {
                     if !is_id_taken(&error) {
@@ -94,12 +153,14 @@ impl SessionStore for FsSessionStore {
         let id = record.session_id();
         let path = self.record_path(id);
         let tmp = self.root.join(format!("{}.json.tmp", id.get()));
-        let json = serde_json::to_vec_pretty(record).map_err(|error| {
-            PalError::with_source(
-                PalErrorKind::Other,
-                io::Error::new(io::ErrorKind::InvalidData, error),
-            )
-        })?;
+        let json = serde_json::to_vec_pretty(&StoredSession::Published(record.clone())).map_err(
+            |error| {
+                PalError::with_source(
+                    PalErrorKind::Other,
+                    io::Error::new(io::ErrorKind::InvalidData, error),
+                )
+            },
+        )?;
         let mut file = File::create(&tmp).map_err(PalError::from_io)?;
         file.write_all(&json).map_err(PalError::from_io)?;
         file.sync_all().map_err(PalError::from_io)?;
@@ -118,33 +179,25 @@ impl SessionStore for FsSessionStore {
     }
 
     fn list(&self) -> Result<Vec<SessionRecord>, PalError> {
-        let entries = match fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(PalError::from_io(error)),
-        };
-        let mut records = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(PalError::from_io)?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let Some(stem) = name.strip_suffix(".json") else {
-                continue;
-            };
-            let Ok(raw) = stem.parse::<u32>() else {
-                continue;
-            };
-            let Some(id) = SessionId::from_u32(raw) else {
-                continue;
-            };
-            if let Ok(Some(record)) = self.read(id) {
-                records.push(record);
-            }
-        }
-        records.sort_by_key(|record| record.id);
-        Ok(records)
+        Ok(self
+            .stored()?
+            .into_iter()
+            .filter_map(|(id, stored)| match stored {
+                StoredSession::Published(record) if record.session_id() == id => Some(record),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn list_reservations(&self) -> Result<Vec<(SessionId, ProcessIdentity)>, PalError> {
+        Ok(self
+            .stored()?
+            .into_iter()
+            .filter_map(|(id, stored)| match stored {
+                StoredSession::Reserved { owner } => Some((id, owner)),
+                StoredSession::Published(_record) => None,
+            })
+            .collect())
     }
 
     fn delete(&self, id: SessionId) -> Result<(), PalError> {
@@ -153,6 +206,25 @@ impl SessionStore for FsSessionStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(PalError::from_io(error)),
         }
+    }
+
+    fn delete_owned_by(&self, id: SessionId, owner: &ProcessIdentity) -> Result<(), PalError> {
+        let bytes = match fs::read(self.record_path(id)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(PalError::from_io(error)),
+        };
+        // A file that no longer names `owner` belongs to whoever claimed the id
+        // after the caller read it, and a file nothing can parse names nobody.
+        let owned = match parse_stored(&bytes) {
+            Ok(StoredSession::Reserved { owner: current }) => current == *owner,
+            Ok(StoredSession::Published(record)) => record.identity() == *owner,
+            Err(_error) => false,
+        };
+        if !owned {
+            return Ok(());
+        }
+        self.delete(id)
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, PalError> {
@@ -170,6 +242,12 @@ impl SessionStore for FsSessionStore {
 /// retry the same fault against every remaining id in turn.
 fn is_id_taken(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::AlreadyExists
+}
+
+/// Writes and flushes a claim so it is durable before the id is handed out.
+fn write_claim(file: &mut File, claim: &[u8]) -> io::Result<()> {
+    file.write_all(claim)?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -204,6 +282,82 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_claim_names_its_owner_until_it_is_published() {
+        let (dir, store) = store();
+        let owner = ProcessIdentity::for_test(7);
+        let id = store.allocate_id(&owner).unwrap();
+
+        // A claimed id is not yet a session, so it lists as a reservation only.
+        assert_eq!(store.list_reservations().unwrap(), vec![(id, owner)]);
+        assert!(store.list().unwrap().is_empty());
+        assert!(store.read(id).unwrap().is_none());
+
+        store.publish(&record(id, dir.path())).unwrap();
+        assert!(store.list_reservations().unwrap().is_empty());
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_claim_is_deleted_only_by_its_owner() {
+        let (_dir, store) = store();
+        let owner = ProcessIdentity::for_test(7);
+        let id = store.allocate_id(&owner).unwrap();
+
+        store
+            .delete_owned_by(id, &ProcessIdentity::for_test(8))
+            .unwrap();
+        assert_eq!(store.list_reservations().unwrap().len(), 1);
+
+        store.delete_owned_by(id, &owner).unwrap();
+        assert!(store.list_reservations().unwrap().is_empty());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_record_is_deleted_only_by_its_own_supervisor() {
+        let (dir, store) = store();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
+        let mut published = record(id, dir.path());
+        published.supervisor_pid = 20;
+        published.supervisor_creation_time = 200;
+        store.publish(&published).unwrap();
+
+        // Stands in for a session that took this id after another process read
+        // the record it means to delete.
+        let stale = ProcessIdentity {
+            pid: 20,
+            creation_time: 199,
+        };
+        store.delete_owned_by(id, &stale).unwrap();
+        assert_eq!(store.read(id).unwrap().unwrap(), published);
+
+        store.delete_owned_by(id, &published.identity()).unwrap();
+        assert!(store.read(id).unwrap().is_none());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn deleting_what_is_not_there_or_not_readable_is_not_an_error() {
+        let (dir, store) = store();
+        let owner = ProcessIdentity::for_test(7);
+        let id = store.allocate_id(&owner).unwrap();
+        // A file nothing can parse names nobody, so no owner may delete it.
+        fs::write(dir.path().join(format!("{}.json", id.get())), b"not json").unwrap();
+        store.delete_owned_by(id, &owner).unwrap();
+        assert!(dir.path().join(format!("{}.json", id.get())).exists());
+
+        store
+            .delete_owned_by(SessionId::from_u32(99).unwrap(), &owner)
+            .unwrap();
+    }
+
+    #[test]
     fn only_an_already_exists_failure_means_the_id_is_taken() {
         assert!(is_id_taken(&io::Error::from(io::ErrorKind::AlreadyExists)));
         assert!(!is_id_taken(&io::Error::from(
@@ -217,12 +371,12 @@ mod tests {
     fn allocates_smallest_unused_and_reuses_after_delete() {
         let (dir, store) = store();
         assert_eq!(store.root(), dir.path());
-        let first = store.allocate_id().unwrap();
-        let second = store.allocate_id().unwrap();
+        let first = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
+        let second = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         assert_eq!(first.get(), 1);
         assert_eq!(second.get(), 2);
         store.delete(first).unwrap();
-        let reused = store.allocate_id().unwrap();
+        let reused = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         assert_eq!(reused.get(), 1);
     }
 
@@ -231,7 +385,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn a_reserved_but_unpublished_id_reads_as_absent() {
         let (_dir, store) = store();
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         assert!(store.read(id).unwrap().is_none());
     }
 
@@ -246,7 +400,7 @@ mod tests {
                 let root = root.clone();
                 thread::spawn(move || {
                     let store = FsSessionStore::new(root);
-                    store.allocate_id().unwrap()
+                    store.allocate_id(&ProcessIdentity::for_test(1)).unwrap()
                 })
             })
             .take(8)
@@ -264,7 +418,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn publish_read_list_delete() {
         let (dir, store) = store();
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         let rec = record(id, dir.path());
         store.publish(&rec).unwrap();
         assert_eq!(store.read(id).unwrap().unwrap(), rec);
@@ -282,7 +436,7 @@ mod tests {
         fs::write(dir.path().join("0.json"), b"{\"id\":0}").unwrap();
         fs::write(dir.path().join("not-json.json"), b"nope").unwrap();
         fs::write(dir.path().join("readme.txt"), b"not a record").unwrap();
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         let rec = record(id, dir.path());
         store.publish(&rec).unwrap();
         assert_eq!(store.list().unwrap(), vec![rec]);
@@ -293,7 +447,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn read_reports_a_corrupt_record() {
         let (dir, store) = store();
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         fs::write(dir.path().join(format!("{}.json", id.get())), b"nope").unwrap();
         assert_eq!(store.read(id).unwrap_err().kind(), PalErrorKind::Other);
     }
@@ -344,13 +498,13 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn read_rejects_filename_id_mismatch() {
         let (dir, store) = store();
-        let first = store.allocate_id().unwrap();
+        let first = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         let rec = record(first, dir.path());
         store.publish(&rec).unwrap();
-        let second = store.allocate_id().unwrap();
+        let second = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         fs::write(
             dir.path().join(format!("{}.json", second.get())),
-            serde_json::to_vec(&rec).unwrap(),
+            serde_json::to_vec(&StoredSession::Published(rec.clone())).unwrap(),
         )
         .unwrap();
         assert!(store.read(second).unwrap().is_none());

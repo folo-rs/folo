@@ -54,6 +54,15 @@ impl StartupWatch {
         watch.conn = Some(conn);
         watch.expired
     }
+
+    /// Release the connection from the watchdog's care after a successful
+    /// handshake, so only the handshake itself tears it down.
+    fn settle(watch: &Mutex<Self>) {
+        let mut watch = watch
+            .lock()
+            .expect("startup watch is only read and written here, never across a panic");
+        watch.conn = None;
+    }
 }
 
 /// Start a new session, spawn the supervisor, and attach.
@@ -146,8 +155,29 @@ where
         transport.disconnect(conn);
         return Err(StartupFailedError::new().into());
     };
-    transport.disconnect(conn);
+    // The supervisor reads this connection as the signal that an attach is
+    // still on its way, and holds a session whose app exits immediately open
+    // until it arrives. So it stays up for as long as this run intends to
+    // attach. Ref: docs/implementation.md, "Process split".
+    StartupWatch::settle(&startup);
 
+    let outcome = attach_to(store, transport, console, session_id);
+    transport.disconnect(conn);
+    outcome
+}
+
+/// Read the published record and hand the console over to the session.
+fn attach_to<S, T, C>(
+    store: &S,
+    transport: &T,
+    console: &C,
+    session_id: crate::session_id::SessionId,
+) -> Result<Outcome, AppError>
+where
+    S: SessionStore,
+    T: Transport + Clone + Send + Sync + 'static,
+    C: LocalConsole + Clone + Send + Sync + 'static,
+{
     let record = store
         .read(session_id)
         .map_err(|_error| StoreError::new())?
@@ -179,6 +209,14 @@ mod tests {
         let watch = Mutex::new(StartupWatch::default());
         assert_eq!(StartupWatch::expire(&watch), None);
         assert!(StartupWatch::register(&watch, ConnId(7)));
+    }
+
+    #[test]
+    fn a_settled_connection_is_left_to_the_handshake() {
+        let watch = Mutex::new(StartupWatch::default());
+        assert!(!StartupWatch::register(&watch, ConnId(7)));
+        StartupWatch::settle(&watch);
+        assert_eq!(StartupWatch::expire(&watch), None);
     }
 
     #[test]

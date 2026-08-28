@@ -35,49 +35,13 @@ use windows::core::{PCWSTR, PWSTR};
 
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{ConnId, ListenerId};
-use crate::pal::raw_handle::RawHandle;
+use crate::pal::raw_handle::PipeHandle;
 use crate::pal::transport::Transport;
 use crate::protocol::{Message, decode_payload, encode, payload_len_ok};
 
 struct PipeTable {
     listeners: HashMap<u64, Listener>,
     conns: HashMap<u64, Conn>,
-}
-
-/// Shared owner of one pipe handle.
-///
-/// `send`, `recv`, and `accept` use a handle after releasing the table lock, so
-/// closing it on teardown could invalidate a handle another thread is still
-/// operating on, or let Windows reuse the value for an unrelated object.
-/// Ownership is shared instead: teardown cancels the I/O outstanding on the
-/// handle and drops the table's reference, and the handle is closed once the
-/// last in-flight operation releases it.
-/// Ref: docs/implementation.md, "Transport".
-struct PipeHandle(RawHandle);
-
-impl PipeHandle {
-    fn new(handle: HANDLE) -> Arc<Self> {
-        Arc::new(Self(RawHandle::from_handle(handle)))
-    }
-
-    fn as_handle(&self) -> HANDLE {
-        self.0.as_handle()
-    }
-
-    /// Abort the I/O outstanding on this handle so blocked operations return.
-    fn cancel(&self) {
-        // SAFETY: `self` owns the handle and keeps it alive across this call. A
-        // null OVERLAPPED cancels every operation this process has pending on
-        // the handle; all pipe I/O here is overlapped, so a blocked read or
-        // write completes with an aborted status instead of waiting forever.
-        _ = unsafe { CancelIoEx(self.as_handle(), None) };
-    }
-}
-
-impl Drop for PipeHandle {
-    fn drop(&mut self) {
-        close(self.as_handle());
-    }
 }
 
 struct Listener {

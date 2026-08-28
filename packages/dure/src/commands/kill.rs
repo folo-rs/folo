@@ -67,7 +67,7 @@ mod tests {
     fn terminates_recorded_identity_and_deletes() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store.publish(&record(id.get(), 10, 100)).unwrap();
 
         let mut processes = MockProcesses::new();
@@ -89,7 +89,7 @@ mod tests {
     fn pid_reuse_does_not_delete_when_terminate_fails() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store.publish(&record(id.get(), 10, 100)).unwrap();
 
         let mut processes = MockProcesses::new();

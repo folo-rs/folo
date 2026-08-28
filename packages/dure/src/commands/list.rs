@@ -25,10 +25,10 @@ mod tests {
     use super::*;
     use crate::pal::processes::{MockProcesses, ProcessLiveness};
     use crate::pal::session_store::{FsSessionStore, SessionStore};
-    use crate::session_record::SessionRecord;
+    use crate::session_record::{ProcessIdentity, SessionRecord};
 
     fn publish_session(store: &FsSessionStore, dir: &Path) {
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store
             .publish(&SessionRecord {
                 id: id.get(),

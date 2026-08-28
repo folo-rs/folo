@@ -1,6 +1,9 @@
-//! Integer form of a Windows `HANDLE` so PAL tables can be `Send`.
+//! Windows handle wrappers shared by the PAL implementations.
 
-use windows::Win32::Foundation::HANDLE;
+use std::sync::Arc;
+
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::IO::CancelIoEx;
 
 /// Process-local handle stored as an integer.
 ///
@@ -18,6 +21,48 @@ impl RawHandle {
 
     pub(crate) fn as_handle(self) -> HANDLE {
         HANDLE(self.0 as *mut core::ffi::c_void)
+    }
+}
+
+/// Shared owner of one pipe handle.
+///
+/// PAL tables hand out handles and release the table lock before doing I/O on
+/// them, so closing one on teardown could invalidate a handle another thread is
+/// still operating on, or let Windows reuse the value for an unrelated object.
+/// Ownership is shared instead: teardown cancels the I/O outstanding on the
+/// handle and drops the table's reference, and the handle is closed once the
+/// last in-flight operation releases it.
+/// Ref: docs/implementation.md, "Transport" and "Pseudoconsole".
+pub(crate) struct PipeHandle(RawHandle);
+
+impl PipeHandle {
+    pub(crate) fn new(handle: HANDLE) -> Arc<Self> {
+        Arc::new(Self(RawHandle::from_handle(handle)))
+    }
+
+    pub(crate) fn as_handle(&self) -> HANDLE {
+        self.0.as_handle()
+    }
+
+    /// Abort the I/O outstanding on this handle so blocked operations return.
+    pub(crate) fn cancel(&self) {
+        // SAFETY: `self` owns the handle and keeps it alive across this call. A
+        // null OVERLAPPED cancels every operation this process has pending on
+        // the handle, so a blocked read or write completes with an aborted
+        // status instead of waiting forever.
+        _ = unsafe { CancelIoEx(self.as_handle(), None) };
+    }
+}
+
+impl Drop for PipeHandle {
+    fn drop(&mut self) {
+        let handle = self.as_handle();
+        if handle.is_invalid() {
+            return;
+        }
+        // SAFETY: this is the last reference to a handle we own, so nothing
+        // uses it again.
+        _ = unsafe { CloseHandle(handle) };
     }
 }
 

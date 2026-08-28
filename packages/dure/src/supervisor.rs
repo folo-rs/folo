@@ -2,12 +2,13 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ohno::AppError;
 
+use crate::outbox::Outbox;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, ConnId, JobId, ListenerId, PtyId};
 use crate::pal::processes::{AppSpawn, Processes};
@@ -16,7 +17,7 @@ use crate::pal::session_store::SessionStore;
 use crate::pal::transport::Transport;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
-use crate::session_record::SessionRecord;
+use crate::session_record::{ProcessIdentity, SessionRecord};
 use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError};
 
 /// Size used until the first client attaches.
@@ -36,7 +37,7 @@ struct InitGuard<'a, P: Processes, S: SessionStore, C: Pseudoconsole> {
     pty_host: &'a C,
     job: Option<JobId>,
     pty: Option<PtyId>,
-    session_id: Option<SessionId>,
+    session: Option<(SessionId, ProcessIdentity)>,
     committed: bool,
 }
 
@@ -45,14 +46,17 @@ impl<P: Processes, S: SessionStore, C: Pseudoconsole> Drop for InitGuard<'_, P, 
         if self.committed {
             return;
         }
-        if let Some(id) = self.session_id {
-            _ = self.store.delete(id);
+        if let Some((id, owner)) = self.session {
+            _ = self.store.delete_owned_by(id, &owner);
+        }
+        // Descendants of the app stay attached to the pseudoconsole until the
+        // job that owns their lifetime is closed, and closing a pseudoconsole
+        // waits for its attached clients.
+        if let Some(job) = self.job {
+            self.processes.close_job(job);
         }
         if let Some(pty) = self.pty {
             self.pty_host.close(pty);
-        }
-        if let Some(job) = self.job {
-            self.processes.close_job(job);
         }
     }
 }
@@ -87,7 +91,7 @@ where
         pty_host,
         job: None,
         pty: None,
-        session_id: None,
+        session: None,
         committed: false,
     };
 
@@ -118,16 +122,18 @@ where
             session_id: initialized.session_id,
         },
     );
-    transport.disconnect(startup);
     guard.committed = true;
 
-    let status = serve(processes, store, transport, pty_host, &initialized)?;
+    // The startup connection stays open past the acknowledgement: `serve` reads
+    // it as the initiator's liveness signal and disconnects it.
+    let status = serve(processes, store, transport, pty_host, &initialized, startup)?;
     Ok(status)
 }
 
 #[derive(Clone, Copy)]
 struct Initialized {
     session_id: SessionId,
+    identity: ProcessIdentity,
     listener: ListenerId,
     pty: PtyId,
     job: JobId,
@@ -174,12 +180,14 @@ where
         .listen(&pipe_name)
         .map_err(|error| map_startup(&error))?;
 
-    let session_id = store.allocate_id().map_err(|_error| StoreError::new())?;
-    guard.session_id = Some(session_id);
-
     let identity = processes
         .current_identity()
         .map_err(|error| map_startup(&error))?;
+    let session_id = store
+        .allocate_id(&identity)
+        .map_err(|_error| StoreError::new())?;
+    guard.session = Some((session_id, identity));
+
     let started_at_unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {
@@ -199,6 +207,7 @@ where
 
     Ok(Initialized {
         session_id,
+        identity,
         listener,
         pty,
         job,
@@ -213,7 +222,7 @@ fn map_startup(error: &PalError) -> AppError {
     }
 }
 
-struct Shared<T, C> {
+struct Shared<T: Transport, C> {
     transport: T,
     pty_host: C,
     pty: PtyId,
@@ -225,13 +234,81 @@ struct Shared<T, C> {
     /// acknowledges under it, which orders `Attached` ahead of any `Output` on
     /// the same connection and closes the window in which output would be
     /// discarded for want of an installed client.
-    client: Mutex<Option<ConnId>>,
+    client: Mutex<Option<Client<T>>>,
     /// Serializes an entire attach: acknowledgement, ownership transfer, and
     /// displacement of the previous client. Without it two attaches can
     /// acknowledge in one order and install in another, letting an older
     /// attach displace a newer one.
     attach: Mutex<()>,
+    /// Gate that holds the session open until somebody has come for it.
+    first_attach: Mutex<FirstAttach>,
+    first_attach_changed: Condvar,
     stopping: AtomicBool,
+}
+
+/// The connection that currently owns the console, and its write side.
+struct Client<T: Transport> {
+    conn: ConnId,
+    outbox: Arc<Outbox<T>>,
+}
+
+impl<T: Transport> Clone for Client<T> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn,
+            outbox: Arc::clone(&self.outbox),
+        }
+    }
+}
+
+/// Whether the session has been claimed, and whether anyone is still coming.
+///
+/// An app that exits immediately would otherwise be torn down before `dure run`
+/// finishes attaching, losing both its output and its exit status. The
+/// supervisor therefore holds the session open after the app exits until either
+/// the first client attaches or the process that started the session goes away.
+/// Ref: docs/design.md, "Run".
+#[derive(Debug, Default)]
+struct FirstAttach {
+    attached: bool,
+    initiator_gone: bool,
+}
+
+impl<T: Transport, C> Shared<T, C> {
+    fn first_attach(&self) -> std::sync::MutexGuard<'_, FirstAttach> {
+        self.first_attach
+            .lock()
+            .expect("first-attach flags are only set, never held across a panic")
+    }
+
+    /// Records that a client took the session.
+    fn note_attached(&self) {
+        self.first_attach().attached = true;
+        self.first_attach_changed.notify_all();
+    }
+
+    /// Records that the process that started the session dropped its channel.
+    fn note_initiator_gone(&self) {
+        self.first_attach().initiator_gone = true;
+        self.first_attach_changed.notify_all();
+    }
+
+    /// Blocks until the session has been claimed or nobody is coming for it.
+    fn await_first_attach(&self) {
+        let mut state = self.first_attach();
+        while !state.attached && !state.initiator_gone {
+            state = self
+                .first_attach_changed
+                .wait(state)
+                .expect("first-attach flags are only set, never held across a panic");
+        }
+    }
+
+    fn client(&self) -> std::sync::MutexGuard<'_, Option<Client<T>>> {
+        self.client
+            .lock()
+            .expect("client slot is only copied or replaced, never held across a panic")
+    }
 }
 
 // Blocking serve loop. A mutation that returns before the accept and PTY threads
@@ -244,6 +321,7 @@ fn serve<P, S, T, C>(
     transport: &T,
     pty_host: &C,
     initialized: &Initialized,
+    startup: ConnId,
 ) -> Result<i32, AppError>
 where
     P: Processes,
@@ -253,6 +331,7 @@ where
 {
     let Initialized {
         session_id,
+        identity,
         listener,
         pty,
         job,
@@ -267,27 +346,48 @@ where
         session_id,
         client: Mutex::new(None),
         attach: Mutex::new(()),
+        first_attach: Mutex::new(FirstAttach::default()),
+        first_attach_changed: Condvar::new(),
         stopping: AtomicBool::new(false),
+    });
+
+    // The startup channel doubles as the initiator's liveness signal: it stays
+    // open for as long as `dure run` intends to attach.
+    thread::spawn({
+        let shared = Arc::clone(&shared);
+        let transport = transport.clone();
+        move || {
+            _ = transport.recv(startup);
+            transport.disconnect(startup);
+            shared.note_initiator_gone();
+        }
     });
 
     let store_flag = store_attached_flag(store, session_id, Arc::clone(&record_live));
     thread::spawn({
         let shared = Arc::clone(&shared);
         let transport = transport.clone();
-        let store_flag = store_flag.clone();
         move || accept_loop(&shared, &transport, listener, store_flag)
     });
 
     let pty_pump = thread::spawn({
         let shared = Arc::clone(&shared);
-        move || pty_output_loop(&shared, store_flag)
+        move || pty_output_loop(&shared)
     });
 
     let status = processes
         .wait_app(app)
         .map_err(|_error| PalFailedError::new())?;
-    transport.close_listener(listener);
 
+    // An app can outlive neither its output nor its exit status: both are only
+    // deliverable while the session is still up, so a session nobody has
+    // attached to yet stays up until its initiator arrives or gives up.
+    shared.await_first_attach();
+
+    transport.close_listener(listener);
+    // Descendants of the app stay attached to the pseudoconsole until this job
+    // ends them, and closing a pseudoconsole waits for its attached clients.
+    processes.close_job(job);
     // The app has exited, so closing the pseudoconsole flushes what it still
     // holds and ends the output loop with a read failure. Joining the pump
     // before announcing the exit is what orders the app's final output ahead
@@ -296,20 +396,13 @@ where
     _ = pty_pump.join();
     shared.stopping.store(true, Ordering::SeqCst);
 
-    if let Some(client) = shared
-        .client
-        .lock()
-        .expect("client slot is only copied or replaced, never held across a panic")
-        .take()
-    {
-        // Deliver the exit status before tearing down the store or pipes.
+    let client = shared.client().take();
+    if let Some(client) = &client {
         // Attach treats a disconnect without `AppExited` as a relay failure
-        // when the input thread has already stopped, so the status must
-        // arrive first.
-        _ = shared
-            .transport
-            .send(client, &Message::AppExited { status });
-        shared.transport.disconnect(client);
+        // when the input thread has already stopped, so the status must be
+        // queued behind the output rather than racing it.
+        client.outbox.send(Message::AppExited { status });
+        client.outbox.finish();
     }
 
     {
@@ -320,11 +413,18 @@ where
             .lock()
             .expect("record_live is only set false here, never held across a panic");
         *live = false;
+        // Ids are reused, so an unconditional delete could reap whichever
+        // session claimed this id after this supervisor published.
         store
-            .delete(session_id)
+            .delete_owned_by(session_id, &identity)
             .map_err(|_error| StoreError::new())?;
     }
-    processes.close_job(job);
+    if let Some(client) = client {
+        // The session already owns nothing, so waiting here for the exit status
+        // to land costs a client that is still reading nothing and a client
+        // that has stopped reading only this process outliving it.
+        client.outbox.flush();
+    }
     Ok(status)
 }
 
@@ -359,7 +459,7 @@ fn accept_loop<T, C>(
     listener: ListenerId,
     set_attached: impl Fn(bool) + Clone + Send + 'static,
 ) where
-    T: Transport,
+    T: Transport + Clone,
     C: Pseudoconsole,
 {
     while !shared.stopping.load(Ordering::SeqCst) {
@@ -382,7 +482,7 @@ fn accept_loop<T, C>(
 #[cfg_attr(test, mutants::skip)]
 fn client_loop<T, C>(shared: &Shared<T, C>, conn: ConnId, set_attached: &impl Fn(bool))
 where
-    T: Transport,
+    T: Transport + Clone,
     C: Pseudoconsole,
 {
     match shared.transport.recv(conn) {
@@ -399,17 +499,16 @@ where
             _ = shared
                 .pty_host
                 .resize(shared.pty, WindowSize { cols, rows });
+            let outbox = Outbox::start(shared.transport.clone(), conn);
             let previous = {
-                let mut slot = shared
-                    .client
-                    .lock()
-                    .expect("client slot is only copied or replaced, never held across a panic");
+                let mut slot = shared.client();
                 // Acknowledging under the client slot keeps `Attached` ahead of
                 // any `Output` on this connection, and installing in the same
                 // critical section means output the app produces right after the
                 // acknowledgement is not discarded for want of an installed
-                // client. The peer is waiting on this frame, so the write is
-                // bounded.
+                // client. This one write is direct rather than queued because
+                // the peer is blocked waiting for exactly this frame, and a
+                // failure here is how a client that is already gone is detected.
                 if shared
                     .transport
                     .send(
@@ -421,20 +520,25 @@ where
                     .is_err()
                 {
                     drop(slot);
-                    shared.transport.disconnect(conn);
+                    outbox.abandon();
                     return;
                 }
-                slot.replace(conn)
+                slot.replace(Client {
+                    conn,
+                    outbox: Arc::clone(&outbox),
+                })
             };
             if let Some(old) = previous {
-                // Notified outside the client slot so a client that accepts no
-                // writes cannot stall output delivery. The displaced client may
-                // already have disconnected; steal still proceeds, because
-                // last-connect-wins does not depend on this notice.
-                _ = shared.transport.send(old, &Message::Displaced);
-                shared.transport.disconnect(old);
+                // Queued rather than written here, so a client that stopped
+                // reading cannot hold up the steal that is replacing it. The
+                // displaced client may already have disconnected; steal still
+                // proceeds, because last-connect-wins does not depend on this
+                // notice.
+                old.outbox.send(Message::Displaced);
+                old.outbox.finish();
             }
             set_attached(true);
+            shared.note_attached();
         }
         _ => {
             shared.transport.disconnect(conn);
@@ -446,11 +550,8 @@ where
         // Ownership is checked and the message applied under one lock: a client
         // displaced while its receive was in flight must not reach the app
         // after the new client became the live console.
-        let slot = shared
-            .client
-            .lock()
-            .expect("client slot is only copied or replaced, never held across a panic");
-        if slot.as_ref() != Some(&conn) {
+        let slot = shared.client();
+        if slot.as_ref().map(|client| client.conn) != Some(conn) {
             break;
         }
         match message {
@@ -468,53 +569,44 @@ where
         }
         drop(slot);
     }
-    {
-        let mut slot = shared
-            .client
-            .lock()
-            .expect("client slot is only copied or replaced, never held across a panic");
-        if slot.as_ref() == Some(&conn) {
-            *slot = None;
+    let departing = {
+        let mut slot = shared.client();
+        if slot.as_ref().map(|client| client.conn) == Some(conn) {
+            let departing = slot.take();
             // Holding the slot so a replacement cannot publish attached=true
             // before this disconnect publishes attached=false.
             set_attached(false);
+            departing
+        } else {
+            None
         }
+    };
+    if let Some(departing) = departing {
+        // The peer is gone or misbehaving, so nothing still queued for it is
+        // worth waiting on.
+        departing.outbox.abandon();
     }
 }
 
 // Blocking read of pty output. A mutation that drops the stop check hangs
 // unit tests because watchdogs are disabled under cargo-mutants.
 #[cfg_attr(test, mutants::skip)]
-fn pty_output_loop<T, C>(shared: &Shared<T, C>, set_attached: impl Fn(bool))
+fn pty_output_loop<T, C>(shared: &Shared<T, C>)
 where
-    T: Transport,
+    T: Transport + Clone,
     C: Pseudoconsole,
 {
     while !shared.stopping.load(Ordering::SeqCst) {
         let Ok(bytes) = shared.pty_host.read_output(shared.pty) else {
             break;
         };
-        let client = shared
-            .client
-            .lock()
-            .expect("client slot is only copied or replaced, never held across a panic")
-            .as_ref()
-            .copied();
-        if let Some(conn) = client
-            && shared
-                .transport
-                .send(conn, &Message::Output(bytes))
-                .is_err()
-        {
-            let mut slot = shared
-                .client
-                .lock()
-                .expect("client slot is only copied or replaced, never held across a panic");
-            if slot.as_ref() == Some(&conn) {
-                *slot = None;
-                shared.transport.disconnect(conn);
-                set_attached(false);
-            }
+        // Queued, never written here: a client that stopped reading must not be
+        // able to hold the pump, which the exit teardown joins. A write failure
+        // is handled by the outbox dropping the connection, which ends the
+        // client's own loop and clears the slot.
+        let client = shared.client().clone();
+        if let Some(client) = client {
+            client.outbox.send(Message::Output(bytes));
         }
     }
 }
@@ -713,6 +805,107 @@ mod tests {
     #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
+    fn an_app_that_exits_before_anyone_attaches_still_reports_its_status() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            // The app is already gone by the time the supervisor waits on it.
+            let exit = Arc::new((Mutex::new(true), Condvar::new()));
+            let processes = mock_processes(Arc::clone(&exit));
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            assert!(matches!(
+                transport.recv(startup_conn).unwrap(),
+                Message::StartupOk { .. }
+            ));
+
+            // The startup connection stays open, which is what holds the
+            // session up for the attach that `dure run` is about to make.
+            let client = transport
+                .connect(
+                    &transport.pipe_name("nonce"),
+                    crate::constants::CONNECT_TIMEOUT,
+                )
+                .unwrap();
+            transport
+                .send(client, &Message::Attach { cols: 80, rows: 24 })
+                .unwrap();
+            assert!(matches!(
+                transport.recv(client).unwrap(),
+                Message::Attached { .. }
+            ));
+            assert_eq!(
+                transport.recv(client).unwrap(),
+                Message::AppExited { status: 7 }
+            );
+            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            transport.disconnect(startup_conn);
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_session_nobody_comes_for_ends_when_its_initiator_gives_up() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let exit = Arc::new((Mutex::new(true), Condvar::new()));
+            let processes = mock_processes(Arc::clone(&exit));
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            assert!(matches!(
+                transport.recv(startup_conn).unwrap(),
+                Message::StartupOk { .. }
+            ));
+            // Nobody will ever attach, so the gate must open on this instead.
+            transport.disconnect(startup_conn);
+
+            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            let leftover = FsSessionStore::new(dir.path().to_path_buf());
+            assert!(leftover.list().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn init_failure_sends_startup_err_and_closes_job() {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
@@ -775,8 +968,17 @@ mod tests {
             session_id: SessionId::from_u32(1).unwrap(),
             client: Mutex::new(None),
             attach: Mutex::new(()),
+            first_attach: Mutex::new(FirstAttach::default()),
+            first_attach_changed: Condvar::new(),
             stopping: AtomicBool::new(false),
         }
+    }
+
+    /// Connection the client slot currently holds, if any.
+    fn client_conn(
+        shared: &Shared<MemoryTransport, MemoryPseudoconsole>,
+    ) -> Option<ConnId> {
+        shared.client().as_ref().map(|client| client.conn)
     }
 
     /// Connected pair as `(supervisor side, client side)`.
@@ -814,7 +1016,7 @@ mod tests {
         let (flags, recorder) = attach_recorder();
         client_loop(&shared, supervisor, &recorder);
 
-        assert!(shared.client.lock().unwrap().is_none());
+        assert!(client_conn(&shared).is_none());
         assert!(flags.lock().unwrap().is_empty());
     }
 
@@ -832,7 +1034,7 @@ mod tests {
         let (flags, recorder) = attach_recorder();
         client_loop(&shared, supervisor, &recorder);
 
-        assert!(shared.client.lock().unwrap().is_none());
+        assert!(client_conn(&shared).is_none());
         assert!(flags.lock().unwrap().is_empty());
         assert!(pty_host.take_input(shared.pty).is_empty());
         transport.recv(client).unwrap_err();
@@ -874,7 +1076,7 @@ mod tests {
             })
         );
         assert_eq!(pty_host.take_input(shared.pty), b"hi");
-        assert!(shared.client.lock().unwrap().is_none());
+        assert!(client_conn(&shared).is_none());
         assert_eq!(*flags.lock().unwrap(), vec![true, false]);
     }
 
@@ -884,14 +1086,18 @@ mod tests {
         let pty_host = MemoryPseudoconsole::new();
         let shared = Arc::new(shared_session(&transport, &pty_host));
         let (supervisor, client) = connected_pair(&transport, "pipe");
+        let (successor, _successor_client) = connected_pair(&transport, "successor");
         // Stands in for a steal that lands between the acknowledgement and the
         // first relayed message. The displaced relay must not reach the app.
-        let successor = ConnId(u64::MAX);
         let steal = {
             let shared = Arc::clone(&shared);
+            let transport = transport.clone();
             move |attached: bool| {
                 if attached {
-                    *shared.client.lock().expect("client lock") = Some(successor);
+                    *shared.client() = Some(Client {
+                        conn: successor,
+                        outbox: Outbox::start(transport.clone(), successor),
+                    });
                 }
             }
         };
@@ -906,27 +1112,56 @@ mod tests {
         client_loop(&shared, supervisor, &steal);
 
         assert!(pty_host.take_input(shared.pty).is_empty());
-        assert_eq!(*shared.client.lock().unwrap(), Some(successor));
+        assert_eq!(client_conn(&shared), Some(successor));
     }
 
     #[test]
-    fn output_that_cannot_be_delivered_drops_the_client() {
+    fn output_is_relayed_to_the_installed_client() {
         let transport = MemoryTransport::new();
         let pty_host = MemoryPseudoconsole::new();
         let shared = shared_session(&transport, &pty_host);
         let (supervisor, client) = connected_pair(&transport, "pipe");
-        *shared.client.lock().unwrap() = Some(supervisor);
+        let outbox = Outbox::start(transport.clone(), supervisor);
+        *shared.client() = Some(Client {
+            conn: supervisor,
+            outbox: Arc::clone(&outbox),
+        });
+
+        pty_host.push_output(shared.pty, b"out");
+        // Ends the loop once the output has been drained.
+        pty_host.close(shared.pty);
+
+        pty_output_loop(&shared);
+        outbox.finish();
+        outbox.flush();
+
+        assert!(matches!(
+            transport.recv(client).unwrap(),
+            Message::Output(bytes) if bytes == b"out",
+        ));
+    }
+
+    #[test]
+    fn output_for_a_client_that_is_gone_is_discarded() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty_host);
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+        let outbox = Outbox::start(transport.clone(), supervisor);
+        *shared.client() = Some(Client {
+            conn: supervisor,
+            outbox: Arc::clone(&outbox),
+        });
         transport.disconnect(client);
 
         pty_host.push_output(shared.pty, b"out");
         // Ends the loop once the undeliverable output has been drained.
         pty_host.close(shared.pty);
 
-        let (flags, recorder) = attach_recorder();
-        pty_output_loop(&shared, recorder);
-
-        assert!(shared.client.lock().unwrap().is_none());
-        assert_eq!(*flags.lock().unwrap(), vec![false]);
+        // The pump must not be the thread that notices, so it completes even
+        // though nothing can be delivered.
+        pty_output_loop(&shared);
+        outbox.flush();
     }
 
     #[test]
@@ -957,7 +1192,7 @@ mod tests {
                 pty_host: &pty,
                 job: None,
                 pty: None,
-                session_id: None,
+                session: None,
                 committed: false,
             };
             let error = initialize(
@@ -983,7 +1218,7 @@ mod tests {
     fn attached_flag_publishes_only_while_the_record_lives() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
-        let id = store.allocate_id().unwrap();
+        let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store
             .publish(&SessionRecord {
                 id: id.get(),

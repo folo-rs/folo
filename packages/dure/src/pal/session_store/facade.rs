@@ -9,7 +9,7 @@ use crate::pal::error::PalError;
 use crate::pal::session_store::MockSessionStore;
 use crate::pal::session_store::{FsSessionStore, SessionStore};
 use crate::session_id::SessionId;
-use crate::session_record::SessionRecord;
+use crate::session_record::{ProcessIdentity, SessionRecord};
 
 /// Dispatches session-store calls to the filesystem store or a test mock.
 #[derive(Clone)]
@@ -57,11 +57,11 @@ impl SessionStore for SessionStoreFacade {
         }
     }
 
-    fn allocate_id(&self) -> Result<SessionId, PalError> {
+    fn allocate_id(&self, owner: &ProcessIdentity) -> Result<SessionId, PalError> {
         match self {
-            Self::Target(store) => store.allocate_id(),
+            Self::Target(store) => store.allocate_id(owner),
             #[cfg(test)]
-            Self::Mock(store) => store.allocate_id(),
+            Self::Mock(store) => store.allocate_id(owner),
         }
     }
 
@@ -89,11 +89,27 @@ impl SessionStore for SessionStoreFacade {
         }
     }
 
+    fn list_reservations(&self) -> Result<Vec<(SessionId, ProcessIdentity)>, PalError> {
+        match self {
+            Self::Target(store) => store.list_reservations(),
+            #[cfg(test)]
+            Self::Mock(store) => store.list_reservations(),
+        }
+    }
+
     fn delete(&self, id: SessionId) -> Result<(), PalError> {
         match self {
             Self::Target(store) => store.delete(id),
             #[cfg(test)]
             Self::Mock(store) => store.delete(id),
+        }
+    }
+
+    fn delete_owned_by(&self, id: SessionId, owner: &ProcessIdentity) -> Result<(), PalError> {
+        match self {
+            Self::Target(store) => store.delete_owned_by(id, owner),
+            #[cfg(test)]
+            Self::Mock(store) => store.delete_owned_by(id, owner),
         }
     }
 

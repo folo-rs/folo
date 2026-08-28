@@ -17,6 +17,9 @@ struct ConnState {
     incoming: VecDeque<Message>,
     peer: ConnId,
     closed: bool,
+    /// Sends on this connection block, standing in for a peer that has stopped
+    /// draining its pipe. Only `disconnect` releases them, as `CancelIoEx` does.
+    stalled: bool,
 }
 
 struct ListenerState {
@@ -58,6 +61,15 @@ impl MemoryTransport {
 
     fn alloc_id(&self) -> u64 {
         self.inner.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Make sends on `conn` block until it is disconnected.
+    pub(crate) fn stall(&self, conn: ConnId) {
+        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        if let Some(state) = conns.get_mut(&conn) {
+            state.stalled = true;
+        }
+        self.inner.cond.notify_all();
     }
 }
 
@@ -124,6 +136,7 @@ impl Transport for MemoryTransport {
                     incoming: VecDeque::new(),
                     peer: client,
                     closed: false,
+                    stalled: false,
                 },
             );
             conns.insert(
@@ -132,6 +145,7 @@ impl Transport for MemoryTransport {
                     incoming: VecDeque::new(),
                     peer: server,
                     closed: false,
+                    stalled: false,
                 },
             );
         }
@@ -151,10 +165,18 @@ impl Transport for MemoryTransport {
 
     fn send(&self, conn: ConnId, message: &Message) -> Result<(), PalError> {
         let mut conns = self.inner.conns.lock().expect("conn map lock");
-        let peer = conns
-            .get(&conn)
-            .map(|state| state.peer)
-            .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
+        let peer = loop {
+            let Some(state) = conns.get(&conn) else {
+                return Err(PalError::new(PalErrorKind::NotFound));
+            };
+            if state.closed {
+                return Err(PalError::new(PalErrorKind::NotFound));
+            }
+            if !state.stalled {
+                break state.peer;
+            }
+            conns = self.inner.cond.wait(conns).expect("conn condvar");
+        };
         let Some(state) = conns.get_mut(&peer) else {
             return Err(PalError::new(PalErrorKind::NotFound));
         };

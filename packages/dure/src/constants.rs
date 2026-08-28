@@ -30,6 +30,16 @@ pub(crate) const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
 /// corrupt length prefix cannot force a huge allocation.
 pub(crate) const MAX_FRAME_LEN: u32 = 1024 * 1024;
 
+/// Output bytes the supervisor will hold for a client before giving up on it.
+///
+/// A client this far behind is not draining its pipe. `dure` keeps no screen
+/// buffer, so undelivered output has no later value and the session is better
+/// served by dropping the connection than by growing without bound. The size is
+/// arbitrary, chosen to sit well above any burst a responsive client causes and
+/// well below a memory footprint worth worrying about.
+/// Ref: docs/implementation.md, "Transport".
+pub(crate) const MAX_CLIENT_BACKLOG_BYTES: usize = 4 * 1024 * 1024;
+
 /// Subdirectory under the per-user `LocalAppData` known folder that holds
 /// session records.
 ///

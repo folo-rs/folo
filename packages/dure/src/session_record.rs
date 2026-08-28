@@ -10,7 +10,7 @@ use crate::session_id::SessionId;
 ///
 /// Liveness opens this pid once and verifies the creation time on that handle
 /// (design.md, "Session identity"; implementation.md, "Session store").
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct ProcessIdentity {
     /// Operating-system process id of the supervisor.
     pub pid: u32,
@@ -41,6 +41,36 @@ pub(crate) struct SessionRecord {
     /// Whether the supervisor currently has a client connection.
     #[serde(default)]
     pub attached: bool,
+}
+
+/// Contents of one record file.
+///
+/// An id is claimed before the supervisor has everything a record needs, so the
+/// claim names the process that made it. That is what lets a reservation left
+/// behind by a supervisor that died mid-initialization be reaped instead of
+/// occupying the id forever (implementation.md, "Session store").
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum StoredSession {
+    /// The id is claimed and `owner` is still initializing its session.
+    Reserved {
+        /// Process that claimed the id.
+        owner: ProcessIdentity,
+    },
+    /// The session is published and attachable.
+    Published(SessionRecord),
+}
+
+impl ProcessIdentity {
+    /// Identity of an arbitrary process, for tests that only need identities
+    /// that compare equal or unequal to each other.
+    #[cfg(test)]
+    pub(crate) fn for_test(pid: u32) -> Self {
+        Self {
+            pid,
+            creation_time: 0,
+        }
+    }
 }
 
 impl SessionRecord {
@@ -93,5 +123,26 @@ mod tests {
         let identity = sample().identity();
         assert_eq!(identity.pid, 42);
         assert_eq!(identity.creation_time, 99);
+    }
+
+    #[test]
+    fn a_reservation_and_a_published_record_are_distinguishable_on_disk() {
+        let owner = ProcessIdentity {
+            pid: 7,
+            creation_time: 8,
+        };
+        let reserved = StoredSession::Reserved { owner };
+        let published = StoredSession::Published(sample());
+        let reserved_json = serde_json::to_string(&reserved).unwrap();
+        let published_json = serde_json::to_string(&published).unwrap();
+        assert_ne!(reserved_json, published_json);
+        assert_eq!(
+            serde_json::from_str::<StoredSession>(&reserved_json).unwrap(),
+            reserved
+        );
+        assert_eq!(
+            serde_json::from_str::<StoredSession>(&published_json).unwrap(),
+            published
+        );
     }
 }

@@ -93,13 +93,14 @@ mod tests {
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::Message;
     use crate::session_id::SessionId;
+    use crate::session_record::ProcessIdentity;
     use crate::{InvalidSessionIdError, PromptFailedError};
 
     /// Publishes two sessions whose launch directories never match the current
     /// directory, so auto-detect reports an ambiguous result.
     fn publish_ambiguous_sessions(store: &FsSessionStore) {
         for name in ["one", "two"] {
-            let id = store.allocate_id().unwrap();
+            let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
             store
                 .publish(&SessionRecord {
                     id: id.get(),
@@ -150,7 +151,7 @@ mod tests {
             let store = FsSessionStore::new(dir.path().to_path_buf());
             let cwd = store.current_dir().unwrap();
             let launch_directory = store.canonicalize(&cwd).unwrap();
-            let id = store.allocate_id().unwrap();
+            let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
             let pipe = "resume-unique";
             store
                 .publish(&SessionRecord {
