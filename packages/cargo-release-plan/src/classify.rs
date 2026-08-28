@@ -2,7 +2,7 @@
 
 use std::any::type_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, io, str};
 
@@ -20,7 +20,7 @@ use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
     DEFAULT_README_FILES, PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers,
     is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
-    parse_workspace_members,
+    parse_workspace_members, to_git_separators,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
@@ -38,6 +38,9 @@ pub(crate) struct Classification {
     pub(crate) groups: BTreeMap<String, GroupVerdict>,
     pub(crate) work_tree: WorkTree,
     pub(crate) git: GitRepo,
+    /// The case rules probed for the volume hosting the work tree, carried so a
+    /// later packaging probe resolves paths exactly as classification did.
+    pub(crate) case: PathCase,
 }
 
 /// Per-package classification: its status and the evidence behind it.
@@ -197,6 +200,7 @@ pub(crate) fn classify(
         groups: group_verdicts,
         work_tree,
         git,
+        case: cache.case(),
     })
 }
 
@@ -243,7 +247,7 @@ fn classify_one(
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
                 ));
-                let side = work_tree_side(package);
+                let side = work_tree_side(package, cache.case());
                 let resource_paths: Vec<&str> =
                     side.resources.values().map(String::as_str).collect();
                 let tracked_resources = git.tracked_paths(&resource_paths)?;
@@ -293,8 +297,9 @@ fn classify_one(
             rules: &anchor_pkg.packaging,
             resources: &anchor_pkg.resources,
             auto_readme: anchor_pkg.auto_readme,
+            case: cache.case(),
         },
-        &work_tree_side(package),
+        &work_tree_side(package, cache.case()),
     )?;
 
     let mut changed = changed_files;
@@ -408,6 +413,9 @@ struct PackageSide<'a> {
     resources: &'a BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
+    /// How the volume hosting the workspace resolves path case, which decides
+    /// whether a tracked spelling answers a README candidate Cargo probes for.
+    case: PathCase,
 }
 
 /// Resolves the files Cargo copies into the `.crate` because a manifest key
@@ -699,9 +707,9 @@ fn untracked_released(
         // say, so an untracked one is worth mentioning — but only while no
         // tracked candidate outranks it, since that is the one Cargo picks.
         let tracked_set: HashSet<&str> = tracked.iter().map(String::as_str).collect();
-        if detected_readme(side.dir, &tracked_set).is_none() {
+        if detected_readme(side.dir, &tracked_set, side.case).is_none() {
             let listed_set: HashSet<&str> = listed.iter().map(String::as_str).collect();
-            if let Some((name, _)) = detected_readme(side.dir, &listed_set) {
+            if let Some((name, _)) = detected_readme(side.dir, &listed_set, side.case) {
                 untracked.push(name);
             }
         }
@@ -721,8 +729,9 @@ fn untracked_released(
 pub(crate) fn released_work_tree_paths(
     git: &GitRepo,
     package: &WorkPackage,
+    case: PathCase,
 ) -> Result<BTreeSet<String>, AppError> {
-    let side = work_tree_side(package);
+    let side = work_tree_side(package, case);
     let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
     let tracked_resources = git.tracked_paths(&resource_paths)?;
     let released = released_in_work_tree(git, &side, &tracked_resources)?;
@@ -730,12 +739,13 @@ pub(crate) fn released_work_tree_paths(
 }
 
 /// The work-tree end of `package`'s released-content comparison.
-fn work_tree_side(package: &WorkPackage) -> PackageSide<'_> {
+fn work_tree_side(package: &WorkPackage, case: PathCase) -> PackageSide<'_> {
     PackageSide {
         dir: &package.manifest.directory,
         rules: &package.manifest.packaging,
         resources: &package.resources,
         auto_readme: package.manifest.auto_readme,
+        case,
     }
 }
 
@@ -808,7 +818,7 @@ fn released_from_paths(
     }
     if side.auto_readme {
         let present: HashSet<&str> = present.iter().map(String::as_str).collect();
-        if let Some((name, full)) = detected_readme(side.dir, &present) {
+        if let Some((name, full)) = detected_readme(side.dir, &present, side.case) {
             map.entry(name).or_insert(full);
         }
     }
@@ -821,14 +831,27 @@ fn released_from_paths(
 /// the first that exists without consulting `include` or `exclude`, so a package
 /// that names no README still releases the one beside it. Detection runs over
 /// the same tracked listing the rest of the comparison uses, because released
-/// content is defined from git-tracked files.
+/// content is defined from git-tracked files. Cargo's probe goes through the
+/// filesystem, so on a case-insensitive volume a tracked `readme.md` answers the
+/// `README.md` candidate and the probed case rules decide the match; the key is
+/// the tracked spelling, which keeps a re-spelling of the file visible as the
+/// content change it is.
 /// Ref: docs/design.md, "Released content".
-fn detected_readme(dir: &str, present: &HashSet<&str>) -> Option<(String, String)> {
+fn detected_readme(dir: &str, present: &HashSet<&str>, case: PathCase) -> Option<(String, String)> {
     DEFAULT_README_FILES.iter().find_map(|name| {
-        let full = join_relative(dir, name)?;
-        present
-            .contains(full.as_str())
-            .then(|| ((*name).to_string(), full))
+        let candidate = join_relative(dir, name)?;
+        let full = match case {
+            PathCase::Sensitive => present.contains(candidate.as_str()).then_some(candidate),
+            // A volume cannot hold two spellings that differ only in case, so at
+            // most one entry can match; `min` only keeps the scan deterministic.
+            PathCase::Insensitive => present
+                .iter()
+                .filter(|held| case.same_path(held, &candidate))
+                .min()
+                .map(|held| (*held).to_string()),
+        }?;
+        let rel = relativize(&full, dir)?.to_string();
+        Some((rel, full))
     })
 }
 
@@ -900,6 +923,11 @@ impl SnapshotCache {
             inner: HashMap::new(),
             case: PathCase::probe(workspace_root),
         }
+    }
+
+    /// The probed case rules, shared by member matching and README detection.
+    fn case(&self) -> PathCase {
+        self.case
     }
 
     fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
@@ -1076,7 +1104,7 @@ fn resolve_members(
 /// Returns `None` when the path climbs above the workspace root, because such a
 /// dependency is outside the workspace and therefore not an implicit member.
 fn join_relative(base: &str, relative: &str) -> Option<String> {
-    let relative = relative.replace('\\', "/");
+    let relative = to_git_separators(relative, MAIN_SEPARATOR);
     let mut segments: Vec<&str> = if base.is_empty() {
         Vec::new()
     } else {
@@ -1283,11 +1311,15 @@ mod tests {
             Some("packages/a/nested".to_string())
         );
         assert_eq!(join_relative("", "vendored"), Some("vendored".to_string()));
-        // Windows-style separators appear in manifests authored on Windows.
-        assert_eq!(
-            join_relative("packages/a", r"..\b"),
-            Some("packages/b".to_string())
-        );
+        // Cargo resolves a manifest-declared path with the host's own rules, so
+        // a backslash separates components only where the platform says it does
+        // and is an ordinary file name character everywhere else.
+        let expected = if MAIN_SEPARATOR == '\\' {
+            "packages/b".to_string()
+        } else {
+            r"packages/a/..\b".to_string()
+        };
+        assert_eq!(join_relative("packages/a", r"..\b"), Some(expected));
         // Climbing above the workspace root leaves the workspace entirely.
         assert_eq!(join_relative("packages", "../../outside"), None);
     }
@@ -1342,6 +1374,7 @@ mod tests {
             rules: &rules,
             resources: &resources,
             auto_readme: false,
+            case: PathCase::Sensitive,
         };
         // `fixture` is a crate of its own, so Cargo packs none of its files with
         // `packages/a` even though the workspace never lists it as a member.
@@ -1372,6 +1405,7 @@ mod tests {
             rules: &rules,
             resources: &resources,
             auto_readme: false,
+            case: PathCase::Sensitive,
         };
         let paths = vec![
             "packages/a/Cargo.toml".to_string(),
@@ -1404,6 +1438,7 @@ mod tests {
             rules: &rules,
             resources: &resources,
             auto_readme: true,
+            case: PathCase::Sensitive,
         };
 
         let released = released_from_paths(&paths, &paths, &side);
@@ -1426,6 +1461,47 @@ mod tests {
         );
     }
 
+    /// Cargo probes the filesystem for its default README names, so on a
+    /// case-insensitive volume a tracked `readme.md` answers the `README.md`
+    /// candidate and its content is released. Matching the spelling exactly
+    /// there would report such a package as having released nothing.
+    #[test]
+    fn a_detected_readme_follows_the_probed_case_rules() {
+        let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+        let resources = BTreeMap::new();
+        let paths = vec![
+            "packages/a/src/lib.rs".to_string(),
+            "packages/a/readme.md".to_string(),
+        ];
+        let strict = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: true,
+            case: PathCase::Sensitive,
+        };
+        assert_eq!(
+            released_from_paths(&paths, &paths, &strict)
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["src/lib.rs"])
+        );
+
+        let relaxed = PackageSide {
+            case: PathCase::Insensitive,
+            ..strict
+        };
+        let released = released_from_paths(&paths, &paths, &relaxed);
+        assert_eq!(
+            released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["src/lib.rs", "readme.md"])
+        );
+        // Keying by the tracked spelling keeps a re-spelling of the file
+        // visible as the released-content change it is.
+        assert_eq!(released.get("readme.md").unwrap(), "packages/a/readme.md");
+    }
+
     /// Git still lists a tracked file the work tree has deleted, but Cargo
     /// packages what is on disk: a nested manifest that is gone no longer stops
     /// packing, and a deleted default README is no longer detected.
@@ -1439,6 +1515,7 @@ mod tests {
             rules: &rules,
             resources: &resources,
             auto_readme: true,
+            case: PathCase::Sensitive,
         };
         let tracked = vec![
             "packages/a/src/lib.rs".to_string(),
@@ -1460,6 +1537,7 @@ mod tests {
             rules: &rules,
             resources: &resources,
             auto_readme: false,
+            case: PathCase::Sensitive,
         };
         let tracked = vec![
             "packages/a/Cargo.toml".to_string(),

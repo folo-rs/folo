@@ -227,7 +227,8 @@ fn verify_packaging_rules(classification: &Classification) -> String {
         // rebuilding it from `include` and `exclude` would miss a README Cargo
         // detects for itself and take in a nested crate's files, warning about a
         // package whose rules are right.
-        let tool = match released_work_tree_paths(&classification.git, package) {
+        let tool = match released_work_tree_paths(&classification.git, package, classification.case)
+        {
             Ok(paths) => paths,
             Err(error) => {
                 writeln!(

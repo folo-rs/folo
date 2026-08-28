@@ -159,7 +159,18 @@ Because Cargo opens member directories through the filesystem while Git reports
 the spelling recorded in the tree, member matching follows the case rules the
 workspace directory actually applies. Those rules are probed once per run by
 re-opening an existing entry under a case-flipped spelling; an inconclusive
-probe yields case-sensitive matching, which never widens membership.
+probe yields case-sensitive matching, which never widens membership. The same
+probed rules decide default-README detection at both ends of a comparison, which
+is the other place Cargo reaches the filesystem while this tool reads Git. A
+detected README is keyed by the tracked spelling rather than by the default name
+that matched it, so a re-spelling stays visible as the content change it is.
+
+Manifest-declared relative paths — a path dependency, a `readme`, a
+`license-file`, a member pattern — are resolved with the host's own separator
+rules, so a backslash divides components only where the platform says it does.
+Rewriting it unconditionally would resolve a legal Unix file name such as
+`odd\name.md` to a directory that does not exist and attribute its content
+elsewhere.
 
 A non-virtual root's own package is a member whatever `members` and `exclude`
 say, so that case is decided before the patterns are consulted.

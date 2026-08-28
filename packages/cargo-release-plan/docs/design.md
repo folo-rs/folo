@@ -82,7 +82,9 @@ A package that declares no `readme` at all still releases one: Cargo probes the
 package directory for its own default names and packs the first it finds, so
 that file is released content on the same terms as a declared one and an
 `include` that omits it changes nothing. `readme = false` opts out, and
-`readme = true` names Cargo's preferred default.
+`readme = true` names Cargo's preferred default. That probe goes through the
+filesystem, so on a volume that ignores path case a differently cased spelling
+answers a default name and is released.
 
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace

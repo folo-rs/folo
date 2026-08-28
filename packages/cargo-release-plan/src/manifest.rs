@@ -1,7 +1,8 @@
 // Manifest parsing for versions, packaging rules, members, and pins.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{MAIN_SEPARATOR, Path};
 use std::{fmt, fs};
 
 use ignore::overrides::{Override, OverrideBuilder};
@@ -111,11 +112,29 @@ impl PathCase {
     }
 
     /// Whether two path components name the same path under these case rules.
-    fn same_path(self, left: &str, right: &str) -> bool {
+    pub(crate) fn same_path(self, left: &str, right: &str) -> bool {
         match self {
             Self::Sensitive => left == right,
             Self::Insensitive => left.to_lowercase() == right.to_lowercase(),
         }
+    }
+}
+
+/// Rewrites a manifest-declared relative path into Git's `/`-separated form.
+///
+/// Cargo resolves a manifest-declared path through the host's own path rules, so
+/// a backslash separates components where the platform says it does and is an
+/// ordinary file name character everywhere else. Normalising only the native
+/// separator keeps the resolved path equal to the one Cargo would open, where
+/// normalising a backslash unconditionally would resolve a legal Unix name such
+/// as `odd\name.md` to a different path and mis-attribute its content.
+/// The separator is a parameter so both spellings are reachable from a test on
+/// either host.
+pub(crate) fn to_git_separators(relative: &str, native_separator: char) -> Cow<'_, str> {
+    if native_separator == '/' {
+        Cow::Borrowed(relative)
+    } else {
+        Cow::Owned(relative.replace(native_separator, "/"))
     }
 }
 
@@ -441,10 +460,10 @@ struct MemberPattern {
 impl MemberPattern {
     fn new(pattern: &str, case: PathCase) -> Result<Self, AppError> {
         // A member list is authored by hand, and one written on Windows may
-        // separate with backslashes, which Cargo accepts. The directories this
-        // is matched against come from Git and are never rewritten, so the
+        // separate with backslashes, which Cargo accepts there. The directories
+        // this is matched against come from Git and are never rewritten, so the
         // normalisation is confined to the pattern.
-        let literal = pattern.replace('\\', "/");
+        let literal = to_git_separators(pattern, MAIN_SEPARATOR).into_owned();
         let mut matcher = OverrideBuilder::new("");
         if case == PathCase::Insensitive {
             matcher
@@ -765,6 +784,18 @@ mod tests {
         );
     }
 
+    /// Cargo resolves a manifest-declared path with the host's own rules, so a
+    /// backslash is a separator on Windows and a legal file name character
+    /// elsewhere. Both spellings are asserted directly because only one of them
+    /// is the native one on any given host.
+    #[test]
+    fn only_the_native_separator_is_rewritten() {
+        assert_eq!(to_git_separators(r"..\b", '\\'), "../b");
+        assert_eq!(to_git_separators(r"odd\name.md", '/'), r"odd\name.md");
+        assert_eq!(to_git_separators("../b", '/'), "../b");
+        assert_eq!(to_git_separators("../b", '\\'), "../b");
+    }
+
     #[test]
     fn publish_false_excludes_package() {
         let parsed = parse_package_manifest(
@@ -852,29 +883,35 @@ exclude = ["packages/skip"]
     }
 
     /// A backslash is an ordinary character in a directory name on Unix, and
-    /// Git reports such a name verbatim. Only the manifest-authored pattern is
-    /// normalised, so a directory literally named `a\b` is one path component
-    /// and neither joins nor splits at the backslash.
+    /// both Git and Cargo treat it that way, so a pattern written with one names
+    /// a single component there rather than a nested directory.
     ///
-    /// Windows cannot hold such a name, and the glob matcher normalises
-    /// separators there, so the distinction is only observable on Unix.
+    /// Windows cannot hold such a name and does separate at a backslash, so the
+    /// distinction is only observable on Unix.
     #[cfg(unix)]
     #[test]
     fn a_directory_name_containing_a_backslash_is_one_component() {
-        let declared = parse_workspace_members(
+        let excluding = parse_workspace_members(
             "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/a\\\\b\"]\n",
             Path::new("Cargo.toml"),
             PathCase::Sensitive,
         )
         .unwrap();
-        // The pattern names a nested directory, so the one-component name it
-        // was written as does not match.
-        assert!(!is_workspace_excluded(r"packages/a\b", &declared));
-        assert!(is_workspace_excluded("packages/a/b", &declared));
-        // `packages/*` does not cross a separator, so the literal name matches
-        // it while the nested directory does not.
-        assert!(is_workspace_member(r"packages/a\b", &declared));
-        assert!(!is_workspace_member("packages/a/b", &declared));
+        // The pattern names the one-component directory it was written as, and
+        // says nothing about the nested one.
+        assert!(is_workspace_excluded(r"packages/a\b", &excluding));
+        assert!(!is_workspace_excluded("packages/a/b", &excluding));
+
+        let listing = parse_workspace_members(
+            "[workspace]\nmembers = [\"packages/a\\\\b\"]\n",
+            Path::new("Cargo.toml"),
+            PathCase::Sensitive,
+        )
+        .unwrap();
+        // The members side reads the same way: the literal name is the member,
+        // and the nested directory the spelling would name on Windows is not.
+        assert!(is_workspace_member(r"packages/a\b", &listing));
+        assert!(!is_workspace_member("packages/a/b", &listing));
     }
 
     #[test]
