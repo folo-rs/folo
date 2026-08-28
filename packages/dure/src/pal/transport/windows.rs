@@ -482,11 +482,14 @@ impl Transport for BuildTargetTransport {
             if remaining.is_zero() {
                 return Err(PalError::new(PalErrorKind::Timeout));
             }
-            // A zero wait asks for the server's default timeout rather than for
-            // no wait at all, so a live deadline is never rounded down to it.
+            // `WaitNamedPipeW` reserves three values: 0 asks for the server's
+            // default timeout, 1 (`NMPWAIT_NOWAIT`) asks for no wait at all,
+            // and `u32::MAX` (`NMPWAIT_WAIT_FOREVER`) waits without a deadline.
+            // Clamping into the interval between them keeps a live deadline from
+            // collapsing into "do not wait" or expanding into "wait forever".
             let timeout_ms = u32::try_from(remaining.as_millis())
                 .unwrap_or(u32::MAX)
-                .max(1);
+                .clamp(2, u32::MAX - 1);
             // SAFETY: `name` is a NUL-terminated pipe path. WaitNamedPipeW does not
             // retain the pointer after it returns.
             let ready = unsafe { WaitNamedPipeW(PCWSTR(name.as_ptr()), timeout_ms) };

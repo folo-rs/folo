@@ -533,7 +533,9 @@ mod tests {
 
         store.list().unwrap_err();
         store.list_reservations().unwrap_err();
-        store.allocate_id(&ProcessIdentity::for_test(1)).unwrap_err();
+        store
+            .allocate_id(&ProcessIdentity::for_test(1))
+            .unwrap_err();
         store
             .publish(&record(SessionId::MIN, dir.path()))
             .unwrap_err();
