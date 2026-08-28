@@ -343,6 +343,34 @@ mod tests {
     #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
+    fn a_record_file_that_is_still_empty_reads_as_absent() {
+        let (dir, store) = store();
+        let id = SessionId::from_u32(3).unwrap();
+        // What a claim looks like between its file being created and its owner
+        // being written into it.
+        fs::write(dir.path().join(format!("{}.json", id.get())), b"").unwrap();
+
+        assert!(store.read(id).unwrap().is_none());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_record_that_cannot_be_inspected_is_not_deleted() {
+        let (dir, store) = store();
+        let id = SessionId::from_u32(3).unwrap();
+        // Stands in for any record this process cannot read. Failing to inspect
+        // one is not evidence that it may be removed.
+        fs::create_dir_all(dir.path().join(format!("{}.json", id.get()))).unwrap();
+
+        store
+            .delete_owned_by(id, &ProcessIdentity::for_test(7))
+            .unwrap_err();
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn deleting_what_is_not_there_or_not_readable_is_not_an_error() {
         let (dir, store) = store();
         let owner = ProcessIdentity::for_test(7);

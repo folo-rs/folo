@@ -101,10 +101,19 @@ function Get-MutantsExcludeArgument {
         # `cfg`-gated per platform, so on any one runner half the tree is not even compiled and
         # its mutants can never be killed, while the compiled half is a thin Win32 binding
         # exercised through integration tests rather than unit tests. `memory.rs` is a test
-        # fake. The portable PAL logic above them stays in scope.
+        # fake. `raw_handle.rs` is the same kind of Win32 binding without the `windows.rs`
+        # suffix: a handle wrapper whose whole behaviour is `CancelIoEx` and `CloseHandle`.
+        # The portable PAL logic above them stays in scope.
         '-e', (protect 'packages/dure/src/pal/*/windows.rs'),
         '-e', (protect 'packages/dure/src/pal/*/unsupported.rs'),
         '-e', (protect 'packages/dure/src/pal/*/memory.rs'),
+        '-e', (protect 'packages/dure/src/pal/raw_handle.rs'),
+
+        # The `dure` outbox is a queue guarded by a mutex and a condvar with a writer thread
+        # behind it, so nearly every mutation there stops the writer from making progress and
+        # hangs the test rather than failing it. Same reason as the synchronization-primitive
+        # packages above. The policy it enforces lives in `constants.rs`, which stays in scope.
+        '-e', (protect 'packages/dure/src/outbox.rs'),
 
         # Integration-test helper binary and in-crate test support are not product code.
         '-e', (protect 'packages/dure/src/bin/dure_test_helper.rs'),
@@ -116,12 +125,6 @@ function Get-MutantsExcludeArgument {
         $exclude += (protect '**/*windows.rs')
         $exclude += '-e'
         $exclude += 'windows'
-
-        # `raw_handle.rs` is a `#[cfg(windows)]` module that does not carry the `windows.rs`
-        # suffix, so it needs naming here. It is not compiled off Windows and its mutants can
-        # never be killed there; the Windows runners do exercise it.
-        $exclude += '-e'
-        $exclude += (protect 'packages/dure/src/pal/raw_handle.rs')
     }
 
     if (-not $IsLinuxPlatform) {

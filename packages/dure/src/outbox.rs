@@ -263,6 +263,45 @@ mod tests {
     }
 
     #[test]
+    fn a_client_within_the_backlog_cap_keeps_everything_queued_for_it() {
+        with_watchdog(|| {
+            // A burst a responsive client can plausibly fall behind by, and the
+            // scale the cap exists to sit well above. Deliberately an absolute
+            // size rather than a fraction of the cap, so a cap that no longer
+            // clears an ordinary burst fails here.
+            const BURST_BYTES: usize = 2 * 1024 * 1024;
+
+            const {
+                assert!(
+                    BURST_BYTES < MAX_CLIENT_BACKLOG_BYTES,
+                    "the cap must leave room for an ordinary burst"
+                );
+            }
+
+            let (transport, server, client) = pair();
+            // The peer stops draining, so the queue accumulates instead of
+            // being written out as fast as it is filled.
+            transport.stall(server);
+            let outbox = Outbox::start(transport.clone(), server);
+            let chunk = vec![0_u8; 64 * 1024];
+            let rounds = BURST_BYTES.div_euclid(chunk.len());
+            for _ in 0..rounds {
+                outbox.send(Message::Output(chunk.clone()));
+            }
+            transport.resume(server);
+            outbox.finish();
+            outbox.flush();
+
+            for _ in 0..rounds {
+                assert_eq!(
+                    transport.recv(client).unwrap(),
+                    Message::Output(chunk.clone())
+                );
+            }
+        });
+    }
+
+    #[test]
     fn finishing_stops_accepting_further_messages() {
         with_watchdog(|| {
             let (transport, server, client) = pair();

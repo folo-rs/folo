@@ -41,6 +41,8 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'packages/dure/src/pal/*/windows.rs'
         $values | Should -Contain 'packages/dure/src/pal/*/unsupported.rs'
         $values | Should -Contain 'packages/dure/src/pal/*/memory.rs'
+        $values | Should -Contain 'packages/dure/src/pal/raw_handle.rs'
+        $values | Should -Contain 'packages/dure/src/outbox.rs'
         $values | Should -Contain 'packages/dure/src/bin/dure_test_helper.rs'
         $values | Should -Contain 'packages/dure/src/test_support.rs'
     }
@@ -49,12 +51,12 @@ Describe 'Get-MutantsExcludeArgument' {
         $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $true -IsLinuxPlatform $false)
         $values | Should -Not -Contain 'windows'
         $values | Should -Not -Contain '**/*windows.rs'
-        $values | Should -Not -Contain 'packages/dure/src/pal/raw_handle.rs'
     }
 
-    It 'excludes the windows-only dure handle module off Windows' {
+    It 'single-quotes the always-excluded dure paths off Windows' {
         $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $false -IsLinuxPlatform $true)
         $values | Should -Contain "'packages/dure/src/pal/raw_handle.rs'"
+        $values | Should -Contain "'packages/dure/src/outbox.rs'"
     }
 
     It 'excludes windows and linux sources on a third platform (e.g. macOS)' {

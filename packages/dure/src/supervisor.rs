@@ -282,18 +282,24 @@ impl<T: Transport, C> Shared<T, C> {
     }
 
     /// Records that a client took the session.
+    // A mutation that drops either flag or the wait leaves the gate closed, and
+    // watchdogs are disabled under cargo-mutants, so the test hangs instead of
+    // failing.
+    #[cfg_attr(test, mutants::skip)]
     fn note_attached(&self) {
         self.first_attach().attached = true;
         self.first_attach_changed.notify_all();
     }
 
     /// Records that the process that started the session dropped its channel.
+    #[cfg_attr(test, mutants::skip)]
     fn note_initiator_gone(&self) {
         self.first_attach().initiator_gone = true;
         self.first_attach_changed.notify_all();
     }
 
     /// Blocks until the session has been claimed or nobody is coming for it.
+    #[cfg_attr(test, mutants::skip)]
     fn await_first_attach(&self) {
         let mut state = self.first_attach();
         while !state.attached && !state.initiator_gone {

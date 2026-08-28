@@ -63,11 +63,20 @@ impl MemoryTransport {
         self.inner.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Make sends on `conn` block until it is disconnected.
+    /// Make sends on `conn` block until it is disconnected or resumed.
     pub(crate) fn stall(&self, conn: ConnId) {
         let mut conns = self.inner.conns.lock().expect("conn map lock");
         if let Some(state) = conns.get_mut(&conn) {
             state.stalled = true;
+        }
+        self.inner.cond.notify_all();
+    }
+
+    /// Let sends on `conn` proceed again, releasing whoever is blocked on it.
+    pub(crate) fn resume(&self, conn: ConnId) {
+        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        if let Some(state) = conns.get_mut(&conn) {
+            state.stalled = false;
         }
         self.inner.cond.notify_all();
     }
