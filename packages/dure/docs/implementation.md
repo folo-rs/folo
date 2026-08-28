@@ -128,6 +128,13 @@ queueing the app's exit status, which is what orders the app's final output
 ahead of it. Nothing is torn down until the initiator has attached or given up,
 so a session whose app exits immediately still reports.
 
+Teardown then claims the client slot under the attach lock, marking the session
+as stopping in the same critical section. An attach is therefore either complete
+before the claim, in which case it owns the slot and is handed the exit status,
+or it observes the stop and is refused before it acknowledges. Without that
+ordering a client could install itself between the stop and the claim, and would
+lose the supervisor without ever being told the app exited.
+
 ## Transport
 
 A per-session named pipe carries a framed protocol containing console bytes,

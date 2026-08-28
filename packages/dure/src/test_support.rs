@@ -98,8 +98,13 @@ impl ConsoleProcess {
         if self.closed {
             return;
         }
-        self.pty_host.close(self.pty);
+        // Same ordering the supervisor's teardown relies on: the child stays
+        // attached to the pseudoconsole until the job that owns its lifetime is
+        // closed, and closing a pseudoconsole waits for its attached clients. A
+        // drop while the child is still running would otherwise never reach
+        // `close_job`.
         self.processes.close_job(self.job);
+        self.pty_host.close(self.pty);
         self.closed = true;
     }
 }

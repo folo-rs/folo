@@ -400,9 +400,20 @@ where
     // of `AppExited` instead of racing it.
     pty_host.close(pty);
     _ = pty_pump.join();
-    shared.stopping.store(true, Ordering::SeqCst);
 
-    let client = shared.client().take();
+    // Both under the attach lock, which `client_loop` also takes for the whole
+    // attach transaction. An attach therefore either completes before the slot
+    // is claimed here and receives the exit status, or observes the stop and is
+    // refused. Reading the slot outside the lock would let a client install
+    // itself between the two and never learn that the app exited.
+    let client = {
+        let _attach = shared
+            .attach
+            .lock()
+            .expect("the attach lock guards no data, so it is never poisoned by its guard");
+        shared.stopping.store(true, Ordering::SeqCst);
+        shared.client().take()
+    };
     if let Some(client) = &client {
         // Attach treats a disconnect without `AppExited` as a relay failure
         // when the input thread has already stopped, so the status must be
@@ -500,6 +511,17 @@ where
                 .attach
                 .lock()
                 .expect("the attach lock guards no data, so it is never poisoned by its guard");
+            // The exit status is routed to whoever owns the slot at the moment
+            // teardown claims it, under this same lock. An attach that installed
+            // itself afterwards would own a session that has already given up
+            // its record, job, and pseudoconsole, and would lose the supervisor
+            // without ever being told the app exited. Refusing before
+            // acknowledging is what makes `resume` report a session that is gone
+            // instead of a relay that broke.
+            if shared.stopping.load(Ordering::SeqCst) {
+                shared.transport.disconnect(conn);
+                return;
+            }
             let outbox = Outbox::start(shared.transport.clone(), conn);
             let previous = {
                 let mut slot = shared.client();
@@ -1025,6 +1047,30 @@ mod tests {
 
         assert!(client_conn(&shared).is_none());
         assert!(flags.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_attach_that_arrives_after_teardown_claims_the_slot_is_refused() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty_host);
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+        // Teardown has already routed the exit status to whoever owned the
+        // slot, so there is nothing left for a new client to be given.
+        shared.stopping.store(true, Ordering::SeqCst);
+
+        transport
+            .send(client, &Message::Attach { cols: 80, rows: 24 })
+            .unwrap();
+
+        let (flags, recorder) = attach_recorder();
+        client_loop(&shared, supervisor, &recorder);
+
+        // Refused before the acknowledgement, so the client sees a session that
+        // is gone rather than one that broke mid-relay.
+        assert!(client_conn(&shared).is_none());
+        assert!(flags.lock().unwrap().is_empty());
+        transport.recv(client).unwrap_err();
     }
 
     #[test]
