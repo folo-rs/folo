@@ -816,13 +816,13 @@ version = \"0.1.0\"
         assert_eq!(doc.to_string(), text);
     }
 
-    /// Only a path resolving to the declaring member is rewritten.
+    /// A path resolving to the declaring member is rewritten.
     ///
-    /// A path dependency is rewritten only when its path resolves to the member directory that
-    /// declares that package, so a same-named package living outside the workspace keeps its own
-    /// requirement.
+    /// A path dependency follows the plan only when its path resolves to the member directory that
+    /// declares that package, so resolution is what admits the rewrite rather than the package name
+    /// alone.
     #[test]
-    fn only_a_path_resolving_to_the_declaring_member_is_rewritten() {
+    fn a_path_resolving_to_the_declaring_member_is_rewritten() {
         let expanded = ExpandedPlan {
             packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
         };
@@ -832,12 +832,30 @@ version = \"0.1.0\"
         let mut inside =
             dep_item("[dependencies]\ndemo = { version = \"0.1.0\", path = \"../demo\" }\n");
         rewrite_dependency_tables(&mut inside, &targets, &expanded, Verbose::new(false));
+
         assert!(inside.to_string().contains("version = \"0.2.0\""));
+    }
+
+    /// A path outside the workspace keeps its own requirement.
+    ///
+    /// A same-named package living outside the workspace is a different package, so its requirement
+    /// must survive a plan that names ours.
+    // The lexical form does not match, so the rewrite falls through to asking the filesystem, which
+    // Miri's isolation refuses.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn a_path_outside_the_workspace_keeps_its_own_requirement() {
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
+        };
+        let members = demo_members();
+        let targets = targets_for("/ws/packages/caller", &members);
 
         let outside_text =
             "[dependencies]\ndemo = { version = \"0.1.0\", path = \"../../vendor/demo\" }\n";
         let mut outside = dep_item(outside_text);
         rewrite_dependency_tables(&mut outside, &targets, &expanded, Verbose::new(false));
+
         assert_eq!(outside.to_string(), outside_text);
     }
 
