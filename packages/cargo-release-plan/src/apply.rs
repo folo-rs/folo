@@ -776,6 +776,43 @@ version = \"0.1.0\"
         assert_eq!(outside.to_string(), outside_text);
     }
 
+    /// The helper folds `.` and `..` itself because the filesystem is not
+    /// consulted, so both must be recognised wherever a manifest spells them.
+    #[test]
+    fn a_path_is_folded_lexically() {
+        assert_eq!(
+            normalize_lexically(Path::new("./packages/./demo")),
+            PathBuf::from("packages/demo")
+        );
+        assert_eq!(
+            normalize_lexically(Path::new("/ws/packages/caller/../demo")),
+            PathBuf::from("/ws/packages/demo")
+        );
+    }
+
+    /// A manifest may spell the same member directory with `./` or a redundant
+    /// `..` hop, which the filesystem would accept and a plain string comparison
+    /// would not.
+    #[test]
+    fn a_path_spelled_with_redundant_components_still_resolves_to_the_member() {
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
+        };
+        let members = demo_members();
+        let targets = targets_for("/ws/packages/caller", &members);
+
+        for path in ["./../demo", "../caller/../demo"] {
+            let mut item = dep_item(&format!(
+                "[dependencies]\ndemo = {{ version = \"0.1.0\", path = \"{path}\" }}\n"
+            ));
+            rewrite_dependency_tables(&mut item, &targets, &expanded, Verbose::new(false));
+            assert!(
+                item.to_string().contains("version = \"0.2.0\""),
+                "path {path} did not resolve to the member"
+            );
+        }
+    }
+
     /// A workspace whose only member is `demo`, laid out under a shared root so
     /// the rewrite tests can express both in-workspace and outside paths.
     fn demo_members() -> BTreeMap<PathBuf, String> {

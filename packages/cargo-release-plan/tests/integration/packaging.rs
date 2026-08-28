@@ -135,6 +135,25 @@ fn an_untracked_manifest_resource_is_advisory_only() {
     assert!(report.contains("README.md"), "{report}");
 }
 
+/// Cargo packs a README it detects for itself whatever the packaging rules say,
+/// so an untracked one is worth naming even when an `include` list excludes it —
+/// the rules would otherwise keep it out of the advisory listing entirely.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_untracked_auto_detected_readme_is_advisory_even_when_the_rules_exclude_it() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "include = [\"src/**\"]");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/README.md", "docs\n");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+    let report = report_json(&fixture, &base);
+    assert!(report.contains("README.md"), "{report}");
+}
+
 /// Cargo dereferences a symbolic link when it packs a `.crate`, so the released
 /// bytes are the target's content while Git stores only the target's path.
 /// Comparing the stored paths would call the package unchanged after an edit to

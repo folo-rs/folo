@@ -451,12 +451,12 @@ fn resolve_resources(
         // README the package excludes is still released content.
         let key = match relativize(&full, package_dir) {
             Some(rel) => rel.to_string(),
-            None => {
-                let Some(name) = full.rsplit('/').next() else {
-                    continue;
-                };
-                name.to_string()
-            }
+            // A resource from outside is flattened into the crate root under its
+            // file name, which is everything after the last separator.
+            None => full
+                .rsplit_once('/')
+                .map_or(full.as_str(), |(_, name)| name)
+                .to_string(),
         };
         resolved.insert(key, full);
     }
@@ -1113,15 +1113,15 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
 // Early-exit is equivalent to walking the rest of first-parent history.
 #[cfg_attr(test, mutants::skip)]
 fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
+    let [.., last] = timeline else {
+        return false;
+    };
     // The anchor walk starts at the newest commit that carried the package: the
     // base itself when the base carries it, the reintroduction point otherwise.
     // Until an older commit declares a different version the anchor is still
     // undetermined, and a package no commit has carried yet needs the whole
     // history to tell creation from truncation.
     let Some(reference) = timeline.iter().find_map(|entry| entry.version.as_ref()) else {
-        return false;
-    };
-    let Some(last) = timeline.last() else {
         return false;
     };
     last.version.as_ref() != Some(reference)
@@ -1556,6 +1556,7 @@ mod tests {
             }
         }
 
+        assert!(!can_stop_timeline(&[]));
         assert!(!can_stop_timeline(&[entry("c2", Some("0.1.0"))]));
         assert!(can_stop_timeline(&[
             entry("c2", Some("0.1.0")),

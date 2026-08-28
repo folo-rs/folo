@@ -64,6 +64,39 @@ fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root
     assert!(!message.contains("outer: unreleased-changes"), "{message}");
 }
 
+/// A path dependency is followed to reconstruct membership at the anchor, where
+/// the target directory may not have carried a manifest yet. The directory's
+/// files then belonged to the depending package, so turning it into a package
+/// takes them out of what the outer one releases.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_path_dependency_without_a_manifest_at_the_anchor_is_not_a_member_there() {
+    let fixture = Fixture::new("");
+    fixture.write(
+        "packages/outer/Cargo.toml",
+        concat!(
+            "[package]\nname = \"outer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n",
+            "[dependencies]\ninner = { path = \"inner\", version = \"0.1.0\" }\n"
+        ),
+    );
+    fixture.write("packages/outer/src/lib.rs", "pub fn f() {}\n");
+    fixture.write("packages/outer/inner/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed with the dependency target still manifest-less");
+
+    fixture.write(
+        "packages/outer/inner/Cargo.toml",
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    fixture.commit("give the target a manifest");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("outer: unreleased-changes"), "{message}");
+    assert!(message.contains("inner/src/lib.rs"), "{message}");
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_nested_manifest_the_work_tree_deleted_no_longer_stops_packing() {

@@ -702,6 +702,19 @@ mod tests {
         );
     }
 
+    /// A member pattern that already anchors itself against the workspace root
+    /// keeps that meaning, and one that does not is anchored for it. Ref: the
+    /// `anchored` documentation.
+    #[test]
+    fn a_member_pattern_matches_from_the_workspace_root_however_it_is_spelled() {
+        for literal in ["packages/*", "/packages/*"] {
+            let pattern = MemberPattern::new(literal, PathCase::Sensitive).unwrap();
+
+            assert!(pattern.matches("packages/foo"), "{literal}");
+            assert!(!pattern.matches("nested/packages/foo"), "{literal}");
+        }
+    }
+
     /// A member set is cloned into every historical snapshot, and the clone must
     /// keep matching exactly what the original matched.
     #[test]

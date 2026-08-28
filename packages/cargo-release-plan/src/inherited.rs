@@ -435,6 +435,29 @@ semver = { version = "1.0.0" }
 
     /// A manifest may omit every table the collector reads, and a table may hold
     /// a value where a table is expected, without that being an error.
+    /// Moving a workspace dependency's `path` does not alter what an inheriting
+    /// package publishes, in either declaration form. Ref: docs/design.md,
+    /// "Inherited values".
+    #[test]
+    fn moving_a_workspace_dependency_path_is_not_a_change() {
+        let keys = InheritedKeys {
+            package: vec![],
+            dependencies: vec!["bar".to_string()],
+        };
+        let inline_old = doc(
+            "[workspace.dependencies]\nbar = { version = \"1.0.0\", path = \"packages/bar\" }\n",
+        );
+        let inline_new =
+            doc("[workspace.dependencies]\nbar = { version = \"1.0.0\", path = \"crates/bar\" }\n");
+        assert!(inherited_changes(&keys, &inline_old, &inline_new).is_empty());
+
+        let table_old =
+            doc("[workspace.dependencies.bar]\nversion = \"1.0.0\"\npath = \"packages/bar\"\n");
+        let table_new =
+            doc("[workspace.dependencies.bar]\nversion = \"1.0.0\"\npath = \"crates/bar\"\n");
+        assert!(inherited_changes(&keys, &table_old, &table_new).is_empty());
+    }
+
     #[test]
     fn a_manifest_without_inheritable_tables_yields_no_keys() {
         assert!(collect_inherited_keys(&doc("")).package.is_empty());
