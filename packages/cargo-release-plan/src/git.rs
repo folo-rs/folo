@@ -4,12 +4,15 @@
 // through this type. Ref: docs/implementation.md, "Subprocess boundaries".
 
 use std::collections::HashSet;
+use std::mem;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
-use crate::{CommandFailedError, NonUtf8PathError, UnresolvedBaseError};
+use crate::{
+    CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
+};
 
 /// Name Cargo requires for a manifest.
 const MANIFEST_FILE_NAME: &str = "Cargo.toml";
@@ -173,14 +176,21 @@ impl GitRepo {
         Ok(stdout.trim() == "true")
     }
 
-    /// File contents at `commit:rel_path`, or `None` if the path is absent.
+    /// Text at `commit:rel_path`, or `None` if the path is absent.
+    ///
+    /// Callers parse the result as TOML. Replacing invalid bytes would turn
+    /// content Cargo could never have parsed into a different, parseable
+    /// document and classify a package against text Git does not store, so a
+    /// blob that is not valid UTF-8 is reported instead.
     pub(crate) fn show_file(
         &self,
         commit: &str,
         rel_path: &str,
     ) -> Result<Option<String>, AppError> {
         match self.show_file_bytes(commit, rel_path)? {
-            Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+            Some(bytes) => String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|error| NonUtf8BlobError::caused_by(commit, rel_path, error).into()),
             None => Ok(None),
         }
     }
@@ -290,10 +300,7 @@ impl GitRepo {
     /// representation. Ids come back in the order the paths were given.
     pub(crate) fn hash_objects(&self, rel_paths: &[&str]) -> Result<Vec<String>, AppError> {
         let mut ids = Vec::with_capacity(rel_paths.len());
-        // A package can hold more paths than a command line accepts, so the
-        // request is split. The size is well under the smallest platform limit
-        // and large enough that ordinary packages take one round trip.
-        for chunk in rel_paths.chunks(256) {
+        for chunk in command_line_batches(rel_paths)? {
             let mut args = vec!["hash-object".to_string(), "--".to_string()];
             args.extend(chunk.iter().map(|path| (*path).to_string()));
             let stdout = run_capture_os_bytes("git", &args, &self.root)?;
@@ -328,6 +335,55 @@ impl GitRepo {
 /// Whether a repository-relative tree path names a Cargo manifest.
 fn is_manifest_path(path: &str) -> bool {
     path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
+}
+
+/// Command-line budget one `git hash-object` invocation may spend on paths.
+///
+/// Windows renders a child's arguments into a single command line that
+/// `CreateProcessW` caps at 32,767 UTF-16 code units, which is the smallest
+/// limit among supported platforms. The remainder of that cap is left for the
+/// executable path, the fixed arguments, and separators.
+const PATH_ARG_BUDGET: usize = 30_000;
+
+/// Splits `rel_paths` into batches whose rendered command line fits the budget.
+///
+/// A path count cannot bound a command line, because paths vary in length. Each
+/// path is charged its worst-case rendered cost, so an ordinary package still
+/// takes one round trip while a deeply nested one is split instead of failing
+/// to spawn.
+fn command_line_batches<'p>(rel_paths: &[&'p str]) -> Result<Vec<Vec<&'p str>>, AppError> {
+    let mut batches = Vec::new();
+    let mut current: Vec<&'p str> = Vec::new();
+    let mut spent = 0_usize;
+    for path in rel_paths {
+        let cost = rendered_arg_cost(path);
+        if cost > PATH_ARG_BUDGET {
+            return Err(PathTooLongError::new(*path).into());
+        }
+        if spent.saturating_add(cost) > PATH_ARG_BUDGET && !current.is_empty() {
+            batches.push(mem::take(&mut current));
+            spent = 0;
+        }
+        current.push(path);
+        spent = spent.saturating_add(cost);
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    Ok(batches)
+}
+
+/// Worst-case command-line cost of one path argument, in UTF-16 code units.
+///
+/// Quoting can at most double a path's length (every character escaped) and
+/// adds surrounding quotes and a separator, so charging that upper bound keeps
+/// the estimate on the safe side of the platform cap without modelling any
+/// particular quoting rule.
+fn rendered_arg_cost(path: &str) -> usize {
+    path.encode_utf16()
+        .count()
+        .saturating_mul(2)
+        .saturating_add(3)
 }
 
 /// One file recorded in a commit's tree.
@@ -370,11 +426,11 @@ impl TreeEntry {
 /// file, and paths Git itself reports already use `/` on every platform and are
 /// therefore taken verbatim.
 pub(crate) fn os_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
+    let path = path.to_string_lossy();
     if MAIN_SEPARATOR == '/' {
-        text.into_owned()
+        path.into_owned()
     } else {
-        text.replace(MAIN_SEPARATOR, "/")
+        path.replace(MAIN_SEPARATOR, "/")
     }
 }
 
@@ -449,6 +505,10 @@ fn split_z(stdout: &[u8]) -> Result<Vec<String>, AppError> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -511,6 +571,42 @@ mod tests {
         }
     }
 
+    /// Ordinary packages must still take one subprocess, or every classification
+    /// would pay for extra round trips.
+    #[test]
+    fn short_paths_all_fit_one_batch() {
+        let paths: Vec<&str> = vec!["packages/foo/src/lib.rs"; 256];
+        let batches = command_line_batches(&paths).unwrap();
+        assert_eq!(batches.len(), 1);
+        let only = batches.first().expect("one batch was just asserted");
+        assert_eq!(only.len(), paths.len());
+    }
+
+    /// Batching is bounded by the rendered command line, not by a path count.
+    #[test]
+    fn long_paths_are_split_across_batches() {
+        // Long enough that two paths cannot share a command line.
+        let long = "x".repeat(PATH_ARG_BUDGET.div_euclid(3));
+        let paths: Vec<&str> = vec![long.as_str(); 4];
+        let batches = command_line_batches(&paths).unwrap();
+        assert!(batches.len() > 1);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), paths.len());
+    }
+
+    #[test]
+    fn an_empty_request_produces_no_batches() {
+        assert!(command_line_batches(&[]).unwrap().is_empty());
+    }
+
+    /// A path that cannot fit alone would otherwise loop or fail to spawn with
+    /// an operating-system message that names no path.
+    #[test]
+    fn a_path_longer_than_the_budget_is_rejected() {
+        let huge = "x".repeat(PATH_ARG_BUDGET);
+        let error = command_line_batches(&[huge.as_str()]).unwrap_err();
+        assert!(error.find_source::<PathTooLongError>().is_some());
+    }
+
     #[test]
     fn join_git_rel_prefixes_when_workspace_is_nested() {
         assert_eq!(join_git_rel("inner", "packages/foo"), "inner/packages/foo");
@@ -529,10 +625,10 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn discover_reports_a_prefix_for_an_uncanonical_directory() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         run_capture("git", &["init", "-q"], temp.path()).unwrap();
         let nested = temp.path().join("inner");
-        std::fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&nested).unwrap();
 
         let repo = GitRepo::discover(&nested.join("..").join("inner")).unwrap();
 
@@ -542,7 +638,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn discover_reports_an_empty_prefix_at_the_repository_root() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         run_capture("git", &["init", "-q"], temp.path()).unwrap();
 
         let repo = GitRepo::discover(temp.path()).unwrap();
@@ -560,12 +656,12 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn discover_starts_from_the_directory_holding_a_file() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         run_capture("git", &["init", "-q"], temp.path()).unwrap();
         let nested = temp.path().join("inner");
-        std::fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&nested).unwrap();
         let manifest = nested.join(MANIFEST_FILE_NAME);
-        std::fs::write(&manifest, "").unwrap();
+        fs::write(&manifest, "").unwrap();
 
         let repo = GitRepo::discover(&manifest).unwrap();
 
@@ -575,7 +671,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn discover_fails_outside_a_repository() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
 
         GitRepo::discover(temp.path()).unwrap_err();
     }
@@ -585,7 +681,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn listings_fail_when_the_root_is_not_a_repository() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         let repo = GitRepo {
             root: temp.path().to_path_buf(),
             prefix: String::new(),
@@ -603,7 +699,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_commit_with_a_reachable_parent_is_not_a_root() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         let repo = init_repo_with_two_commits(temp.path());
         let head = repo.rev_parse("HEAD").unwrap();
         let root = repo.rev_parse("HEAD~1").unwrap();
@@ -617,13 +713,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_root_commit_whose_message_mentions_a_parent_is_still_a_root() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         let root = temp.path();
         run_capture("git", &["init", "-q"], root).unwrap();
         run_capture("git", &["config", "user.name", "test"], root).unwrap();
         run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
         run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
-        std::fs::write(root.join("first.txt"), "one\n").unwrap();
+        fs::write(root.join("first.txt"), "one\n").unwrap();
         run_capture("git", &["add", "-A"], root).unwrap();
         run_capture(
             "git",
@@ -649,7 +745,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn show_file_distinguishes_an_absent_path_from_a_failure() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         let repo = init_repo_with_two_commits(temp.path());
 
         assert_eq!(
@@ -662,7 +758,7 @@ mod tests {
 
     fn init_repo_with_two_commits(root: &Path) -> GitRepo {
         let repo = init_repo(root);
-        std::fs::write(root.join("second.txt"), "two\n").unwrap();
+        fs::write(root.join("second.txt"), "two\n").unwrap();
         run_capture("git", &["add", "-A"], root).unwrap();
         run_capture("git", &["commit", "-q", "-m", "second"], root).unwrap();
         repo
@@ -674,7 +770,7 @@ mod tests {
         run_capture("git", &["config", "user.name", "test"], root).unwrap();
         run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
         run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
-        std::fs::write(root.join("first.txt"), "one\n").unwrap();
+        fs::write(root.join("first.txt"), "one\n").unwrap();
         run_capture("git", &["add", "-A"], root).unwrap();
         run_capture("git", &["commit", "-q", "-m", "first"], root).unwrap();
         GitRepo::discover(root).unwrap()
@@ -716,13 +812,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_directory_named_like_a_pattern_lists_only_its_own_files() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         let root = temp.path();
         // `de[m]o` is a legal directory name on every supported platform and is
         // also a glob that matches its sibling `demo`.
         for dir in ["packages/de[m]o", "packages/demo"] {
-            std::fs::create_dir_all(root.join(dir)).unwrap();
-            std::fs::write(root.join(dir).join("lib.rs"), "x").unwrap();
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join("lib.rs"), "x").unwrap();
         }
         let repo = init_repo(root);
 
@@ -747,11 +843,11 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn a_work_tree_file_hashes_to_the_id_its_tree_entry_records() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempdir().unwrap();
         let root = temp.path();
-        std::fs::create_dir_all(root.join("packages/demo")).unwrap();
-        std::fs::write(root.join("packages/demo/lib.rs"), "x").unwrap();
-        std::fs::write(root.join("packages/demo/other.rs"), "y").unwrap();
+        fs::create_dir_all(root.join("packages/demo")).unwrap();
+        fs::write(root.join("packages/demo/lib.rs"), "x").unwrap();
+        fs::write(root.join("packages/demo/other.rs"), "y").unwrap();
         let repo = init_repo(root);
 
         let entries = repo.ls_tree("HEAD", &["packages/demo"]).unwrap();

@@ -70,6 +70,38 @@ pub(crate) struct NonUtf8PathError {
 impl UnwindSafe for NonUtf8PathError {}
 impl RefUnwindSafe for NonUtf8PathError {}
 
+/// A blob recorded in history is not valid UTF-8.
+///
+/// Every blob this tool reads as text is a Cargo manifest, and Cargo requires
+/// UTF-8. Replacing invalid bytes could yield a parseable document Git does not
+/// store, so the run stops instead.
+#[ohno::error]
+#[display(
+    "Blob '{}:{}' is not valid UTF-8",
+    commit.quoted(),
+    path.quoted()
+)]
+pub(crate) struct NonUtf8BlobError {
+    commit: String,
+    path: String,
+}
+
+impl UnwindSafe for NonUtf8BlobError {}
+impl RefUnwindSafe for NonUtf8BlobError {}
+
+/// A single path does not fit the platform command-line budget.
+#[ohno::error]
+#[display(
+    "Path '{}' is too long to pass to a 'git' subprocess",
+    path.quoted()
+)]
+pub(crate) struct PathTooLongError {
+    path: String,
+}
+
+impl UnwindSafe for PathTooLongError {}
+impl RefUnwindSafe for PathTooLongError {}
+
 /// A file could not be read.
 #[ohno::error]
 #[display("Failed to read '{}'", path.quoted())]
@@ -669,6 +701,30 @@ mod tests {
     );
     assert_impl_all!(
         SymlinkReleasedError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        NonUtf8BlobError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        PathTooLongError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        MalformedDefaultBaseError: Send,
         Sync,
         Debug,
         error::Error,

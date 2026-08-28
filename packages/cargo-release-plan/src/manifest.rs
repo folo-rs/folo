@@ -498,20 +498,6 @@ impl MemberPattern {
     }
 }
 
-/// Root-anchors a member pattern for gitignore-style matching.
-///
-/// Cargo resolves `members` and `exclude` globs against the workspace root, but
-/// a gitignore pattern with no separator matches a basename at any depth, so
-/// `foo*` would otherwise pull in `packages/foo` and attribute a nested crate's
-/// files to a workspace that never declared it. A leading `/` restores Cargo's
-/// meaning; a pattern that already carries a separator is anchored either way.
-fn anchored(literal: &str) -> String {
-    match literal.strip_prefix('/') {
-        Some(_) => literal.to_string(),
-        None => format!("/{literal}"),
-    }
-}
-
 // `Override` has no `Clone`, and the compiled matchers are immutable after
 // construction, so cloning a member set recompiles its patterns.
 impl Clone for MemberPattern {
@@ -528,6 +514,20 @@ impl fmt::Debug for MemberPattern {
         f.debug_struct(short_type_name::<Self>())
             .field("literal", &self.literal)
             .finish_non_exhaustive()
+    }
+}
+
+/// Root-anchors a member pattern for gitignore-style matching.
+///
+/// Cargo resolves `members` and `exclude` globs against the workspace root, but
+/// a gitignore pattern with no separator matches a basename at any depth, so
+/// `foo*` would otherwise pull in `packages/foo` and attribute a nested crate's
+/// files to a workspace that never declared it. A leading `/` restores Cargo's
+/// meaning; a pattern that already carries a separator is anchored either way.
+fn anchored(literal: &str) -> String {
+    match literal.strip_prefix('/') {
+        Some(_) => literal.to_string(),
+        None => format!("/{literal}"),
     }
 }
 

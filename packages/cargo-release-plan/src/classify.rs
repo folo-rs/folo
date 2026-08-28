@@ -213,7 +213,7 @@ enum Verdict {
 }
 
 /// Classification status of one publishable package.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackageStatus {
     Releasing,
@@ -255,7 +255,7 @@ impl Serialize for ChangedItem {
 }
 
 /// Insertion/deletion counts for one package in `report.json`.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct DiffStat {
     pub(crate) files: usize,
     pub(crate) insertions: usize,
@@ -263,7 +263,7 @@ pub(crate) struct DiffStat {
 }
 
 /// Anchor identity as serialized in `report.json`.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct AnchorJson {
     pub(crate) commit: String,
     pub(crate) version: String,
@@ -381,51 +381,54 @@ fn classify_one(
     let dependents = dependents_of(&work_tree.packages, name);
 
     let timeline = build_timeline(git, name, commits, cache)?;
-    let anchor =
-        if base_snapshot.packages.contains_key(name) {
-            resolve_anchor(name, &timeline)?
-        } else {
-            match reintroduction_anchor(name, &timeline)? {
-                Some(anchor) => {
-                    verbose.note(|| format!(
+    let anchor = if base_snapshot.packages.contains_key(name) {
+        resolve_anchor(name, &timeline)?
+    } else {
+        match reintroduction_anchor(name, &timeline)? {
+            Some(anchor) => {
+                verbose.note(|| format!(
                     "{shown}: absent from base {base_sha} but carried earlier on its first-parent \
                      history, so this branch reintroduces a package rather than creating one and \
                      the last version change on that history ({} declaring {}) is the anchor",
                     short_commit(&anchor.commit),
                     anchor.version
                 ));
-                    anchor
-                }
-                None => {
-                    verbose.note(|| format!(
-                    "{shown}: absent from base {base_sha} and from every sampled commit on its \
+                anchor
+            }
+            None => {
+                verbose.note(|| {
+                    format!(
+                        "{shown}: absent from base {base_sha} and from every sampled commit on its \
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
-                ));
-                    let side = work_tree_side(package, cache.case());
-                    let resource_paths: Vec<&str> =
-                        side.resources.values().map(String::as_str).collect();
-                    let tracked_resources = git.tracked_paths(&resource_paths)?;
-                    let untracked = untracked_released(git, &side, &tracked_resources)?;
-                    log_untracked(verbose, name, untracked.len());
-                    return Ok(PackageClass {
-                        name: name.clone(),
-                        declared_version: package.manifest.version.clone(),
-                        group,
-                        verdict: Verdict::New,
-                        stat: DiffStat {
-                            files: 0,
-                            insertions: 0,
-                            deletions: 0,
-                        },
-                        untracked,
-                        dependencies: package.dependencies.clone(),
-                        dependents,
-                        manifest_path: package.manifest_path.clone(),
-                    });
-                }
+                    )
+                });
+                let side = work_tree_side(package, cache.case());
+                let resource_paths: Vec<&str> =
+                    side.resources.values().map(String::as_str).collect();
+                let tracked_resources = git.tracked_paths(&resource_paths)?;
+                let content = released_in_work_tree(git, &side, &tracked_resources)?;
+                let untracked =
+                    untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
+                log_untracked(verbose, name, untracked.len());
+                return Ok(PackageClass {
+                    name: name.clone(),
+                    declared_version: package.manifest.version.clone(),
+                    group,
+                    verdict: Verdict::New,
+                    stat: DiffStat {
+                        files: 0,
+                        insertions: 0,
+                        deletions: 0,
+                    },
+                    untracked,
+                    dependencies: package.dependencies.clone(),
+                    dependents,
+                    manifest_path: package.manifest_path.clone(),
+                });
             }
-        };
+        }
+    };
     let short_anchor = short_commit(&anchor.commit);
     verbose.note(|| format!(
         "{shown}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
@@ -631,19 +634,20 @@ fn diff_package(
     name: &str,
     anchor_commit: &str,
     anchor: &PackageSide<'_>,
-    work: &PackageSide<'_>,
+    work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
     // rules, where the directory listing cannot vouch for it. Asking Git
     // directly keeps an untracked README from being read off disk and reported
     // as a content change. Ref: docs/design.md, "Released content".
-    let resource_paths: Vec<&str> = work.resources.values().map(String::as_str).collect();
+    let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
     let tracked_resources = git.tracked_paths(&resource_paths)?;
 
     let anchor_tree = anchor_tree_entries(git, anchor_commit, anchor)?;
     let anchor_files = released_at_commit(&anchor_tree, anchor);
-    let work_files = released_in_work_tree(git, work, &tracked_resources)?;
+    let work = released_in_work_tree(git, work_side, &tracked_resources)?;
+    let work_files = &work.released;
 
     reject_anchor_symlinks(name, &anchor_tree, &anchor_files)?;
 
@@ -657,7 +661,7 @@ fn diff_package(
         .iter()
         .map(|entry| (entry.path.as_str(), entry.id.as_str()))
         .collect();
-    let work_ids = work_blob_ids(git, name, &work_files)?;
+    let work_ids = work_blob_ids(git, name, work_files)?;
 
     let rels: BTreeSet<&str> = anchor_files
         .keys()
@@ -703,7 +707,7 @@ fn diff_package(
         patch.push_str(&file_diff.text);
     }
 
-    let untracked = untracked_released(git, work, &tracked_resources)?;
+    let untracked = untracked_released(git, work_side, &tracked_resources, &work.present_tracked)?;
 
     let stat = DiffStat {
         files: changed.len(),
@@ -827,17 +831,15 @@ fn untracked_released(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &HashSet<String>,
+    tracked: &[String],
 ) -> Result<Vec<String>, AppError> {
     let listed: Vec<String> = git.ls_untracked(side.dir)?;
     // The same nested-package boundary the tracked listing observes applies
     // here, or a file under a nested crate would be advertised as content
     // Cargo would pack for the outer one. The manifest drawing that boundary
-    // may itself still be untracked, so both listings feed the scan, and the
-    // tracked one is narrowed to what the work tree still holds for the same
-    // reason `released_in_work_tree` narrows it.
-    let tracked: Vec<String> = present_in_work_tree(git, &git.ls_files(side.dir)?);
+    // may itself still be untracked, so both listings feed the scan.
     let mut boundary_paths = listed.clone();
-    boundary_paths.extend_from_slice(&tracked);
+    boundary_paths.extend_from_slice(tracked);
     let nested = nested_package_dirs(&boundary_paths, side.dir);
 
     let mut untracked: Vec<String> = listed
@@ -889,8 +891,8 @@ pub(crate) fn released_work_tree_paths(
     let side = work_tree_side(package, case);
     let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
     let tracked_resources = git.tracked_paths(&resource_paths)?;
-    let released = released_in_work_tree(git, &side, &tracked_resources)?;
-    Ok(released.into_keys().collect())
+    let content = released_in_work_tree(git, &side, &tracked_resources)?;
+    Ok(content.released.into_keys().collect())
 }
 
 /// The work-tree end of `package`'s released-content comparison.
@@ -904,11 +906,20 @@ fn work_tree_side(package: &WorkPackage, case: PathCase) -> PackageSide<'_> {
     }
 }
 
+/// One work-tree package's released content and the listing it was drawn from.
+///
+/// The tracked listing is reused for the advisory untracked scan, which needs
+/// the same nested-package boundary this selection observed.
+struct WorkTreeContent {
+    released: HashMap<String, String>,
+    present_tracked: Vec<String>,
+}
+
 fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &HashSet<String>,
-) -> Result<HashMap<String, String>, AppError> {
+) -> Result<WorkTreeContent, AppError> {
     let tracked = git.ls_files(side.dir)?;
     let present = present_in_work_tree(git, &tracked);
     let mut released = released_from_paths(&tracked, &present, side);
@@ -918,7 +929,10 @@ fn released_in_work_tree(
             .iter()
             .filter(|(_, path)| tracked_resources.contains(*path)),
     );
-    Ok(released)
+    Ok(WorkTreeContent {
+        released,
+        present_tracked: present,
+    })
 }
 
 /// The subset of `paths` the work tree still holds on disk.
@@ -1373,6 +1387,11 @@ fn workspace_relative_dir<'a>(dir: &'a str, workspace_prefix: &str) -> Option<&'
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
+    use tempfile::tempdir;
+
     use super::*;
     use crate::inherited::InheritedKeys;
 
@@ -1409,7 +1428,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
     fn read_optional_bytes_missing_is_none() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let path = dir.path().join("gone.txt");
         assert_eq!(read_optional_bytes(&path, "pkg", "gone.txt").unwrap(), None);
     }
@@ -1417,7 +1436,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
     fn read_optional_bytes_reads_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let path = dir.path().join("here.txt");
         fs::write(&path, "hi").unwrap();
         assert_eq!(
@@ -1431,7 +1450,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
     fn read_optional_bytes_rejects_non_not_found_errors() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let _ = read_optional_bytes(dir.path(), "pkg", "dir").unwrap_err();
     }
 
@@ -1441,9 +1460,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
     fn read_optional_bytes_rejects_a_symbolic_link() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         fs::write(dir.path().join("real.txt"), "hi").unwrap();
         let link = dir.path().join("link.txt");
         symlink("real.txt", &link).unwrap();

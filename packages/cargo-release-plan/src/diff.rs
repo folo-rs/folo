@@ -1,6 +1,7 @@
 // Renders released-file changes as unified diffs for report artifacts.
 
 use std::fmt::Write as _;
+use std::iter::repeat_n;
 
 use crate::quote_path;
 
@@ -65,20 +66,16 @@ fn unified_diff(
 ) -> FileDiff {
     // `split_inclusive` keeps line terminators, so a change that only adds or
     // removes a trailing newline is still visible as a differing line.
-    let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
-    let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
-    let regions = changed_regions(&old_lines, &new_lines, MAX_EDIT_DISTANCE);
+    let old: Vec<&str> = old.split_inclusive('\n').collect();
+    let new: Vec<&str> = new.split_inclusive('\n').collect();
+    let regions = changed_regions(&old, &new, MAX_EDIT_DISTANCE);
 
     let mut hunks = String::new();
     let mut insertions = 0_usize;
     let mut deletions = 0_usize;
     for region in &regions {
-        let old_region = old_lines
-            .get(region.old_start..region.old_end)
-            .unwrap_or(&[]);
-        let new_region = new_lines
-            .get(region.new_start..region.new_end)
-            .unwrap_or(&[]);
+        let old_region = old.get(region.old_start..region.old_end).unwrap_or(&[]);
+        let new_region = new.get(region.new_start..region.new_end).unwrap_or(&[]);
         deletions = deletions.saturating_add(old_region.len());
         insertions = insertions.saturating_add(new_region.len());
         writeln!(
@@ -233,8 +230,8 @@ fn edit_script(old: &[&str], new: &[&str], max_distance: usize) -> Vec<Edit> {
 
 fn whole_file_script(old_len: usize, new_len: usize) -> Vec<Edit> {
     let mut script = Vec::with_capacity(old_len.saturating_add(new_len));
-    script.extend(std::iter::repeat_n(Edit::Delete, old_len));
-    script.extend(std::iter::repeat_n(Edit::Insert, new_len));
+    script.extend(repeat_n(Edit::Delete, old_len));
+    script.extend(repeat_n(Edit::Insert, new_len));
     script
 }
 
@@ -345,7 +342,7 @@ fn backtrack(trace: &[Vec<isize>], budget: usize, old_len: usize, new_len: usize
             .min(new_index.saturating_sub(previous_new))
             .max(0);
         let keeps = usize::try_from(keeps).unwrap_or(0);
-        script.extend(std::iter::repeat_n(Edit::Keep, keeps));
+        script.extend(repeat_n(Edit::Keep, keeps));
         let stepped = isize::try_from(keeps).unwrap_or(0);
         old_index = old_index.saturating_sub(stepped);
         new_index = new_index.saturating_sub(stepped);
