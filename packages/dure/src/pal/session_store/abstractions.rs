@@ -35,13 +35,11 @@ pub(crate) trait SessionStore: Send + Sync + std::fmt::Debug + 'static {
     /// Ids that are claimed but not published, with the process that claimed them.
     fn list_reservations(&self) -> Result<Vec<(SessionId, ProcessIdentity)>, PalError>;
 
-    /// Removes the record file. Missing files succeed.
-    fn delete(&self, id: SessionId) -> Result<(), PalError>;
-
     /// Removes the record file only while it still describes `owner`.
     ///
     /// Ids are reused, so an unconditional delete can reap a session that
-    /// happens to have claimed the id since the caller last read it.
+    /// happens to have claimed the id since the caller last read it. Missing
+    /// files succeed.
     fn delete_owned_by(&self, id: SessionId, owner: &ProcessIdentity) -> Result<(), PalError>;
 
     /// Canonical absolute form used as the launch-directory key.

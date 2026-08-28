@@ -51,7 +51,8 @@ directory. Reconnect is `dure resume`, never an implicit side effect of `run`.
 The command is executed directly, not through a shell. The child's working
 directory and environment are those of the `dure run` process at start time and
 do not update on a later resume. Relative command paths are resolved against
-that launch directory.
+that launch directory, and a bare command name is looked up on the executable
+search path, as a shell would.
 
 If the process cannot be kept alive across SSH disconnect, `dure run` fails
 instead of starting a session that would die on disconnect.

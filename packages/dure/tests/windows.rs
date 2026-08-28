@@ -173,3 +173,40 @@ fn helper_sees_a_console() {
         assert_eq!(report, "console");
     });
 }
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn a_dropped_client_leaves_the_app_resumable() {
+    with_watchdog(|| {
+        let dir = TempDir::new().unwrap();
+        let helper = helper_exe();
+        let run_args = vec![
+            "--store-root".to_string(),
+            dir.path().display().to_string(),
+            "run".to_string(),
+            "--".to_string(),
+            helper.display().to_string(),
+            "wait-exit".to_string(),
+            SAMPLE_NONZERO_EXIT.to_string(),
+        ];
+        let client = ConsoleProcess::spawn(&dure_exe(), &run_args, dir.path());
+        _ = collect_until(&client, "session");
+        // Models the SSH connection dropping: the client dies where it stands,
+        // without a chance to tell the supervisor anything.
+        drop(client);
+
+        let resume_args = vec![
+            "--store-root".to_string(),
+            dir.path().display().to_string(),
+            "resume".to_string(),
+        ];
+        let resumed = ConsoleProcess::spawn(&dure_exe(), &resume_args, dir.path());
+        _ = collect_until(&resumed, "session");
+        // The app was blocked on console input across the disconnect. Reaching
+        // it now, and seeing its own exit status arrive, is what makes the
+        // resumed session interactive rather than merely alive.
+        resumed.write_input(b"x\r\n");
+        let status = resumed.wait();
+        assert_eq!(status, SAMPLE_NONZERO_EXIT);
+    });
+}

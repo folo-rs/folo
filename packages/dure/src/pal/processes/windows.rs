@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Write;
 use std::mem::size_of;
-use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -14,6 +14,7 @@ use windows::Win32::Foundation::{
     CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
+use windows::Win32::Storage::FileSystem::SearchPathW;
 use windows::Win32::System::Console::HPCON;
 use windows::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -140,6 +141,50 @@ fn open_verified(
 fn close(handle: HANDLE) {
     // SAFETY: `handle` is a process or job handle we own and never use again.
     _ = unsafe { CloseHandle(handle) };
+}
+
+/// Resolves a bare command name through the standard executable search order.
+///
+/// `CreateProcessW` performs no search when `lpApplicationName` is supplied, so
+/// a bare `copilot.exe` would otherwise only be found in the launch directory.
+/// Anything that already names a directory, and anything the search cannot
+/// find, is returned unchanged so `CreateProcessW` reports the failure.
+fn search_executable(exe: &Path) -> PathBuf {
+    if exe.components().count() != 1 {
+        return exe.to_path_buf();
+    }
+    let name = wide(&exe.to_string_lossy());
+    // Applied only when the name carries no extension of its own, which is what
+    // makes `dure run -- copilot` behave like typing it in the shell.
+    let extension = wide(".exe");
+    // Long enough for a traditional path; a longer result is retried at the
+    // size the first call reports.
+    let mut buf = vec![0_u16; 260];
+    for _attempt in 0..2_u8 {
+        // SAFETY: `name` and `extension` are NUL-terminated and are not retained
+        // after the call. `buf` is exclusive for the call and its own length is
+        // what bounds the write.
+        let len = unsafe {
+            SearchPathW(
+                PCWSTR::null(),
+                PCWSTR(name.as_ptr()),
+                PCWSTR(extension.as_ptr()),
+                Some(&mut buf),
+                None,
+            )
+        } as usize;
+        if len == 0 {
+            break;
+        }
+        if len < buf.len() {
+            return buf.get(..len).map_or_else(
+                || exe.to_path_buf(),
+                |found| PathBuf::from(OsString::from_wide(found)),
+            );
+        }
+        buf = vec![0_u16; len];
+    }
+    exe.to_path_buf()
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -290,13 +335,13 @@ impl Processes for BuildTargetProcesses {
 
     fn spawn_app(&self, request: &AppSpawn) -> Result<AppId, PalError> {
         let hpcon = hpcon_for(request.pty).ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
-        let exe = resolve_command_path(
+        let exe = search_executable(&resolve_command_path(
             request
                 .command
                 .first()
                 .ok_or_else(|| PalError::new(PalErrorKind::Other))?,
             &request.launch_directory,
-        );
+        ));
         let rest = request.command.get(1..).unwrap_or(&[]);
         let mut cmd_wide = wide(&windows_command_line(&exe.to_string_lossy(), rest));
         let mut exe_wide = wide(&exe.to_string_lossy());
@@ -378,8 +423,11 @@ impl Processes for BuildTargetProcesses {
             u32::try_from(size_of::<STARTUPINFOEXW>()).expect("STARTUPINFOEXW fits in u32");
         // Parent stdio is often redirected (SSH, `cargo test`). CreateProcess
         // copies those handle values into the child unless STARTF_USESTDHANDLES
-        // overrides them. Invalid std handles let the pseudoconsole attribute
-        // install console handles instead of the parent's pipes.
+        // overrides them, and the pseudoconsole attribute does not displace an
+        // inherited value. Invalid std handles are what leaves the pseudoconsole
+        // free to install console handles instead: without this the child sees
+        // pipes, which the `helper_sees_a_console` integration test observes
+        // directly.
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;

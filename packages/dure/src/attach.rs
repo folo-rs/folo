@@ -32,15 +32,17 @@ where
     if !console.has_console() {
         return Err(NoConsoleError::new().into());
     }
+    // Installed before the first console mutation so a partial failure inside
+    // either call below still leaves the user with a cooked console.
+    let _raw_guard = RawRelayGuard {
+        console: console.clone(),
+    };
     console
         .disable_ctrl_c_handler()
         .map_err(|_error| PalFailedError::new())?;
     console
         .enter_raw_relay()
         .map_err(|_error| PalFailedError::new())?;
-    let _raw_guard = RawRelayGuard {
-        console: console.clone(),
-    };
     let size = console
         .window_size()
         .map_err(|_error| PalFailedError::new())?;

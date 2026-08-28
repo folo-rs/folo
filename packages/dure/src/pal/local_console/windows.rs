@@ -51,6 +51,14 @@ fn console_mode(handle: HANDLE) -> Result<CONSOLE_MODE, PalError> {
     Ok(mode)
 }
 
+/// Restores one standard handle's console mode, best effort.
+fn restore_mode(kind: STD_HANDLE, mode: CONSOLE_MODE) -> Result<(), PalError> {
+    let handle = std_handle(kind)?;
+    // SAFETY: `handle` is a standard console handle; `mode` was captured from
+    // it before `enter_raw_relay` changed it.
+    unsafe { SetConsoleMode(handle, mode) }.map_err(|_error| PalError::new(PalErrorKind::Other))
+}
+
 fn read_window_size(output: HANDLE) -> Result<WindowSize, PalError> {
     let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
     // SAFETY: `output` is a console handle; `info` is a stack structure that
@@ -201,25 +209,23 @@ impl LocalConsole for BuildTargetConsole {
     }
 
     fn leave_raw_relay(&self) -> Result<(), PalError> {
-        let Some((in_mode, out_mode)) = saved_modes()
+        let saved = saved_modes()
             .lock()
             .expect("saved console modes are only copied, never held across a panic")
-            .take()
-        else {
-            return Ok(());
-        };
-        let input = std_handle(STD_INPUT_HANDLE)?;
-        let output = std_handle(STD_OUTPUT_HANDLE)?;
-        // SAFETY: restoring the modes captured before `enter_raw_relay`.
-        unsafe { SetConsoleMode(input, in_mode) }
-            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
-        // SAFETY: restoring the modes captured before `enter_raw_relay`.
-        unsafe { SetConsoleMode(output, out_mode) }
-            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+            .take();
+        // Every restoration is attempted even when an earlier one fails, and the
+        // Ctrl+C request is undone even when no modes were ever captured:
+        // leaving the console half-raw is worse than losing a later error.
+        let input = saved.map_or(Ok(()), |(in_mode, _out_mode)| {
+            restore_mode(STD_INPUT_HANDLE, in_mode)
+        });
+        let output = saved.map_or(Ok(()), |(_in_mode, out_mode)| {
+            restore_mode(STD_OUTPUT_HANDLE, out_mode)
+        });
         // SAFETY: Add=FALSE undoes the ignore-Ctrl+C request from attach.
-        unsafe { SetConsoleCtrlHandler(None, false) }
-            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
-        Ok(())
+        let ctrl_c = unsafe { SetConsoleCtrlHandler(None, false) }
+            .map_err(|_error| PalError::new(PalErrorKind::Other));
+        input.and(output).and(ctrl_c)
     }
 
     fn window_size(&self) -> Result<WindowSize, PalError> {

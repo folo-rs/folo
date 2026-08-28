@@ -15,11 +15,12 @@ pub(crate) fn execute(
     id: SessionId,
 ) -> Result<(), AppError> {
     let record = require_live_session(store, processes, id)?;
+    let identity = record.identity();
     processes
-        .terminate(&record.identity())
+        .terminate(&identity)
         .map_err(|_error| KillFailedError::for_id(id))?;
     store
-        .delete(id)
+        .delete_owned_by(id, &identity)
         .map_err(|_error| crate::StoreError::new())?;
     Ok(())
 }

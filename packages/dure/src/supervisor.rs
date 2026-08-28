@@ -500,11 +500,6 @@ where
                 .attach
                 .lock()
                 .expect("the attach lock guards no data, so it is never poisoned by its guard");
-            // Resize failure means the pty is already gone; wait_app and
-            // read_output observe that and stop the relay.
-            _ = shared
-                .pty_host
-                .resize(shared.pty, WindowSize { cols, rows });
             let outbox = Outbox::start(shared.transport.clone(), conn);
             let previous = {
                 let mut slot = shared.client();
@@ -543,6 +538,14 @@ where
                 old.outbox.send(Message::Displaced);
                 old.outbox.finish();
             }
+            // Applied only once this connection owns the client slot: the app
+            // redraws in response to a size change, and that redraw belongs to
+            // the client that asked for the size. Resize failure means the pty
+            // is already gone; wait_app and read_output observe that and stop
+            // the relay.
+            _ = shared
+                .pty_host
+                .resize(shared.pty, WindowSize { cols, rows });
             set_attached(true);
             shared.note_attached();
         }

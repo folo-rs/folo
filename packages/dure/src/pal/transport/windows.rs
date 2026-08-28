@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
@@ -317,8 +317,12 @@ fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
             }
             .is_err()
             {
+                let err = {
+                    // SAFETY: immediately after the failed GetOverlappedResult.
+                    unsafe { GetLastError() }
+                };
                 close(event);
-                return Err(PalError::new(PalErrorKind::Other));
+                return Err(PalError::new(io_error_kind(err)));
             }
         }
         close(event);
@@ -371,8 +375,12 @@ fn write_all(handle: HANDLE, mut buf: &[u8]) -> Result<(), PalError> {
             }
             .is_err()
             {
+                let err = {
+                    // SAFETY: immediately after the failed GetOverlappedResult.
+                    unsafe { GetLastError() }
+                };
                 close(event);
-                return Err(PalError::new(PalErrorKind::Other));
+                return Err(PalError::new(io_error_kind(err)));
             }
         }
         close(event);
@@ -467,46 +475,63 @@ impl Transport for BuildTargetTransport {
 
     fn connect(&self, name: &str, timeout: Duration) -> Result<ConnId, PalError> {
         let name = wide_z(name);
-        let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
         let access = FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0;
-        // SAFETY: `name` is a NUL-terminated pipe path. WaitNamedPipeW does not
-        // retain the pointer after it returns.
-        let ready = unsafe { WaitNamedPipeW(PCWSTR(name.as_ptr()), timeout_ms) };
-        if !ready.as_bool() {
-            return Err(PalError::new(PalErrorKind::Timeout));
-        }
-        // SAFETY: WaitNamedPipeW reported an instance. CreateFile opens a new
-        // client handle we own. FILE_FLAG_OVERLAPPED matches the server end.
-        let handle = unsafe {
-            CreateFileW(
-                PCWSTR(name.as_ptr()),
-                access,
-                FILE_SHARE_NONE,
-                None,
-                OPEN_EXISTING,
-                FILE_FLAG_OVERLAPPED,
-                None,
-            )
-        };
-        let Ok(handle) = handle else {
-            let err = {
-                // SAFETY: immediately after the failed CreateFileW.
-                unsafe { GetLastError() }
-            };
-            if err == ERROR_PIPE_BUSY {
+        let started = Instant::now();
+        loop {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
                 return Err(PalError::new(PalErrorKind::Timeout));
             }
-            return Err(PalError::new(PalErrorKind::NotFound));
-        };
-        let id = next_id();
-        table().lock().expect("pipe table").conns.insert(
-            id,
-            Conn {
-                handle: PipeHandle::new(handle),
-                write: Arc::new(Mutex::new(())),
-            },
-        );
-        Ok(ConnId(id))
+            // A zero wait asks for the server's default timeout rather than for
+            // no wait at all, so a live deadline is never rounded down to it.
+            let timeout_ms = u32::try_from(remaining.as_millis())
+                .unwrap_or(u32::MAX)
+                .max(1);
+            // SAFETY: `name` is a NUL-terminated pipe path. WaitNamedPipeW does not
+            // retain the pointer after it returns.
+            let ready = unsafe { WaitNamedPipeW(PCWSTR(name.as_ptr()), timeout_ms) };
+            if !ready.as_bool() {
+                return Err(PalError::new(PalErrorKind::Timeout));
+            }
+            // SAFETY: WaitNamedPipeW reported an instance. CreateFile opens a new
+            // client handle we own. FILE_FLAG_OVERLAPPED matches the server end.
+            let handle = unsafe {
+                CreateFileW(
+                    PCWSTR(name.as_ptr()),
+                    access,
+                    FILE_SHARE_NONE,
+                    None,
+                    OPEN_EXISTING,
+                    FILE_FLAG_OVERLAPPED,
+                    None,
+                )
+            };
+            let handle = match handle {
+                Ok(handle) => handle,
+                Err(_error) => {
+                    let err = {
+                        // SAFETY: immediately after the failed CreateFileW.
+                        unsafe { GetLastError() }
+                    };
+                    if err != ERROR_PIPE_BUSY {
+                        return Err(PalError::new(PalErrorKind::NotFound));
+                    }
+                    // Another client took the instance the wait reported. The
+                    // supervisor posts the next one as soon as it accepts, so
+                    // keep trying for as long as the caller allows.
+                    continue;
+                }
+            };
+            let id = next_id();
+            table().lock().expect("pipe table").conns.insert(
+                id,
+                Conn {
+                    handle: PipeHandle::new(handle),
+                    write: Arc::new(Mutex::new(())),
+                },
+            );
+            return Ok(ConnId(id));
+        }
     }
 
     fn send(&self, conn: ConnId, message: &Message) -> Result<(), PalError> {

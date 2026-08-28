@@ -97,14 +97,6 @@ impl SessionStore for SessionStoreFacade {
         }
     }
 
-    fn delete(&self, id: SessionId) -> Result<(), PalError> {
-        match self {
-            Self::Target(store) => store.delete(id),
-            #[cfg(test)]
-            Self::Mock(store) => store.delete(id),
-        }
-    }
-
     fn delete_owned_by(&self, id: SessionId, owner: &ProcessIdentity) -> Result<(), PalError> {
         match self {
             Self::Target(store) => store.delete_owned_by(id, owner),

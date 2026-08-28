@@ -89,6 +89,9 @@ pub(crate) trait Processes: Send + Sync + std::fmt::Debug + 'static {
 }
 
 /// Resolves `exe` relative to `launch_directory` when it contains a path separator.
+///
+/// A bare name is left alone here and resolved through the platform's
+/// executable search order when the app is spawned.
 #[must_use]
 #[cfg_attr(
     not(any(windows, test)),

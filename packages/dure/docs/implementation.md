@@ -71,9 +71,11 @@ paths that must not delete a live supervisor record.
 
 The real PAL is exercised on Windows through nested-pseudoconsole process tests
 with a helper child that is not part of the product. That suite proves the app
-sees a console, `run` forwards exit status, and session records disappear when
-the app exits. Broader SSH-survival and steal scenarios belong to the same
-harness; they wait on process and pipe events inside the workspace watchdog.
+sees a console, `run` forwards exit status, session records disappear when
+the app exits, and a session whose client dies outright is still resumable and
+still interactive afterwards. Broader SSH-survival and steal scenarios belong to
+the same harness; they wait on process and pipe events inside the workspace
+watchdog.
 
 Integration tests do not try to prove console-host cosmetics, nested
 pseudoconsole rendering, or behavior when Windows logs the user off.
@@ -112,7 +114,10 @@ signal before reporting success. It never needs the session connection.
 
 An attach is one serialized transaction: acknowledgement, ownership transfer, and
 displacement of the previous client happen under a single lock, so concurrent
-attaches cannot acknowledge in one order and install in another. The relay checks
+attaches cannot acknowledge in one order and install in another. The size the
+attaching client asks for is applied to the pseudoconsole only once that client
+owns the slot, because the app answers a size change with a redraw and that
+redraw belongs to the client that asked. The relay checks
 ownership and applies each message under the client-slot lock, so a client
 displaced while its receive was in flight cannot reach the pseudoconsole
 afterwards. Pseudoconsole input lands in the console host's buffer, which the
@@ -156,6 +161,11 @@ disconnected rather than buffered without bound. `dure` keeps no screen buffer,
 so output that cannot be delivered has no later value, and the user recovers the
 session with a fresh `dure resume`.
 
+Connecting is a deadline, not an attempt. A pipe instance the wait reported can
+be taken by another client before this one opens it, and the supervisor posts a
+fresh instance as soon as it accepts, so a busy instance is retried for as long
+as the caller's timeout allows. Only an expired deadline is a timeout.
+
 [`CreatePseudoConsole`]: https://learn.microsoft.com/windows/console/createpseudoconsole
 
 ## Session store
@@ -177,11 +187,16 @@ a supervisor that died mid-initialization be reaped instead of occupying the id
 forever. A claim is reported as absent to everything except that reaping.
 
 Ids are reused, so every delete is conditional on the file still naming the
-process the caller means to remove. Without that, a stale read could reap the
-session that took the id in the meantime. A claim written by a supervisor killed
-between creating the file and writing its owner names nobody and is not reaped;
-that window is a single unbuffered write wide and is accepted rather than
-designed around.
+process the caller means to remove; the store offers no unconditional delete to
+reach for by mistake. Without that condition, a stale read could reap the
+session that took the id in the meantime. Two windows remain and are accepted
+rather than designed around, because closing either needs a store-wide lock and
+the harm is a duplicated id rather than a lost session. A claim written by a
+supervisor killed between creating the file and writing its owner names nobody
+and is not reaped; that window is a single unbuffered write wide. The ownership
+check and the removal are also separate filesystem operations, so a record
+deleted and re-claimed between them is removed on the strength of the old
+content.
 
 ## Pseudoconsole
 
@@ -191,6 +206,11 @@ from the supervisor's side it is a pair of pipes plus resize. Raw anonymous
 pipes as the child's stdin/stdout are not an alternative: a TUI would not see a
 console.
 
+The app is spawned with explicitly invalid standard handles. `CreateProcessW`
+otherwise passes the supervisor's own standard handle values on to the child,
+and the pseudoconsole attribute does not displace values that arrive that way,
+so the child would come up on pipes rather than on a console.
+
 SSH already wraps the remote shell in a pseudoconsole. `dure` adds a second one
 around the app. For a VT TUI such as Copilot CLI, that extra layer is not
 expected to remove features the same app already has over SSH without `dure`.
@@ -198,8 +218,12 @@ HWND-based console features and terminal graphics protocols remain unavailable,
 as they already are under SSH. Occasional resize or line-wrap glitches are in
 the same class as SSH plus a pseudoconsole.
 
-The client disables its own Ctrl+C handler and forwards the key. Console close
-on the client does not propagate a kill into the supervisor's pseudoconsole.
+The client disables its own Ctrl+C handler and forwards the key, and switches its
+console to a raw relay. The restore is armed before the first of those changes
+rather than after the last, so a change that fails halfway still leaves a cooked
+console behind, and restoration attempts every step even when one of them fails.
+Console close on the client does not propagate a kill into the supervisor's
+pseudoconsole.
 
 Teardown closes the lifetime job before the pseudoconsole. Descendants of the
 app stay attached to the pseudoconsole until the job ends them, and closing a

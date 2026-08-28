@@ -126,7 +126,7 @@ mod tests {
                 attached: false,
             }))
         });
-        store.expect_delete().returning(|_| Ok(()));
+        store.expect_delete_owned_by().returning(|_, _| Ok(()));
         let mut processes = MockProcesses::new();
         processes
             .expect_probe()
