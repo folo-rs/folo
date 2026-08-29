@@ -1,5 +1,7 @@
 //! Bundle of PAL facades used by command dispatch.
 
+use std::path::PathBuf;
+
 use crate::pal::error::PalError;
 use crate::pal::local_console::LocalConsoleFacade;
 use crate::pal::processes::ProcessesFacade;
@@ -24,7 +26,7 @@ pub(crate) struct Pal {
 
 impl Pal {
     /// Real PAL with an optional store-root override.
-    pub(crate) fn target(store_root: Option<std::path::PathBuf>) -> Result<Self, PalError> {
+    pub(crate) fn target(store_root: Option<PathBuf>) -> Result<Self, PalError> {
         let root = resolve_store_root(store_root)?;
         Ok(Self {
             store: SessionStoreFacade::target(root),

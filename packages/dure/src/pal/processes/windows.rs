@@ -8,18 +8,19 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::{env, iter, ptr};
 
 use rand::RngExt;
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-    WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows::Win32::Storage::FileSystem::SearchPathW;
 use windows::Win32::System::Console::HPCON;
 use windows::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
+    CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 use windows::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
@@ -31,13 +32,13 @@ use windows::Win32::System::Threading::{
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{BOOL, PCWSTR, PWSTR};
 
 use crate::constants::TERMINATE_TIMEOUT;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, JobId};
 use crate::pal::processes::{
-    AppSpawn, ProcessLiveness, Processes, SupervisorSpawn, resolve_command_path,
+    AppSpawn, Breakaway, ProcessLiveness, Processes, SupervisorSpawn, resolve_command_path,
     windows_command_line,
 };
 use crate::pal::pseudoconsole::hpcon_for;
@@ -190,15 +191,71 @@ fn search_executable(exe: &Path) -> PathBuf {
 fn wide(s: &str) -> Vec<u16> {
     OsString::from(s)
         .encode_wide()
-        .chain(std::iter::once(0))
+        .chain(iter::once(0))
         .collect()
+}
+
+/// Whether this process belongs to any job object.
+///
+/// Windows reports a refused breakaway as a plain access-denied error, and an
+/// unreadable image reports the same thing. Only a process that is in a job can
+/// have been refused a breakaway, so this is what tells the two apart.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn in_a_job() -> bool {
+    // SAFETY: the pseudo-handle this returns needs no state and is always valid.
+    let current = unsafe { GetCurrentProcess() };
+    let mut in_job = BOOL::default();
+    // SAFETY: `current` is a valid process handle, a null job asks about any
+    // job, and `in_job` outlives the call.
+    let queried = unsafe { IsProcessInJob(current, None, &raw mut in_job) };
+    queried.is_ok() && in_job.as_bool()
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(test, mutants::skip)]
+impl BuildTargetProcesses {
+    /// Create an unnamed kill-on-close job with the requested breakaway policy.
+    ///
+    /// Ref: docs/implementation.md, "Job breakaway".
+    pub(crate) fn create_job(breakaway: Breakaway) -> Result<JobId, PalError> {
+        // SAFETY: a null name creates an unnamed job object.
+        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
+            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = match breakaway {
+            Breakaway::Permitted => {
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            }
+            #[cfg(any(test, feature = "private-test-util"))]
+            Breakaway::Forbidden => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        // SAFETY: `info` is a stack structure of the size SetInformationJobObject
+        // expects for JobObjectExtendedLimitInformation.
+        unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                ptr::from_mut(&mut info).cast(),
+                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                    .expect("job info size fits in u32"),
+            )
+        }
+        .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+        let id = next_id();
+        table()
+            .lock()
+            .expect("handle table")
+            .jobs
+            .insert(id, RawHandle::from_handle(handle));
+        Ok(JobId(id))
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(test, mutants::skip)]
 impl Processes for BuildTargetProcesses {
     fn current_exe(&self) -> Result<PathBuf, PalError> {
-        std::env::current_exe().map_err(PalError::from_io)
+        env::current_exe().map_err(PalError::from_io)
     }
 
     fn spawn_supervisor(&self, request: &SupervisorSpawn) -> Result<ProcessIdentity, PalError> {
@@ -230,7 +287,16 @@ impl Processes for BuildTargetProcesses {
                 &raw mut pi,
             )
         };
-        created.map_err(|_error| PalError::new(PalErrorKind::BreakawayDenied))?;
+        created.map_err(|error| {
+            // Windows reports a refused breakaway as plain access-denied, which
+            // an unreadable image produces too. Job membership separates the
+            // two, so `run` can name the cause instead of guessing at it.
+            if error.code() == ERROR_ACCESS_DENIED.to_hresult() && in_a_job() {
+                PalError::new(PalErrorKind::BreakawayDenied)
+            } else {
+                PalError::new(PalErrorKind::Other)
+            }
+        })?;
         close(pi.hThread);
         // Closed on both paths: an early return here would leave the detached
         // supervisor holding an unreferenced handle in this process.
@@ -300,31 +366,10 @@ impl Processes for BuildTargetProcesses {
     }
 
     fn create_lifetime_job(&self) -> Result<JobId, PalError> {
-        // SAFETY: a null name creates an unnamed job object.
-        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
-            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
-        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags =
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
-        // SAFETY: `info` is a stack structure of the size SetInformationJobObject
-        // expects for JobObjectExtendedLimitInformation.
-        unsafe {
-            SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                std::ptr::from_mut(&mut info).cast(),
-                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
-                    .expect("job info size fits in u32"),
-            )
-        }
-        .map_err(|_error| PalError::new(PalErrorKind::Other))?;
-        let id = next_id();
-        table()
-            .lock()
-            .expect("handle table")
-            .jobs
-            .insert(id, RawHandle::from_handle(handle));
-        Ok(JobId(id))
+        // The session job permits breakaway so a nested `dure run` inside the
+        // app can still create an independent inner supervisor.
+        // Ref: docs/implementation.md, "Job breakaway".
+        Self::create_job(Breakaway::Permitted)
     }
 
     fn close_job(&self, job: JobId) {
@@ -410,7 +455,7 @@ impl Processes for BuildTargetProcesses {
                 0,
                 usize::try_from(PROC_THREAD_ATTRIBUTE_JOB_LIST)
                     .expect("PROC_THREAD_ATTRIBUTE_JOB_LIST fits in usize"),
-                Some(std::ptr::from_mut(&mut job_list).cast()),
+                Some(ptr::from_mut(&mut job_list).cast()),
                 size_of::<HANDLE>(),
                 None,
                 None,
@@ -448,7 +493,7 @@ impl Processes for BuildTargetProcesses {
                 flags,
                 None,
                 PCWSTR(dir_wide.as_mut_ptr()),
-                std::ptr::from_ref(&si.StartupInfo),
+                ptr::from_ref(&si.StartupInfo),
                 &raw mut pi,
             )
         };

@@ -6,9 +6,23 @@ follows the workspace rules for
 
 ## Process split
 
-The same binary implements both roles. `dure run` spawns `dure` again in
-supervisor mode (a hidden subcommand or equivalent), then the original process
-stays the client and attaches. Windows has no `exec`.
+The same binary implements both roles. `dure run` spawns `dure supervisor`, a
+hidden subcommand, then the original process stays the client and attaches.
+Windows has no `exec`.
+
+```mermaid
+sequenceDiagram
+  participant C as dure run (client)
+  participant S as dure supervisor
+  participant A as app
+  C->>S: spawn, detached and broken out of the job
+  S->>S: allocate id, create job + pseudoconsole
+  S->>A: spawn inside job, attached to pseudoconsole
+  S->>S: create session pipe, publish record
+  S-->>C: StartupOk(id) on startup pipe
+  C->>S: connect to session pipe, attach
+  Note over C,S: startup pipe stays open until the client attaches or gives up
+```
 
 `run` gives the supervisor a private one-shot startup channel. The supervisor
 allocates the session id, creates the lifetime job and pseudoconsole, starts the
@@ -26,11 +40,43 @@ output and exit status to the race. So once the app has exited, the supervisor
 holds the session open — listener included — until either a client has attached
 or the initiator has dropped the channel.
 
+## Platform gate
+
+`dure` builds only for Windows. `lib.rs` carries a crate-level `#![cfg(windows)]`
+and `main.rs` compiles to an empty `main` elsewhere, so a non-Windows build
+produces a binary that does nothing rather than a crate full of per-item platform
+attributes. Nothing under the PAL needs a non-Windows implementation, and no
+module needs to reason about a platform it never runs on. The integration test
+helper follows the same rule for the same reason.
+
+Workspace-wide commands therefore still build and lint the workspace on any
+platform without `dure` contributing dead abstractions to satisfy them. The
+consequence is that `dure` contributes no tests off Windows, which is why the
+workspace test and coverage recipes treat an empty test run as a pass.
+
+## PAL slicing
+
 Windows APIs sit behind a PAL so logic does not depend on a real console host,
 named pipe, or job object. The PAL is the only place that talks to the operating
 system. Logic consumes it through facades that select the real implementation, or
 a mock implementation in test builds, matching the workspace
 [PAL](../../../docs/pal.md) pattern.
+
+```mermaid
+flowchart TB
+  logic["commands, supervisor, client"]
+  logic --> facade["PAL facades"]
+  facade --> real["real: Win32"]
+  facade --> mock["mock: in-memory (cfg(test))"]
+  subgraph slices
+    store[session store]
+    proc[processes]
+    trans[transport]
+    console[local console]
+    pty[pseudoconsole]
+  end
+  facade --- slices
+```
 
 The PAL is sliced by responsibility, at a grain that tests can drive, not as a
 1:1 wrap of each Win32 call:
@@ -40,10 +86,10 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
   LocalAppData known folder, subdirectory `dure`. The root is supplied by the
   PAL so tests never touch the user's real store.
 * **Processes** — spawn a console-detached supervisor with job breakaway;
-  identify it by pid and process creation time; create an app-lifetime job;
-  spawn the app attached to a pseudoconsole and assigned to that job at
-  creation; terminate a verified process handle; wait for an exit status.
-  Failure to break away is a PAL error that `run` surfaces rather than ignoring.
+  identify it by pid and process creation time; create a job with a chosen
+  breakaway policy; spawn the app attached to a pseudoconsole and assigned to
+  that job at creation; terminate a verified process handle; wait for an exit
+  status.
 * **Transport** — listen, accept, connect, read and write console bytes and
   window-size messages, disconnect. Steal is "accept a new connection while an
   old one still exists."
@@ -69,36 +115,84 @@ Those tests cover command parsing, session discovery and garbage collection,
 the supervisor steal loop, and the client attach handshake, including failure
 paths that must not delete a live supervisor record.
 
-The real PAL is exercised on Windows through nested-pseudoconsole process tests
-with a helper child that is not part of the product. That suite proves the app
-sees a console, `run` forwards exit status, session records disappear when
-the app exits, and a session whose client dies outright is still resumable and
-still interactive afterwards. Broader SSH-survival and steal scenarios belong to
-the same harness; they wait on process and pipe events inside the workspace
-watchdog.
+### Integration tests
+
+The real PAL is exercised on Windows by running `dure` as a child of a
+test-owned pseudoconsole. A test runner has no interactive console of its own, so
+the harness builds the console the client requires rather than assuming one.
+The app under supervision is `dure-test-helper`, a separate unpublished package
+so that a helper binary never ships inside the product crate; it reports whether
+it has a console and can be told to print, wait, or exit with a chosen status.
+
+That suite proves the app sees a console, `run` forwards exit status, session
+records disappear when the app exits, a session whose client dies outright is
+still resumable and still interactive afterwards, and `run` refuses a launcher
+whose job forbids breakaway. Tests wait on process and pipe events inside the
+workspace watchdog.
+
+Assertions about console output ignore whitespace. A pseudoconsole wraps at the
+window width and may break a line mid-word, so the exact spacing of relayed
+output is a property of the console host rather than of `dure`.
 
 Integration tests do not try to prove console-host cosmetics, nested
 pseudoconsole rendering, or behavior when Windows logs the user off.
 
-Non-Windows CI runs the unit tests and the refuse-to-run check.
+Non-Windows builds produce an empty binary, so there is nothing there to test.
 
-## SSH survival
+## Detached supervisor
 
-Windows OpenSSH places the remote shell in a job that is killed on disconnect.
-The supervisor is created with job breakaway and as a detached console process,
-so it is neither in that job nor attached to the SSH pseudoconsole. It does not
+A terminal typically confines what it launches. Windows OpenSSH places the remote
+shell in a job object that is killed on disconnect, and a console process dies
+with the console it is attached to. The supervisor is created with job breakaway
+and as a detached console process, so it is in neither boundary. It does not
 inherit handles; it reconnects to the startup named pipe by name. Breakaway does
-not create a new Windows logon session and does not survive logoff. If the
-current job denies breakaway, `dure run` fails rather than starting a session
-that would die on disconnect.
+not create a new Windows logon session and does not survive logoff.
+
+```mermaid
+flowchart LR
+  subgraph launcher["launcher job (killed with the terminal)"]
+    client["dure client"]
+  end
+  subgraph session["session job (kill-on-close, breakaway permitted)"]
+    app["app"]
+    desc["descendants"]
+  end
+  supervisor["dure supervisor (detached, broken away)"]
+  client -. "spawns, then only talks over the pipe" .-> supervisor
+  supervisor --> session
+```
 
 After breaking away, the supervisor creates a non-inheritable job object with
 kill-on-close enabled. The app is created with both that job and the
 pseudoconsole in the process-attribute list, so it is born inside the lifetime
-boundary and attached to a console. Ordinary descendants inherit the job. The
-job permits explicit breakaway so a nested `dure run` can create an independent
-inner supervisor; other apps that deliberately request breakaway receive the
-same Windows behavior.
+boundary and attached to a console. Ordinary descendants inherit the job.
+
+## Job breakaway
+
+Breakaway is evaluated against the job a process is directly in, so the policy
+matters in two places and the PAL takes it as an explicit `Breakaway` parameter
+rather than a fixed choice.
+
+The **session job permits breakaway**, so a nested `dure run` inside the app can
+create an independent inner supervisor; other apps that deliberately request
+breakaway receive the same Windows behavior.
+
+The **launcher's job is not ours to choose**. A launcher that forbids breakaway
+would kill the supervisor along with itself, so `dure run` refuses to start a
+session it knows cannot outlive the terminal. `cargo run` is such a launcher, so
+`dure` is exercised as an installed binary, not through cargo.
+
+Diagnosing that refusal needs care, because Windows reports a denied breakaway as
+a plain access-denied failure from `CreateProcessW`. Only that error code, and
+only while the calling process is actually in a job, is reported as denied
+breakaway; every other failure keeps its own identity instead of being
+misattributed to a job policy. The resulting message names the job as the cause
+and tells the user to launch `dure.exe` directly.
+
+Tests would otherwise never see this path: a test that builds its own job to host
+a child naturally gives it the permissive policy, which is more permissive than
+any real launcher. The integration harness therefore offers both, and the
+regression test spawns `dure run` inside a job that forbids breakaway.
 
 ## Accept loop and steal
 
@@ -107,6 +201,20 @@ writing the current one. Steal does not depend on the old connection still being
 healthy. Connect attempts time out. A supervisor whose recorded process identity
 is still alive but never accepts stays listed; resume fails and `kill --id`
 still targets it.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Listening
+  Listening --> Attached: accept, then install under the attach lock
+  Attached --> Attached: new client steals the slot, old one is disconnected
+  Attached --> Stopping: app exits
+  Listening --> Stopping: app exits
+  Stopping --> [*]: exit status delivered, session record removed
+  note right of Stopping
+    claiming the slot and marking stopping
+    happen in one critical section
+  end note
+```
 
 `dure kill --id` opens the recorded pid, verifies the process creation time and
 running state, and terminates that process handle, then waits for the process to
@@ -218,12 +326,13 @@ otherwise passes the supervisor's own standard handle values on to the child,
 and the pseudoconsole attribute does not displace values that arrive that way,
 so the child would come up on pipes rather than on a console.
 
-SSH already wraps the remote shell in a pseudoconsole. `dure` adds a second one
-around the app. For a VT TUI such as Copilot CLI, that extra layer is not
-expected to remove features the same app already has over SSH without `dure`.
-HWND-based console features and terminal graphics protocols remain unavailable,
-as they already are under SSH. Occasional resize or line-wrap glitches are in
-the same class as SSH plus a pseudoconsole.
+The terminal the user sits at already presents a console: Windows Terminal
+through the console host, an SSH session through a pseudoconsole. `dure` adds a
+second one around the app. For a VT TUI such as Copilot CLI, that extra layer is
+not expected to remove features the same app already has in that terminal
+without `dure`. HWND-based console features and terminal graphics protocols
+remain unavailable, as they already are in those terminals. Occasional resize or
+line-wrap glitches are in the same class as any terminal plus a pseudoconsole.
 
 The client disables its own Ctrl+C handler and forwards the key, and switches its
 console to a raw relay. The restore is armed before the first of those changes

@@ -3,12 +3,14 @@
 //! Id allocation uses exclusive file creation so two concurrent `run`
 //! invocations cannot take the same id.
 
+use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::session_store::SessionStore;
+use crate::pal::session_store::windows::move_file_replace;
 use crate::session_id::SessionId;
 use crate::session_record::{ProcessIdentity, SessionRecord, StoredSession};
 
@@ -38,16 +40,7 @@ fn parse_record(bytes: &[u8], expected: SessionId) -> Result<Option<SessionRecor
 }
 
 fn replace_file(tmp: &Path, dest: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        use crate::pal::session_store::windows::move_file_replace;
-
-        move_file_replace(tmp, dest)
-    }
-    #[cfg(not(windows))]
-    {
-        fs::rename(tmp, dest)
-    }
+    move_file_replace(tmp, dest)
 }
 
 impl FsSessionStore {
@@ -240,7 +233,7 @@ impl SessionStore for FsSessionStore {
     }
 
     fn current_dir(&self) -> Result<PathBuf, PalError> {
-        std::env::current_dir().map_err(PalError::from_io)
+        env::current_dir().map_err(PalError::from_io)
     }
 }
 
@@ -483,22 +476,6 @@ mod tests {
         store.publish(&rec).unwrap();
         assert_eq!(store.list().unwrap(), vec![rec]);
         assert!(store.list_reservations().unwrap().is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
-    fn list_skips_a_name_that_is_not_text() {
-        use std::ffi::OsStr;
-        use std::os::unix::ffi::OsStrExt;
-
-        let (dir, store) = store();
-        // Nothing this store writes produces such a name, so it belongs to a
-        // foreign writer and cannot encode an id.
-        fs::write(dir.path().join(OsStr::from_bytes(b"\xffbad.json")), b"nope").unwrap();
-
-        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

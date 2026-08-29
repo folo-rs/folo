@@ -4,11 +4,7 @@
 //! Each argv element is quoted so spaces and embedded quotes survive that split.
 //! See <https://learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw>.
 
-// Used by the Windows process PAL. Unit tests cover quoting on every target.
-#![cfg_attr(
-    not(any(windows, test)),
-    expect(dead_code, reason = "CreateProcessW quoting is Windows PAL plus tests")
-)]
+use std::iter;
 
 /// Builds a Windows process command line from an executable and following argv.
 #[must_use]
@@ -47,7 +43,7 @@ pub(crate) fn quote_windows_arg(arg: &str) -> String {
             continue;
         }
         if ch == '"' {
-            quoted.extend(std::iter::repeat_n(
+            quoted.extend(iter::repeat_n(
                 '\\',
                 backslashes.saturating_mul(2).saturating_add(1),
             ));
@@ -55,11 +51,11 @@ pub(crate) fn quote_windows_arg(arg: &str) -> String {
             backslashes = 0;
             continue;
         }
-        quoted.extend(std::iter::repeat_n('\\', backslashes));
+        quoted.extend(iter::repeat_n('\\', backslashes));
         quoted.push(ch);
         backslashes = 0;
     }
-    quoted.extend(std::iter::repeat_n('\\', backslashes.saturating_mul(2)));
+    quoted.extend(iter::repeat_n('\\', backslashes.saturating_mul(2)));
     quoted.push('"');
     quoted
 }

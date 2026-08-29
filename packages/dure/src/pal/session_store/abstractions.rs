@@ -1,5 +1,6 @@
 //! Session store PAL: records, id allocation, and path canonicalization.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::pal::error::PalError;
@@ -12,7 +13,7 @@ use crate::session_record::{ProcessIdentity, SessionRecord};
 /// Tests supply an isolated root instead of the user's store.
 /// Ref: docs/implementation.md, PAL slicing and "Session store".
 #[cfg_attr(test, mockall::automock)]
-pub(crate) trait SessionStore: Send + Sync + std::fmt::Debug + 'static {
+pub(crate) trait SessionStore: Send + Sync + fmt::Debug + 'static {
     /// Directory that holds session record files.
     #[cfg(test)]
     fn root(&self) -> PathBuf;

@@ -1,5 +1,6 @@
 //! Process, job, and supervisor-spawn PAL.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::pal::error::PalError;
@@ -11,10 +12,6 @@ use crate::session_record::ProcessIdentity;
 #[non_exhaustive]
 pub(crate) enum ProcessLiveness {
     /// The same process is still running.
-    #[cfg_attr(
-        not(any(windows, test)),
-        expect(dead_code, reason = "produced by the Windows process PAL and tests")
-    )]
     Live,
     /// Missing, exited, or pid reused by a different process.
     Dead,
@@ -22,12 +19,23 @@ pub(crate) enum ProcessLiveness {
     InspectFailed,
 }
 
+/// Whether a job object lets its members create processes that escape it.
+///
+/// Ref: docs/implementation.md, "Job breakaway".
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Breakaway {
+    /// A member may escape the job by asking for breakaway at creation time.
+    Permitted,
+    /// Members and everything they spawn stay confined to the job.
+    ///
+    /// `dure` never confines a session this way. Only the integration harness
+    /// builds such a job, to model the launchers `dure run` must refuse.
+    #[cfg(any(test, feature = "private-test-util"))]
+    Forbidden,
+}
+
 /// Request to spawn a console-detached supervisor with job breakaway.
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    not(windows),
-    expect(dead_code, reason = "fields are read by the Windows process PAL")
-)]
 pub(crate) struct SupervisorSpawn {
     /// Path of this `dure` binary.
     pub exe: PathBuf,
@@ -37,10 +45,6 @@ pub(crate) struct SupervisorSpawn {
 
 /// Request to spawn the app attached to a pseudoconsole and lifetime job.
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    not(windows),
-    expect(dead_code, reason = "fields are read by the Windows process PAL")
-)]
 pub(crate) struct AppSpawn {
     /// Command argv.
     pub command: Vec<String>,
@@ -54,9 +58,9 @@ pub(crate) struct AppSpawn {
 
 /// Spawn a detached supervisor, identify processes, own the app-lifetime job.
 ///
-/// Ref: docs/implementation.md, PAL slicing and "SSH survival".
+/// Ref: docs/implementation.md, PAL slicing and "Detached supervisor".
 #[cfg_attr(test, mockall::automock)]
-pub(crate) trait Processes: Send + Sync + std::fmt::Debug + 'static {
+pub(crate) trait Processes: Send + Sync + fmt::Debug + 'static {
     /// Path of the current executable, used to re-spawn as supervisor.
     fn current_exe(&self) -> Result<PathBuf, PalError>;
 
@@ -93,10 +97,6 @@ pub(crate) trait Processes: Send + Sync + std::fmt::Debug + 'static {
 /// A bare name is left alone here and resolved through the platform's
 /// executable search order when the app is spawned.
 #[must_use]
-#[cfg_attr(
-    not(any(windows, test)),
-    expect(dead_code, reason = "used by the Windows process PAL and unit tests")
-)]
 pub(crate) fn resolve_command_path(command: &str, launch_directory: &Path) -> PathBuf {
     let path = Path::new(command);
     if path.is_absolute() {

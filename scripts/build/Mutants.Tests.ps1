@@ -39,12 +39,21 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'packages/cbh_detect/src/detect/examples.rs'
         $values | Should -Contain 'packages/cbh_detect/src/detect/scatter.rs'
         $values | Should -Contain 'packages/dure/src/pal/*/windows.rs'
-        $values | Should -Contain 'packages/dure/src/pal/*/unsupported.rs'
         $values | Should -Contain 'packages/dure/src/pal/*/memory.rs'
         $values | Should -Contain 'packages/dure/src/pal/raw_handle.rs'
         $values | Should -Contain 'packages/dure/src/outbox.rs'
-        $values | Should -Contain 'packages/dure/src/bin/dure_test_helper.rs'
+        $values | Should -Contain 'packages/dure-test-helper/**/*.rs'
         $values | Should -Contain 'packages/dure/src/test_support.rs'
+    }
+
+    It 'excludes the whole Windows-only dure package off Windows' {
+        $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $false -IsLinuxPlatform $true)
+        $values | Should -Contain "'packages/dure/**/*.rs'"
+    }
+
+    It 'keeps the dure package in scope on Windows' {
+        $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $true -IsLinuxPlatform $false)
+        $values | Should -Not -Contain 'packages/dure/**/*.rs'
     }
 
     It 'does not exclude windows sources when running on Windows' {

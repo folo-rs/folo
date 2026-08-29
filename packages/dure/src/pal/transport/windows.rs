@@ -1,6 +1,7 @@
 //! Windows named-pipe transport.
 
 use std::collections::HashMap;
+use std::iter;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -90,7 +91,7 @@ fn close(handle: HANDLE) {
 }
 
 fn wide_z(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
+    s.encode_utf16().chain(iter::once(0)).collect()
 }
 
 // Kernel buffer for each direction. Sized for a typical console burst so a

@@ -1,6 +1,6 @@
 [package]
 name = "dure"
-description = "Detachable Windows console sessions that survive SSH disconnect"
+description = "Detachable Windows console sessions that outlive the terminal"
 publish = false
 version = "0.1.0"
 
@@ -15,6 +15,11 @@ include = ["Cargo.toml", "README.md", "docs/**/*", "src/**/*"]
 [package.metadata.docs.rs]
 all-features = true
 
+# The Windows integration tests are gated behind `private-test-util`, so a default-feature build
+# compiles none of them and the helper they drive looks unused. Same reason as `many_cpus`.
+[package.metadata.cargo-udeps.ignore]
+development = ["dure-test-helper"]
+
 # Baseline of external types intentionally exposed in the public API. Any new
 # external type here trips the check so accidental exposures are caught.
 # Ref: docs/external-types.md.
@@ -27,24 +32,21 @@ allowed_external_types = [
     "ohno::app::error::AppError",
 ]
 
-[[bin]]
-name = "dure-test-helper"
-path = "src/bin/dure_test_helper.rs"
-required-features = ["private-test-util"]
-
 [features]
-# Builds the helper child used by Windows integration tests. Not part of the product.
+# Exposes the in-crate test support the Windows integration tests drive the real
+# PAL through. Not part of the product.
 private-test-util = []
 
-[dependencies]
+# Every dependency is Windows-only because the crate itself is: a non-Windows build compiles to an
+# empty stub (docs/implementation.md, "Platform gate"), so declaring them unconditionally would
+# make them genuinely unused there.
+[target.'cfg(windows)'.dependencies]
 clap = { workspace = true, features = ["derive"] }
 mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
+rand = { workspace = true, features = ["thread_rng"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-
-[target.'cfg(windows)'.dependencies]
-rand = { workspace = true, features = ["thread_rng"] }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -59,7 +61,8 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell",
 ] }
 
-[dev-dependencies]
+[target.'cfg(windows)'.dev-dependencies]
+dure-test-helper = { path = "../dure-test-helper" }
 mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }

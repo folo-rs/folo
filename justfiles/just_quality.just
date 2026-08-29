@@ -30,7 +30,11 @@ coverage-measure:
     # meaningful. The benches are exercised separately (a "does it still build and run"
     # smoke check) through the `test-benches` recipe, which runs them via `cargo test
     # --benches`.
-    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --lib --bins --tests --examples --no-report --all-features --locked
+    #
+    # `--no-tests=pass` for the same reason as the `test` recipe: a package that supports only
+    # some platforms contributes no tests on the others, and selective validation can narrow a
+    # run down to exactly such a package.
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --lib --bins --tests --examples --no-report --all-features --locked --no-tests=pass
 
 # This tool needs a different way to specify the package.
 coverage-package := if package == "" { "" } else { "-p " + replace(package, " ", " -p ") }

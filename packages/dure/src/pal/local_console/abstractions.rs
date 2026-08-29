@@ -1,17 +1,12 @@
 //! Local console PAL used by the client process.
 
+use std::fmt;
+
 use crate::pal::error::PalError;
 use crate::pal::pseudoconsole::WindowSize;
 
 /// One blocking read from the local console during attach.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    all(not(windows), not(test)),
-    expect(
-        dead_code,
-        reason = "variants are constructed by the Windows console PAL and by tests"
-    )
-)]
 pub(crate) enum ConsoleInput {
     /// VT or key bytes to forward as [`crate::protocol::Message::Input`].
     Bytes(Vec<u8>),
@@ -23,7 +18,7 @@ pub(crate) enum ConsoleInput {
 ///
 /// Ref: docs/implementation.md, PAL slicing.
 #[cfg_attr(test, mockall::automock)]
-pub(crate) trait LocalConsole: Send + Sync + std::fmt::Debug + 'static {
+pub(crate) trait LocalConsole: Send + Sync + fmt::Debug + 'static {
     /// Whether this process is attached to a console.
     fn has_console(&self) -> bool;
 

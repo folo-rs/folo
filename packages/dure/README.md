@@ -1,14 +1,17 @@
 # dure
 
-Detachable Windows console sessions that survive SSH disconnect.
+Detachable Windows console sessions that outlive the terminal.
 
-`dure` starts an interactive console process under a per-app supervisor so the
-process keeps running after the SSH session that launched it ends. A later SSH
-session can attach to the same process. The crate is unpublished; install from
-this workspace with `cargo install --path packages/dure`.
+`dure` starts an interactive console process under a per-app supervisor, so the
+process keeps running after the terminal that launched it goes away — a closed
+window, a dropped SSH connection, or a killed foreground process. A later
+terminal attaches to the same process.
 
-Runtime support is Windows only. The crate still compiles on other targets; the
-binary exits with an error there.
+`dure` is a Windows tool and builds only for Windows targets.
+
+```text
+cargo binstall dure
+```
 
 ## Usage
 

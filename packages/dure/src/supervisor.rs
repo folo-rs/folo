@@ -2,12 +2,13 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ohno::AppError;
 
+use crate::constants::{CONNECT_TIMEOUT, DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS};
 use crate::outbox::Outbox;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, ConnId, JobId, ListenerId, PtyId};
@@ -26,8 +27,8 @@ use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError
 /// attach always resizes to the client's real size (design.md, "Attach, detach,
 /// steal").
 const DEFAULT_PTY_SIZE: WindowSize = WindowSize {
-    cols: crate::constants::DEFAULT_PTY_COLS,
-    rows: crate::constants::DEFAULT_PTY_ROWS,
+    cols: DEFAULT_PTY_COLS,
+    rows: DEFAULT_PTY_ROWS,
 };
 
 /// Resources that must be torn down if initialization fails.
@@ -82,7 +83,7 @@ where
     C: Pseudoconsole + Clone + Send + Sync + 'static,
 {
     let startup = transport
-        .connect(startup_pipe, crate::constants::CONNECT_TIMEOUT)
+        .connect(startup_pipe, CONNECT_TIMEOUT)
         .map_err(|_error| StartupFailedError::new())?;
 
     let mut guard = InitGuard {
@@ -275,7 +276,7 @@ struct FirstAttach {
 }
 
 impl<T: Transport, C> Shared<T, C> {
-    fn first_attach(&self) -> std::sync::MutexGuard<'_, FirstAttach> {
+    fn first_attach(&self) -> MutexGuard<'_, FirstAttach> {
         self.first_attach
             .lock()
             .expect("first-attach flags are only set, never held across a panic")
@@ -310,7 +311,7 @@ impl<T: Transport, C> Shared<T, C> {
         }
     }
 
-    fn client(&self) -> std::sync::MutexGuard<'_, Option<Client<T>>> {
+    fn client(&self) -> MutexGuard<'_, Option<Client<T>>> {
         self.client
             .lock()
             .expect("client slot is only copied or replaced, never held across a panic")
@@ -722,9 +723,7 @@ mod tests {
             transport.disconnect(startup_conn);
 
             let pipe = transport.pipe_name("nonce");
-            let first = transport
-                .connect(&pipe, crate::constants::CONNECT_TIMEOUT)
-                .unwrap();
+            let first = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
             transport
                 .send(first, &Message::Attach { cols: 80, rows: 24 })
                 .unwrap();
@@ -733,9 +732,7 @@ mod tests {
                 Message::Attached { session_id: id } if id == session_id
             ));
 
-            let second = transport
-                .connect(&pipe, crate::constants::CONNECT_TIMEOUT)
-                .unwrap();
+            let second = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
             transport
                 .send(
                     second,
@@ -799,10 +796,7 @@ mod tests {
             transport.disconnect(startup_conn);
 
             let client = transport
-                .connect(
-                    &transport.pipe_name("nonce"),
-                    crate::constants::CONNECT_TIMEOUT,
-                )
+                .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
             transport
                 .send(client, &Message::Attach { cols: 80, rows: 24 })
@@ -871,10 +865,7 @@ mod tests {
             // The startup connection stays open, which is what holds the
             // session up for the attach that `dure run` is about to make.
             let client = transport
-                .connect(
-                    &transport.pipe_name("nonce"),
-                    crate::constants::CONNECT_TIMEOUT,
-                )
+                .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
             transport
                 .send(client, &Message::Attach { cols: 80, rows: 24 })
@@ -1013,9 +1004,7 @@ mod tests {
     /// Connected pair as `(supervisor side, client side)`.
     fn connected_pair(transport: &MemoryTransport, name: &str) -> (ConnId, ConnId) {
         let listener = transport.listen(name).unwrap();
-        let client = transport
-            .connect(name, crate::constants::CONNECT_TIMEOUT)
-            .unwrap();
+        let client = transport.connect(name, CONNECT_TIMEOUT).unwrap();
         let supervisor = transport.accept(listener).unwrap();
         (supervisor, client)
     }

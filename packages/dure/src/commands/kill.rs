@@ -2,11 +2,11 @@
 
 use ohno::AppError;
 
-use crate::KillFailedError;
 use crate::gc::require_live_session;
 use crate::pal::processes::Processes;
 use crate::pal::session_store::SessionStore;
 use crate::session_id::SessionId;
+use crate::{KillFailedError, StoreError};
 
 /// Abruptly terminate the recorded supervisor process.
 pub(crate) fn execute(
@@ -21,7 +21,7 @@ pub(crate) fn execute(
         .map_err(|_error| KillFailedError::for_id(id))?;
     store
         .delete_owned_by(id, &identity)
-        .map_err(|_error| crate::StoreError::new())?;
+        .map_err(|_error| StoreError::new())?;
     Ok(())
 }
 

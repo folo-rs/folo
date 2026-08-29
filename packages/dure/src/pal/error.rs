@@ -3,13 +3,14 @@
 //! Logic maps these into semantic `ohno` leaves. Tests match on `kind`, not
 //! messages.
 
-use std::fmt;
+use std::error::Error;
+use std::{fmt, io};
 
 /// Failure produced by a PAL operation.
 #[derive(Debug)]
 pub(crate) struct PalError {
     kind: PalErrorKind,
-    source: Option<std::io::Error>,
+    source: Option<io::Error>,
 }
 
 /// Distinguishes PAL failures that logic handles differently.
@@ -19,22 +20,10 @@ pub(crate) enum PalErrorKind {
     /// A bounded connect wait elapsed.
     Timeout,
     /// Job breakaway was denied.
-    #[cfg_attr(
-        not(any(windows, test)),
-        expect(dead_code, reason = "produced by the Windows process PAL and tests")
-    )]
     BreakawayDenied,
     /// Opening or querying a process handle failed.
-    #[cfg_attr(
-        not(windows),
-        expect(dead_code, reason = "produced by the Windows process PAL")
-    )]
     InspectFailed,
     /// The requested object does not exist.
-    #[cfg_attr(
-        not(any(windows, test)),
-        expect(dead_code, reason = "produced by the Windows PAL and tests")
-    )]
     NotFound,
     /// The peer closed the connection.
     Disconnected,
@@ -47,7 +36,7 @@ impl PalError {
         Self { kind, source: None }
     }
 
-    pub(crate) fn with_source(kind: PalErrorKind, source: std::io::Error) -> Self {
+    pub(crate) fn with_source(kind: PalErrorKind, source: io::Error) -> Self {
         Self {
             kind,
             source: Some(source),
@@ -58,11 +47,11 @@ impl PalError {
         self.kind
     }
 
-    pub(crate) fn from_io(error: std::io::Error) -> Self {
+    pub(crate) fn from_io(error: io::Error) -> Self {
         let kind = match error.kind() {
-            std::io::ErrorKind::BrokenPipe
-            | std::io::ErrorKind::ConnectionReset
-            | std::io::ErrorKind::UnexpectedEof => PalErrorKind::Disconnected,
+            io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::UnexpectedEof => PalErrorKind::Disconnected,
             _ => PalErrorKind::Other,
         };
         Self::with_source(kind, error)
@@ -89,8 +78,8 @@ impl fmt::Display for PalError {
 // Source chaining is not an API contract.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(test, mutants::skip)]
-impl std::error::Error for PalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for PalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self.source.as_ref() {
             Some(error) => Some(error),
             None => None,
@@ -105,16 +94,13 @@ mod tests {
 
     #[test]
     fn from_io_maps_broken_pipe_to_disconnected() {
-        let error = PalError::from_io(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            "closed",
-        ));
+        let error = PalError::from_io(io::Error::new(io::ErrorKind::BrokenPipe, "closed"));
         assert_eq!(error.kind(), PalErrorKind::Disconnected);
     }
 
     #[test]
     fn from_io_maps_other_kinds_to_other() {
-        let error = PalError::from_io(std::io::Error::other("platform"));
+        let error = PalError::from_io(io::Error::other("platform"));
         assert_eq!(error.kind(), PalErrorKind::Other);
     }
 }

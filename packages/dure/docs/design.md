@@ -1,47 +1,48 @@
 # dure design
 
-`dure` keeps an interactive Windows console process running after the SSH session
-that started it disconnects, and reattaches a later SSH session to that same
-process. It is a per-app supervisor, not a multiplexed server.
+`dure` keeps an interactive Windows console process running after the terminal
+that started it goes away, and reattaches a later terminal to that same process.
+It is a per-app supervisor, not a multiplexed server.
 
-The crate is unpublished. Install from this workspace with
-`cargo install --path packages/dure`.
+Closing a terminal window, dropping an SSH connection, and killing the
+foreground process are one event to `dure`: the client is gone and the app keeps
+running. SSH is the mainstream case, not a privileged one.
 
 ## Tenets
 
-* **Survive disconnect, not logoff.** Dropping SSH does not stop the app. A
-  Windows logoff or reboot does.
+* **Survive losing the terminal, not logoff.** A closed window, a dropped SSH
+  connection, or a killed client does not stop the app. A Windows logoff or
+  reboot does.
 * **One supervisor per app.** There is no shared daemon. Supervisors coordinate
   through per-user files on the machine.
 * **Transparent once attached.** After attach, keyboard and console I/O are a
   direct funnel. No prefix key, no in-band detach, no `dure` UI inside the app.
-* **Detach is losing the client.** Closing the SSH session, closing the terminal,
-  or otherwise killing the foreground `dure` process leaves the supervisor and
-  app running.
+* **Detach is losing the client.** Anything that kills the foreground `dure`
+  process leaves the supervisor and app running.
 * **Resume is not a replay.** Attach does not reconstruct prior screen contents.
   The new client sees an empty screen, then live bytes.
 * **Latest client wins.** A new successful attach becomes the sole live console
-  and disconnects any older client. That is how a wedged SSH session is
-  displaced. There is no separate `--force` flag.
+  and disconnects any older client. That is how a wedged client is displaced.
+  There is no separate `--force` flag.
 
 ## Roles
 
 ```mermaid
 flowchart LR
-  terminal[SSH terminal] --> client[dure client]
+  terminal[terminal] --> client[dure client]
   client <--> supervisor[dure supervisor]
   supervisor --> app[app]
 ```
 
 * **App** — the command given to `dure run`.
 * **Supervisor** — a hidden `dure` process that owns the app and its console and
-  outlives SSH. The user never launches this role directly.
-* **Client** — the foreground `dure` in the SSH session (`run` or `resume`) that
+  outlives the terminal. The user never launches this role directly.
+* **Client** — the foreground `dure` in the terminal (`run` or `resume`) that
   relays the user's console to the supervisor.
 
 `dure run -- copilot.exe` starts a supervisor, starts the app under it, and
-attaches this client. If SSH dies, the client dies; the supervisor and app do
-not.
+attaches this client. When the terminal goes away the client dies with it; the
+supervisor and app do not.
 
 ## Commands
 
@@ -54,8 +55,12 @@ do not update on a later resume. Relative command paths are resolved against
 that launch directory, and a bare command name is looked up on the executable
 search path, as a shell would.
 
-If the process cannot be kept alive across SSH disconnect, `dure run` fails
-instead of starting a session that would die on disconnect.
+A session must be able to outlive the process that launched it. Some launchers
+confine their children to a Windows job object that forbids breakaway and kills
+everything in it when the launcher exits; `cargo run` is one. Started from such
+a launcher, `dure run` fails outright, naming that cause, rather than starting a
+session that would die with the launcher. Ordinary shells, including the one an
+SSH session provides, permit breakaway.
 
 An app that exits before `dure run` has finished attaching still reports its
 output and exit status. Only if the `dure run` process itself goes away first is
@@ -68,8 +73,8 @@ that live session and skips auto-detect.
 client is currently attached, supervisor pid. A record is discarded only when
 the same supervisor process is gone; reuse of its numeric process id by another
 process does not keep the record live. Attached means the supervisor still has
-a client connection; a hung SSH client may still appear attached. Resume
-steals anyway.
+a client connection; a hung client may still appear attached. Resume steals
+anyway.
 
 `dure kill --id <id>` abruptly terminates the supervisor process for that
 session. The app and its ordinary descendants die with it. `--id` is required;
@@ -155,14 +160,16 @@ TUI, skip color, or refuse to run. Interactive tools such as Copilot CLI need
 the console case.
 
 From the app's side this is a console. From the supervisor's side it is bytes
-plus window size, which the attached client relays to the user's SSH terminal.
+plus window size, which the attached client relays to the user's terminal.
 The app's stdout and stderr are one console stream.
 
-SSH already wraps the remote shell in a Windows pseudoconsole. `dure` adds
-another around the app. For a VT TUI such as Copilot CLI, that extra layer is
-not expected to remove features the same app already has over SSH without
-`dure`. What SSH already cannot provide (a real console window, graphics
-protocols, console font and selection chrome) stays unavailable.
+The terminal the user sits at already presents the app with a console: Windows
+Terminal through the console host, an SSH session through a pseudoconsole.
+`dure` adds one more around the app. For a VT TUI such as Copilot CLI, that
+extra layer is not expected to remove features the same app already has in that
+terminal without `dure`. What the terminal itself cannot provide (a real console
+window, graphics protocols, console font and selection chrome) stays
+unavailable.
 
 `dure` writes diagnostics to stderr only while it is not attached. Before
 attach, `run` and `resume` print the session id so the user can `kill` or
@@ -176,16 +183,15 @@ resume id prompt additionally requires a terminal stdin; without one, `resume`
 without `--id` fails.
 
 A console is the Windows console-host API: handles, modes, and window size. A
-terminal is the visible emulator (Windows Terminal, the SSH client) that
-renders VT. `dure` attaches to a console and relays bytes to whatever terminal
-the SSH session already uses.
+terminal is the visible emulator (Windows Terminal, an SSH client) that renders
+VT. `dure` attaches to a console and relays bytes to whatever terminal the user
+is already sitting at.
 
 ## Lifetime
 
 | Event | App | Supervisor | Client |
 | --- | --- | --- | --- |
-| SSH disconnect or client killed | running | running | dead |
-| Terminal closed | running | running | dead |
+| Terminal closed, SSH dropped, or client killed | running | running | dead |
 | App exits | dead | exits after cleanup | app status if attached |
 | Logoff or reboot | dead | dead | dead |
 | New attach | running | running | previous client disconnected |
@@ -198,10 +204,10 @@ dies, they die with it. Supervisors do not orphan apps.
 Sessions are a flat list. A `dure run` issued from inside an attached session
 (for example the app is a shell) starts another ordinary session. Killing or
 detaching one does not cascade to the other: the inner supervisor has already
-broken away, which is the same rule as SSH disconnect applied twice.
+broken away, which is the same rule as losing a terminal, applied twice.
 
-A machine configured to log off the user when SSH disconnects makes the product
-impossible; `dure` cannot outlive a logoff.
+A machine configured to log the user off when their interactive session ends
+makes the product impossible; `dure` cannot outlive a logoff.
 
 ## Isolation
 
@@ -213,14 +219,12 @@ Command lines appear in `list` output. Secrets do not belong on the app argv.
 
 ## Distribution
 
-Published crate and binary name: `dure`. Publication is currently disabled;
-once the crate is published it is intended to use the same `cargo binstall`
-URL contract as the other published binaries in this repository. Until then,
-install from this workspace with `cargo install --path packages/dure`.
+Crate and binary name: `dure`, published to crates.io and installed with
+`cargo binstall dure` under the same prebuilt-archive contract as the other
+published binaries in this repository.
 
-Runtime support is Windows only. The crate still compiles on the rest of the
-workspace target matrix so CI stays unified; a non-Windows binary exits with an
-error.
+`dure` is a Windows tool. On other targets the binary is an empty stub with no
+behavior.
 
 ## Screen contents
 

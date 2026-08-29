@@ -18,11 +18,6 @@ macro_rules! unwind_safe {
     };
 }
 
-/// Runtime support is Windows only.
-#[ohno::error]
-#[display("dure runs only on Windows")]
-pub(crate) struct UnsupportedPlatformError;
-
 /// Attaching requires a console.
 #[ohno::error]
 #[display("Attaching requires a console")]
@@ -77,9 +72,13 @@ impl KillFailedError {
     }
 }
 
-/// The current job denied breakaway, so the session would die on SSH disconnect.
+/// The launcher's job denied breakaway, so the session could not outlive it.
 #[ohno::error]
-#[display("The current job does not allow process breakaway")]
+#[display(
+    "Cannot start a durable session: this process belongs to a Windows job object that \
+     forbids breakaway, so the supervisor would be killed together with the launcher. \
+     Launch dure.exe directly instead of through a wrapper such as `cargo run`."
+)]
 pub(crate) struct BreakawayDeniedError;
 
 /// Supervisor initialization failed.
@@ -137,7 +136,6 @@ pub(crate) struct RelayFailedError;
 pub(crate) struct InvalidSessionIdError;
 
 unwind_safe!(
-    UnsupportedPlatformError,
     NoConsoleError,
     EmptyCommandError,
     NoLiveSessionsError,
@@ -181,13 +179,7 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(
-        UnsupportedPlatformError: Send,
-        Sync,
-        Debug,
-        UnwindSafe,
-        RefUnwindSafe
-    );
+    assert_impl_all!(NoConsoleError: Send, Sync, Debug, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn parse_prompted_id_rejects_zero_and_garbage() {

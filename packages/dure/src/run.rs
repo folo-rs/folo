@@ -2,21 +2,18 @@
 
 use ohno::AppError;
 
-use crate::commands;
 use crate::pal::Pal;
-use crate::platform::ensure_supported_platform;
 use crate::types::{Command, Outcome, RunInput};
+use crate::{PalFailedError, commands};
 
 /// Executes a parsed `dure` invocation.
 ///
 /// # Errors
 ///
-/// Returns an error when the platform is not Windows, when a session cannot be
-/// started, resumed, listed, or killed, or when attach is displaced.
+/// Returns an error when a session cannot be started, resumed, listed, or
+/// killed, or when attach is displaced.
 pub fn run(input: &RunInput) -> Result<Outcome, AppError> {
-    ensure_supported_platform()?;
-    let pal =
-        Pal::target(input.store_root.clone()).map_err(|_error| crate::PalFailedError::new())?;
+    let pal = Pal::target(input.store_root.clone()).map_err(|_error| PalFailedError::new())?;
     dispatch(input, &pal)
 }
 
@@ -65,6 +62,8 @@ pub(crate) fn dispatch(input: &RunInput, pal: &Pal) -> Result<Outcome, AppError>
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::SessionNotFoundError;
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
@@ -120,7 +119,7 @@ mod tests {
                 supervisor_pid: 10,
                 supervisor_creation_time: 100,
                 pipe_name: "pipe".to_string(),
-                launch_directory: std::path::PathBuf::from("/work"),
+                launch_directory: PathBuf::from("/work"),
                 command: vec!["app.exe".to_string()],
                 started_at_unix_ms: 1,
                 attached: false,

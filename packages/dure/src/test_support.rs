@@ -1,9 +1,13 @@
 //! Helpers for Windows integration tests. Not part of the product.
 
 use std::path::Path;
+use std::thread;
 
+use crate::constants::{DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS};
 use crate::pal::ids::{AppId, JobId, PtyId};
-use crate::pal::processes::{AppSpawn, Processes, ProcessesFacade};
+use crate::pal::processes::{
+    AppSpawn, Breakaway, BuildTargetProcesses, Processes, ProcessesFacade,
+};
 use crate::pal::pseudoconsole::{Pseudoconsole, PseudoconsoleFacade, WindowSize};
 
 /// A process started inside a test-owned pseudoconsole.
@@ -22,17 +26,32 @@ pub struct ConsoleProcess {
 
 impl ConsoleProcess {
     /// Spawn `exe` with `args` in `cwd`, attached to a new `ConPTY`.
+    ///
+    /// The surrounding job permits breakaway, which models the shell an SSH
+    /// session provides (implementation.md, "Job breakaway").
     #[must_use]
     pub fn spawn(exe: &Path, args: &[String], cwd: &Path) -> Self {
+        Self::spawn_with(exe, args, cwd, Breakaway::Permitted)
+    }
+
+    /// Spawn `exe` the way a launcher that confines its children would.
+    ///
+    /// The surrounding job forbids breakaway, which models wrappers such as
+    /// `cargo run` that `dure run` must refuse to detach from
+    /// (implementation.md, "Job breakaway").
+    #[must_use]
+    pub fn spawn_confined(exe: &Path, args: &[String], cwd: &Path) -> Self {
+        Self::spawn_with(exe, args, cwd, Breakaway::Forbidden)
+    }
+
+    fn spawn_with(exe: &Path, args: &[String], cwd: &Path, breakaway: Breakaway) -> Self {
         let processes = ProcessesFacade::target();
         let pty_host = PseudoconsoleFacade::target();
-        let job = processes
-            .create_lifetime_job()
-            .expect("create test lifetime job");
+        let job = BuildTargetProcesses::create_job(breakaway).expect("create test job");
         let pty = pty_host
             .create(WindowSize {
-                cols: crate::constants::DEFAULT_PTY_COLS,
-                rows: crate::constants::DEFAULT_PTY_ROWS,
+                cols: DEFAULT_PTY_COLS,
+                rows: DEFAULT_PTY_ROWS,
             })
             .expect("create test pseudoconsole");
         let mut command = Vec::with_capacity(args.len().saturating_add(1));
@@ -77,7 +96,7 @@ impl ConsoleProcess {
     /// pseudoconsole cannot block on a full pipe while this wait runs.
     #[must_use]
     pub fn wait(mut self) -> i32 {
-        let drain = std::thread::spawn({
+        let drain = thread::spawn({
             let pty_host = self.pty_host.clone();
             let pty = self.pty;
             move || loop {

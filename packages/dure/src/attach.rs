@@ -6,6 +6,7 @@ use std::thread;
 
 use ohno::AppError;
 
+use crate::constants::CONNECT_TIMEOUT;
 use crate::pal::error::PalErrorKind;
 use crate::pal::ids::ConnId;
 use crate::pal::local_console::{ConsoleInput, LocalConsole};
@@ -47,7 +48,7 @@ where
         .window_size()
         .map_err(|_error| PalFailedError::new())?;
 
-    let conn = match transport.connect(pipe_name, crate::constants::CONNECT_TIMEOUT) {
+    let conn = match transport.connect(pipe_name, CONNECT_TIMEOUT) {
         Ok(conn) => conn,
         Err(error) if error.kind() == PalErrorKind::Timeout => {
             return Err(ResumeTimeoutError::for_id(session_id).into());

@@ -1,5 +1,6 @@
 //! Windows local console PAL.
 
+use std::io;
 use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
@@ -293,7 +294,7 @@ impl LocalConsole for BuildTargetConsole {
 
     fn read_prompt_line(&self) -> Result<String, PalError> {
         let mut line = String::new();
-        std::io::stdin()
+        io::stdin()
             .read_line(&mut line)
             .map_err(PalError::from_io)?;
         Ok(line.trim_end_matches(['\r', '\n']).to_string())

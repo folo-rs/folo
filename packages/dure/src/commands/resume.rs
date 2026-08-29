@@ -4,7 +4,7 @@ use ohno::AppError;
 
 use crate::attach::attach;
 use crate::detect::{DetectOutcome, auto_detect};
-use crate::gc::live_sessions;
+use crate::gc::{live_sessions, require_live_session};
 use crate::list_fmt::format_list;
 use crate::pal::local_console::LocalConsole;
 use crate::pal::processes::Processes;
@@ -34,7 +34,7 @@ where
     C: LocalConsole + Clone + Send + Sync + 'static,
 {
     let record = match id {
-        Some(id) => crate::gc::require_live_session(store, processes, id)?,
+        Some(id) => require_live_session(store, processes, id)?,
         None => {
             let live = live_sessions(store, processes)?;
             let id = resolve_auto(store, console, &live, verbose)?;

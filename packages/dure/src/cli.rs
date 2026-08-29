@@ -6,6 +6,7 @@
 use std::num::NonZero;
 use std::path::PathBuf;
 
+use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 
 use crate::constants::SUPERVISOR_COMMAND;
@@ -20,7 +21,7 @@ use crate::types::{Command, RunInput};
 #[derive(Debug, Parser)]
 #[command(
     name = "dure",
-    about = "Detachable Windows console sessions that survive SSH disconnect.",
+    about = "Detachable Windows console sessions that outlive the terminal.",
     disable_version_flag = true
 )]
 pub struct Cli {
@@ -94,7 +95,6 @@ pub struct EarlyExit {
 
 impl EarlyExit {
     fn from_clap(error: &clap::Error) -> Self {
-        use clap::error::ErrorKind;
         let success = matches!(
             error.kind(),
             ErrorKind::DisplayHelp

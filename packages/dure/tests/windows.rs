@@ -2,6 +2,7 @@
 
 #![cfg(all(windows, feature = "private-test-util"))]
 
+use std::fs;
 use std::path::PathBuf;
 
 use dure::test_support::ConsoleProcess;
@@ -13,12 +14,7 @@ fn dure_exe() -> PathBuf {
 }
 
 fn helper_exe() -> PathBuf {
-    // Cargo writes every binary from this package next to `CARGO_BIN_EXE_dure`.
-    // The helper is a second `[[bin]]` in the same package, so replacing the
-    // file name is the path Cargo emits.
-    let mut path = PathBuf::from(env!("CARGO_BIN_EXE_dure"));
-    path.set_file_name("dure-test-helper.exe");
-    path
+    PathBuf::from(dure_test_helper::binary_path())
 }
 
 /// Introducer for CSI, OSC, and other ECMA-48 sequences.
@@ -63,12 +59,22 @@ fn visible_text(bytes: &[u8]) -> String {
     text
 }
 
+/// Text with all whitespace removed.
+///
+/// `ConPTY` wraps output at the window width and can break a line in the middle
+/// of a word, so ignoring whitespace is the only stable way to look for a
+/// phrase in console output.
+fn without_whitespace(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
 fn collect_until(console: &ConsoleProcess, needle: &str) -> String {
+    let wanted = without_whitespace(needle);
     let mut collected = Vec::new();
     loop {
         collected.extend(console.read_output());
         let text = visible_text(&collected);
-        if text.contains(needle) {
+        if without_whitespace(&text).contains(&wanted) {
             return text;
         }
     }
@@ -168,7 +174,7 @@ fn helper_sees_a_console() {
         client.write_input(b"x\r\n");
         let status = client.wait();
         assert_eq!(status, 0);
-        let report = std::fs::read_to_string(dir.path().join("console-status.txt"))
+        let report = fs::read_to_string(dir.path().join("console-status.txt"))
             .expect("helper console status file");
         assert_eq!(report, "console");
     });
@@ -208,5 +214,40 @@ fn a_dropped_client_leaves_the_app_resumable() {
         resumed.write_input(b"x\r\n");
         let status = resumed.wait();
         assert_eq!(status, SAMPLE_NONZERO_EXIT);
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn run_refuses_a_launcher_that_forbids_breakaway() {
+    with_watchdog(|| {
+        let dir = TempDir::new().unwrap();
+        let helper = helper_exe();
+        let args = vec![
+            "--store-root".to_string(),
+            dir.path().display().to_string(),
+            "run".to_string(),
+            "--".to_string(),
+            helper.display().to_string(),
+            "wait-exit".to_string(),
+            SAMPLE_NONZERO_EXIT.to_string(),
+        ];
+        // Models a wrapper such as `cargo run`, whose job would kill the
+        // supervisor along with the client it launched.
+        let client = ConsoleProcess::spawn_confined(&dure_exe(), &args, dir.path());
+        let output = collect_until(&client, "forbids breakaway");
+        let status = client.wait();
+        assert_ne!(status, 0, "client output: {output:?}");
+        assert!(
+            !output.contains("session "),
+            "a refused launch must not report a session, got {output:?}"
+        );
+        // Nothing may be left behind for `resume` or `list` to find.
+        let records = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(records.is_empty(), "store must stay empty, got {records:?}");
     });
 }

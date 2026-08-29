@@ -1,6 +1,7 @@
 //! In-memory pseudoconsole for unit tests.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -27,8 +28,8 @@ pub(crate) struct MemoryPseudoconsole {
     inner: Arc<Inner>,
 }
 
-impl std::fmt::Debug for MemoryPseudoconsole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for MemoryPseudoconsole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MemoryPseudoconsole").finish()
     }
 }

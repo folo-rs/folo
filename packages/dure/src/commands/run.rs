@@ -7,7 +7,7 @@ use std::thread;
 use ohno::AppError;
 
 use crate::attach::attach;
-use crate::constants::SUPERVISOR_COMMAND;
+use crate::constants::{CONNECT_TIMEOUT, SUPERVISOR_COMMAND};
 use crate::pal::error::PalErrorKind;
 use crate::pal::ids::ConnId;
 use crate::pal::local_console::LocalConsole;
@@ -15,6 +15,7 @@ use crate::pal::processes::{Processes, SupervisorSpawn};
 use crate::pal::session_store::SessionStore;
 use crate::pal::transport::Transport;
 use crate::protocol::Message;
+use crate::session_id::SessionId;
 use crate::types::Outcome;
 use crate::{
     BreakawayDeniedError, CanonicalizeError, CurrentDirectoryError, EmptyCommandError,
@@ -133,7 +134,7 @@ where
         let transport = transport.clone();
         let startup = Arc::clone(&startup);
         move || {
-            thread::sleep(crate::constants::CONNECT_TIMEOUT);
+            thread::sleep(CONNECT_TIMEOUT);
             let conn = StartupWatch::expire(&startup);
             transport.close_listener(listener);
             if let Some(conn) = conn {
@@ -171,7 +172,7 @@ fn attach_to<S, T, C>(
     store: &S,
     transport: &T,
     console: &C,
-    session_id: crate::session_id::SessionId,
+    session_id: SessionId,
 ) -> Result<Outcome, AppError>
 where
     S: SessionStore,
@@ -335,9 +336,7 @@ mod tests {
             let transport = transport.clone();
             move |_| {
                 let pipe = transport.pipe_name("startup-nonce");
-                let conn = transport
-                    .connect(&pipe, crate::constants::CONNECT_TIMEOUT)
-                    .unwrap();
+                let conn = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
                 transport.send(conn, &Message::StartupErr).unwrap();
                 Ok(ProcessIdentity {
                     pid: 10,

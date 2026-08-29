@@ -1,5 +1,6 @@
 //! Positive integer session identity.
 
+use std::fmt;
 use std::num::NonZero;
 
 /// Positive integer that identifies a live session for this user.
@@ -38,9 +39,9 @@ impl SessionId {
     }
 }
 
-impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
+impl fmt::Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 

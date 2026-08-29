@@ -3,8 +3,12 @@
 
 //! Binary entry point for `dure`.
 
-use std::process::ExitCode;
+#[cfg(windows)]
+use std::env;
+#[cfg(windows)]
+use std::process::{self, ExitCode};
 
+#[cfg(windows)]
 use dure::{Cli, Outcome, run};
 
 // Install mimalloc as a scalable, general-purpose allocator process-wide: faster
@@ -12,13 +16,19 @@ use dure::{Cli, Outcome, run};
 // Windows process heap), a broad low-risk win applied uniformly across the
 // workspace's binaries. Miri cannot call mimalloc's FFI, so under Miri the
 // default allocator stands in.
-#[cfg(not(miri))]
+#[cfg(all(windows, not(miri)))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// `dure` has no meaning outside Windows, so the binary is an empty stub there
+/// (implementation.md, "Platform gate").
+#[cfg(not(windows))]
+fn main() {}
+
+#[cfg(windows)]
 #[cfg_attr(test, mutants::skip)]
 fn main() -> ExitCode {
-    let env_args: Vec<String> = std::env::args_os()
+    let env_args: Vec<String> = env::args_os()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     let str_args: Vec<&str> = env_args.iter().map(String::as_str).collect();
@@ -50,7 +60,7 @@ fn main() -> ExitCode {
             } else {
                 // Windows process statuses are wider than `ExitCode`'s portable
                 // `u8`. Forward via `exit` so the original value is preserved.
-                std::process::exit(status);
+                process::exit(status);
             }
         }
         Err(error) => {

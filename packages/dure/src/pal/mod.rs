@@ -9,7 +9,6 @@ pub(crate) mod ids;
 pub(crate) mod local_console;
 pub(crate) mod processes;
 pub(crate) mod pseudoconsole;
-#[cfg(windows)]
 pub(crate) mod raw_handle;
 pub(crate) mod session_store;
 pub(crate) mod store_root;

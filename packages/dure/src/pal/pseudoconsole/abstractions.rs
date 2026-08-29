@@ -1,5 +1,7 @@
 //! Pseudoconsole PAL: create, resize, close, and byte handles.
 
+use std::fmt;
+
 use crate::pal::error::PalError;
 use crate::pal::ids::PtyId;
 
@@ -17,7 +19,7 @@ pub(crate) struct WindowSize {
 /// Whether a child *sees* a console is an integration concern.
 /// Ref: docs/implementation.md, PAL slicing and "Pseudoconsole".
 #[cfg_attr(test, mockall::automock)]
-pub(crate) trait Pseudoconsole: Send + Sync + std::fmt::Debug + 'static {
+pub(crate) trait Pseudoconsole: Send + Sync + fmt::Debug + 'static {
     /// Create a pseudoconsole with the given initial size.
     fn create(&self, size: WindowSize) -> Result<PtyId, PalError>;
 

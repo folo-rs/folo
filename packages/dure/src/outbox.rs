@@ -1,7 +1,7 @@
 //! Queued write side of one client connection.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
 use crate::constants::MAX_CLIENT_BACKLOG_BYTES;
@@ -131,7 +131,7 @@ impl<T: Transport + Clone> Outbox<T> {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, OutboxState> {
+    fn lock(&self) -> MutexGuard<'_, OutboxState> {
         self.state
             .lock()
             .expect("the outbox lock is only held for queue bookkeeping, never across a panic")
@@ -182,6 +182,7 @@ mod tests {
     use testing::with_watchdog;
 
     use super::*;
+    use crate::constants::CONNECT_TIMEOUT;
     use crate::pal::transport::MemoryTransport;
     use crate::session_id::SessionId;
 
@@ -190,9 +191,7 @@ mod tests {
         let transport = MemoryTransport::new();
         let name = transport.pipe_name("outbox");
         let listener = transport.listen(&name).unwrap();
-        let client = transport
-            .connect(&name, crate::constants::CONNECT_TIMEOUT)
-            .unwrap();
+        let client = transport.connect(&name, CONNECT_TIMEOUT).unwrap();
         let server = transport.accept(listener).unwrap();
         transport.close_listener(listener);
         (transport, server, client)

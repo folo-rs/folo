@@ -1154,6 +1154,7 @@ name = "dure"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dure-test-helper",
  "mimalloc",
  "mockall",
  "mutants",
@@ -1165,6 +1166,13 @@ dependencies = [
  "tempfile",
  "testing",
  "windows",
+]
+
+[[package]]
+name = "dure-test-helper"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

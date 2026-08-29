@@ -1,5 +1,6 @@
 //! Client-supervisor transport PAL.
 
+use std::fmt;
 use std::time::Duration;
 
 use crate::pal::error::PalError;
@@ -11,7 +12,7 @@ use crate::protocol::Message;
 /// Steal is "accept a new connection while an old one still exists."
 /// Ref: docs/implementation.md, PAL slicing and "Transport".
 #[cfg_attr(test, mockall::automock)]
-pub(crate) trait Transport: Send + Sync + std::fmt::Debug + 'static {
+pub(crate) trait Transport: Send + Sync + fmt::Debug + 'static {
     /// Create a first-instance listener for `name`.
     fn listen(&self, name: &str) -> Result<ListenerId, PalError>;
 

@@ -1,4 +1,8 @@
 //! Process-level tests that do not require a console.
+//!
+//! `dure` is a Windows-only binary; on other platforms it is an empty stub with
+//! no behavior to assert on.
+#![cfg(windows)]
 
 use std::process::Command;
 
@@ -11,7 +15,7 @@ fn dure() -> Command {
 // Talks to the real operating system: runs the built binary as a child process.
 #[cfg_attr(miri, ignore)]
 #[test]
-fn help_succeeds_on_every_platform() {
+fn help_succeeds() {
     let output = dure().arg("--help").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -31,16 +35,10 @@ fn list_empty_store() {
         ])
         .output()
         .unwrap();
-    if cfg!(windows) {
-        assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("ID"));
-        assert!(stdout.contains("ATTACHED"));
-    } else {
-        assert!(!output.status.success());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("Error:"));
-    }
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ID"));
+    assert!(stdout.contains("ATTACHED"));
 }
 
 // Talks to the real operating system: runs the built binary as a child process.

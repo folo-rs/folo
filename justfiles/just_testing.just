@@ -156,7 +156,10 @@ test FILTER="":
     $PSNativeCommandUseErrorActionPreference = $true
 
     $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
-    cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
+    # `--no-tests=pass` because a platform-specific package contributes no tests on the platforms
+    # it does not support (`dure` is Windows-only), and selective validation can narrow a run down
+    # to exactly such a package. Matches the `miri` recipe above.
+    cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --no-tests=pass
 
 # Run the PowerShell test suites for the standalone scripts under scripts/ (currently the
 # release-automation module, scripts/release/ReleaseAutomation.psm1). Uses Pester 5, installed by
