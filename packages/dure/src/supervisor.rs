@@ -121,6 +121,10 @@ where
         startup,
         &Message::StartupOk {
             session_id: initialized.session_id,
+            // Only this process can see the job it landed in, and the client is
+            // the one with a console to report it on.
+            // Ref: docs/implementation.md, "Job breakaway".
+            durability: processes.durability(),
         },
     );
     guard.committed = true;
@@ -653,6 +657,7 @@ mod tests {
     use testing::with_watchdog;
 
     use super::*;
+    use crate::durability::Durability;
     use crate::pal::ids::{AppId, ConnId, JobId};
     use crate::pal::processes::MockProcesses;
     use crate::pal::pseudoconsole::MemoryPseudoconsole;
@@ -662,7 +667,15 @@ mod tests {
     use crate::session_record::ProcessIdentity;
 
     fn mock_processes(exit: Arc<(Mutex<bool>, Condvar)>) -> MockProcesses {
+        mock_processes_with(exit, Durability::Durable)
+    }
+
+    fn mock_processes_with(
+        exit: Arc<(Mutex<bool>, Condvar)>,
+        durability: Durability,
+    ) -> MockProcesses {
         let mut processes = MockProcesses::new();
+        processes.expect_durability().returning(move || durability);
         processes
             .expect_create_lifetime_job()
             .returning(|| Ok(JobId(1)));
@@ -717,7 +730,8 @@ mod tests {
             });
 
             let startup_conn = transport.accept(startup).unwrap();
-            let Message::StartupOk { session_id } = transport.recv(startup_conn).unwrap() else {
+            let Message::StartupOk { session_id, .. } = transport.recv(startup_conn).unwrap()
+            else {
                 panic!("expected startup ok");
             };
             transport.disconnect(startup_conn);
@@ -936,6 +950,9 @@ mod tests {
             let store = FsSessionStore::new(dir.path().to_path_buf());
             let mut processes = MockProcesses::new();
             processes
+                .expect_durability()
+                .returning(|| Durability::Durable);
+            processes
                 .expect_create_lifetime_job()
                 .returning(|| Ok(JobId(1)));
             processes
@@ -961,12 +978,54 @@ mod tests {
             });
 
             let startup_conn = transport.accept(startup).unwrap();
-            assert!(matches!(
-                transport.recv(startup_conn).unwrap(),
-                Message::StartupErr
-            ));
+            assert_eq!(transport.recv(startup_conn).unwrap(), Message::StartupErr);
             supervisor.join().unwrap().unwrap_err();
             assert!(store.list().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_supervisor_that_cannot_outlive_its_launcher_says_so_on_the_startup_pipe() {
+        with_watchdog(|| {
+            let exit = Arc::new((Mutex::new(false), Condvar::new()));
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let processes = mock_processes_with(Arc::clone(&exit), Durability::TiedToLauncher);
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            // Only the client has a console to report this on.
+            let Message::StartupOk { durability, .. } = transport.recv(startup_conn).unwrap()
+            else {
+                panic!("expected startup ok");
+            };
+            assert_eq!(durability, Durability::TiedToLauncher);
+            transport.disconnect(startup_conn);
+            {
+                let (lock, cvar) = &*exit;
+                *lock.lock().expect("exit lock") = true;
+                cvar.notify_all();
+            }
+            supervisor.join().unwrap().unwrap();
         });
     }
 
@@ -1232,6 +1291,9 @@ mod tests {
         let transport = MemoryTransport::new();
         let pty = MemoryPseudoconsole::new();
         let mut processes = MockProcesses::new();
+        processes
+            .expect_durability()
+            .returning(|| Durability::Durable);
         processes
             .expect_create_lifetime_job()
             .returning(|| Ok(JobId(1)));

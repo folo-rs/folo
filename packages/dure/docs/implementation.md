@@ -16,18 +16,18 @@ sequenceDiagram
   participant S as dure supervisor
   participant A as app
   C->>S: spawn, detached and broken out of the job
-  S->>S: allocate id, create job + pseudoconsole
+  S->>S: create lifetime job + pseudoconsole
   S->>A: spawn inside job, attached to pseudoconsole
-  S->>S: create session pipe, publish record
+  S->>S: create session pipe, allocate id, publish record
   S-->>C: StartupOk(id) on startup pipe
   C->>S: connect to session pipe, attach
   Note over C,S: startup pipe stays open until the client attaches or gives up
 ```
 
 `run` gives the supervisor a private one-shot startup channel. The supervisor
-allocates the session id, creates the lifetime job and pseudoconsole, starts the
-app, creates the session pipe, and atomically publishes the session record. It
-reports the id only after the pipe is accepting connections. An initialization
+creates the lifetime job and pseudoconsole, starts the app, creates the session
+pipe, then allocates the session id and atomically publishes the session record.
+It reports the id only after the pipe is accepting connections. An initialization
 failure closes the lifetime job, removes any provisional state, reports
 `StartupErr` on the startup pipe, and exits. The initiating client treats every
 non-`StartupOk` response as a failed start. A client never reports a successful start
@@ -86,7 +86,8 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
   LocalAppData known folder, subdirectory `dure`. The root is supplied by the
   PAL so tests never touch the user's real store.
 * **Processes** — spawn a console-detached supervisor with job breakaway;
-  identify it by pid and process creation time; create a job with a chosen
+  identify it by pid and process creation time; report whether a job object would
+  end this process along with its launcher; create a job with a chosen
   breakaway policy; spawn the app attached to a pseudoconsole and assigned to
   that job at creation; terminate a verified process handle; wait for an exit
   status.
@@ -126,9 +127,10 @@ it has a console and can be told to print, wait, or exit with a chosen status.
 
 That suite proves the app sees a console, `run` forwards exit status, session
 records disappear when the app exits, a session whose client dies outright is
-still resumable and still interactive afterwards, and `run` refuses a launcher
-whose job forbids breakaway. Tests wait on process and pipe events inside the
-workspace watchdog.
+still resumable and still interactive afterwards, `run` refuses a launcher whose
+job forbids breakaway, and `run` warns when an ancestor job it cannot leave would
+end the session. Tests wait on process and pipe events inside the workspace
+watchdog.
 
 Assertions about console output ignore whitespace. A pseudoconsole wraps at the
 window width and may break a line mid-word, so the exact spacing of relayed
@@ -178,21 +180,53 @@ create an independent inner supervisor; other apps that deliberately request
 breakaway receive the same Windows behavior.
 
 The **launcher's job is not ours to choose**. A launcher that forbids breakaway
-would kill the supervisor along with itself, so `dure run` refuses to start a
-session it knows cannot outlive the terminal. `cargo run` is such a launcher, so
-`dure` is exercised as an installed binary, not through cargo.
+would kill the supervisor along with itself, and `CreateProcessW` refuses the
+spawn outright, so `dure run` reports that as a startup failure. `cargo run` is
+such a launcher, so `dure` is exercised as an installed binary, not through
+cargo.
 
-Diagnosing that refusal needs care, because Windows reports a denied breakaway as
-a plain access-denied failure from `CreateProcessW`. Only that error code, and
-only while the calling process is actually in a job, is reported as denied
-breakaway; every other failure keeps its own identity instead of being
-misattributed to a job policy. The resulting message names the job as the cause
-and tells the user to launch `dure.exe` directly.
+Because breakaway only leaves the *immediate* job, a permissive job nested inside
+a restrictive one lets `CreateProcessW` succeed while the supervisor stays a
+member of the outer job — durable in appearance only. Whether the supervisor
+escaped is therefore confirmed rather than assumed, and confirmed by the
+supervisor, because Windows reports a process's job membership only to that
+process itself and offers no way to enumerate a chain of ancestor jobs.
 
-Tests would otherwise never see this path: a test that builds its own job to host
-a child naturally gives it the permissive policy, which is more permissive than
-any real launcher. The integration harness therefore offers both, and the
-regression test spawns `dure run` inside a job that forbids breakaway.
+What the supervisor asks is not whether it is in a job but whether the job it is
+in would kill it: only `KILL_ON_JOB_CLOSE` ties its lifetime to the launcher.
+Terminals and remote-session hosts routinely place every process in an ambient
+job without that limit, and treating those as doomed would condemn nearly every
+real session. Membership in a job that does not kill on close is therefore
+durable. An unanswerable query counts as tied to the launcher, because a
+needless warning costs a line of text while a missing one costs the session the
+user believed was safe.
+
+The answer is a warning, not a refusal. The supervisor cannot know why it was
+launched that way, and a session that is merely non-durable still does
+everything else the user asked for; a build or test harness that wraps `dure`
+in a job wants exactly that. So `StartupOk` carries the durability, and the
+client, which owns the user's console, prints the warning and continues. This
+is also what lets the integration tests run: `cargo test` places its test
+binaries in a kill-on-close job that forbids breakaway, so no session started
+under cargo is ever durable.
+
+The check inspects the immediate job, so a harmless job nested inside a killing
+one still reads as durable. Detecting that would require walking the job chain,
+which Windows does not expose. It is a narrow gap: the launchers that impose
+kill-on-close do not nest a second job below it.
+
+Diagnosing a denied breakaway needs care in the other direction too, because
+Windows reports it as a plain access-denied failure from `CreateProcessW`. Only
+that error code, and only while the job the caller is in withholds the breakaway
+permission, is reported as denied breakaway; every other failure keeps its own
+identity instead of being misattributed to a job policy. The resulting message
+names the job as the cause and tells the user to launch `dure.exe` directly.
+
+Tests would otherwise never see either path: a test that builds its own job to
+host a child naturally gives it the permissive policy, which is more permissive
+than any real launcher. The integration harness therefore builds job chains, and
+the regression tests spawn `dure run` both inside a job that forbids breakaway
+and inside a permissive job nested in one that forbids it.
 
 ## Accept loop and steal
 

@@ -18,9 +18,9 @@ use windows::Win32::Foundation::{
 use windows::Win32::Storage::FileSystem::SearchPathW;
 use windows::Win32::System::Console::HPCON;
 use windows::Win32::System::JobObjects::{
-    CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+    CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectExtendedLimitInformation, SetInformationJobObject,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
 };
 use windows::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
@@ -35,6 +35,7 @@ use windows::Win32::System::Threading::{
 use windows::core::{BOOL, PCWSTR, PWSTR};
 
 use crate::constants::TERMINATE_TIMEOUT;
+use crate::durability::Durability;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, JobId};
 use crate::pal::processes::{
@@ -50,7 +51,7 @@ use crate::session_record::ProcessIdentity;
 pub(crate) struct BuildTargetProcesses;
 
 struct HandleTable {
-    jobs: HashMap<u64, RawHandle>,
+    jobs: HashMap<u64, Vec<RawHandle>>,
     apps: HashMap<u64, RawHandle>,
 }
 
@@ -195,20 +196,76 @@ fn wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
-/// Whether this process belongs to any job object.
+/// Whether `process` belongs to any job object.
+fn process_in_a_job(process: HANDLE) -> Result<bool, PalError> {
+    let mut in_job = BOOL::default();
+    // SAFETY: `process` is a valid process handle, a null job asks about any
+    // job, and `in_job` outlives the call.
+    unsafe { IsProcessInJob(process, None, &raw mut in_job) }
+        .map_err(|_error| PalError::new(PalErrorKind::InspectFailed))?;
+    Ok(in_job.as_bool())
+}
+
+/// What is known about the limits of the job this process is directly in.
 ///
-/// Windows reports a refused breakaway as a plain access-denied error, and an
-/// unreadable image reports the same thing. Only a process that is in a job can
-/// have been refused a breakaway, so this is what tells the two apart.
+/// Membership and limits are separate questions with separate failure modes, and
+/// callers answer an unreadable job differently from no job at all.
+enum JobLimits {
+    /// The process belongs to no job object.
+    None,
+    /// The process belongs to a job whose limits could not be read.
+    Unknown,
+    /// The limit flags of the job the process is directly in.
+    Known(JOB_OBJECT_LIMIT),
+}
+
+/// Read the limits of the job this process is directly in.
+///
+/// Windows reports only the immediate job, and only to the process itself, so
+/// this says nothing about any ancestor job.
+/// Ref: docs/implementation.md, "Job breakaway".
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn in_a_job() -> bool {
+fn immediate_job_limits() -> JobLimits {
     // SAFETY: the pseudo-handle this returns needs no state and is always valid.
     let current = unsafe { GetCurrentProcess() };
-    let mut in_job = BOOL::default();
-    // SAFETY: `current` is a valid process handle, a null job asks about any
-    // job, and `in_job` outlives the call.
-    let queried = unsafe { IsProcessInJob(current, None, &raw mut in_job) };
-    queried.is_ok() && in_job.as_bool()
+    match process_in_a_job(current) {
+        Ok(false) => return JobLimits::None,
+        Ok(true) => {}
+        Err(_error) => return JobLimits::Unknown,
+    }
+    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    // SAFETY: a null job handle asks about the job this process is directly in,
+    // and `info` is a stack structure of the size the information class expects.
+    let queried = unsafe {
+        QueryInformationJobObject(
+            None,
+            JobObjectExtendedLimitInformation,
+            ptr::from_mut(&mut info).cast(),
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                .expect("job info size fits in u32"),
+            None,
+        )
+    };
+    if queried.is_err() {
+        return JobLimits::Unknown;
+    }
+    JobLimits::Known(info.BasicLimitInformation.LimitFlags)
+}
+
+/// Whether the job this process is directly in would refuse it a breakaway.
+///
+/// Windows reports a refused breakaway as a plain access-denied error, and an
+/// unreadable image reports the same thing. Only a job that withholds
+/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` can have refused one, so this is what tells
+/// the two apart. A job whose limits cannot be read is assumed to be the cause,
+/// because a process outside a job never sees this question at all.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn breakaway_forbidden() -> bool {
+    match immediate_job_limits() {
+        JobLimits::None => false,
+        JobLimits::Unknown => true,
+        JobLimits::Known(flags) => (flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK).0 == 0,
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -218,37 +275,65 @@ impl BuildTargetProcesses {
     ///
     /// Ref: docs/implementation.md, "Job breakaway".
     pub(crate) fn create_job(breakaway: Breakaway) -> Result<JobId, PalError> {
-        // SAFETY: a null name creates an unnamed job object.
-        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
-            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
-        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags = match breakaway {
-            Breakaway::Permitted => {
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        Self::create_job_chain(&[breakaway])
+    }
+
+    /// Create a chain of nested jobs, outermost first.
+    ///
+    /// A process spawned into the chain joins every job in it, so the last
+    /// policy is the one its breakaway is evaluated against and the earlier ones
+    /// stay behind as ancestors.
+    ///
+    /// Ref: docs/implementation.md, "Job breakaway".
+    pub(crate) fn create_job_chain(policies: &[Breakaway]) -> Result<JobId, PalError> {
+        let mut handles = Vec::with_capacity(policies.len());
+        for breakaway in policies {
+            match create_job_handle(*breakaway) {
+                Ok(handle) => handles.push(RawHandle::from_handle(handle)),
+                Err(error) => {
+                    // A partly built chain owns handles no id names yet, so it
+                    // can only be released here.
+                    for handle in handles {
+                        close(handle.as_handle());
+                    }
+                    return Err(error);
+                }
             }
-            #[cfg(any(test, feature = "private-test-util"))]
-            Breakaway::Forbidden => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        };
-        // SAFETY: `info` is a stack structure of the size SetInformationJobObject
-        // expects for JobObjectExtendedLimitInformation.
-        unsafe {
-            SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                ptr::from_mut(&mut info).cast(),
-                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
-                    .expect("job info size fits in u32"),
-            )
         }
-        .map_err(|_error| PalError::new(PalErrorKind::Other))?;
         let id = next_id();
         table()
             .lock()
             .expect("handle table")
             .jobs
-            .insert(id, RawHandle::from_handle(handle));
+            .insert(id, handles);
         Ok(JobId(id))
     }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn create_job_handle(breakaway: Breakaway) -> Result<HANDLE, PalError> {
+    // SAFETY: a null name creates an unnamed job object.
+    let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
+        .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    info.BasicLimitInformation.LimitFlags = match breakaway {
+        Breakaway::Permitted => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+        #[cfg(any(test, feature = "private-test-util"))]
+        Breakaway::Forbidden => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // SAFETY: `info` is a stack structure of the size SetInformationJobObject
+    // expects for JobObjectExtendedLimitInformation.
+    unsafe {
+        SetInformationJobObject(
+            handle,
+            JobObjectExtendedLimitInformation,
+            ptr::from_mut(&mut info).cast(),
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                .expect("job info size fits in u32"),
+        )
+    }
+    .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+    Ok(handle)
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -289,9 +374,10 @@ impl Processes for BuildTargetProcesses {
         };
         created.map_err(|error| {
             // Windows reports a refused breakaway as plain access-denied, which
-            // an unreadable image produces too. Job membership separates the
-            // two, so `run` can name the cause instead of guessing at it.
-            if error.code() == ERROR_ACCESS_DENIED.to_hresult() && in_a_job() {
+            // an unreadable image produces too. The job's breakaway policy
+            // separates the two, so `run` can name the cause instead of
+            // guessing at it.
+            if error.code() == ERROR_ACCESS_DENIED.to_hresult() && breakaway_forbidden() {
                 PalError::new(PalErrorKind::BreakawayDenied)
             } else {
                 PalError::new(PalErrorKind::Other)
@@ -303,6 +389,27 @@ impl Processes for BuildTargetProcesses {
         let identity = identity_of(pi.hProcess);
         close(pi.hProcess);
         identity
+    }
+
+    fn durability(&self) -> Durability {
+        match immediate_job_limits() {
+            JobLimits::None => Durability::Durable,
+            // An unanswerable query is reported as the cautious answer: a
+            // spurious warning costs the user a line of text, a missed one
+            // costs a session.
+            JobLimits::Unknown => Durability::TiedToLauncher,
+            // Only kill-on-close ties this process's lifetime to the launcher's
+            // job. Membership in a job without it is harmless, and terminals and
+            // remote session hosts routinely impose such a job on everything
+            // they start.
+            JobLimits::Known(flags) => {
+                if (flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).0 == 0 {
+                    Durability::Durable
+                } else {
+                    Durability::TiedToLauncher
+                }
+            }
+        }
     }
 
     fn probe(&self, identity: &ProcessIdentity) -> ProcessLiveness {
@@ -373,8 +480,12 @@ impl Processes for BuildTargetProcesses {
     }
 
     fn close_job(&self, job: JobId) {
-        if let Some(handle) = table().lock().expect("handle table").jobs.remove(&job.0) {
-            close(handle.as_handle());
+        if let Some(handles) = table().lock().expect("handle table").jobs.remove(&job.0) {
+            // Innermost first, so a kill-on-close ancestor never tears down a
+            // job this still holds a handle to.
+            for handle in handles.into_iter().rev() {
+                close(handle.as_handle());
+            }
         }
     }
 
@@ -392,14 +503,17 @@ impl Processes for BuildTargetProcesses {
         let mut exe_wide = wide(&exe.to_string_lossy());
         let mut dir_wide = wide(&request.launch_directory.to_string_lossy());
 
-        let job = table()
+        // Outermost first: a process is assigned to the jobs in the order the
+        // attribute lists them, which is what nests them.
+        let mut job_list = table()
             .lock()
             .expect("handle table")
             .jobs
             .get(&request.job.0)
-            .copied()
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?
-            .as_handle();
+            .iter()
+            .map(|handle| handle.as_handle())
+            .collect::<Vec<_>>();
 
         // Pseudoconsole and lifetime job, both applied at CreateProcessW so the
         // app cannot run outside the job. CREATE_SUSPENDED plus a later
@@ -446,17 +560,18 @@ impl Processes for BuildTargetProcesses {
         }
         .map_err(|_error| PalError::new(PalErrorKind::Other))?;
 
-        let mut job_list = [job];
         // SAFETY: the list still has a free slot. `job_list` holds the lifetime
-        // job handle and lives until CreateProcessW returns.
+        // job handles and lives until CreateProcessW returns.
         unsafe {
             UpdateProcThreadAttribute(
                 attr_list,
                 0,
                 usize::try_from(PROC_THREAD_ATTRIBUTE_JOB_LIST)
                     .expect("PROC_THREAD_ATTRIBUTE_JOB_LIST fits in usize"),
-                Some(ptr::from_mut(&mut job_list).cast()),
-                size_of::<HANDLE>(),
+                Some(job_list.as_mut_ptr().cast()),
+                size_of::<HANDLE>()
+                    .checked_mul(job_list.len())
+                    .expect("job handle list size fits in usize"),
                 None,
                 None,
             )

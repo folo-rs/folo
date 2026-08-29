@@ -3,7 +3,7 @@
 #![cfg(all(windows, feature = "private-test-util"))]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dure::test_support::ConsoleProcess;
 use tempfile::TempDir;
@@ -71,17 +71,25 @@ fn without_whitespace(text: &str) -> String {
 fn collect_until(console: &ConsoleProcess, needle: &str) -> String {
     let wanted = without_whitespace(needle);
     let mut collected = Vec::new();
-    loop {
-        collected.extend(console.read_output());
+    for chunk in console.output_until_exit() {
+        collected.extend(chunk);
         let text = visible_text(&collected);
         if without_whitespace(&text).contains(&wanted) {
             return text;
         }
     }
+    panic!(
+        "child exited without printing {needle:?}, output was {:?}",
+        visible_text(&collected)
+    );
 }
 
 /// Arbitrary nonzero status used to prove forwarding, not a special value.
 const SAMPLE_NONZERO_EXIT: i32 = 7;
+
+/// The id a fresh store hands to its first session, so a test that owns an
+/// empty store knows the banner to expect.
+const FIRST_SESSION_ID: u64 = 1;
 
 #[cfg_attr(miri, ignore)]
 #[test]
@@ -223,15 +231,7 @@ fn run_refuses_a_launcher_that_forbids_breakaway() {
     with_watchdog(|| {
         let dir = TempDir::new().unwrap();
         let helper = helper_exe();
-        let args = vec![
-            "--store-root".to_string(),
-            dir.path().display().to_string(),
-            "run".to_string(),
-            "--".to_string(),
-            helper.display().to_string(),
-            "wait-exit".to_string(),
-            SAMPLE_NONZERO_EXIT.to_string(),
-        ];
+        let args = run_helper_args(dir.path(), &helper);
         // Models a wrapper such as `cargo run`, whose job would kill the
         // supervisor along with the client it launched.
         let client = ConsoleProcess::spawn_confined(&dure_exe(), &args, dir.path());
@@ -249,5 +249,40 @@ fn run_refuses_a_launcher_that_forbids_breakaway() {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(records.is_empty(), "store must stay empty, got {records:?}");
+    });
+}
+
+/// Command line for a `run` that launches the wait-exit helper.
+fn run_helper_args(store_root: &Path, helper: &Path) -> Vec<String> {
+    vec![
+        "--store-root".to_string(),
+        store_root.display().to_string(),
+        "run".to_string(),
+        "--".to_string(),
+        helper.display().to_string(),
+        "wait-exit".to_string(),
+        SAMPLE_NONZERO_EXIT.to_string(),
+    ]
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn run_warns_when_an_ancestor_job_would_end_the_session() {
+    with_watchdog(|| {
+        let dir = TempDir::new().unwrap();
+        let helper = helper_exe();
+        let args = run_helper_args(dir.path(), &helper);
+        // The immediate job permits breakaway, so the supervisor starts, but the
+        // ancestor it cannot leave would kill it with the launcher.
+        let client = ConsoleProcess::spawn_confined_by_ancestor(&dure_exe(), &args, dir.path());
+        // The banner follows the warning, so waiting for it collects both.
+        let output = collect_until(&client, &format!("session {FIRST_SESSION_ID}"));
+        assert!(
+            output.contains("will not survive a disconnect"),
+            "a session tied to the launcher must say so, got {output:?}"
+        );
+        client.write_input(b"x\r\n");
+        let status = client.wait();
+        assert_eq!(status, SAMPLE_NONZERO_EXIT, "client output: {output:?}");
     });
 }

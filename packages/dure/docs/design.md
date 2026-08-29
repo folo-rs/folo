@@ -59,8 +59,10 @@ A session must be able to outlive the process that launched it. Some launchers
 confine their children to a Windows job object that forbids breakaway and kills
 everything in it when the launcher exits; `cargo run` is one. Started from such
 a launcher, `dure run` fails outright, naming that cause, rather than starting a
-session that would die with the launcher. Ordinary shells, including the one an
-SSH session provides, permit breakaway.
+session that would die with the launcher. Where the job permits breakaway but an
+ancestor job would still end the session, `dure run` says so and starts the
+session anyway. Ordinary shells, including the one an SSH session provides,
+permit breakaway.
 
 An app that exits before `dure run` has finished attaching still reports its
 output and exit status. Only if the `dure run` process itself goes away first is

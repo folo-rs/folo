@@ -71,6 +71,24 @@ pub(crate) fn hpcon_for(pty: PtyId) -> Option<HPCON> {
         .map(|pty| pty.hpcon)
 }
 
+/// Close the pseudoconsole, leaving a pending read to finish on its own.
+///
+/// `close` cancels pending reads, which discards output the app wrote but the
+/// reader has not picked up yet. A caller draining the output of an app that has
+/// already exited wants those last bytes, and then the end of the stream that
+/// closing the host side produces on its own.
+#[cfg(feature = "private-test-util")]
+pub(crate) fn close_without_cancel(pty: PtyId) {
+    let Some(entry) = table().lock().expect("pty table").ptys.remove(&pty.0) else {
+        return;
+    };
+    // SAFETY: `entry.hpcon` is the unique HPCON created for this pty and is not
+    // used after this call.
+    unsafe {
+        ClosePseudoConsole(entry.hpcon);
+    }
+}
+
 /// Real Windows `ConPTY` host.
 #[derive(Debug, Default)]
 pub(crate) struct BuildTargetPseudoconsole;

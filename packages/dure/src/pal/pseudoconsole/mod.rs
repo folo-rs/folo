@@ -18,4 +18,6 @@ pub(crate) use abstractions::*;
 pub(crate) use facade::*;
 #[cfg(test)]
 pub(crate) use memory::*;
+#[cfg(feature = "private-test-util")]
+pub(crate) use windows::close_without_cancel;
 pub(crate) use windows::{BuildTargetPseudoconsole, hpcon_for};

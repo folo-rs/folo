@@ -189,6 +189,7 @@ mod tests {
     use std::{thread, vec};
 
     use super::*;
+    use crate::durability::Durability;
     use crate::pal::error::{PalError, PalErrorKind};
     use crate::pal::ids::{ConnId, ListenerId};
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
@@ -658,6 +659,7 @@ mod tests {
                     conn,
                     &Message::StartupOk {
                         session_id: SessionId::MIN,
+                        durability: Durability::Durable,
                     },
                 );
             })

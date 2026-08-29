@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::Arc;
 
+use crate::durability::Durability;
 use crate::pal::error::PalError;
 use crate::pal::ids::{AppId, JobId};
 #[cfg(test)]
@@ -67,6 +68,14 @@ impl Processes for ProcessesFacade {
             Self::Target(inner) => inner.spawn_supervisor(request),
             #[cfg(test)]
             Self::Mock(inner) => inner.spawn_supervisor(request),
+        }
+    }
+
+    fn durability(&self) -> Durability {
+        match self {
+            Self::Target(inner) => inner.durability(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.durability(),
         }
     }
 

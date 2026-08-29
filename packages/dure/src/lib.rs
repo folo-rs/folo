@@ -15,6 +15,7 @@ mod cli;
 mod commands;
 mod constants;
 mod detect;
+mod durability;
 mod errors;
 mod gc;
 mod list_fmt;

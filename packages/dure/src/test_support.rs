@@ -1,6 +1,7 @@
 //! Helpers for Windows integration tests. Not part of the product.
 
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use crate::constants::{DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS};
@@ -8,7 +9,9 @@ use crate::pal::ids::{AppId, JobId, PtyId};
 use crate::pal::processes::{
     AppSpawn, Breakaway, BuildTargetProcesses, Processes, ProcessesFacade,
 };
-use crate::pal::pseudoconsole::{Pseudoconsole, PseudoconsoleFacade, WindowSize};
+use crate::pal::pseudoconsole::{
+    Pseudoconsole, PseudoconsoleFacade, WindowSize, close_without_cancel,
+};
 
 /// A process started inside a test-owned pseudoconsole.
 ///
@@ -31,7 +34,7 @@ impl ConsoleProcess {
     /// session provides (implementation.md, "Job breakaway").
     #[must_use]
     pub fn spawn(exe: &Path, args: &[String], cwd: &Path) -> Self {
-        Self::spawn_with(exe, args, cwd, Breakaway::Permitted)
+        Self::spawn_in_jobs(exe, args, cwd, &[Breakaway::Permitted])
     }
 
     /// Spawn `exe` the way a launcher that confines its children would.
@@ -41,13 +44,29 @@ impl ConsoleProcess {
     /// (implementation.md, "Job breakaway").
     #[must_use]
     pub fn spawn_confined(exe: &Path, args: &[String], cwd: &Path) -> Self {
-        Self::spawn_with(exe, args, cwd, Breakaway::Forbidden)
+        Self::spawn_in_jobs(exe, args, cwd, &[Breakaway::Forbidden])
     }
 
-    fn spawn_with(exe: &Path, args: &[String], cwd: &Path, breakaway: Breakaway) -> Self {
+    /// Spawn `exe` inside a permissive job that itself sits in a confining one.
+    ///
+    /// Breakaway is evaluated against the immediate job only, so `CreateProcessW`
+    /// succeeds here and leaves the supervisor a member of the outer job. This
+    /// models the case `dure run` can only detect after the spawn
+    /// (implementation.md, "Job breakaway").
+    #[must_use]
+    pub fn spawn_confined_by_ancestor(exe: &Path, args: &[String], cwd: &Path) -> Self {
+        Self::spawn_in_jobs(
+            exe,
+            args,
+            cwd,
+            &[Breakaway::Forbidden, Breakaway::Permitted],
+        )
+    }
+
+    fn spawn_in_jobs(exe: &Path, args: &[String], cwd: &Path, jobs: &[Breakaway]) -> Self {
         let processes = ProcessesFacade::target();
         let pty_host = PseudoconsoleFacade::target();
-        let job = BuildTargetProcesses::create_job(breakaway).expect("create test job");
+        let job = BuildTargetProcesses::create_job_chain(jobs).expect("create test job");
         let pty = pty_host
             .create(WindowSize {
                 cols: DEFAULT_PTY_COLS,
@@ -82,12 +101,45 @@ impl ConsoleProcess {
             .expect("write test console input");
     }
 
-    /// Block until the child writes console output.
+    /// Console output as it arrives, ending once the child has exited.
+    ///
+    /// A pseudoconsole keeps its read side open for as long as this process
+    /// holds it, so a caller waiting for a phrase the child never printed would
+    /// wait forever, including under mutation testing where the workspace
+    /// watchdog is disabled. Closing the pseudoconsole once the child is gone
+    /// ends the stream instead, turning that wait into a failed assertion,
+    /// after delivering everything the child did write.
+    /// Ref: docs/testing.md, "Tests must not hang".
     #[must_use]
-    pub fn read_output(&self) -> Vec<u8> {
-        self.pty_host
-            .read_output(self.pty)
-            .expect("read test console output")
+    pub fn output_until_exit(&self) -> Receiver<Vec<u8>> {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn({
+            let pty_host = self.pty_host.clone();
+            let pty = self.pty;
+            move || {
+                loop {
+                    match pty_host.read_output(pty) {
+                        Ok(bytes) if bytes.is_empty() => break,
+                        Ok(bytes) => {
+                            if sender.send(bytes).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_error) => break,
+                    }
+                }
+            }
+        });
+        thread::spawn({
+            let processes = self.processes.clone();
+            let app = self.app;
+            let pty = self.pty;
+            move || {
+                _ = processes.wait_app(app);
+                close_without_cancel(pty);
+            }
+        });
+        receiver
     }
 
     /// Wait for the child to exit and tear down the job and pseudoconsole.
