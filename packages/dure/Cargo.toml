@@ -37,9 +37,9 @@ allowed_external_types = [
 # PAL through. Not part of the product.
 private-test-util = []
 
-# Every dependency is Windows-only because the crate itself is: a non-Windows build compiles to an
-# empty stub (docs/implementation.md, "Platform gate"), so declaring them unconditionally would
-# make them genuinely unused there.
+# Every dependency is Windows-only because the crate itself is: a non-Windows build compiles to a
+# stub that only reports the unsupported platform (docs/implementation.md, "Platform gate"), so
+# declaring them unconditionally would make them genuinely unused there.
 [target.'cfg(windows)'.dependencies]
 clap = { workspace = true, features = ["derive"] }
 mimalloc = { workspace = true }
@@ -49,6 +49,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",

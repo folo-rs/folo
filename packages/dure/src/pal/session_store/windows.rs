@@ -21,5 +21,7 @@ pub(crate) fn move_file_replace(tmp: &Path, dest: &Path) -> io::Result<()> {
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         )
     }
-    .map_err(|error| io::Error::other(error.message()))
+    // Carries the Win32 error as the source rather than folding its rendering
+    // into a string. Ref: docs/error-handling.md.
+    .map_err(io::Error::other)
 }

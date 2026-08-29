@@ -12,5 +12,7 @@
 #![cfg(windows)]
 
 mod locate;
+mod non_ascii;
 
 pub use locate::binary_path;
+pub use non_ascii::SAMPLE_NON_ASCII_TEXT;

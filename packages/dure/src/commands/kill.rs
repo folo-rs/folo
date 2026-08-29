@@ -6,6 +6,7 @@ use crate::gc::require_live_session;
 use crate::pal::processes::Processes;
 use crate::pal::session_store::SessionStore;
 use crate::session_id::SessionId;
+use crate::trace::{Trace, trace};
 use crate::{KillFailedError, StoreError};
 
 /// Abruptly terminate the recorded supervisor process.
@@ -13,12 +14,18 @@ pub(crate) fn execute(
     store: &impl SessionStore,
     processes: &impl Processes,
     id: SessionId,
+    trace: Trace,
 ) -> Result<(), AppError> {
-    let record = require_live_session(store, processes, id)?;
+    let record = require_live_session(store, processes, id, trace)?;
     let identity = record.identity();
+    trace!(
+        trace,
+        "terminating supervisor pid {}, which ends the app it owns", identity.pid
+    );
     processes
         .terminate(&identity)
         .map_err(|_error| KillFailedError::for_id(id))?;
+    trace!(trace, "removing the record for session {id}");
     store
         .delete_owned_by(id, &identity)
         .map_err(|_error| StoreError::new())?;
@@ -59,7 +66,7 @@ mod tests {
         let mut processes = MockProcesses::new();
         processes.expect_probe().never();
         let id = SessionId::from_u32(1).unwrap();
-        execute(&store, &processes, id).unwrap_err();
+        execute(&store, &processes, id, Trace::default()).unwrap_err();
     }
 
     #[test]
@@ -80,7 +87,7 @@ mod tests {
             .withf(|identity: &ProcessIdentity| identity.pid == 10 && identity.creation_time == 100)
             .returning(|_| Ok(()));
 
-        execute(&store, &processes, id).unwrap();
+        execute(&store, &processes, id, Trace::default()).unwrap();
         assert!(store.read(id).unwrap().is_none());
     }
 
@@ -101,7 +108,7 @@ mod tests {
             .expect_terminate()
             .returning(|_| Err(PalError::new(PalErrorKind::NotFound)));
 
-        execute(&store, &processes, id).unwrap_err();
+        execute(&store, &processes, id, Trace::default()).unwrap_err();
         assert!(store.read(id).unwrap().is_some());
     }
 }

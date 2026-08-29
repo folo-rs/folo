@@ -20,7 +20,8 @@ running. SSH is the mainstream case, not a privileged one.
 * **Detach is losing the client.** Anything that kills the foreground `dure`
   process leaves the supervisor and app running.
 * **Resume is not a replay.** Attach does not reconstruct prior screen contents.
-  The new client sees an empty screen, then live bytes.
+  The new client sees an empty screen, then live bytes. The exception is the
+  app's opening output, which is held for the first client.
 * **Latest client wins.** A new successful attach becomes the sole live console
   and disconnects any older client. That is how a wedged client is displaced.
   There is no separate `--force` flag.
@@ -189,6 +190,27 @@ terminal is the visible emulator (Windows Terminal, an SSH client) that renders
 VT. `dure` attaches to a console and relays bytes to whatever terminal the user
 is already sitting at.
 
+Text keeps its meaning across the relay in both directions. Non-ASCII output —
+the box-drawing characters a TUI frames itself with, accented letters, symbols —
+reaches the terminal as the app wrote it, and non-ASCII input reaches the app as
+the user typed it. `dure` converts the console it attaches to for the duration
+of the relay and converts it back on the way out, so a shell that shares that
+console before or after a session is unaffected.
+
+## Listing sessions
+
+`list` prints a table: a heading row and one row per live session, columns
+separated by a fixed gap and each column as wide as its widest cell, so a
+heading sits above the values it names. Column order is the order given under
+[Commands](#commands). Cells are never truncated; a long command widens its
+column rather than losing text.
+
+Directories print in the form a user would type. Windows extended-length paths
+carry a `\\?\` prefix that the shell does not use and that a user cannot paste
+back; `list` and `--verbose` show the plain path instead. Matching still uses
+the canonical path, so what is displayed is a rendering choice and never changes
+which session `resume` finds.
+
 ## Lifetime
 
 | Event | App | Supervisor | Client |
@@ -225,19 +247,34 @@ Crate and binary name: `dure`, published to crates.io and installed with
 `cargo binstall dure` under the same prebuilt-archive contract as the other
 published binaries in this repository.
 
-`dure` is a Windows tool. On other targets the binary is an empty stub with no
-behavior.
+`dure` is a Windows tool. On other targets the binary reports that it is
+unsupported and exits with a failure status.
 
 ## Screen contents
 
 Attach does not replay prior output. The new client sees an empty screen, then
 live bytes. The supervisor applies the attaching client's window size.
 
+The one exception is the app's opening output. `dure run` starts the app and
+only then attaches, so an app that prints immediately would otherwise speak
+before it has an audience. That opening output is held for the first client and
+delivered to it. Later attaches begin on an empty screen.
+
 ## Diagnostics
 
-`--verbose` explains auto-detect: which sessions were considered, which paths
-were compared, why a session was chosen or why the command fell through to the
-list. Failures before attach go to stderr with a non-zero status.
+`--verbose` explains what the command is doing well enough that its decisions
+can be reconstructed from the output: where the session store is, which session
+records were read, why each was judged live or dead, and what each command then
+did with them. For `resume` that includes auto-detect — which launch directories
+were compared against the current one, and why a session was chosen or why the
+command fell through to the list. For `run` it includes the app and launch
+directory, the connection the supervisor was given, the command line it was
+spawned with, and whether the session will survive the launcher.
+
+Verbose output is explanatory, never a substitute for the command's own result,
+and goes to stderr so it does not contaminate `list` output being read by
+something else. It stops at attach: once the funnel is exclusive, the app owns
+the screen. Failures before attach go to stderr with a non-zero status.
 
 Internal architecture is documented in the
 [implementation guide](implementation.md).

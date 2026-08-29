@@ -8,7 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ohno::AppError;
 
-use crate::constants::{CONNECT_TIMEOUT, DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS};
+use crate::constants::{
+    CONNECT_TIMEOUT, DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS, MAX_CLIENT_BACKLOG_BYTES,
+};
 use crate::outbox::Outbox;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, ConnId, JobId, ListenerId, PtyId};
@@ -245,6 +247,10 @@ struct Shared<T: Transport, C> {
     /// acknowledge in one order and install in another, letting an older
     /// attach displace a newer one.
     attach: Mutex<()>,
+    /// Output the app produced before anyone attached, kept for the first
+    /// client. Taken under the client slot, which is what orders it ahead of
+    /// the output that follows the attach.
+    preamble: Mutex<Option<Vec<u8>>>,
     /// Gate that holds the session open until somebody has come for it.
     first_attach: Mutex<FirstAttach>,
     first_attach_changed: Condvar,
@@ -320,6 +326,44 @@ impl<T: Transport, C> Shared<T, C> {
             .lock()
             .expect("client slot is only copied or replaced, never held across a panic")
     }
+
+    /// Holds output produced before the first client attached.
+    ///
+    /// `dure run` starts the app and only then attaches, so an app that prints
+    /// immediately can speak before it has an audience. Those are the app's
+    /// first words rather than scrollback, so they wait for the client that is
+    /// already on its way. Ref: docs/design.md, "Screen contents".
+    ///
+    /// The caller holds the client slot, which is what keeps this from landing
+    /// behind an attach that has already taken what was held.
+    fn hold_for_first_client(&self, bytes: &[u8]) {
+        let mut preamble = self
+            .preamble
+            .lock()
+            .expect("the preamble is only appended to or taken, never held across a panic");
+        let Some(held) = preamble.as_mut() else {
+            return;
+        };
+        // The same measure of how far behind delivery has fallen that bounds a
+        // live client's backlog. What is kept is the earliest output rather
+        // than the latest, because a first screen is worth more to the arriving
+        // client than the tail of a burst it has no context for.
+        let free = MAX_CLIENT_BACKLOG_BYTES.saturating_sub(held.len());
+        held.extend(bytes.iter().take(free));
+    }
+
+    /// Takes what was held for the first client, permanently.
+    ///
+    /// Output produced while no client is attached has no audience once the
+    /// session has been claimed and given up again, so only the first attach
+    /// receives anything. Ref: docs/design.md, "Screen contents".
+    fn take_preamble(&self) -> Option<Vec<u8>> {
+        self.preamble
+            .lock()
+            .expect("the preamble is only appended to or taken, never held across a panic")
+            .take()
+            .filter(|held| !held.is_empty())
+    }
 }
 
 // Blocking serve loop. A mutation that returns before the accept and PTY threads
@@ -357,6 +401,7 @@ where
         session_id,
         client: Mutex::new(None),
         attach: Mutex::new(()),
+        preamble: Mutex::new(Some(Vec::new())),
         first_attach: Mutex::new(FirstAttach::default()),
         first_attach_changed: Condvar::new(),
         stopping: AtomicBool::new(false),
@@ -551,6 +596,9 @@ where
                     outbox.abandon();
                     return;
                 }
+                if let Some(held) = shared.take_preamble() {
+                    outbox.send(Message::Output(held));
+                }
                 slot.replace(Client {
                     conn,
                     outbox: Arc::clone(&outbox),
@@ -562,6 +610,13 @@ where
                 // displaced client may already have disconnected; steal still
                 // proceeds, because last-connect-wins does not depend on this
                 // notice.
+                //
+                // A client that is alive but has stopped draining leaves its
+                // writer blocked here until the client's own process exits and
+                // closes the pipe. That is accepted: the notice is what tells a
+                // user why their screen went quiet, and it is worth more than
+                // reclaiming the thread promptly.
+                // Ref: docs/implementation.md, "Displacement".
                 old.outbox.send(Message::Displaced);
                 old.outbox.finish();
             }
@@ -640,7 +695,16 @@ where
         // able to hold the pump, which the exit teardown joins. A write failure
         // is handled by the outbox dropping the connection, which ends the
         // client's own loop and clears the slot.
-        let client = shared.client().clone();
+        let client = {
+            let slot = shared.client();
+            match slot.as_ref() {
+                Some(client) => Some(client.clone()),
+                None => {
+                    shared.hold_for_first_client(&bytes);
+                    None
+                }
+            }
+        };
         if let Some(client) = client {
             client.outbox.send(Message::Output(bytes));
         }
@@ -665,6 +729,10 @@ mod tests {
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::Message;
     use crate::session_record::ProcessIdentity;
+
+    /// Arbitrary nonzero status the mock app exits with, so a test can tell a
+    /// forwarded status from a defaulted one.
+    const SAMPLE_APP_EXIT: i32 = 7;
 
     fn mock_processes(exit: Arc<(Mutex<bool>, Condvar)>) -> MockProcesses {
         mock_processes_with(exit, Durability::Durable)
@@ -696,7 +764,7 @@ mod tests {
             while !*done {
                 done = cvar.wait(done).expect("exit wait");
             }
-            Ok(7)
+            Ok(SAMPLE_APP_EXIT)
         });
         processes
     }
@@ -767,7 +835,7 @@ mod tests {
                 *lock.lock().expect("exit lock") = true;
                 cvar.notify_all();
             }
-            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             let leftover = FsSessionStore::new(dir.path().to_path_buf());
             assert!(leftover.list().unwrap().is_empty());
         });
@@ -835,9 +903,11 @@ mod tests {
             );
             assert_eq!(
                 transport.recv(client).unwrap(),
-                Message::AppExited { status: 7 }
+                Message::AppExited {
+                    status: SAMPLE_APP_EXIT
+                }
             );
-            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
         });
     }
 
@@ -890,9 +960,11 @@ mod tests {
             ));
             assert_eq!(
                 transport.recv(client).unwrap(),
-                Message::AppExited { status: 7 }
+                Message::AppExited {
+                    status: SAMPLE_APP_EXIT
+                }
             );
-            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             transport.disconnect(startup_conn);
         });
     }
@@ -933,7 +1005,7 @@ mod tests {
             // Nobody will ever attach, so the gate must open on this instead.
             transport.disconnect(startup_conn);
 
-            assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             let leftover = FsSessionStore::new(dir.path().to_path_buf());
             assert!(leftover.list().unwrap().is_empty());
         });
@@ -1037,6 +1109,123 @@ mod tests {
         assert!(other.find_source::<StartupFailedError>().is_some());
     }
 
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn output_produced_before_the_first_attach_reaches_that_client() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let exit = Arc::new((Mutex::new(false), Condvar::new()));
+            let processes = mock_processes(Arc::clone(&exit));
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                let pty = pty.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            assert!(matches!(
+                transport.recv(startup_conn).unwrap(),
+                Message::StartupOk { .. }
+            ));
+
+            // The app speaks before anyone has attached, which is the window
+            // `dure run` spends spawning the supervisor and connecting to it.
+            // The supervisor creates exactly one pty on this host, so it holds
+            // the first allocated id.
+            pty.push_output(PtyId(1), b"hello");
+            transport.disconnect(startup_conn);
+
+            let client = transport
+                .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
+                .unwrap();
+            transport
+                .send(client, &Message::Attach { cols: 80, rows: 24 })
+                .unwrap();
+            assert!(matches!(
+                transport.recv(client).unwrap(),
+                Message::Attached { .. }
+            ));
+
+            {
+                let (lock, cvar) = &*exit;
+                *lock.lock().expect("exit lock") = true;
+                cvar.notify_all();
+            }
+
+            // Reading until the app's exit status rather than expecting the held
+            // bytes as the very next message keeps this test terminating: a
+            // supervisor that never delivers them still reaches `AppExited`, so
+            // the failure is an assertion rather than a wait with no end.
+            let mut received = Vec::new();
+            loop {
+                match transport.recv(client).unwrap() {
+                    Message::Output(bytes) => received.extend(bytes),
+                    Message::AppExited { status } => {
+                        assert_eq!(status, SAMPLE_APP_EXIT);
+                        break;
+                    }
+                    other => panic!("unexpected message {other:?}"),
+                }
+            }
+            assert_eq!(received, b"hello");
+
+            assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
+        });
+    }
+
+    #[test]
+    fn only_the_first_client_receives_what_was_held_for_it() {
+        let transport = MemoryTransport::new();
+        let pty = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty);
+        shared.hold_for_first_client(b"hello");
+        assert_eq!(shared.take_preamble(), Some(b"hello".to_vec()));
+        // A client that attaches later starts on an empty screen, so output
+        // produced while nobody was attached is not kept for it.
+        shared.hold_for_first_client(b"unheard");
+        assert_eq!(shared.take_preamble(), None);
+    }
+
+    #[test]
+    fn nothing_held_is_nothing_to_deliver() {
+        let transport = MemoryTransport::new();
+        let pty = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty);
+        assert_eq!(shared.take_preamble(), None);
+    }
+
+    #[test]
+    fn what_is_held_for_the_first_client_is_capped() {
+        let transport = MemoryTransport::new();
+        let pty = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty);
+        let chunk = vec![b'x'; 64 * 1024];
+        let rounds = MAX_CLIENT_BACKLOG_BYTES.div_euclid(chunk.len()) + 2;
+        for _ in 0..rounds {
+            shared.hold_for_first_client(&chunk);
+        }
+        assert_eq!(
+            shared.take_preamble().map(|held| held.len()),
+            Some(MAX_CLIENT_BACKLOG_BYTES)
+        );
+    }
+
     /// Session with a live pty, no client attached.
     fn shared_session(
         transport: &MemoryTransport,
@@ -1049,6 +1238,7 @@ mod tests {
             session_id: SessionId::from_u32(1).unwrap(),
             client: Mutex::new(None),
             attach: Mutex::new(()),
+            preamble: Mutex::new(Some(Vec::new())),
             first_attach: Mutex::new(FirstAttach::default()),
             first_attach_changed: Condvar::new(),
             stopping: AtomicBool::new(false),

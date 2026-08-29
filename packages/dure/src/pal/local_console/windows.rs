@@ -4,14 +4,16 @@ use std::io;
 use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Globalization::CP_UTF8;
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows::Win32::System::Console::{
     CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
     ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
     ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, ENABLE_WRAP_AT_EOL_OUTPUT,
-    GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT,
-    PeekConsoleInputW, ReadConsoleInputW, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-    SetConsoleCtrlHandler, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+    GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo, GetStdHandle,
+    INPUT_RECORD, KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW, STD_HANDLE, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, SetConsoleCP, SetConsoleCtrlHandler, SetConsoleMode, SetConsoleOutputCP,
+    WINDOW_BUFFER_SIZE_EVENT,
 };
 use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
@@ -27,8 +29,18 @@ pub(crate) struct BuildTargetConsole;
 /// `ReadFile` may return less. Not a protocol bound.
 const INPUT_READ_BUF: usize = 4096;
 
-fn saved_modes() -> &'static Mutex<Option<(CONSOLE_MODE, CONSOLE_MODE)>> {
-    static SAVED: OnceLock<Mutex<Option<(CONSOLE_MODE, CONSOLE_MODE)>>> = OnceLock::new();
+/// Console state the relay replaces, kept so the terminal can be handed back
+/// the way it was found. Ref: docs/implementation.md, "Local console".
+#[derive(Clone, Copy, Debug)]
+struct SavedConsole {
+    in_mode: CONSOLE_MODE,
+    out_mode: CONSOLE_MODE,
+    in_code_page: u32,
+    out_code_page: u32,
+}
+
+fn saved_console() -> &'static Mutex<Option<SavedConsole>> {
+    static SAVED: OnceLock<Mutex<Option<SavedConsole>>> = OnceLock::new();
     SAVED.get_or_init(|| Mutex::new(None))
 }
 
@@ -58,6 +70,28 @@ fn restore_mode(kind: STD_HANDLE, mode: CONSOLE_MODE) -> Result<(), PalError> {
     // SAFETY: `handle` is a standard console handle; `mode` was captured from
     // it before `enter_raw_relay` changed it.
     unsafe { SetConsoleMode(handle, mode) }.map_err(|_error| PalError::new(PalErrorKind::Other))
+}
+
+/// Sets the code pages this console uses to interpret relayed bytes.
+///
+/// The relay carries a byte stream that a pseudoconsole produced and that a
+/// pseudoconsole will consume, and those are UTF-8 in both directions. A
+/// console applies its code page to the bytes crossing `WriteFile` and
+/// `ReadFile`, and that code page defaults to the machine's OEM one, under
+/// which every multi-byte UTF-8 sequence decodes as several unrelated glyphs.
+/// Ref: docs/implementation.md, "Console encoding".
+///
+/// Both are attempted even when the first fails, because a console left with
+/// one side converted is worse than one left wholly unconverted.
+fn set_code_pages(input: u32, output: u32) -> Result<(), PalError> {
+    // SAFETY: both set process-wide console state to a documented code page
+    // identifier and take no pointers.
+    let input = unsafe { SetConsoleCP(input) };
+    // SAFETY: as above, for the output direction.
+    let output = unsafe { SetConsoleOutputCP(output) };
+    input
+        .and(output)
+        .map_err(|_error| PalError::new(PalErrorKind::Other))
 }
 
 fn read_window_size(output: HANDLE) -> Result<WindowSize, PalError> {
@@ -174,12 +208,21 @@ impl LocalConsole for BuildTargetConsole {
         let output = std_handle(STD_OUTPUT_HANDLE)?;
         let in_mode = console_mode(input)?;
         let out_mode = console_mode(output)?;
+        // SAFETY: reads process-wide console state and takes no arguments.
+        let in_code_page = unsafe { GetConsoleCP() };
+        // SAFETY: reads process-wide console state and takes no arguments.
+        let out_code_page = unsafe { GetConsoleOutputCP() };
         {
-            let mut saved = saved_modes()
+            let mut saved = saved_console()
                 .lock()
-                .expect("saved console modes are only copied, never held across a panic");
+                .expect("saved console state is only copied, never held across a panic");
             if saved.is_none() {
-                *saved = Some((in_mode, out_mode));
+                *saved = Some(SavedConsole {
+                    in_mode,
+                    out_mode,
+                    in_code_page,
+                    out_code_page,
+                });
             }
         }
         // Disable cooked input so keystrokes reach the app immediately. Enable
@@ -206,27 +249,31 @@ impl LocalConsole for BuildTargetConsole {
         // combination of documented console mode flags.
         unsafe { SetConsoleMode(output, raw_out) }
             .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+        set_code_pages(CP_UTF8, CP_UTF8)?;
         Ok(())
     }
 
     fn leave_raw_relay(&self) -> Result<(), PalError> {
-        let saved = saved_modes()
+        let saved = saved_console()
             .lock()
-            .expect("saved console modes are only copied, never held across a panic")
+            .expect("saved console state is only copied, never held across a panic")
             .take();
         // Every restoration is attempted even when an earlier one fails, and the
         // Ctrl+C request is undone even when no modes were ever captured:
         // leaving the console half-raw is worse than losing a later error.
-        let input = saved.map_or(Ok(()), |(in_mode, _out_mode)| {
-            restore_mode(STD_INPUT_HANDLE, in_mode)
+        let input = saved.map_or(Ok(()), |saved| {
+            restore_mode(STD_INPUT_HANDLE, saved.in_mode)
         });
-        let output = saved.map_or(Ok(()), |(_in_mode, out_mode)| {
-            restore_mode(STD_OUTPUT_HANDLE, out_mode)
+        let output = saved.map_or(Ok(()), |saved| {
+            restore_mode(STD_OUTPUT_HANDLE, saved.out_mode)
+        });
+        let code_pages = saved.map_or(Ok(()), |saved| {
+            set_code_pages(saved.in_code_page, saved.out_code_page)
         });
         // SAFETY: Add=FALSE undoes the ignore-Ctrl+C request from attach.
         let ctrl_c = unsafe { SetConsoleCtrlHandler(None, false) }
             .map_err(|_error| PalError::new(PalErrorKind::Other));
-        input.and(output).and(ctrl_c)
+        input.and(output).and(code_pages).and(ctrl_c)
     }
 
     fn window_size(&self) -> Result<WindowSize, PalError> {

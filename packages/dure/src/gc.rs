@@ -6,6 +6,7 @@ use crate::pal::processes::{ProcessLiveness, Processes};
 use crate::pal::session_store::SessionStore;
 use crate::session_id::SessionId;
 use crate::session_record::SessionRecord;
+use crate::trace::{Trace, trace};
 use crate::{InspectProcessError, SessionNotFoundError, StoreError};
 
 /// Lists live sessions, deleting records whose supervisor process is gone.
@@ -17,13 +18,33 @@ use crate::{InspectProcessError, SessionNotFoundError, StoreError};
 pub(crate) fn live_sessions(
     store: &impl SessionStore,
     processes: &impl Processes,
+    trace: Trace,
 ) -> Result<Vec<SessionRecord>, AppError> {
     let records = store.list().map_err(|_error| StoreError::new())?;
+    trace!(
+        trace,
+        "read {} session record(s) from the store",
+        records.len()
+    );
     let mut live = Vec::new();
     for record in records {
         match processes.probe(&record.identity()) {
-            ProcessLiveness::Live => live.push(record),
+            ProcessLiveness::Live => {
+                trace!(
+                    trace,
+                    "session {}: supervisor pid {} is running, so the session is live",
+                    record.id,
+                    record.supervisor_pid
+                );
+                live.push(record);
+            }
             ProcessLiveness::Dead => {
+                trace!(
+                    trace,
+                    "session {}: supervisor pid {} is gone, so the record is dropped",
+                    record.id,
+                    record.supervisor_pid
+                );
                 // Ids are reused, so deleting by id alone can reap a session
                 // that claimed this id since `list` read it.
                 store
@@ -31,11 +52,18 @@ pub(crate) fn live_sessions(
                     .map_err(|_error| StoreError::new())?;
             }
             ProcessLiveness::InspectFailed => {
+                trace!(
+                    trace,
+                    "session {}: supervisor pid {} could not be inspected, so nothing is assumed about it",
+                    record.id,
+                    record.supervisor_pid
+                );
                 return Err(InspectProcessError::for_pid(record.supervisor_pid).into());
             }
         }
     }
-    reap_orphan_reservations(store, processes)?;
+    reap_orphan_reservations(store, processes, trace)?;
+    trace!(trace, "{} live session(s)", live.len());
     Ok(live)
 }
 
@@ -46,15 +74,26 @@ pub(crate) fn live_sessions(
 fn reap_orphan_reservations(
     store: &impl SessionStore,
     processes: &impl Processes,
+    trace: Trace,
 ) -> Result<(), AppError> {
     let reservations = store
         .list_reservations()
         .map_err(|_error| StoreError::new())?;
     for (id, owner) in reservations {
         if processes.probe(&owner) == ProcessLiveness::Dead {
+            trace!(
+                trace,
+                "id {id} was claimed by pid {} which is gone, so the claim is released", owner.pid
+            );
             store
                 .delete_owned_by(id, &owner)
                 .map_err(|_error| StoreError::new())?;
+        } else {
+            trace!(
+                trace,
+                "id {id} is claimed by pid {} which is still starting up, so the id stays taken",
+                owner.pid
+            );
         }
     }
     Ok(())
@@ -65,13 +104,26 @@ pub(crate) fn require_live_session(
     store: &impl SessionStore,
     processes: &impl Processes,
     id: SessionId,
+    trace: Trace,
 ) -> Result<SessionRecord, AppError> {
     let Some(record) = store.read(id).map_err(|_error| StoreError::new())? else {
+        trace!(trace, "no record for session {id} in the store");
         return Err(SessionNotFoundError::for_id(id).into());
     };
+    trace!(
+        trace,
+        "session {id}: recorded supervisor pid {}, pipe {}",
+        record.supervisor_pid,
+        record.pipe_name
+    );
     match processes.probe(&record.identity()) {
         ProcessLiveness::Live => Ok(record),
         ProcessLiveness::Dead => {
+            trace!(
+                trace,
+                "session {id}: supervisor pid {} is gone, so the record is dropped",
+                record.supervisor_pid
+            );
             store
                 .delete_owned_by(id, &record.identity())
                 .map_err(|_error| StoreError::new())?;
@@ -129,7 +181,7 @@ mod tests {
                 }
             });
 
-        let live = live_sessions(&store, &processes).unwrap();
+        let live = live_sessions(&store, &processes, Trace::default()).unwrap();
         assert_eq!(live.len(), 1);
         assert_eq!(live.first().expect("one live session").id, live_id.get());
         assert!(store.read(dead_id).unwrap().is_none());
@@ -150,7 +202,7 @@ mod tests {
             .expect_probe()
             .returning(|_| ProcessLiveness::InspectFailed);
 
-        live_sessions(&store, &processes).unwrap_err();
+        live_sessions(&store, &processes, Trace::default()).unwrap_err();
         assert!(store.read(id).unwrap().is_some());
         _ = SessionId::MIN;
     }
@@ -173,7 +225,7 @@ mod tests {
             .withf(|identity: &ProcessIdentity| identity.pid == 10)
             .returning(|_| ProcessLiveness::Live);
 
-        let found = require_live_session(&store, &processes, live_id).unwrap();
+        let found = require_live_session(&store, &processes, live_id, Trace::default()).unwrap();
         assert_eq!(found.id, live_id.get());
         assert!(store.read(dead_id).unwrap().is_some());
     }
@@ -192,7 +244,7 @@ mod tests {
             .expect_probe()
             .returning(|_| ProcessLiveness::Dead);
 
-        let error = require_live_session(&store, &processes, id).unwrap_err();
+        let error = require_live_session(&store, &processes, id, Trace::default()).unwrap_err();
         assert!(error.find_source::<SessionNotFoundError>().is_some());
         assert!(store.read(id).unwrap().is_none());
     }
@@ -210,7 +262,11 @@ mod tests {
             .expect_probe()
             .returning(|_| ProcessLiveness::Dead);
 
-        assert!(live_sessions(&store, &processes).unwrap().is_empty());
+        assert!(
+            live_sessions(&store, &processes, Trace::default())
+                .unwrap()
+                .is_empty()
+        );
         assert!(store.list_reservations().unwrap().is_empty());
         // The id is free again, so the next claim takes it.
         assert_eq!(
@@ -233,7 +289,11 @@ mod tests {
             .expect_probe()
             .returning(|_| ProcessLiveness::Live);
 
-        assert!(live_sessions(&store, &processes).unwrap().is_empty());
+        assert!(
+            live_sessions(&store, &processes, Trace::default())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(store.list_reservations().unwrap(), vec![(claimed, owner)]);
     }
 
@@ -253,7 +313,11 @@ mod tests {
 
         // An unreadable owner is not a confirmed death, so the claim stays and
         // reaping reports success.
-        assert!(live_sessions(&store, &processes).unwrap().is_empty());
+        assert!(
+            live_sessions(&store, &processes, Trace::default())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(store.list_reservations().unwrap().len(), 1);
     }
 }

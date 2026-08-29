@@ -43,8 +43,9 @@ or the initiator has dropped the channel.
 ## Platform gate
 
 `dure` builds only for Windows. `lib.rs` carries a crate-level `#![cfg(windows)]`
-and `main.rs` compiles to an empty `main` elsewhere, so a non-Windows build
-produces a binary that does nothing rather than a crate full of per-item platform
+and `main.rs` compiles elsewhere to a `main` that reports the unsupported
+platform and exits with a failure status, so a non-Windows build produces a
+binary that refuses to run rather than a crate full of per-item platform
 attributes. Nothing under the PAL needs a non-Windows implementation, and no
 module needs to reason about a platform it never runs on. The integration test
 helper follows the same rule for the same reason.
@@ -103,6 +104,32 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
 Bounded waits use `CONNECT_TIMEOUT` as a stuck-supervisor watchdog. Unit tests
 inject timeout and disconnect through the mock transport instead of waiting on
 real time.
+
+## Output rendering
+
+Everything the user reads before attach is assembled by pure functions that take
+data and return text, so the wording and shape of the output are unit-testable
+without a console:
+
+* `list_fmt` builds the session table. It measures every cell, including the
+  headings, and pads each column to the widest of them, so a heading always sits
+  above the values it names however long a command line is. Widths count
+  characters rather than bytes, because a byte count would over-pad any row
+  holding a non-ASCII path. The final column is not padded, which keeps trailing
+  blanks out of a line something else may compare.
+* `path_display` renders a stored path for a human. The session store keeps
+  canonical paths, which on Windows carry the extended-length `\\?\` prefix;
+  that prefix is dropped for display, and the UNC form `\\?\UNC\server\share` is
+  rendered back as `\\server\share`. Only display goes through this; comparison
+  always uses the canonical form.
+* `trace` is the `--verbose` channel. `Trace` is a `Copy` value threaded into
+  every command and into the garbage collector rather than a global, so a test
+  can construct a quiet one by `Default` and the compiler enforces that new code
+  paths decide what they explain. The `trace!` macro takes `format_args!` and so
+  assembles nothing when tracing is off. Notes go to stderr; they describe the
+  inputs behind a decision, not just its result, per the workspace convention in
+  `docs/standalone-binaries.md` at the repository root. The wording itself is not
+  a behavioral contract, so the note-producing helpers carry `mutants::skip`.
 
 ## Testing
 
@@ -277,6 +304,33 @@ or it observes the stop and is refused before it acknowledges. Without that
 ordering a client could install itself between the stop and the claim, and would
 lose the supervisor without ever being told the app exited.
 
+### Opening output
+
+The app starts before its first client attaches, so the output pump has to hold
+what it produces in that window rather than discard it (design.md, "Screen
+contents"). The pump decides under the client-slot lock: with a client it hands
+the bytes over, without one it appends them to the held buffer. Taking that
+decision under the slot lock is what stops an attach from slipping between
+"nobody is attached" and the append, which would strand the bytes behind a
+buffer nobody will read again. Attach takes the buffer, permanently — a second
+attach finds nothing, which is what makes later attaches start on an empty
+screen.
+
+What is held is bounded by the same measure as a live client's backlog, keeping
+the earliest bytes, because an arriving client is served better by the app's
+first screen than by the tail of a burst it has no context for.
+
+### Displacement
+
+A displaced client is told why its screen went quiet before its connection is
+dropped, so the notice is queued rather than written on the accept path. A
+displaced client that is alive but has stopped draining leaves its writer
+blocked on that notice until its own process exits and closes the pipe. That
+thread is accepted: `Outbox::finish` deliberately does not disconnect, because
+disconnecting would be the very thing that discards the notice, and a user who
+does not know their session was taken has a worse problem than a supervisor
+holding one idle thread.
+
 ## Transport
 
 A per-session named pipe carries a framed protocol containing console bytes,
@@ -379,6 +433,31 @@ Teardown closes the lifetime job before the pseudoconsole. Descendants of the
 app stay attached to the pseudoconsole until the job ends them, and closing a
 pseudoconsole waits for its attached clients, so the other order can stall on a
 grandchild that outlived the app.
+
+### Console encoding
+
+A pseudoconsole produces and consumes UTF-8. A console, in contrast, applies a
+code page to the bytes crossing `WriteFile` and `ReadFile`, and both console
+code pages default to the machine's OEM one — 437 on a US-English install. The
+relay hands the client's console raw pseudoconsole bytes, so under an OEM code
+page every multi-byte UTF-8 sequence is decoded as several unrelated glyphs:
+a TUI's frame comes out as unreadable text, and because each sequence expands to
+more cells than it should, the line wraps early and the right edge of the screen
+breaks up. ASCII survives because it is identical in both, which is why plain
+text looks fine while everything else does not.
+
+`enter_raw_relay` therefore sets both code pages to `CP_UTF8` alongside the
+console modes, and `leave_raw_relay` restores the saved values with the saved
+modes. Code pages are per-console and outlive the process that changed them, so
+leaving them converted would change how a shell sharing that console behaves
+after the session. The input direction needs the same treatment: without it a
+non-ASCII keystroke is encoded under the OEM code page and reaches the app as
+something else.
+
+`relayed_output_keeps_non_ascii_text_intact` covers this end to end: the helper
+prints box-drawing characters through the supervisor's pseudoconsole, and the
+test asserts they arrive intact in the outer pseudoconsole's screen, which they
+do not if either code page is left at its default.
 
 ## Crates and concurrency
 

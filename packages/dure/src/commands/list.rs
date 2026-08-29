@@ -6,13 +6,15 @@ use crate::gc::live_sessions;
 use crate::list_fmt::format_list;
 use crate::pal::processes::Processes;
 use crate::pal::session_store::SessionStore;
+use crate::trace::Trace;
 
 /// Print live sessions.
 pub(crate) fn execute(
     store: &impl SessionStore,
     processes: &impl Processes,
+    trace: Trace,
 ) -> Result<(), AppError> {
-    let live = live_sessions(store, processes)?;
+    let live = live_sessions(store, processes, trace)?;
     println!("{}", format_list(&live));
     Ok(())
 }
@@ -50,7 +52,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
         let processes = MockProcesses::new();
-        execute(&store, &processes).unwrap();
+        execute(&store, &processes, Trace::default()).unwrap();
     }
 
     #[test]
@@ -64,7 +66,7 @@ mod tests {
         processes
             .expect_probe()
             .returning(|_| ProcessLiveness::Live);
-        execute(&store, &processes).unwrap();
+        execute(&store, &processes, Trace::default()).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
@@ -79,7 +81,7 @@ mod tests {
         processes
             .expect_probe()
             .returning(|_| ProcessLiveness::Dead);
-        execute(&store, &processes).unwrap();
+        execute(&store, &processes, Trace::default()).unwrap();
         assert!(store.list().unwrap().is_empty());
     }
 }

@@ -3,6 +3,8 @@
 use ohno::AppError;
 
 use crate::pal::Pal;
+use crate::path_display::display_path;
+use crate::trace::{Trace, trace};
 use crate::types::{Command, Outcome, RunInput};
 use crate::{PalFailedError, commands};
 
@@ -18,6 +20,15 @@ pub fn run(input: &RunInput) -> Result<Outcome, AppError> {
 }
 
 pub(crate) fn dispatch(input: &RunInput, pal: &Pal) -> Result<Outcome, AppError> {
+    let trace = Trace::new(input.verbose);
+    trace!(
+        trace,
+        "store root: {}",
+        input
+            .store_root
+            .as_deref()
+            .map_or_else(|| "per-user default".to_string(), display_path)
+    );
     match &input.command {
         Command::Run { command } => commands::run::execute(
             &pal.store,
@@ -26,6 +37,7 @@ pub(crate) fn dispatch(input: &RunInput, pal: &Pal) -> Result<Outcome, AppError>
             &pal.console,
             command.clone(),
             input.store_root.clone(),
+            trace,
         ),
         Command::Resume { id } => commands::resume::execute(
             &pal.store,
@@ -33,14 +45,14 @@ pub(crate) fn dispatch(input: &RunInput, pal: &Pal) -> Result<Outcome, AppError>
             &pal.transport,
             &pal.console,
             *id,
-            input.verbose,
+            trace,
         ),
         Command::List => {
-            commands::list::execute(&pal.store, &pal.processes)?;
+            commands::list::execute(&pal.store, &pal.processes, trace)?;
             Ok(Outcome::Success)
         }
         Command::Kill { id } => {
-            commands::kill::execute(&pal.store, &pal.processes, *id)?;
+            commands::kill::execute(&pal.store, &pal.processes, *id, trace)?;
             Ok(Outcome::Success)
         }
         Command::Supervisor {

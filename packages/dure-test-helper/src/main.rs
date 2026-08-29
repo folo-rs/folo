@@ -39,6 +39,10 @@ fn main() {
         Some("has-console") => {
             print_console_status();
         }
+        Some("print-non-ascii") => {
+            println!("{}", dure_test_helper::SAMPLE_NON_ASCII_TEXT);
+            io::stdout().flush().expect("flush stdout");
+        }
         Some("wait-has-console") => {
             wait_for_byte();
             print_console_status();
@@ -50,7 +54,7 @@ fn main() {
         _ => {
             eprintln!(
                 "usage: dure-test-helper echo-line | print-and-wait | exit [code] | \
-                 has-console | wait-has-console | wait-exit [code]"
+                 has-console | print-non-ascii | wait-has-console | wait-exit [code]"
             );
             process::exit(2);
         }

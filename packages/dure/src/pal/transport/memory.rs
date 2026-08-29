@@ -32,7 +32,12 @@ struct Inner {
     listeners: Mutex<HashMap<String, ListenerId>>,
     listener_state: Mutex<HashMap<ListenerId, ListenerState>>,
     conns: Mutex<HashMap<ConnId, ConnState>>,
-    cond: Condvar,
+    /// Guards the pending-connection predicate under `listener_state`. A
+    /// `Condvar` may only ever be paired with one mutex, so the connection side
+    /// has its own below.
+    listener_cond: Condvar,
+    /// Guards the queued-message and stalled predicates under `conns`.
+    conn_cond: Condvar,
 }
 
 /// Thread-safe in-memory named-pipe stand-in.
@@ -55,7 +60,8 @@ impl MemoryTransport {
                 listeners: Mutex::new(HashMap::new()),
                 listener_state: Mutex::new(HashMap::new()),
                 conns: Mutex::new(HashMap::new()),
-                cond: Condvar::new(),
+                listener_cond: Condvar::new(),
+                conn_cond: Condvar::new(),
             }),
         }
     }
@@ -70,7 +76,7 @@ impl MemoryTransport {
         if let Some(state) = conns.get_mut(&conn) {
             state.stalled = true;
         }
-        self.inner.cond.notify_all();
+        self.inner.conn_cond.notify_all();
     }
 
     /// Let sends on `conn` proceed again, releasing whoever is blocked on it.
@@ -79,7 +85,7 @@ impl MemoryTransport {
         if let Some(state) = conns.get_mut(&conn) {
             state.stalled = false;
         }
-        self.inner.cond.notify_all();
+        self.inner.conn_cond.notify_all();
     }
 }
 
@@ -125,7 +131,11 @@ impl Transport for MemoryTransport {
             if !state.contains_key(&listener) {
                 return Err(PalError::new(PalErrorKind::NotFound));
             }
-            state = self.inner.cond.wait(state).expect("listener condvar");
+            state = self
+                .inner
+                .listener_cond
+                .wait(state)
+                .expect("listener condvar");
         }
     }
 
@@ -169,7 +179,7 @@ impl Transport for MemoryTransport {
             return Err(PalError::new(PalErrorKind::Timeout));
         };
         listener_state.pending.push_back(server);
-        self.inner.cond.notify_all();
+        self.inner.listener_cond.notify_all();
         Ok(client)
     }
 
@@ -185,7 +195,7 @@ impl Transport for MemoryTransport {
             if !state.stalled {
                 break state.peer;
             }
-            conns = self.inner.cond.wait(conns).expect("conn condvar");
+            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
         };
         let Some(state) = conns.get_mut(&peer) else {
             return Err(PalError::new(PalErrorKind::NotFound));
@@ -194,7 +204,7 @@ impl Transport for MemoryTransport {
             return Err(PalError::new(PalErrorKind::NotFound));
         }
         state.incoming.push_back(message.clone());
-        self.inner.cond.notify_all();
+        self.inner.conn_cond.notify_all();
         Ok(())
     }
 
@@ -210,7 +220,7 @@ impl Transport for MemoryTransport {
             if state.closed {
                 return Err(PalError::new(PalErrorKind::Disconnected));
             }
-            conns = self.inner.cond.wait(conns).expect("conn condvar");
+            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
         }
     }
 
@@ -225,7 +235,7 @@ impl Transport for MemoryTransport {
         {
             state.closed = true;
         }
-        self.inner.cond.notify_all();
+        self.inner.conn_cond.notify_all();
     }
 
     fn close_listener(&self, listener: ListenerId) {
@@ -239,7 +249,7 @@ impl Transport for MemoryTransport {
             .lock()
             .expect("listener state lock")
             .remove(&listener);
-        self.inner.cond.notify_all();
+        self.inner.listener_cond.notify_all();
     }
 
     fn pipe_name(&self, nonce: &str) -> String {

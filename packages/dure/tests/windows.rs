@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dure::test_support::ConsoleProcess;
+use dure_test_helper::SAMPLE_NON_ASCII_TEXT;
 use tempfile::TempDir;
 use testing::with_watchdog;
 
@@ -90,6 +91,10 @@ const SAMPLE_NONZERO_EXIT: i32 = 7;
 /// The id a fresh store hands to its first session, so a test that owns an
 /// empty store knows the banner to expect.
 const FIRST_SESSION_ID: u64 = 1;
+
+/// Distinctive part of the helper's file name, which a verbose run echoes and a
+/// quiet one never does.
+const HELPER_STEM: &str = "dure-test-helper";
 
 #[cfg_attr(miri, ignore)]
 #[test]
@@ -185,6 +190,55 @@ fn helper_sees_a_console() {
         let report = fs::read_to_string(dir.path().join("console-status.txt"))
             .expect("helper console status file");
         assert_eq!(report, "console");
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn run_explains_what_it_is_launching_when_verbose() {
+    with_watchdog(|| {
+        let dir = TempDir::new().unwrap();
+        let helper = helper_exe();
+        let args = vec![
+            "--store-root".to_string(),
+            dir.path().display().to_string(),
+            "run".to_string(),
+            "--verbose".to_string(),
+            "--".to_string(),
+            helper.display().to_string(),
+            "wait-exit".to_string(),
+            "0".to_string(),
+        ];
+        let client = ConsoleProcess::spawn(&dure_exe(), &args, dir.path());
+        // The app being launched is an input a quiet run never echoes, so
+        // finding it proves the trace reached the terminal before attach.
+        let output = collect_until(&client, HELPER_STEM);
+        // The helper's console is in line-input mode, so a lone character is
+        // not delivered to `stdin.read` until a newline arrives.
+        client.write_input(b"x\r\n");
+        let status = client.wait();
+        assert_eq!(status, 0, "client output: {output:?}");
+    });
+}
+
+#[cfg_attr(miri, ignore)]
+#[test]
+fn relayed_output_keeps_non_ascii_text_intact() {
+    with_watchdog(|| {
+        let dir = TempDir::new().unwrap();
+        let helper = helper_exe();
+        let args = vec![
+            "--store-root".to_string(),
+            dir.path().display().to_string(),
+            "run".to_string(),
+            "--".to_string(),
+            helper.display().to_string(),
+            "print-non-ascii".to_string(),
+        ];
+        let client = ConsoleProcess::spawn(&dure_exe(), &args, dir.path());
+        let output = collect_until(&client, SAMPLE_NON_ASCII_TEXT);
+        let status = client.wait();
+        assert_eq!(status, 0, "client output: {output:?}");
     });
 }
 

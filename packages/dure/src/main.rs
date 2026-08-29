@@ -20,17 +20,27 @@ use dure::{Cli, Outcome, run};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// `dure` has no meaning outside Windows, so the binary is an empty stub there
-/// (implementation.md, "Platform gate").
+/// `dure` drives Windows consoles and has no meaning elsewhere
+/// (implementation.md, "Platform gate"), so the binary refuses to run rather
+/// than reporting a success it did not deliver.
 #[cfg(not(windows))]
-fn main() {}
+fn main() -> std::process::ExitCode {
+    eprintln!("Error: dure runs only on Windows.");
+    std::process::ExitCode::FAILURE
+}
 
 #[cfg(windows)]
 #[cfg_attr(test, mutants::skip)]
 fn main() -> ExitCode {
-    let env_args: Vec<String> = env::args_os()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let Some(env_args) = env::args_os()
+        .map(|arg| arg.into_string().ok())
+        .collect::<Option<Vec<String>>>()
+    else {
+        // The app is launched with the argv given here, so mangling it into
+        // something the shell did not ask for is worse than refusing.
+        eprintln!("Error: every argument must be valid Unicode.");
+        return ExitCode::FAILURE;
+    };
     let str_args: Vec<&str> = env_args.iter().map(String::as_str).collect();
     let program_name = str_args.first().map_or("dure", |name| *name);
 

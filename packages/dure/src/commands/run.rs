@@ -15,8 +15,10 @@ use crate::pal::local_console::LocalConsole;
 use crate::pal::processes::{Processes, SupervisorSpawn};
 use crate::pal::session_store::SessionStore;
 use crate::pal::transport::Transport;
+use crate::path_display::display_path;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
+use crate::trace::{Trace, trace};
 use crate::types::Outcome;
 use crate::{
     BreakawayDeniedError, CanonicalizeError, CurrentDirectoryError, EmptyCommandError,
@@ -80,6 +82,7 @@ pub(crate) fn execute<S, P, T, C>(
     console: &C,
     command: Vec<String>,
     store_root: Option<PathBuf>,
+    trace: Trace,
 ) -> Result<Outcome, AppError>
 where
     S: SessionStore,
@@ -93,6 +96,7 @@ where
     if !console.has_console() {
         return Err(NoConsoleError::new().into());
     }
+    trace!(trace, "app to run: {}", command.join(" "));
 
     let cwd = store
         .current_dir()
@@ -100,9 +104,20 @@ where
     let launch_directory = store
         .canonicalize(&cwd)
         .map_err(|_error| CanonicalizeError::new(cwd))?;
+    // Auto-detect matches on this canonicalized form, so it is what a later
+    // `dure resume` in this directory will compare against.
+    trace!(
+        trace,
+        "launch directory: {} (auto-detect will match a resume from here)",
+        display_path(&launch_directory)
+    );
 
     let nonce = processes.random_nonce();
     let startup_pipe = transport.pipe_name(&format!("startup-{nonce}"));
+    trace!(
+        trace,
+        "listening on {startup_pipe} for the supervisor to report in"
+    );
     let listener = transport
         .listen(&startup_pipe)
         .map_err(|_error| StartupFailedError::new())?;
@@ -124,6 +139,12 @@ where
     args.push("--".to_string());
     args.extend(command);
 
+    trace!(
+        trace,
+        "spawning the supervisor: {} {}",
+        display_path(&exe),
+        args.join(" ")
+    );
     processes
         .spawn_supervisor(&SupervisorSpawn { exe, args })
         .map_err(|error| match error.kind() {
@@ -163,6 +184,11 @@ where
             session_id,
             durability,
         }) => {
+            trace!(
+                trace,
+                "supervisor reported in as session {session_id}, durability {}",
+                durability_note(durability)
+            );
             if durability == Durability::TiedToLauncher {
                 // The supervisor discovers this about itself but has no console
                 // to say it on. Ref: docs/implementation.md, "Job breakaway".
@@ -181,9 +207,19 @@ where
     // attach. Ref: docs/implementation.md, "Process split".
     StartupWatch::settle(&startup);
 
-    let outcome = attach_to(store, transport, console, session_id);
+    let outcome = attach_to(store, transport, console, session_id, trace);
     transport.disconnect(conn);
     outcome
+}
+
+// Trace wording is not a behavioral contract; the warning that follows a
+// tied-to-launcher session is.
+#[cfg_attr(test, mutants::skip)]
+fn durability_note(durability: Durability) -> &'static str {
+    match durability {
+        Durability::Durable => "survives this terminal",
+        Durability::TiedToLauncher => "tied to the launcher, so it will not survive",
+    }
 }
 
 /// Read the published record and hand the console over to the session.
@@ -192,6 +228,7 @@ fn attach_to<S, T, C>(
     transport: &T,
     console: &C,
     session_id: SessionId,
+    trace: Trace,
 ) -> Result<Outcome, AppError>
 where
     S: SessionStore,
@@ -202,6 +239,10 @@ where
         .read(session_id)
         .map_err(|_error| StoreError::new())?
         .ok_or_else(StartupFailedError::new)?;
+    trace!(
+        trace,
+        "attaching to session {session_id} on {}", record.pipe_name
+    );
     attach(transport, console, &record.pipe_name, session_id)
 }
 
@@ -248,7 +289,16 @@ mod tests {
         let processes = MockProcesses::new();
         let transport = MemoryTransport::new();
         let console = LocalConsoleFacade::from_mock(MockLocalConsole::new());
-        execute(&store, &processes, &transport, &console, Vec::new(), None).unwrap_err();
+        execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            Vec::new(),
+            None,
+            Trace::default(),
+        )
+        .unwrap_err();
     }
 
     #[test]
@@ -269,6 +319,7 @@ mod tests {
             &console,
             vec!["app.exe".to_string()],
             None,
+            Trace::default(),
         )
         .unwrap_err();
     }
@@ -300,6 +351,7 @@ mod tests {
             &console,
             vec!["app.exe".to_string()],
             None,
+            Trace::default(),
         )
         .unwrap_err();
         assert!(error.find_source::<BreakawayDeniedError>().is_some());
@@ -332,6 +384,7 @@ mod tests {
             &console,
             vec!["app.exe".to_string()],
             None,
+            Trace::default(),
         )
         .unwrap_err();
         assert!(error.find_source::<StartupFailedError>().is_some());
@@ -374,6 +427,7 @@ mod tests {
             &console,
             vec!["app.exe".to_string()],
             None,
+            Trace::default(),
         )
         .unwrap_err();
         assert!(error.find_source::<StartupFailedError>().is_some());
@@ -432,6 +486,7 @@ mod tests {
             &console,
             vec!["app.exe".to_string()],
             None,
+            Trace::default(),
         )
         .unwrap_err()
     }

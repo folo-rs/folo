@@ -1,5 +1,7 @@
 //! `dure resume`.
 
+use std::io::{self, Write};
+
 use ohno::AppError;
 
 use crate::attach::attach;
@@ -12,10 +14,11 @@ use crate::pal::session_store::SessionStore;
 use crate::pal::transport::Transport;
 use crate::session_id::SessionId;
 use crate::session_record::SessionRecord;
+use crate::trace::{Trace, trace};
 use crate::types::Outcome;
 use crate::{
-    CanonicalizeError, CurrentDirectoryError, NoLiveSessionsError, PromptFailedError,
-    SessionNotFoundError, parse_prompted_id,
+    CanonicalizeError, CurrentDirectoryError, NoLiveSessionsError, PalFailedError,
+    PromptFailedError, SessionNotFoundError, parse_prompted_id,
 };
 
 /// Attach using auto-detect or an explicit id.
@@ -25,7 +28,7 @@ pub(crate) fn execute<S, P, T, C>(
     transport: &T,
     console: &C,
     id: Option<SessionId>,
-    verbose: bool,
+    trace: Trace,
 ) -> Result<Outcome, AppError>
 where
     S: SessionStore,
@@ -34,15 +37,27 @@ where
     C: LocalConsole + Clone + Send + Sync + 'static,
 {
     let record = match id {
-        Some(id) => require_live_session(store, processes, id)?,
+        Some(id) => {
+            trace!(
+                trace,
+                "session {id} was named on the command line, so auto-detect is skipped"
+            );
+            require_live_session(store, processes, id, trace)?
+        }
         None => {
-            let live = live_sessions(store, processes)?;
-            let id = resolve_auto(store, console, &live, verbose)?;
+            let live = live_sessions(store, processes, trace)?;
+            let id = resolve_auto(store, console, &live, trace)?;
             live.into_iter()
                 .find(|record| record.session_id() == id)
                 .ok_or_else(|| AppError::from(SessionNotFoundError::for_id(id)))?
         }
     };
+    trace!(
+        trace,
+        "attaching to session {} on {}",
+        record.session_id(),
+        record.pipe_name
+    );
     attach(transport, console, &record.pipe_name, record.session_id())
 }
 
@@ -50,7 +65,7 @@ fn resolve_auto<S, C>(
     store: &S,
     console: &C,
     live: &[SessionRecord],
-    verbose: bool,
+    trace: Trace,
 ) -> Result<SessionId, AppError>
 where
     S: SessionStore,
@@ -62,7 +77,7 @@ where
     let cwd = store
         .canonicalize(&cwd)
         .map_err(|_error| CanonicalizeError::new(cwd))?;
-    match auto_detect(live, &cwd, verbose) {
+    match auto_detect(live, &cwd, trace) {
         DetectOutcome::None => Err(NoLiveSessionsError::new().into()),
         DetectOutcome::Unique(id) => Ok(id),
         DetectOutcome::Ambiguous(sessions) => {
@@ -70,6 +85,11 @@ where
             if !console.stdin_is_terminal() {
                 return Err(PromptFailedError::new().into());
             }
+            // The read below blocks, so say what is being waited for.
+            print!("Session id to resume: ");
+            io::stdout()
+                .flush()
+                .map_err(|_error| PalFailedError::new())?;
             let line = console
                 .read_prompt_line()
                 .map_err(|_error| PromptFailedError::new())?;
@@ -125,7 +145,15 @@ mod tests {
         let processes = MockProcesses::new();
         let transport = MemoryTransport::new();
         let console = LocalConsoleFacade::from_mock(MockLocalConsole::new());
-        execute(&store, &processes, &transport, &console, None, false).unwrap_err();
+        execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            None,
+            Trace::default(),
+        )
+        .unwrap_err();
     }
 
     #[test]
@@ -138,7 +166,15 @@ mod tests {
         let transport = MemoryTransport::new();
         let console = LocalConsoleFacade::from_mock(MockLocalConsole::new());
         let id = SessionId::from_u32(9).unwrap();
-        execute(&store, &processes, &transport, &console, Some(id), false).unwrap_err();
+        execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            Some(id),
+            Trace::default(),
+        )
+        .unwrap_err();
     }
 
     #[test]
@@ -194,7 +230,15 @@ mod tests {
             });
             console.expect_write_output().returning(|_| Ok(()));
             let console = LocalConsoleFacade::from_mock(console);
-            let outcome = execute(&store, &processes, &transport, &console, None, false).unwrap();
+            let outcome = execute(
+                &store,
+                &processes,
+                &transport,
+                &console,
+                None,
+                Trace::default(),
+            )
+            .unwrap();
             assert!(matches!(outcome, Outcome::AppExit(0)));
         });
     }
@@ -214,7 +258,15 @@ mod tests {
         let mut console = MockLocalConsole::new();
         console.expect_stdin_is_terminal().return_const(false);
         let console = LocalConsoleFacade::from_mock(console);
-        let error = execute(&store, &processes, &transport, &console, None, false).unwrap_err();
+        let error = execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            None,
+            Trace::default(),
+        )
+        .unwrap_err();
         assert!(error.find_source::<PromptFailedError>().is_some());
     }
 
@@ -236,7 +288,15 @@ mod tests {
             .expect_read_prompt_line()
             .returning(|| Ok("not a number".to_string()));
         let console = LocalConsoleFacade::from_mock(console);
-        let error = execute(&store, &processes, &transport, &console, None, false).unwrap_err();
+        let error = execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            None,
+            Trace::default(),
+        )
+        .unwrap_err();
         assert!(error.find_source::<InvalidSessionIdError>().is_some());
     }
 }

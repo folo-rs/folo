@@ -21,11 +21,13 @@ mod gc;
 mod list_fmt;
 mod outbox;
 mod pal;
+mod path_display;
 mod protocol;
 mod run;
 mod session_id;
 mod session_record;
 mod supervisor;
+mod trace;
 mod types;
 
 pub use cli::{Cli, EarlyExit};
