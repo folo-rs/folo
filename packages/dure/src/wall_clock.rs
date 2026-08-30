@@ -34,6 +34,7 @@ mod tests {
     const WELL_AFTER_NOW_MS: u64 = 4_102_444_800_000;
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Reads the host clock, which Miri's isolation refuses.
     fn the_clock_reads_a_plausible_present() {
         let now = unix_now_ms();
         assert!(now > WELL_BEFORE_NOW_MS, "{now} is not a present-day clock");
@@ -41,6 +42,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Reads the host clock, which Miri's isolation refuses.
     fn the_clock_does_not_run_backwards_between_reads() {
         let first = unix_now_ms();
         let second = unix_now_ms();

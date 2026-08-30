@@ -1222,6 +1222,9 @@ mod tests {
     }
 
     #[test]
+    // Moves megabytes through pure byte handling, so Miri has no unsafe code to
+    // check here and its interpreter makes the volume impractically slow.
+    #[cfg_attr(miri, ignore)]
     fn what_is_held_for_the_first_client_is_capped() {
         let transport = MemoryTransport::new();
         let pty = MemoryPseudoconsole::new();
@@ -1238,6 +1241,9 @@ mod tests {
     }
 
     #[test]
+    // Moves megabytes through pure byte handling, so Miri has no unsafe code to
+    // check here and its interpreter makes the volume impractically slow.
+    #[cfg_attr(miri, ignore)]
     fn a_preamble_too_large_for_one_frame_is_split_into_frames_a_receiver_accepts() {
         // A hold the transport could not carry in one frame, which is reachable
         // because the hold cap is several frames' worth.
