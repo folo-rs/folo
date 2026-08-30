@@ -221,13 +221,7 @@ impl SessionStore for FsSessionStore {
         if !owned {
             return Ok(());
         }
-        match file.delete() {
-            Ok(()) => Ok(()),
-            // Somebody else unlinked the name first. The file this handle addresses is already
-            // on its way out, which is the outcome asked for.
-            Err(error) if is_absent(&error) => Ok(()),
-            Err(error) => Err(PalError::from_io(error)),
-        }
+        file.delete().map_err(PalError::from_io)
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, PalError> {
@@ -239,10 +233,10 @@ impl SessionStore for FsSessionStore {
     }
 }
 
-/// Whether a failure means the name simply is not there.
+/// Whether a failure to open a record means the name simply is not there.
 ///
-/// Both halves of a delete report this: the open when nothing holds the name, and the delete
-/// itself when another process unlinked the file first. Neither is a fault.
+/// Nothing to delete is not a failure to delete, so an id whose file is already gone is a
+/// caller asking for a state that already holds. Any other open failure is a real fault.
 fn is_absent(error: &io::Error) -> bool {
     matches!(error.kind(), io::ErrorKind::NotFound)
 }
