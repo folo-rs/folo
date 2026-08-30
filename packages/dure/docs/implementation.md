@@ -403,6 +403,16 @@ outstanding on the handle, which is what unblocks a waiting reader, and the
 handle is closed once the last operation releases it. The pseudoconsole PAL owns
 its host pipe handles the same way, for the same reason.
 
+Cancelling reaches only operations that are already pending, and teardown gets
+one attempt: it has already dropped the table's reference, so nothing can find
+the handle to cancel it a second time. An operation that started just after that
+attempt would therefore wait with nothing left to release it. Starting an
+operation and cancelling one are consequently mutually exclusive, so an
+operation either becomes pending in time to be cancelled or is refused and
+reported as a disconnect. Refusing is only possible where issuing an operation
+does not block, which is why it covers the overlapped transport handles and not
+the synchronous pseudoconsole ones.
+
 Because these are stack-allocated overlapped structures paired with an event
 handle that is closed on return, no path may abandon an operation the kernel
 still owns. Cancellation is a request, not a completion, so a caller giving up

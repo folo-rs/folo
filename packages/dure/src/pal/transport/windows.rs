@@ -254,7 +254,8 @@ fn abandon_operation(handle: HANDLE, overlapped: &OVERLAPPED) {
     _ = unsafe { GetOverlappedResult(handle, &raw const *overlapped, &raw mut transferred, true) };
 }
 
-fn connect_instance(handle: HANDLE) -> Result<(), PalError> {
+fn connect_instance(pipe: &PipeHandle) -> Result<(), PalError> {
+    let handle = pipe.as_handle();
     let event = create_event()?;
     let mut overlapped = OVERLAPPED {
         hEvent: event,
@@ -262,7 +263,12 @@ fn connect_instance(handle: HANDLE) -> Result<(), PalError> {
     };
     // SAFETY: `handle` is a listening pipe instance. `overlapped` is valid for
     // the duration of this wait.
-    let result = unsafe { ConnectNamedPipe(handle, Some(&raw mut overlapped)) };
+    let Some(result) =
+        pipe.issue(|handle| unsafe { ConnectNamedPipe(handle, Some(&raw mut overlapped)) })
+    else {
+        close(event);
+        return Err(PalError::new(PalErrorKind::Disconnected));
+    };
     if result.is_ok() {
         close(event);
         return Ok(());
@@ -293,7 +299,8 @@ fn connect_instance(handle: HANDLE) -> Result<(), PalError> {
     completed.map_err(|_error| PalError::new(PalErrorKind::Disconnected))
 }
 
-fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
+fn read_exact(pipe: &PipeHandle, buf: &mut [u8]) -> Result<(), PalError> {
+    let handle = pipe.as_handle();
     let mut filled = 0_usize;
     while filled < buf.len() {
         let event = create_event()?;
@@ -307,13 +314,16 @@ fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
             .ok_or_else(|| PalError::new(PalErrorKind::Other))?;
         // SAFETY: `handle` is a connected overlapped pipe. `dest` is exclusive
         // for the duration of this call.
-        let ok = unsafe {
+        let Some(ok) = pipe.issue(|handle| unsafe {
             ReadFile(
                 handle,
                 Some(dest),
                 Some(&raw mut transferred),
                 Some(&raw mut overlapped),
             )
+        }) else {
+            close(event);
+            return Err(PalError::new(PalErrorKind::Disconnected));
         };
         if ok.is_err() {
             let err = {
@@ -355,7 +365,8 @@ fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
     Ok(())
 }
 
-fn write_all(handle: HANDLE, mut buf: &[u8]) -> Result<(), PalError> {
+fn write_all(pipe: &PipeHandle, mut buf: &[u8]) -> Result<(), PalError> {
+    let handle = pipe.as_handle();
     while !buf.is_empty() {
         let event = create_event()?;
         let mut overlapped = OVERLAPPED {
@@ -365,13 +376,16 @@ fn write_all(handle: HANDLE, mut buf: &[u8]) -> Result<(), PalError> {
         let mut transferred = 0_u32;
         // SAFETY: `handle` is a connected overlapped pipe. `buf` is exclusive
         // for the duration of this call.
-        let ok = unsafe {
+        let Some(ok) = pipe.issue(|handle| unsafe {
             WriteFile(
                 handle,
                 Some(buf),
                 Some(&raw mut transferred),
                 Some(&raw mut overlapped),
             )
+        }) else {
+            close(event);
+            return Err(PalError::new(PalErrorKind::Other));
         };
         if ok.is_err() {
             let err = {
@@ -463,7 +477,7 @@ impl Transport for BuildTargetTransport {
                 .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
             (Arc::clone(&listener.pending), listener.name.clone())
         };
-        let connected = connect_instance(pending.as_handle());
+        let connected = connect_instance(&pending);
         // After each accept, create the next server instance so another client
         // can connect while this connection is still live (steal). If
         // close_listener already removed the listener, this handle must not be
@@ -560,19 +574,19 @@ impl Transport for BuildTargetTransport {
         let frame = encode(message);
         let (handle, write) = conn_write(conn)?;
         let _guard = write.lock().expect("pipe write lock");
-        write_all(handle.as_handle(), &frame)
+        write_all(&handle, &frame)
     }
 
     fn recv(&self, conn: ConnId) -> Result<Message, PalError> {
         let handle = conn_handle(conn)?;
         let mut header = [0_u8; 4];
-        read_exact(handle.as_handle(), &mut header)?;
+        read_exact(&handle, &mut header)?;
         let len = u32::from_le_bytes(header);
         if !payload_len_ok(len) {
             return Err(PalError::new(PalErrorKind::Other));
         }
         let mut payload = vec![0_u8; len as usize];
-        read_exact(handle.as_handle(), &mut payload)?;
+        read_exact(&handle, &mut payload)?;
         decode_payload(&payload).map_err(|_error| PalError::new(PalErrorKind::Other))
     }
 
