@@ -40,12 +40,4 @@ exclude_re = [
     # reconstructs the same family and is rejected there too. Replacing either `||`
     # with `&&` changes the amount of work but not the selected family.
     'packages/cbh_detect/src/detect/branch\.rs:\d+:\d+: replace \|\| with && in consider_family_seed',
-
-    # Unreachable mutant: `dure` is a Windows-only tool whose non-Windows entry point is a
-    # stub reporting the unsupported platform (dure/docs/implementation.md, "Platform gate").
-    # Mutation testing runs on Windows, where `cfg(not(windows))` code is never compiled, so no
-    # test can observe this mutation. The site cannot carry `mutants::skip` instead: the
-    # `mutants` dev-dependency is itself Windows-only, so naming the attribute there would break
-    # the non-Windows build that is the only one compiling the stub.
-    'packages/dure/src/main\.rs:\d+:\d+: replace main -> std::process::ExitCode with Default::default\(\)',
 ]

@@ -45,9 +45,28 @@ fn row(session: &SessionRecord, now_unix_ms: u64) -> [String; 6] {
         if session.attached { "yes" } else { "no" }.to_string(),
         session.supervisor_pid.to_string(),
         format_age(session.started_at_unix_ms, now_unix_ms),
-        display_path(&session.launch_directory),
-        session.command.join(" "),
+        printable(&display_path(&session.launch_directory)),
+        printable(&session.command.join(" ")),
     ]
+}
+
+/// Renders a cell so that it cannot break the table it sits in.
+///
+/// A command a user launched may carry control characters, and a terminal acts
+/// on them: a newline would split one session across two rows and an escape
+/// sequence would repaint the screen. Showing them in escaped form keeps a row
+/// a row, and keeps the table a description of the sessions rather than
+/// something they can drive.
+fn printable(cell: &str) -> String {
+    let mut rendered = String::with_capacity(cell.len());
+    for character in cell.chars() {
+        if character.is_control() {
+            rendered.extend(character.escape_debug());
+        } else {
+            rendered.push(character);
+        }
+    }
+    rendered
 }
 
 /// Renders how long a session has been running, coarsest unit first.
@@ -221,6 +240,24 @@ mod tests {
         for line in text.lines() {
             assert_eq!(line, line.trim_end(), "trailing blanks in {line:?}");
         }
+    }
+
+    #[test]
+    fn a_session_stays_one_row_however_its_command_was_written() {
+        let text = format_list(
+            &[session(1, "/work", "app.exe\nID  ATTACHED\n2  yes")],
+            SOME_AGE_MS,
+        );
+        // A heading line and exactly one session line.
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains(r"app.exe\nID  ATTACHED\n2  yes"));
+    }
+
+    #[test]
+    fn a_command_cannot_repaint_the_screen_it_is_listed_on() {
+        let text = format_list(&[session(1, "/work", "app.exe\u{1b}[2J")], SOME_AGE_MS);
+        assert!(!text.contains('\u{1b}'), "an escape survived in {text:?}");
+        assert!(text.contains(r"app.exe\u{1b}[2J"));
     }
 
     #[test]

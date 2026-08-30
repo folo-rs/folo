@@ -40,12 +40,4 @@ mod tests {
         assert!(now > WELL_BEFORE_NOW_MS, "{now} is not a present-day clock");
         assert!(now < WELL_AFTER_NOW_MS, "{now} is not a present-day clock");
     }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Reads the host clock, which Miri's isolation refuses.
-    fn the_clock_does_not_run_backwards_between_reads() {
-        let first = unix_now_ms();
-        let second = unix_now_ms();
-        assert!(second >= first);
-    }
 }

@@ -439,14 +439,19 @@ where
         move || pty_output_loop(&shared)
     });
 
-    let status = processes
-        .wait_app(app)
-        .map_err(|_error| PalFailedError::new())?;
+    // Everything below this point is teardown the session owes the host whether
+    // or not the wait succeeded: the listener, the job holding the app and its
+    // descendants, the pseudoconsole, and the published record all outlive this
+    // function otherwise. The wait failure is reported only once that is done.
+    let waited = processes.wait_app(app);
 
     // An app can outlive neither its output nor its exit status: both are only
     // deliverable while the session is still up, so a session nobody has
-    // attached to yet stays up until its initiator arrives or gives up.
-    shared.await_first_attach();
+    // attached to yet stays up until its initiator arrives or gives up. A wait
+    // that failed has no status to deliver, so there is nothing to wait for.
+    if waited.is_ok() {
+        shared.await_first_attach();
+    }
 
     transport.close_listener(listener);
     // Descendants of the app stay attached to the pseudoconsole until this job
@@ -473,14 +478,16 @@ where
         shared.client().take()
     };
     if let Some(client) = &client {
-        // Attach treats a disconnect without `AppExited` as a relay failure
-        // when the input thread has already stopped, so the status must be
-        // queued behind the output rather than racing it.
-        client.outbox.send(Message::AppExited { status });
+        if let Ok(status) = &waited {
+            // Attach treats a disconnect without `AppExited` as a relay failure
+            // when the input thread has already stopped, so the status must be
+            // queued behind the output rather than racing it.
+            client.outbox.send(Message::AppExited { status: *status });
+        }
         client.outbox.finish();
     }
 
-    {
+    let deleted = {
         // Client threads take this lock before publishing an attached-flag
         // update. Clearing it first prevents a late publish from recreating
         // the record after delete, including over a reused session id.
@@ -490,10 +497,14 @@ where
         *live = false;
         // Ids are reused, so an unconditional delete could reap whichever
         // session claimed this id after this supervisor published.
-        store
-            .delete_owned_by(session_id, &identity)
-            .map_err(|_error| StoreError::new())?;
-    }
+        store.delete_owned_by(session_id, &identity)
+    };
+
+    // A wait that failed is the cause and a record that outlives it is only a
+    // consequence, so the wait failure is the one worth reporting.
+    let status = waited.map_err(|_error| PalFailedError::new())?;
+    deleted.map_err(|_error| StoreError::new())?;
+
     if let Some(client) = client {
         // The session already owns nothing, so waiting here for the exit status
         // to land costs a client that is still reading nothing and a client
@@ -746,12 +757,22 @@ mod tests {
     const SAMPLE_APP_EXIT: i32 = 7;
 
     fn mock_processes(exit: Arc<(Mutex<bool>, Condvar)>) -> MockProcesses {
-        mock_processes_with(exit, Durability::Durable)
+        mock_processes_with(exit, Durability::Durable, AppWait::Reports)
+    }
+
+    /// How the mock app's wait ends once the test releases it.
+    #[derive(Clone, Copy)]
+    enum AppWait {
+        /// The app exited and its status is known.
+        Reports,
+        /// The wait itself failed, so no status exists to report.
+        Fails,
     }
 
     fn mock_processes_with(
         exit: Arc<(Mutex<bool>, Condvar)>,
         durability: Durability,
+        wait: AppWait,
     ) -> MockProcesses {
         let mut processes = MockProcesses::new();
         processes.expect_durability().returning(move || durability);
@@ -775,7 +796,10 @@ mod tests {
             while !*done {
                 done = cvar.wait(done).expect("exit wait");
             }
-            Ok(SAMPLE_APP_EXIT)
+            match wait {
+                AppWait::Reports => Ok(SAMPLE_APP_EXIT),
+                AppWait::Fails => Err(PalError::new(PalErrorKind::Other)),
+            }
         });
         processes
     }
@@ -1077,7 +1101,11 @@ mod tests {
             let pty = MemoryPseudoconsole::new();
             let dir = tempfile::TempDir::new().unwrap();
             let store = FsSessionStore::new(dir.path().to_path_buf());
-            let processes = mock_processes_with(Arc::clone(&exit), Durability::TiedToLauncher);
+            let processes = mock_processes_with(
+                Arc::clone(&exit),
+                Durability::TiedToLauncher,
+                AppWait::Reports,
+            );
 
             let startup = transport.listen("startup").unwrap();
             let supervisor = thread::spawn({
@@ -1109,6 +1137,59 @@ mod tests {
                 cvar.notify_all();
             }
             supervisor.join().unwrap().unwrap();
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_wait_that_fails_still_takes_the_session_off_the_host() {
+        with_watchdog(|| {
+            let exit = Arc::new((Mutex::new(false), Condvar::new()));
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let processes =
+                mock_processes_with(Arc::clone(&exit), Durability::Durable, AppWait::Fails);
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                let store = store.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            assert!(matches!(
+                transport.recv(startup_conn).unwrap(),
+                Message::StartupOk { .. }
+            ));
+            assert_eq!(store.list().unwrap().len(), 1, "the session was published");
+            transport.disconnect(startup_conn);
+            {
+                let (lock, cvar) = &*exit;
+                *lock.lock().expect("exit lock") = true;
+                cvar.notify_all();
+            }
+
+            supervisor.join().unwrap().unwrap_err();
+            // The wait is the only thing that failed, so everything the session
+            // put on the host is still the session's to take back.
+            assert!(
+                store.list().unwrap().is_empty(),
+                "the record outlived the session"
+            );
         });
     }
 

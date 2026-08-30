@@ -65,10 +65,14 @@ windows = { workspace = true, features = [
 [target.'cfg(windows)'.dev-dependencies]
 dure-test-helper = { path = "../dure-test-helper" }
 mockall = { workspace = true }
-mutants = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
 testing = { path = "../testing" }
+
+# The non-Windows stub carries a mutation skip of its own, so unlike every other
+# dependency this one is named on both platforms.
+[dev-dependencies]
+mutants = { workspace = true }
 
 [lints]
 workspace = true

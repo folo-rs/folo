@@ -263,6 +263,11 @@ The same table is printed when `resume` cannot auto-detect and has to ask which
 session to take, so the id being typed is chosen from the same information
 `list` gives.
 
+A session is described, never obeyed. A command may have been launched with
+arguments carrying control characters, and a terminal would act on them, so they
+print in escaped form: a session occupies one row whatever it was launched with,
+and listing sessions cannot move the cursor or repaint the screen.
+
 ## Lifetime
 
 | Event | App | Supervisor | Client |

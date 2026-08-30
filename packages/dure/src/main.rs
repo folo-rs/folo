@@ -23,7 +23,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// `dure` drives Windows consoles and has no meaning elsewhere
 /// (implementation.md, "Platform gate"), so the binary refuses to run rather
 /// than reporting a success it did not deliver.
+// Mutation testing runs on Windows, where this stub is not compiled and no test
+// can observe a mutation of it.
 #[cfg(not(windows))]
+#[cfg_attr(test, mutants::skip)]
 fn main() -> std::process::ExitCode {
     eprintln!("Error: dure runs only on Windows.");
     std::process::ExitCode::FAILURE

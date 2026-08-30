@@ -118,7 +118,12 @@ without a console:
   holding a non-ASCII path. The final column is not padded, which keeps trailing
   blanks out of a line something else may compare. The current time arrives as an
   argument rather than being read here, which keeps the whole table a pure
-  function of its inputs and the age column testable without a clock.
+  function of its inputs and the age column testable without a clock. Cells
+  holding text a user chose are escaped: a control character in a command
+  argument would otherwise be handed to the terminal, splitting one session over
+  two rows or repainting the screen. Escaping is applied where the cell is built
+  rather than where the row is printed, so a cell's measured width is the width
+  that reaches the terminal.
 * `path_display` renders a stored path for a human. The session store keeps
   canonical paths, which on Windows carry the extended-length `\\?\` prefix;
   that prefix is dropped for display, and the UNC form `\\?\UNC\server\share` is
@@ -215,6 +220,15 @@ After breaking away, the supervisor creates a non-inheritable job object with
 kill-on-close enabled. The app is created with both that job and the
 pseudoconsole in the process-attribute list, so it is born inside the lifetime
 boundary and attached to a console. Ordinary descendants inherit the job.
+
+The supervisor holds a listener, a job, a pseudoconsole and a published record,
+all of which outlive it if not released. Serving therefore treats teardown as
+owed rather than conditional: the wait on the app is run for its result, the
+result is set aside, and the listener, job, pseudoconsole and record are released
+whatever it says. Only then is a failed wait reported, ahead of a failed delete,
+because the wait is the cause and a record that outlives its session is only the
+consequence. A wait that failed yields no exit status, so nothing is sent to the
+attached client and the session does not linger waiting for one to arrive.
 
 ## Job breakaway
 
