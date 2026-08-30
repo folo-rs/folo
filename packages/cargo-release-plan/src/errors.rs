@@ -432,13 +432,19 @@ pub(crate) struct SymlinkReleasedError {
 impl UnwindSafe for SymlinkReleasedError {}
 impl RefUnwindSafe for SymlinkReleasedError {}
 
-/// The workspace declares a `release-plan` base that is not a revision name.
+/// A Cargo lockfile does not describe a resolved dependency graph.
+///
+/// The lockfile is machine-written, so a lockfile that does not parse means the
+/// tool is reading something other than what it believes. Guessing a closure
+/// from it would silently under-report the dependencies a binary ships.
 #[ohno::error]
-#[display("Workspace metadata key 'release-plan.base' must be a non-empty revision name")]
-pub(crate) struct MalformedDefaultBaseError {}
+#[display("Failed to read the resolved dependencies in '{}'", path.quoted())]
+pub(crate) struct MalformedLockfileError {
+    path: String,
+}
 
-impl UnwindSafe for MalformedDefaultBaseError {}
-impl RefUnwindSafe for MalformedDefaultBaseError {}
+impl UnwindSafe for MalformedLockfileError {}
+impl RefUnwindSafe for MalformedLockfileError {}
 
 /// The workspace declares `release-plan.groups` as something other than a table.
 #[ohno::error]
@@ -732,13 +738,14 @@ mod tests {
         RefUnwindSafe
     );
     assert_impl_all!(
-        MalformedDefaultBaseError: Send,
+        MalformedLockfileError: Send,
         Sync,
         Debug,
         error::Error,
         UnwindSafe,
         RefUnwindSafe
     );
+
     assert_impl_all!(
         VersionRegressionError: Send,
         Sync,

@@ -74,7 +74,7 @@ pub(crate) fn run_check(
 
 fn default_success_message(passed: bool, message: &str) -> Option<&'static str> {
     if passed && message.is_empty() {
-        Some("All publishable packages are released or releasing.")
+        Some("Every publishable package is released or pending release.")
     } else {
         None
     }
@@ -120,6 +120,12 @@ fn render_diagnostics(
             }
             Some(ChangedItem::Inherited { field }) => {
                 format!("{} (and related paths) changed", quote_path(field))
+            }
+            Some(ChangedItem::Lockfile { dependency, .. }) => {
+                format!(
+                    "the locked dependency {} (and related paths) changed",
+                    quote_path(dependency)
+                )
             }
             None => "released content changed".to_string(),
         };
@@ -497,7 +503,7 @@ mod tests {
 
     #[test]
     fn an_inconsistent_group_names_the_version_each_member_declares() {
-        let member = PackageClass::releasing(
+        let member = PackageClass::pending_release(
             "demo",
             Version::new(0, 2, 0),
             Anchor {

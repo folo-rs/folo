@@ -59,6 +59,10 @@ resolver = "2"
         fs::write(path, contents).unwrap();
     }
 
+    pub(crate) fn read(&self, rel: &str) -> String {
+        fs::read_to_string(self.path().join(rel)).unwrap()
+    }
+
     pub(crate) fn git(&self, args: &[&str]) -> String {
         let mut command = hermetic_git();
         command.arg("-C");
@@ -129,6 +133,17 @@ pub(crate) fn hermetic_git() -> Command {
     let mut command = Command::new("git");
     command.args(HERMETIC_CONFIG);
     command
+}
+
+/// Writes a package whose only target is an executable.
+///
+/// A binary package releases the dependency closure its archive's lockfile
+/// records, which a library package does not.
+/// Ref: docs/design.md, "Lockfiles of binary packages".
+pub(crate) fn write_binary_package(fixture: &Fixture, name: &str, version: &str, extra: &str) {
+    write_package(fixture, name, version, extra);
+    fs::remove_file(fixture.path().join(format!("packages/{name}/src/lib.rs"))).unwrap();
+    fixture.write(&format!("packages/{name}/src/main.rs"), "fn main() {}\n");
 }
 
 pub(crate) fn write_package(fixture: &Fixture, name: &str, version: &str, extra: &str) {

@@ -20,6 +20,7 @@ mod errors;
 mod git;
 mod groups;
 mod inherited;
+mod lockfile;
 mod manifest;
 mod metadata;
 mod packaging;

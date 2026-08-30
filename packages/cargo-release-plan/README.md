@@ -5,9 +5,10 @@ version **anchor**, reports changes to **released content**, and applies an
 approved increment plan (group expansion, `=`-pin rewrites, lockfile refresh).
 
 A package has unreleased changes when its released content differs between its
-version anchor and the work tree without an increase in its declared version.
-The anchor is the most recent commit on the base revision's first-parent line in
-which the package's parsed `version` changed.
+version anchor and the work tree without an increase in its declared version; it
+is pending release once that version has been raised. The anchor is the most
+recent commit on the release baseline's first-parent line in which the package's
+parsed `version` changed.
 
 ## Usage
 
@@ -21,11 +22,11 @@ cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
 
-Without `--base`, the base revision comes from the workspace's
-`[workspace.metadata.release-plan] base` key, falling back to `origin/main`. CI
-should pass an explicit SHA of the merge-base or target-branch tip (the **base
-revision**). `--manifest-path` defaults to `Cargo.toml` in the current
-directory.
+`--base` names the **release baseline**: the tip of the branch releases are made
+from, which is not necessarily the branch a pull request targets. CI should pass
+it explicitly. Without it, the baseline is the default branch the `origin`
+remote advertises, falling back to `origin/main`. `--manifest-path` defaults to
+`Cargo.toml` in the current directory.
 
 ### `report`
 
@@ -97,26 +98,31 @@ Each increment must supply exactly one of `level` or `version`.
 
 `report.json` uses the same schema revision. Top-level fields are
 `schema_version`, `head`, `packages`, and `groups`. Each package object includes
-`name`, `declared_version`, `status` (`releasing` / `unreleased-changes` /
+`name`, `declared_version`, `status` (`pending-release` / `unreleased-changes` /
 `released`), `changed`, `stat`, `dependencies`, and `dependents`, plus omitted
-when empty: `group`, `anchor`, `diff_path`, `untracked`. A change is either
-`{"path","change","source":"package"}` or `{"field","source":"inherited"}`.
+when empty: `group`, `anchor`, `diff_path`, `untracked`. A change is one of
+`{"path","change","source":"package"}`, `{"field","source":"inherited"}`, or
+`{"dependency","change","source":"lockfile"}`.
 `diff_path` is relative to the report directory. Plan and report formats
 advance this revision together: an incompatible field, enum, or path-layout
 change increments it.
 
 ## Classification
 
-| Status               | Condition                                                | Verdict  |
-| -------------------- | -------------------------------------------------------- | -------- |
-| `releasing`          | version increased since the anchor                       | pass     |
-| `unreleased-changes` | version unchanged, released content changed since anchor | fail     |
-| `released`           | version unchanged, released content unchanged            | pass     |
+| Status               | Condition                                                |
+| -------------------- | -------------------------------------------------------- |
+| `pending-release`    | version increased since the anchor                       |
+| `unreleased-changes` | version unchanged, released content changed since anchor |
+| `released`           | version unchanged, released content unchanged            |
 
-Packages with `publish = false` are ignored. A package's own `Cargo.lock` is
-never released content. Untracked files are advisory only. Versions only move
-forwards: a
+`check` fails on `unreleased-changes` alone. Packages with `publish = false` are
+ignored. Untracked files are advisory only. Versions only move forwards: a
 declared version below the anchor's version is an error rather than a status.
+
+A package that publishes an executable also releases its resolved dependency
+closure, because `cargo install --locked` builds from the lockfile in the
+archive. A workspace lockfile change that moves such a package's dependencies is
+therefore an unreleased change; the same change against a library is not.
 
 A packaged file's executable bit is released content too, since Cargo carries
 the mode Git records into the archive. Making a packaged file executable is
@@ -126,8 +132,8 @@ same way.
 
 Version groups are declared in the workspace root as
 `[workspace.metadata.release-plan.groups]`. Members share a declared version; if
-any member needs an increment, all members increment. Members that do not exist
-on the base revision are exempt from the consistency rule.
+any member needs an increment, all members increment. Members the baseline does
+not carry are exempt from the consistency rule.
 
 ## Offline operation
 

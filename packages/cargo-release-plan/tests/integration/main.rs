@@ -10,11 +10,13 @@
 //! [`harness`]; this file is the crate root that ties the modules together.
 
 mod apply;
+mod baseline;
 mod cli_binary;
 mod fixture;
 mod groups;
 mod harness;
 mod history;
+mod lockfile;
 mod nesting;
 mod packaging;
 mod report;

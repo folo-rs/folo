@@ -1,39 +1,186 @@
-# cargo-release-plan - Design
+# cargo-release-plan — Design
 
-`cargo-release-plan` classifies every publishable workspace package against its
-version anchor and applies an approved increment plan. A package has unreleased
-changes when its released content differs between its version anchor and the
-work tree without an increase in its declared version. A base revision is valid
-for release when no publishable package is in that state and every version group
-is consistent, which are the two conditions `check` reports on.
+## Purpose
 
-## The invariant
+The tool exists for a workspace where merging is releasing: whatever reaches
+the release branch is what consumers get from the registry. That model holds
+only if every package whose published content changed also carries a version
+number that has not been published yet, and nothing enforces that by reading a
+diff.
 
-A package fails when its released content differs between its **anchor** and the
-work tree, while its declared version has not increased since that anchor.
+`cargo-release-plan` decides, for every publishable package in a workspace,
+which of these two things is true of it:
 
-The anchor is the most recent commit on the **base revision's first-parent
-line** in which the package's parsed `version` field changed. Walking
-first-parent means each merged pull request counts as one step. Reading the
-anchor off the base revision, not the working branch, means a branch's own
-commits never become anchors. Comparison uses the parsed version, so
-reformatting a manifest without changing the version is not an increment. A
-package's creation (absent to present) counts as a version change.
+* It has **unreleased changes**: the content it would publish differs from the
+  content of its last release, and its declared version has not moved since. In
+  this state a merge would ship changed code under a version number that is
+  already on the registry.
+* It is **pending release**: its declared version has already been raised past
+  its last release, so a merge publishes it.
 
-A package that is absent from the base but present at some earlier commit on
-the base's first-parent line is being restored, not created. The version it
-declared before the deletion may already be published, so its anchor is the last
-version change on that history and the ordinary monotonicity and content
-comparisons apply.
+Two kinds of automation follow, and each has its own command:
 
-A run without `--base` takes the base revision from the workspace's
-`[workspace.metadata.release-plan] base` key, and falls back to `origin/main`
-when the workspace declares none. CI should pass an explicit SHA of the
-merge-base or target-branch tip. A stale default can both add and hide
-differences, so it is not a conservative fallback.
+* **Gating a merge.** `check` reports failure for as long as any package has
+  unreleased changes or a version group disagrees with itself. A pull request
+  cannot merge until every package it changed has been incremented.
+* **Deciding the increments.** `report` describes what changed, per package,
+  in enough detail to choose an increment level for each; `apply` then edits
+  the manifests to carry that decision out.
 
-A truncated history that never reveals a version change (including creation) is
-an error, not a pass.
+Two terms carry the rest of this document. The **release baseline** is the
+revision a workspace is compared against: the tip of the branch releases are
+made from. A package's **anchor** is the commit on that baseline where the
+package's declared version last changed, and is therefore the best available
+record of what the currently declared version released.
+
+## Commands
+
+`report --out-dir <dir>` writes `report.json` and a unified diff for each
+package whose unreleased changes include a file difference. The report includes
+intra-workspace dependencies and dependents so version decisions can cascade.
+Only edges that survive into the published manifest are reported: normal and
+build dependencies cascade, as do dev dependencies that declare a version
+requirement. A path-only dev dependency does not, because Cargo strips it when
+it normalises the manifest for packaging.
+
+`check` exits non-zero when any package has unreleased changes or any version
+group is inconsistent, with one actionable diagnostic line that names the
+`increment-versions` skill. `--format github` adds workflow annotations.
+
+`check --verify-packaging` additionally cross-checks the released-content rules
+against `cargo package --list` and prints warnings without changing the exit
+code. It is advisory rather than authoritative because listing a package makes
+Cargo require a clean tree, resolve the dependency graph, and assemble an
+archive for every candidate, none of which the classification path requires;
+making the verdict depend on it would turn a dirty work tree or an unavailable
+registry into a release failure and would give up the offline, no-resolve
+guarantee the rest of the tool provides. Each warning names the paths only the
+rules claim and the paths only Cargo claims, because that is what tells the
+reader whether a rule is wrong or the tree simply is not clean — an untracked
+file is never released content but Cargo would still pack it. A mismatch on a
+clean tree means the released-content rules and Cargo disagree, so it is
+investigated and fixed in the rules, not tolerated.
+
+`apply --plan <plan.json>` reads a plan (`schema_version` 1 with per-target
+`level` or `version`), expands version groups, rewrites package versions and
+intra-workspace requirements that must follow (including `=` pins in
+non-publishable members), and refreshes the workspace lockfile. Manifests are
+edited structurally so comments and layout survive. Every reason a plan can be
+rejected — an unknown target, a version that would move backwards, an unreadable
+manifest — is decided before the first manifest is written, so a rejected plan
+changes nothing. `--dry-run` reports the manifests that would change and writes
+nothing. Writes themselves are sequential, so a plan that is accepted and then
+fails on an I/O error can leave earlier manifests updated; the work tree is
+reverted with the version control system rather than by the tool.
+
+All three read the workspace named by `--manifest-path`, defaulting to the
+manifest discovered from the working directory, and take the release baseline
+from `--base`.
+
+## The release baseline
+
+The baseline is the tip of the branch releases are made from. Passing it
+explicitly is the reliable choice, because only the caller knows which branch
+that is: it is a property of how the project publishes, not of the revision
+being examined. In particular it is not necessarily the branch a pull request
+targets. A stacked pull request targets its parent branch, which has released
+nothing; comparing against that parent would call content released that no
+registry has ever seen. Continuous integration should therefore name the
+release branch itself, as a ref or a resolved SHA.
+
+Without `--base` the tool asks Git which branch the `origin` remote considers
+its default and uses that remote-tracking branch, falling back to `origin/main`
+only when the remote publishes no default. Both are conveniences for running by
+hand; neither knows whether the default branch is the release branch.
+
+Nothing about the comparison requires a pull request. Running on the release
+branch itself is the ordinary way to ask which packages are pending release and
+would be published by the next release run: the baseline is then an ancestor of
+the work tree, so every package that was incremented since it is reported as
+pending release. Running with a work tree that has uncommitted edits is equally
+supported, because the comparison reads the work tree rather than a commit;
+this is what makes `check` useful before committing.
+
+## Anchors
+
+A package has unreleased changes when its released content differs between its
+**anchor** and the work tree while its declared version has not increased since
+that anchor.
+
+The anchor is the most recent commit on the **baseline's first-parent line** in
+which the package's parsed `version` field changed. Comparison uses the parsed
+version, so reformatting a manifest without changing the version is not an
+increment. A package's creation — absent to present — counts as a version
+change.
+
+A truncated history that never reveals a version change, creation included, is
+an error rather than a pass: a clone shallow enough to hide the anchor cannot
+support a claim that nothing needs releasing.
+
+### Anchors across merges
+
+The walk follows first parents, which makes each merged pull request one step
+in the baseline's history rather than a detour through the commits that
+composed it. Two properties follow, and they are what make the anchor stable.
+
+On a linear baseline the walk visits every commit, and the anchor is simply the
+most recent one that changed the version:
+
+```
+  A --- B --- C --- D        baseline first-parent line
+        ^           ^
+        |           baseline tip
+        version 0.2.0 declared here; B is the anchor
+```
+
+When work reaches the baseline through a merge, the walk steps over the merged
+commits and lands on the merge itself:
+
+```
+              E --- F               topic branch, second parent of M
+             /       \
+  A --- B --- C ------ M --- D      baseline first-parent line
+                       ^
+                       0.2.0 first reaches the baseline here; M is the anchor
+```
+
+`F` is where somebody typed the new version, but `M` is where that version and
+its content became what the baseline publishes. Anchoring on `M` is what makes
+the anchor a statement about released history instead of about the order in
+which topic branches happened to be written.
+
+A branch under examination can also merge the baseline into itself, which is
+the reverse direction and does not disturb anything:
+
+```
+  A --- B ------------ M --- D          baseline first-parent line
+         \                    \
+          P --- Q ------------ N --- R  branch being examined
+```
+
+The anchor is resolved on the baseline alone, so `N` is not a candidate however
+recent it is. What `N` changes is the work tree: after it, the branch holds the
+baseline's newer releases as well as its own commits, so the comparison against
+the anchor shows the branch's own changes and nothing else.
+
+A branch that has *not* merged the baseline is compared against the same anchor
+and its work tree simply lacks whatever the baseline released in the meantime.
+Those differences are reported too, because they are real: the branch would
+publish content older than what is already released. Merging the baseline in
+resolves it.
+
+### Packages the baseline does not publish
+
+A package the baseline does not publish — because it does not exist there, or
+exists with `publish = false` — has no released content to compare against, so
+the branch is preparing its first release and it is pending release whatever
+its version.
+
+A name that was published once, deleted, and later restored is not treated as a
+continuation of that earlier incarnation. Deciding which past release a restored
+directory continues would rest the verdict on commits the baseline no longer
+carries and a shallow clone need not fetch at all. Reconciling a restored name
+with what the registry already holds under it is left to whoever restores it.
 
 ### Version monotonicity
 
@@ -100,9 +247,6 @@ classification follows it in each case:
   terms as a declared one, and an `include` that omits it changes nothing.
   `readme = false` opts out, and `readme = true` names Cargo's preferred
   default.
-* **The package's own `Cargo.lock`.** It is never released content, because
-  Cargo derives the published lockfile when it builds the archive. A lockfile
-  nested deeper in the package is ordinary source.
 * **The build directory.** A `target` directory at the package root is never
   released content, because Cargo drops it before it reads `include` or
   `exclude`. A directory of that name deeper in the package is ordinary source.
@@ -112,6 +256,35 @@ classification follows it in each case:
   comparing what Git stores would call a package unchanged after an edit to the
   file it points at. Replace the link with a regular file, or keep it out of the
   released content with `exclude`.
+
+### Lockfiles of binary packages
+
+Cargo writes a lockfile into every package archive, but only a package that
+publishes an executable releases what that lockfile says. `cargo install
+--locked` builds from it, so the exact dependency versions it names are part of
+what the consumer receives; for a library the consumer resolves their own
+versions and the archived lockfile never participates in a build. A change to
+the resolved dependencies of a package with a binary target is therefore a
+released content change, and the same change against a library is not — the
+same criterion that keeps `[workspace.lints]` out of scope, applied to a
+different input.
+
+What is compared is the package's own dependency closure as resolved by the
+workspace lockfile, not the lockfile's bytes: Cargo re-derives the archived
+lockfile from the closure it needs, so unrelated members of the same workspace
+moving does not reach the archive. The package's own entry is excluded from its
+closure, so incrementing a binary package is never itself a further change to
+that package. A workspace with no lockfile contributes nothing to the
+comparison rather than an invented difference.
+
+A dependency update that touches a binary's closure marks that binary as having
+unreleased changes even though no file in it was edited. This is deliberate: the
+executable really would be built from different code. The state settles once the
+binary is incremented, because its declared version has then moved past the
+anchor.
+
+A `Cargo.lock` nested deeper inside a package, rather than the one governing the
+workspace, is ordinary source and is compared like any other file.
 
 ### Path case
 
@@ -144,25 +317,28 @@ A global inherited change therefore marks every inheriting package.
 
 ## Package status
 
-| Status               | Condition                                                | Verdict  |
-| -------------------- | -------------------------------------------------------- | -------- |
-| `releasing`          | version increased since the anchor                       | pass     |
-| `unreleased-changes` | version unchanged, released content changed since anchor | fail     |
-| `released`           | version unchanged, released content unchanged            | pass     |
+| Status               | Condition                                                |
+| -------------------- | -------------------------------------------------------- |
+| `pending-release`    | version increased since the anchor                       |
+| `unreleased-changes` | version unchanged, released content changed since anchor |
+| `released`           | version unchanged, released content unchanged            |
+
+`check` reports failure when any package is `unreleased-changes`; the other two
+statuses are states a release branch can merge from.
 
 `publish = false` packages are excluded. Group consistency is a separate
-group-level verdict: a package may have unreleased changes *and* belong to an
+group-level condition: a package may have unreleased changes *and* belong to an
 inconsistent group, and both are reported.
 
 ### Version groups
 
 Members of a version group share a declared version. If any member needs an
 increment, all members increment. The new version is the highest version
-declared by any member, raised by the highest required level. Members that do
-not exist on the base revision are exempt from the consistency rule, so a new
-package can join a group before it has been published. A member the base
-revision carries but does not publish is not exempt: it exists there and may
-already have been released before it was withdrawn.
+declared by any member, raised by the highest required level. Members the
+baseline does not carry are exempt from the consistency rule, so a new package
+can join a group before it has been published. A member the baseline carries but
+does not publish is not exempt: it exists there and may already have been
+released before it was withdrawn.
 
 Group membership is `[workspace.metadata.release-plan.groups]` in the workspace
 root manifest. A plan entry names either a package or a group, so a group named
@@ -171,45 +347,6 @@ it does not contain is rejected as ambiguous configuration. A group may only
 name publishable packages: a group keeps released versions in lockstep, so a
 `publish = false` member has no released version to keep in step and is rejected
 rather than quietly left out of every decision.
-
-## Commands
-
-`report` writes `report.json` and a unified diff for each package whose
-unreleased changes include a file difference. The report includes intra-workspace dependencies and dependents so
-version decisions can cascade. Only edges that survive into the published
-manifest are reported: normal and build dependencies cascade, as do dev
-dependencies that declare a version requirement. A path-only dev dependency does
-not, because Cargo strips it when it normalises the manifest for packaging.
-
-`check` exits non-zero on unreleased changes or an inconsistent group, with one
-actionable diagnostic line that names the `increment-versions` skill.
-`--format github` adds workflow annotations.
-
-`--verify-packaging` cross-checks the released-content rules against
-`cargo package --list` and prints warnings without failing the check. It is
-advisory rather than authoritative because listing a package makes Cargo require
-a clean tree, resolve the dependency graph, and assemble an archive for every
-candidate, none of which the classification path requires; making the verdict
-depend on it would turn a dirty work tree or an unavailable registry into a
-release failure and would give up the offline, no-resolve guarantee the rest of
-the tool provides. Each warning names the paths only the rules claim and the
-paths only Cargo claims, because that is what tells the reader whether a rule is
-wrong or the tree simply is not clean — an untracked file is never released
-content but Cargo would still pack it. A mismatch on a clean tree means the
-released-content rules and Cargo disagree, so it is investigated and fixed in
-the rules, not tolerated.
-
-`apply` reads a plan (`schema_version` 1 with per-target `level` or `version`),
-expands version groups, rewrites package versions and intra-workspace
-requirements that must follow (including `=` pins in non-publishable members),
-and refreshes the workspace lockfile.
-Manifests are edited structurally so comments and layout survive. Every reason a
-plan can be rejected — an unknown target, a version that would move backwards,
-an unreadable manifest — is decided before the first manifest is written, so a
-rejected plan changes nothing. `--dry-run` reports the manifests that would
-change and writes nothing. Writes themselves are sequential, so a plan that is
-accepted and then fails on an I/O error can leave earlier manifests updated; the
-work tree is reverted with the version control system rather than by the tool.
 
 ### Report artifacts
 

@@ -19,9 +19,9 @@ pub enum RunInput {
     Report {
         /// Directory that receives `report.json` and `diffs/`.
         out_dir: PathBuf,
-        /// Base revision whose first-parent line supplies anchors.
+        /// Release baseline whose first-parent line supplies anchors.
         ///
-        /// `None` defers to the base the workspace declares.
+        /// `None` defers to the default branch of the `origin` remote.
         base: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
@@ -30,9 +30,9 @@ pub enum RunInput {
     },
     /// `check` — fail on unreleased changes or an inconsistent group.
     Check {
-        /// Base revision whose first-parent line supplies anchors.
+        /// Release baseline whose first-parent line supplies anchors.
         ///
-        /// `None` defers to the base the workspace declares.
+        /// `None` defers to the default branch of the `origin` remote.
         base: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,

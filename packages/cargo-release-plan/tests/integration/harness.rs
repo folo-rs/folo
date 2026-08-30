@@ -56,6 +56,21 @@ pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, Stri
     }
 }
 
+/// Runs `check` with no baseline, leaving the tool to discover one.
+pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String), String> {
+    match run(&RunInput::Check {
+        base: None,
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    }) {
+        Ok(RunOutcome::Check { passed, message }) => Ok((passed, message)),
+        Ok(other) => panic!("expected check, got {other:?}"),
+        Err(error) => Err(format!("{error}")),
+    }
+}
+
 pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool, String) {
     match run(&RunInput::Check {
         base: Some(base.to_string()),

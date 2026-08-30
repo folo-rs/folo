@@ -16,7 +16,7 @@ use crate::harness::{check, seeded_package};
 /// The anchor walk follows first parents, which makes each merged pull request
 /// one step in the base's history. Following the topic commit that carried the
 /// increment instead would anchor on a revision the base line never reached.
-/// Ref: docs/design.md, "The invariant".
+/// Ref: docs/design.md, "Anchors across merges".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn merge_commit_on_base_first_parent_line_is_the_anchor() {
@@ -79,9 +79,17 @@ fn shallow_history_without_a_version_change_is_an_error() {
     );
 }
 
+/// A package the baseline does not publish is treated as entirely new.
+///
+/// Whether the name was published under an earlier incarnation and later
+/// withdrawn is deliberately not reconsidered. Reconciling a restored name is
+/// left to whoever restores it, because guessing which older release a
+/// restored directory continues would rest the verdict on commits a shallow
+/// fetch need not carry at all.
+/// Ref: docs/design.md, "Packages the baseline does not publish".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn reintroduced_package_is_anchored_to_the_version_it_carried_before_deletion() {
+fn a_package_the_baseline_lacks_is_new_however_it_got_there() {
     let fixture = Fixture::new("");
     write_package(&fixture, "keeper", "0.1.0", "");
     write_package(&fixture, "demo", "0.3.0", "");
@@ -93,17 +101,8 @@ fn reintroduced_package_is_anchored_to_the_version_it_carried_before_deletion() 
 
     write_package(&fixture, "demo", "0.3.0", "");
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 5; }\n");
-    fixture.commit("reintroduce demo at an already-released version");
+    fixture.commit("restore demo at the version it carried before");
 
-    // Restoring a package is not creating it: 0.3.0 was already carried by the
-    // base line, so content that differs from it is unreleased.
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("demo: unreleased-changes"), "{message}");
-
-    write_package(&fixture, "demo", "0.4.0", "");
-    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 5; }\n");
-    fixture.commit("increment past the released version");
     let (passed, message) = check(&fixture, &base);
     assert!(passed, "{message}");
 }
@@ -139,32 +138,41 @@ fn a_withdrawn_package_is_still_anchored_to_its_last_release() {
     assert!(passed, "{message}");
 }
 
+/// Merging the baseline into a branch does not move the anchor.
+///
+/// The walk runs on the baseline's own first-parent line, so a merge that only
+/// appears in the branch is invisible to it. The merge does change the work
+/// tree, which is the point: the branch then differs from the baseline by its
+/// own changes alone.
+/// Ref: docs/design.md, "Anchors across merges".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn reintroduced_package_is_anchored_to_its_last_version_change() {
+fn merging_the_baseline_into_the_branch_keeps_the_verdict() {
     let fixture = Fixture::new("");
-    write_package(&fixture, "keeper", "0.1.0", "");
-    write_package(&fixture, "demo", "0.2.0", "");
+    write_package(&fixture, "demo", "0.1.0", "");
     fixture.commit("seed");
 
-    write_package(&fixture, "demo", "0.3.0", "");
-    fixture.commit("release 0.3.0");
+    fixture.git(&["checkout", "-b", "feature"]);
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 1; }\n");
+    fixture.commit("branch content");
 
-    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 8; }\n");
-    fixture.commit("content without a version bump");
-
-    fs::remove_dir_all(fixture.path().join("packages/demo")).unwrap();
-    fixture.commit("delete demo");
+    fixture.git(&["checkout", "main"]);
+    write_package(&fixture, "demo", "0.2.0", "");
+    fixture.commit("release 0.2.0");
     let base = fixture.sha("HEAD");
 
-    write_package(&fixture, "demo", "0.3.0", "");
-    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 8; }\n");
-    fixture.commit("restore demo at the same version");
+    fixture.git(&["checkout", "feature"]);
+    fixture.git(&["merge", "--no-ff", "-m", "merge main", "main"]);
 
-    // The anchor is the commit that introduced 0.3.0, not the newest commit that
-    // merely carried the package, so content committed afterwards without an
-    // increment is still unreleased after the round trip through deletion.
+    // The branch now declares the version the baseline released, so its own
+    // content edit is unreleased.
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
     assert!(message.contains("demo: unreleased-changes"), "{message}");
+
+    write_package(&fixture, "demo", "0.3.0", "");
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 1; }\n");
+    fixture.commit("increment past the baseline release");
+    let (passed, message) = check(&fixture, &base);
+    assert!(passed, "{message}");
 }

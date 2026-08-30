@@ -1,6 +1,6 @@
 //! Status verdicts.
 //!
-//! Covers which released-content and manifest changes make a package releasing,
+//! Covers which released-content and manifest changes make a package pending release,
 //! carrying unreleased changes, or already released.
 
 use std::fs;
@@ -12,7 +12,7 @@ use crate::harness::{check, report_json, seeded_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn increment_early_in_a_branch_with_later_changes_is_releasing() {
+fn increment_early_in_a_branch_with_later_changes_is_pending_release() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     write_package(&fixture, "demo", "0.1.1", "");
@@ -23,7 +23,7 @@ fn increment_early_in_a_branch_with_later_changes_is_releasing() {
     let (passed, message) = check(&fixture, &base);
     assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
-    assert!(report.contains("\"status\": \"releasing\""));
+    assert!(report.contains("\"status\": \"pending-release\""));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -275,7 +275,7 @@ fn inherited_publish_false_excludes_a_package_from_classification() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn new_package_on_the_branch_is_releasing() {
+fn new_package_on_the_branch_is_pending_release() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     write_package(&fixture, "fresh", "0.1.0", "");
@@ -283,7 +283,7 @@ fn new_package_on_the_branch_is_releasing() {
 
     let report = report_json(&fixture, &base);
     assert!(report.contains("\"name\": \"fresh\""));
-    assert!(report.contains("\"status\": \"releasing\""));
+    assert!(report.contains("\"status\": \"pending-release\""));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

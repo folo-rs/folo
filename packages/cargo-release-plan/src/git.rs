@@ -51,6 +51,53 @@ pub(crate) fn tree_mode(executable: bool) -> &'static str {
     }
 }
 
+/// Remote whose recorded head names the branch releases are made from.
+const DEFAULT_REMOTE_HEAD_REF: &str = "refs/remotes/origin/HEAD";
+
+/// Revision used when the remote records no default branch.
+///
+/// Only reached by a repository that has never recorded a remote head, so the
+/// most widely used name for a default branch is the one remaining guess.
+const CONVENTIONAL_BASE: &str = "origin/main";
+
+/// Where the release baseline came from when the caller did not name one.
+///
+/// Which of the two answered decides how much a run should trust the baseline,
+/// so the distinction is carried to the caller rather than collapsed into a
+/// string: a recorded remote head is the repository's own statement of the
+/// branch it releases from, while the convention is a guess that a repository
+/// releasing from a differently named branch would silently make wrong.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DefaultBase {
+    /// The remote's recorded default branch.
+    RemoteHead(String),
+    /// The conventional name, because the remote records no default branch.
+    Convention(String),
+}
+
+impl DefaultBase {
+    pub(crate) fn revision(&self) -> &str {
+        match self {
+            Self::RemoteHead(revision) | Self::Convention(revision) => revision,
+        }
+    }
+}
+
+/// Interprets what the recorded remote head lookup answered.
+///
+/// A repository whose remote head is unset fails the lookup rather than
+/// answering emptily, but a configuration that answers with nothing names no
+/// branch either, so both reach the convention by the same route.
+fn decode_default_base(recorded: Option<String>) -> DefaultBase {
+    let recorded = recorded
+        .map(|branch| branch.trim().to_owned())
+        .filter(|branch| !branch.is_empty());
+    match recorded {
+        Some(branch) => DefaultBase::RemoteHead(branch),
+        None => DefaultBase::Convention(CONVENTIONAL_BASE.to_owned()),
+    }
+}
+
 /// The tool's access to one Git repository.
 ///
 /// Every historical fact a verdict rests on — the commits on the base
@@ -112,6 +159,20 @@ impl GitRepo {
             Ok(stdout) => Ok(stdout.trim().to_string()),
             Err(error) => Err(UnresolvedBaseError::caused_by(rev, error).into()),
         }
+    }
+
+    /// The branch releases are made from, used when the caller names no baseline.
+    ///
+    /// `git clone` records the remote's default branch, and `git remote
+    /// set-head` refreshes it, so the repository already knows the branch it
+    /// releases from and the tool does not have to assume what it is called.
+    pub(crate) fn default_base(&self) -> Result<DefaultBase, AppError> {
+        let recorded = run_capture_ok(
+            "git",
+            &["symbolic-ref", "--short", DEFAULT_REMOTE_HEAD_REF],
+            &self.root,
+        )?;
+        Ok(decode_default_base(recorded))
     }
 
     // HEAD is only used as a report label; tests do not pin the exact SHA string.
@@ -605,6 +666,47 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn a_recorded_remote_head_is_the_default_base() {
+        assert_eq!(
+            decode_default_base(Some("origin/trunk".to_owned())),
+            DefaultBase::RemoteHead("origin/trunk".to_owned())
+        );
+        assert_eq!(
+            decode_default_base(Some("origin/main\n".to_owned())),
+            DefaultBase::RemoteHead("origin/main".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_unrecorded_remote_head_falls_back_to_the_convention() {
+        assert_eq!(
+            decode_default_base(None),
+            DefaultBase::Convention(CONVENTIONAL_BASE.to_owned())
+        );
+        // An answer that names no branch is as unusable as no answer.
+        assert_eq!(
+            decode_default_base(Some(String::new())),
+            DefaultBase::Convention(CONVENTIONAL_BASE.to_owned())
+        );
+        assert_eq!(
+            decode_default_base(Some("  \n".to_owned())),
+            DefaultBase::Convention(CONVENTIONAL_BASE.to_owned())
+        );
+    }
+
+    #[test]
+    fn either_default_base_yields_its_revision() {
+        assert_eq!(
+            DefaultBase::RemoteHead("origin/trunk".to_owned()).revision(),
+            "origin/trunk"
+        );
+        assert_eq!(
+            DefaultBase::Convention("origin/main".to_owned()).revision(),
+            "origin/main"
+        );
+    }
 
     #[test]
     fn only_the_record_terminator_is_stripped() {

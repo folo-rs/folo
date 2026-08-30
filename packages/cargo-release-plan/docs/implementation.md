@@ -12,9 +12,10 @@ compiled binary is also covered by a subprocess test.
 Every module owns a subject rather than a category, so the crate has no module
 of shared types or constants: the run input and outcome sit with `run()`, the
 check format and the skill named in failure text sit with the check command, the
-schema revision sits with plan parsing, and the default base revision sits with
-argument parsing. The public surface is re-exported from the crate root, so an
-item is defined next to its subject regardless of where callers reach it.
+schema revision sits with plan parsing, and the fallback release baseline sits
+with the Git wrapper that discovers it. The public surface is re-exported from
+the crate root, so an item is defined next to its subject regardless of where
+callers reach it.
 
 ## Subprocess boundaries
 
@@ -76,8 +77,9 @@ same reason colour is disabled there.
 
 ### Anchor and change set
 
-Classification walks the base revision's first-parent commits that touch a
-`Cargo.toml` (always including the base SHA and the oldest first-parent commit)
+Classification walks the baseline's first-parent commits that touch a
+`Cargo.toml` (always including the baseline SHA and the oldest first-parent
+commit)
 until a parsed version change (or creation) is found, then diffs released paths
 between that commit and the work tree. Packaging rules are compiled once from
 gitignore-style `include` / `exclude` patterns. Inherited-value attribution
@@ -87,16 +89,16 @@ Comparison is on canonically typed TOML values rather than rendered text, so a
 reformatted table is not mistaken for a changed value and two differently shaped
 values never collapse into the same representation.
 
-Each commit on that walk records one of three states for a package: absent, a
-member that declares `publish = false`, and a publishable member at a version.
-The three are not interchangeable. An absent package makes its reappearance a
-version change, because a package that was not there released nothing under the
-version it comes back with. A member that is present but not publishable is
-skipped instead: nothing was released from it either, but the release it had
-before it was withdrawn still governs, so the walk must reach past the withdrawn
-stretch rather than stop at the commit that restored publication. A package that
-is not publishable anywhere in the sampled history has never released anything,
-so it is new.
+A package the baseline itself does not publish never reaches that walk: it has
+no released content there, so it is new and the walk has nothing to look for.
+Within the walk, a commit records a package as either absent, a member that
+declares `publish = false`, or a publishable member at a version. The last two
+are not interchangeable. A member that is present but not publishable is
+skipped, because nothing was released from it while it was withdrawn but the
+release it had beforehand still governs; stopping at the commit that restored
+publication would absorb the withdrawn stretch's content into the anchor. An
+absent commit ends the walk in the same way creation does, since the package
+released nothing under a version it did not yet carry.
 
 ### Workspace membership
 
@@ -246,17 +248,34 @@ from the repository-root manifest. Git rejects an empty pathspec, so
 the repository root — which every one of these paths spells as the empty string —
 becomes `.` inside the Git wrapper rather than at each call site.
 
-### Restored packages
+### Baseline discovery
 
-A package that is absent from the base revision is only treated as newly created
-once the first-parent walk shows no sampled commit carried it. When some earlier
-commit did, the branch is restoring a package, so the walk resumes at the newest
-commit that carried it and then applies the ordinary anchor rule. Anchoring on
-that commit directly would be wrong whenever content was committed without an
-increment before the deletion: the anchor would absorb the unreleased content and
-a package restored at the same version would look released. Treating every
-absence as creation would instead let a restored package re-publish a version
-that is already on crates.io.
+Without `--base` the baseline comes from `refs/remotes/origin/HEAD`, read with
+`git symbolic-ref`, and from `origin/main` when that ref is missing. The ref is
+what a clone records for the remote's default branch, so it answers without
+assuming a name; the literal is only the convention to fall back on when a clone
+never fetched the remote's head. A failure to read the ref is not an error,
+because the fallback still produces a usable baseline and the run should not
+stop over a missing convenience.
+
+### Lockfile closures
+
+A package with a binary target releases its resolved dependency closure, so the
+workspace lockfile is parsed at both ends and each package's closure is walked
+out of it from that package's own entry. Comparing the file's bytes instead
+would report every unrelated member's dependency movement, because Cargo
+re-derives the archived lockfile from the closure the package actually needs.
+Each dependency is identified by version and source, deliberately not by
+checksum: a checksum that changes without a version change is a registry event
+rather than a release-relevant one, and a lockfile format that omits checksums is
+still comparable.
+
+Resolving a package's own entry prefers the one carrying no `source`, because a
+workspace member and a registry crate of the same name both appear and only the
+former is the package being classified. That entry is then excluded from its own
+closure however it is reached, so incrementing a binary package cannot register
+as a further change to it and a development-dependency cycle back onto the root
+terminates.
 
 ### Packaging cross-check
 

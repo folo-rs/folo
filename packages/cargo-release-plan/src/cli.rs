@@ -136,9 +136,9 @@ struct ReportArgs {
     #[arg(long)]
     out_dir: PathBuf,
 
-    /// Base revision whose first-parent line supplies anchors.
+    /// Release baseline whose first-parent line supplies anchors.
     ///
-    /// Defaults to the base declared in workspace metadata.
+    /// Defaults to the default branch the `origin` remote advertises.
     #[arg(long)]
     base: Option<String>,
 
@@ -154,9 +154,9 @@ struct ReportArgs {
 /// Arguments for `check`.
 #[derive(Debug, Parser)]
 struct CheckArgs {
-    /// Base revision whose first-parent line supplies anchors.
+    /// Release baseline whose first-parent line supplies anchors.
     ///
-    /// Defaults to the base declared in workspace metadata.
+    /// Defaults to the default branch the `origin` remote advertises.
     #[arg(long)]
     base: Option<String>,
 

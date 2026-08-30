@@ -12,11 +12,12 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
-use crate::anchor::{Anchor, Presence, TimelineEntry, reintroduction_anchor, resolve_anchor};
+use crate::anchor::{Anchor, Presence, TimelineEntry, resolve_anchor};
 use crate::diff::{file_diff, mode_change_diff};
-use crate::git::{GitRepo, TreeEntry, join_git_rel, tree_mode};
+use crate::git::{DefaultBase, GitRepo, TreeEntry, join_git_rel, tree_mode};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
+use crate::lockfile::{ClosureChange, Lockfile, closure_changes};
 use crate::manifest::{
     DEFAULT_README_FILES, PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers,
     is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
@@ -26,7 +27,13 @@ use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_wo
 use crate::packaging::{PackagingRules, relativize};
 use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
-use crate::{ReadFileError, SymlinkReleasedError, VersionRegressionError, short_commit};
+use crate::{
+    MalformedLockfileError, ReadFileError, SymlinkReleasedError, VersionRegressionError,
+    short_commit,
+};
+
+/// Name Cargo requires for a workspace lockfile.
+const LOCKFILE_FILE_NAME: &str = "Cargo.lock";
 
 /// Workspace classification: every publishable package plus its group verdicts.
 ///
@@ -78,7 +85,7 @@ impl PackageClass {
     /// Classification status, as reported and as gated on.
     pub(crate) fn status(&self) -> PackageStatus {
         match &self.verdict {
-            Verdict::New | Verdict::Releasing { .. } => PackageStatus::Releasing,
+            Verdict::New | Verdict::PendingRelease { .. } => PackageStatus::PendingRelease,
             Verdict::Released { .. } => PackageStatus::Released,
             Verdict::UnreleasedChanges { .. } => PackageStatus::UnreleasedChanges,
         }
@@ -88,7 +95,7 @@ impl PackageClass {
     pub(crate) fn anchor(&self) -> Option<&Anchor> {
         match &self.verdict {
             Verdict::New => None,
-            Verdict::Releasing { anchor, .. }
+            Verdict::PendingRelease { anchor, .. }
             | Verdict::Released { anchor }
             | Verdict::UnreleasedChanges { anchor, .. } => Some(anchor),
         }
@@ -98,9 +105,8 @@ impl PackageClass {
     pub(crate) fn changed(&self) -> &[ChangedItem] {
         match &self.verdict {
             Verdict::New | Verdict::Released { .. } => &[],
-            Verdict::Releasing { changed, .. } | Verdict::UnreleasedChanges { changed, .. } => {
-                changed
-            }
+            Verdict::PendingRelease { changed, .. }
+            | Verdict::UnreleasedChanges { changed, .. } => changed,
         }
     }
 
@@ -108,7 +114,7 @@ impl PackageClass {
     pub(crate) fn patch(&self) -> &str {
         match &self.verdict {
             Verdict::UnreleasedChanges { patch, .. } => patch,
-            Verdict::New | Verdict::Releasing { .. } | Verdict::Released { .. } => "",
+            Verdict::New | Verdict::PendingRelease { .. } | Verdict::Released { .. } => "",
         }
     }
 }
@@ -135,7 +141,7 @@ impl PackageClass {
         )
     }
 
-    pub(crate) fn releasing(
+    pub(crate) fn pending_release(
         name: &str,
         declared_version: Version,
         anchor: Anchor,
@@ -144,7 +150,7 @@ impl PackageClass {
         Self::with_verdict(
             name,
             declared_version,
-            Verdict::Releasing {
+            Verdict::PendingRelease {
                 anchor,
                 changed: Vec::new(),
             },
@@ -209,7 +215,7 @@ enum Verdict {
     /// nothing to compare against.
     New,
     /// The declared version increased over the anchor's.
-    Releasing {
+    PendingRelease {
         anchor: Anchor,
         changed: Vec<ChangedItem>,
     },
@@ -227,19 +233,21 @@ enum Verdict {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackageStatus {
-    Releasing,
+    PendingRelease,
     UnreleasedChanges,
     Released,
 }
 
-/// A released-content or inherited-value change.
+/// A released-content, inherited-value or locked-dependency change.
 ///
-/// Serialized as the report.json object with `path`/`change` or `field`, plus
-/// `source`, so callers keep a stable JSON shape without optional nulls.
+/// Serialized as the report.json object with `path`/`change`, `field`, or
+/// `dependency`/`change`, plus `source`, so callers keep a stable JSON shape
+/// without optional nulls.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ChangedItem {
     Package { path: String, change: String },
     Inherited { field: String },
+    Lockfile { dependency: String, change: String },
 }
 
 impl Serialize for ChangedItem {
@@ -259,6 +267,13 @@ impl Serialize for ChangedItem {
                 let mut state = serializer.serialize_struct(name, 2)?;
                 state.serialize_field("field", field)?;
                 state.serialize_field("source", "inherited")?;
+                state.end()
+            }
+            Self::Lockfile { dependency, change } => {
+                let mut state = serializer.serialize_struct(name, 3)?;
+                state.serialize_field("dependency", dependency)?;
+                state.serialize_field("change", change)?;
+                state.serialize_field("source", "lockfile")?;
                 state.end()
             }
         }
@@ -286,8 +301,26 @@ pub(crate) fn classify(
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
     let mut work_tree = load_work_tree(manifest_path)?;
-    let base = base.unwrap_or(&work_tree.default_base).to_owned();
     let git = GitRepo::discover(&work_tree.workspace_root)?;
+    let base = match base {
+        Some(base) => base.to_owned(),
+        None => {
+            let default = git.default_base()?;
+            verbose.note(|| match &default {
+                DefaultBase::RemoteHead(revision) => format!(
+                    "no --base given; the remote records {} as its default branch, so that \
+                     is taken to be the branch releases are made from",
+                    quote_path(revision)
+                ),
+                DefaultBase::Convention(revision) => format!(
+                    "no --base given and the remote records no default branch, so the \
+                     conventional {} is assumed to be the branch releases are made from",
+                    quote_path(revision)
+                ),
+            });
+            default.revision().to_owned()
+        }
+    };
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
         package.resources =
@@ -351,8 +384,8 @@ pub(crate) fn classify(
             .collect();
         verbose.note(|| {
             format!(
-                "version group {}: members [{}]; consistent={} (members that do not exist on \
-             the base revision are exempt from matching declared versions)",
+                "version group {}: members [{}]; consistent={} (members the baseline does not \
+             carry are exempt from matching declared versions)",
                 quote_path(name),
                 members.join(", "),
                 verdict.is_consistent()
@@ -397,55 +430,47 @@ fn classify_one(
     let anchor = if base_snapshot.packages.contains_key(name) {
         resolve_anchor(name, &timeline)?
     } else {
-        match reintroduction_anchor(name, &timeline)? {
-            Some(anchor) => {
-                verbose.note(|| format!(
-                    "{shown}: absent from base {base_sha} but carried earlier on its first-parent \
-                     history, so this branch reintroduces a package rather than creating one and \
-                     the last version change on that history ({} declaring {}) is the anchor",
-                    short_commit(&anchor.commit),
-                    anchor.version
-                ));
-                anchor
-            }
-            None => {
-                verbose.note(|| {
-                    format!(
-                        "{shown}: absent from base {base_sha} and from every sampled commit on its \
-                     first-parent history, so creation on this branch counts as a version \
-                     increase and the status is releasing"
-                    )
-                });
-                let side = work_tree_side(package, cache.case());
-                let resource_paths: Vec<&str> =
-                    side.resources.values().map(String::as_str).collect();
-                let tracked_resources = git.tracked_paths(&resource_paths)?;
-                let content = released_in_work_tree(git, &side, &tracked_resources)?;
-                let untracked =
-                    untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
-                log_untracked(verbose, name, untracked.len());
-                return Ok(PackageClass {
-                    name: name.clone(),
-                    declared_version: package.manifest.version.clone(),
-                    group,
-                    verdict: Verdict::New,
-                    stat: DiffStat {
-                        files: 0,
-                        insertions: 0,
-                        deletions: 0,
-                    },
-                    untracked,
-                    dependencies: package.dependencies.clone(),
-                    dependents,
-                    manifest_path: package.manifest_path.clone(),
-                });
-            }
-        }
+        // A package the baseline does not publish has no released version to
+        // compare against, whether it never existed or once did and was
+        // withdrawn. Reconciling a name that was published before is left to
+        // whoever restores it: guessing which older release a restored
+        // directory continues would make the tool's verdict depend on history
+        // a fetch may not even carry.
+        // Ref: docs/design.md, "Packages the baseline does not publish".
+        verbose.note(|| {
+            format!(
+                "{shown}: not published by the baseline {base_sha}, so it is treated as a new \
+                 package whose first release this branch prepares"
+            )
+        });
+        let side = work_tree_side(package, cache.case());
+        let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
+        let tracked_resources = git.tracked_paths(&resource_paths)?;
+        let content = released_in_work_tree(git, &side, &tracked_resources)?;
+        let untracked =
+            untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
+        log_untracked(verbose, name, untracked.len());
+        return Ok(PackageClass {
+            name: name.clone(),
+            declared_version: package.manifest.version.clone(),
+            group,
+            verdict: Verdict::New,
+            stat: DiffStat {
+                files: 0,
+                insertions: 0,
+                deletions: 0,
+            },
+            untracked,
+            dependencies: package.dependencies.clone(),
+            dependents,
+            manifest_path: package.manifest_path.clone(),
+        });
     };
     let short_anchor = short_commit(&anchor.commit);
     verbose.note(|| format!(
-        "{shown}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
-         requires the work-tree version to be greater than the anchor version (parsed, not textual)",
+        "{shown}: anchor {short_anchor} declared {}; work tree declares {}; the package counts as \
+         pending release only when the work-tree version is greater than the anchor version \
+         (parsed, not textual)",
         anchor.version,
         package.manifest.version
     ));
@@ -489,6 +514,26 @@ fn classify_one(
 
     log_untracked(verbose, name, untracked.len());
 
+    if package.has_binary {
+        for (dependency, change) in
+            lockfile_closure_changes(git, work_tree, name, &anchor.commit, verbose)?
+        {
+            verbose.note(|| {
+                format!(
+                    "{shown}: the locked identity of {} is {} between the anchor and the work \
+                     tree, and this package installs as an executable built from the lockfile \
+                     its archive carries, so the dependency is released content",
+                    quote_path(&dependency),
+                    change.as_str()
+                )
+            });
+            changed.push(ChangedItem::Lockfile {
+                dependency,
+                change: change.as_str().to_owned(),
+            });
+        }
+    }
+
     // A declared version below the anchor cannot describe a release: the anchor
     // version is already on the base line, so the work tree would re-publish an
     // existing version with different content. Ref: docs/design.md,
@@ -505,7 +550,7 @@ fn classify_one(
 
     let version_increased = package.manifest.version > anchor.version;
     let verdict = if version_increased {
-        Verdict::Releasing { anchor, changed }
+        Verdict::PendingRelease { anchor, changed }
     } else if changed.is_empty() {
         Verdict::Released { anchor }
     } else {
@@ -1395,6 +1440,63 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
 
 // Untracked paths are advisory-only; tests cannot observe that a log line was skipped.
 #[cfg_attr(test, mutants::skip)]
+/// Dependencies whose locked identity changed between the anchor and the work tree.
+///
+/// Both ends are read the way every other comparison reads them: the anchor from
+/// the commit, the work tree from disk. A workspace that does not track a
+/// lockfile, or one whose lockfile predates the package, yields nothing rather
+/// than a fabricated difference — there is no resolved closure to compare, and
+/// treating its absence as a change would report on the lockfile's arrival
+/// instead of on the package.
+/// Ref: docs/design.md, "Lockfiles of binary packages".
+fn lockfile_closure_changes(
+    git: &GitRepo,
+    work_tree: &WorkTree,
+    name: &str,
+    anchor_commit: &str,
+    verbose: Verbose,
+) -> Result<Vec<(String, ClosureChange)>, AppError> {
+    let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
+    let Some(anchor_bytes) = git.show_file_bytes(anchor_commit, &git_path)? else {
+        log_missing_lockfile(
+            verbose,
+            name,
+            "the anchor commit tracks no workspace lockfile",
+        );
+        return Ok(Vec::new());
+    };
+    let work_path = work_tree.workspace_root.join(LOCKFILE_FILE_NAME);
+    let Some(work_bytes) = read_optional_bytes(&work_path, name, &git_path)? else {
+        log_missing_lockfile(verbose, name, "the work tree holds no workspace lockfile");
+        return Ok(Vec::new());
+    };
+    let anchor = Lockfile::parse(&decode_lockfile(anchor_bytes, &git_path)?, &git_path)?;
+    let work = Lockfile::parse(&decode_lockfile(work_bytes, &git_path)?, &git_path)?;
+    let (Some(anchor), Some(work)) = (anchor.closure(name), work.closure(name)) else {
+        log_missing_lockfile(
+            verbose,
+            name,
+            "a lockfile end does not resolve this package",
+        );
+        return Ok(Vec::new());
+    };
+    Ok(closure_changes(&anchor, &work))
+}
+
+/// Reads lockfile bytes as text, naming `path` if they are not text at all.
+fn decode_lockfile(bytes: Vec<u8>, path: &str) -> Result<String, AppError> {
+    String::from_utf8(bytes).map_err(|error| MalformedLockfileError::caused_by(path, error).into())
+}
+
+fn log_missing_lockfile(verbose: Verbose, name: &str, reason: &str) {
+    verbose.note(|| {
+        format!(
+            "{}: {reason}, so no resolved dependency closure is compared for it",
+            quote_path(name)
+        )
+    });
+}
+
 fn log_untracked(verbose: Verbose, name: &str, count: usize) {
     if count == 0 {
         return;
