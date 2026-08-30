@@ -143,6 +143,26 @@ fn empty_file_header(path: &str, old_present: bool) -> String {
     format!("diff --git {old_name} {new_name}\n{change} file mode {EMPTY_FILE_MODE}\n")
 }
 
+/// Git's extended headers for a change of a file's mode.
+///
+/// A mode change leaves the content identical, so the unified renderer produces
+/// nothing for it. Git's own `old mode` / `new mode` headers carry the change
+/// instead, which keeps a `.patch` artifact readable by the standard tooling
+/// that consumes it.
+pub(crate) fn mode_change_diff(path: &str, old_mode: &str, new_mode: &str) -> FileDiff {
+    let old_name = quote_path(&format!("a/{path}")).into_owned();
+    let new_name = quote_path(&format!("b/{path}")).into_owned();
+    FileDiff {
+        text: format!(
+            "diff --git {old_name} {new_name}\nold mode {old_mode}\nnew mode {new_mode}\n"
+        ),
+        // A mode change moves no lines, so it contributes to the changed-file
+        // count alone.
+        insertions: 0,
+        deletions: 0,
+    }
+}
+
 /// A contiguous run of deleted and inserted lines, as zero-based line indexes.
 struct ChangedRegion {
     old_start: usize,
@@ -525,6 +545,30 @@ mod tests {
             diff.text,
             "diff --git a/src/lib.rs b/src/lib.rs\ndeleted file mode 100644\n--- a/src/lib.rs\n+++ \
              /dev/null\n"
+        );
+    }
+
+    #[test]
+    fn a_mode_change_renders_only_the_mode_headers() {
+        // The content is identical, so a reader has no hunks to take work from
+        // and the mode headers are the whole record of the change.
+        let diff = mode_change_diff("src/lib.rs", "100644", "100755");
+        assert_eq!(
+            diff.text,
+            "diff --git a/src/lib.rs b/src/lib.rs\nold mode 100644\nnew mode 100755\n"
+        );
+        assert_eq!((diff.insertions, diff.deletions), (0, 0));
+    }
+
+    #[test]
+    fn a_mode_change_quotes_a_path_needing_it() {
+        // The prefix goes inside the quotes, as it does for every other header.
+        let diff = mode_change_diff("src/a b\"c.rs", "100755", "100644");
+        assert!(
+            diff.text
+                .starts_with("diff --git \"a/src/a b\\\"c.rs\" \"b/src/a b\\\"c.rs\"\n"),
+            "{}",
+            diff.text
         );
     }
 

@@ -176,6 +176,15 @@ staging them would. Delegating the question that way means no conversion has to
 be understood, reimplemented, or kept in step with Git. Bytes are then read only
 for the paths whose ids differ, to render the patch.
 
+The file mode travels alongside the object id, because Cargo copies the
+executable bit into the archive and so a mode change alters released content
+while leaving the blob identical. The anchor's modes come from the same tree
+listing as its ids. The work tree's come from the index rather than from
+filesystem metadata: Git decides a work-tree file's mode from `core.fileMode`,
+which checkouts on Windows switch off, so reading the permission bit off disk
+would classify one commit differently per platform. The index holds the mode Git
+would record in a commit, which is the mode a published archive carries.
+
 ### Patch rendering
 
 Patches are rendered with Myers' line-level difference algorithm under a fixed

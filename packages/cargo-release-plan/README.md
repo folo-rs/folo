@@ -118,6 +118,12 @@ never released content. Untracked files are advisory only. Versions only move
 forwards: a
 declared version below the anchor's version is an error rather than a status.
 
+A packaged file's executable bit is released content too, since Cargo carries
+the mode Git records into the archive. Making a packaged file executable is
+therefore a change even when its bytes are untouched. The mode is read from the
+index, so a checkout on a platform without executable permissions classifies the
+same way.
+
 Version groups are declared in the workspace root as
 `[workspace.metadata.release-plan.groups]`. Members share a declared version; if
 any member needs an increment, all members increment. Members that do not exist

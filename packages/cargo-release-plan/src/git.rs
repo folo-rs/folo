@@ -29,6 +29,28 @@ const MANIFEST_GLOB_PATHSPEC: &str = ":(glob)**/Cargo.toml";
 /// entry may carry.
 const SYMLINK_TREE_MODE: &str = "120000";
 
+/// Tree mode Git records for an executable regular file.
+///
+/// Cargo copies the bit into the archive it builds, so the mode is part of a
+/// package's released content rather than a local detail.
+/// Ref: docs/design.md, "Released content".
+const EXECUTABLE_TREE_MODE: &str = "100755";
+
+/// Tree mode Git records for a regular file without the executable bit.
+const REGULAR_TREE_MODE: &str = "100644";
+
+/// The mode Git records for a regular file, chosen by its executable bit.
+///
+/// Reports name the mode rather than the bit, so that what they print is the
+/// vocabulary Git and Cargo both use.
+pub(crate) fn tree_mode(executable: bool) -> &'static str {
+    if executable {
+        EXECUTABLE_TREE_MODE
+    } else {
+        REGULAR_TREE_MODE
+    }
+}
+
 /// The tool's access to one Git repository.
 ///
 /// Every historical fact a verdict rests on — the commits on the base
@@ -257,6 +279,37 @@ impl GitRepo {
         Ok(split_z(&stdout)?.into_iter().collect())
     }
 
+    /// Paths under `pathspecs` that Git records with the executable bit set.
+    ///
+    /// Git records exactly two modes for a regular file, and it decides which
+    /// one a work-tree file carries from `core.fileMode`, which checkouts on
+    /// Windows switch off. Reading the bit off the filesystem would therefore
+    /// answer differently per platform for one commit. The index holds the mode
+    /// Git would record in a commit, and so the mode the published archive
+    /// carries, which is the question released content asks.
+    /// Ref: docs/implementation.md, "Classification".
+    ///
+    /// An empty input answers without invoking Git, because `git ls-files` with
+    /// no pathspec lists the whole repository.
+    pub(crate) fn executable_paths(&self, pathspecs: &[&str]) -> Result<HashSet<String>, AppError> {
+        if pathspecs.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut args = vec![
+            "ls-files".to_string(),
+            "-s".to_string(),
+            "-z".to_string(),
+            "--".to_string(),
+        ];
+        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
+        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
+        Ok(split_z(&stdout)?
+            .iter()
+            .filter_map(|record| executable_staged_path(record))
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+
     /// Untracked, non-ignored paths under `pathspec`.
     // Advisory-only listing; classification does not fail on untracked files.
     #[cfg_attr(test, mutants::skip)]
@@ -440,6 +493,23 @@ impl TreeEntry {
     pub(crate) fn is_symlink(&self) -> bool {
         self.mode == SYMLINK_TREE_MODE
     }
+
+    /// Whether the entry carries the executable bit.
+    pub(crate) fn is_executable(&self) -> bool {
+        self.mode == EXECUTABLE_TREE_MODE
+    }
+}
+
+/// Reads a `<mode> <object> <stage>\t<path>` index record, keeping the path
+/// only when the record carries the executable mode.
+///
+/// The mode is read off the record's own first field rather than matched
+/// anywhere in the record, so a path that itself looks like a mode cannot be
+/// mistaken for one.
+fn executable_staged_path(record: &str) -> Option<&str> {
+    let (metadata, path) = record.split_once('\t')?;
+    let mode = metadata.split(' ').next()?;
+    (mode == EXECUTABLE_TREE_MODE).then_some(path)
 }
 
 /// Rewrites an operating-system path into the `/`-separated form Git reports.
@@ -594,6 +664,77 @@ mod tests {
         // Not a record at all: no field separator.
         assert!(TreeEntry::parse("120000 blob abc packages/foo").is_none());
         assert!(TreeEntry::parse("120000 blob\tpackages/foo").is_none());
+    }
+
+    /// Tree entries report the executable bit off the mode field.
+    #[test]
+    fn tree_records_report_the_executable_bit() {
+        let script = TreeEntry::parse("100755 blob abc\tpackages/foo/run.sh").unwrap();
+        assert!(script.is_executable());
+        let plain = TreeEntry::parse("100644 blob def\tpackages/foo/lib.rs").unwrap();
+        assert!(!plain.is_executable());
+        // A symbolic link is not a regular file and so is never executable.
+        assert!(
+            !TreeEntry::parse("120000 blob abc\tpackages/foo/link")
+                .unwrap()
+                .is_executable()
+        );
+    }
+
+    /// Index records yield only the executable paths.
+    ///
+    /// The mode is read off the record's own first field, so a path that itself looks like the
+    /// executable mode cannot be mistaken for one.
+    #[test]
+    fn index_records_yield_only_the_executable_paths() {
+        assert_eq!(
+            executable_staged_path("100755 abc 0\tpackages/foo/run.sh"),
+            Some("packages/foo/run.sh")
+        );
+        assert_eq!(
+            executable_staged_path("100644 abc 0\tpackages/foo/lib.rs"),
+            None
+        );
+        // The path names the executable mode without carrying it.
+        assert_eq!(executable_staged_path("100644 abc 0\t100755"), None);
+        // Not a record at all: no field separator.
+        assert_eq!(executable_staged_path("100755 abc 0 packages/foo"), None);
+    }
+
+    /// A regular file's mode is chosen by its executable bit.
+    #[test]
+    fn a_regular_files_mode_is_chosen_by_its_executable_bit() {
+        assert_eq!(tree_mode(true), EXECUTABLE_TREE_MODE);
+        assert_eq!(tree_mode(false), REGULAR_TREE_MODE);
+    }
+
+    /// An empty pathspec list never reaches Git.
+    ///
+    /// `git ls-files` with no pathspec lists the whole repository, which would report executable
+    /// paths from every package rather than only the one being classified.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn executable_paths_are_read_from_the_index() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("packages/foo")).unwrap();
+        fs::write(root.join("packages/foo/run.sh"), "echo\n").unwrap();
+        fs::write(root.join("packages/foo/lib.rs"), "x").unwrap();
+        let repo = init_repo(root);
+        // Set through the index, because a Windows checkout has no executable
+        // permission to set and turns `core.fileMode` off.
+        run_capture(
+            "git",
+            &["update-index", "--chmod=+x", "packages/foo/run.sh"],
+            root,
+        )
+        .unwrap();
+
+        assert_eq!(
+            repo.executable_paths(&["packages/foo"]).unwrap(),
+            HashSet::from(["packages/foo/run.sh".to_string()])
+        );
+        assert!(repo.executable_paths(&[]).unwrap().is_empty());
     }
 
     /// Os path rewrites only the platform separator.

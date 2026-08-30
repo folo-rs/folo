@@ -13,8 +13,8 @@ use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, Presence, TimelineEntry, reintroduction_anchor, resolve_anchor};
-use crate::diff::file_diff;
-use crate::git::{GitRepo, TreeEntry, join_git_rel};
+use crate::diff::{file_diff, mode_change_diff};
+use crate::git::{GitRepo, TreeEntry, join_git_rel, tree_mode};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
@@ -688,6 +688,16 @@ fn diff_package(
         .collect();
     let work_ids = work_blob_ids(git, name, work_files)?;
 
+    // Cargo copies the executable bit into the archive, so a file made
+    // executable without an edit is released content that changed even though
+    // its blob is untouched. Ref: docs/design.md, "Released content".
+    let anchor_exec: HashSet<&str> = anchor_tree
+        .iter()
+        .filter(|entry| entry.is_executable())
+        .map(|entry| entry.path.as_str())
+        .collect();
+    let work_exec = work_executable_paths(git, work_side, &tracked_resources)?;
+
     let rels: BTreeSet<&str> = anchor_files
         .keys()
         .chain(work_files.keys())
@@ -704,7 +714,17 @@ fn diff_package(
             .get(rel)
             .and_then(|path| anchor_ids.get(path.as_str()).copied());
         let new_id = work_ids.get(rel).map(String::as_str);
-        if old_id == new_id {
+        // The mode is only a change while the file exists at both ends: an
+        // addition or a deletion is already reported by presence alone.
+        let mode_change = match (anchor_files.get(rel), work_files.get(rel)) {
+            (Some(old_path), Some(new_path)) if old_id.is_some() && new_id.is_some() => {
+                let old_mode = tree_mode(anchor_exec.contains(old_path.as_str()));
+                let new_mode = tree_mode(work_exec.contains(new_path.as_str()));
+                (old_mode != new_mode).then_some((old_mode, new_mode))
+            }
+            _ => None,
+        };
+        if old_id == new_id && mode_change.is_none() {
             continue;
         }
         let kind = match (old_id.is_some(), new_id.is_some()) {
@@ -716,6 +736,9 @@ fn diff_package(
             path: rel.to_string(),
             change: kind.to_string(),
         });
+        if let Some((old_mode, new_mode)) = mode_change {
+            patch.push_str(&mode_change_diff(rel, old_mode, new_mode).text);
+        }
         // The content itself is only needed to render what changed, so it is
         // read for the differing paths alone.
         let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
@@ -740,6 +763,22 @@ fn diff_package(
         deletions,
     };
     Ok((changed, patch, stat, untracked))
+}
+
+/// Released work-tree paths Git records as executable.
+///
+/// The package directory does not cover a manifest resource that lives outside
+/// it, so those paths are asked for alongside the directory. Only tracked
+/// resources are asked for, because an untracked one is not released content
+/// and Git records no mode for it.
+fn work_executable_paths(
+    git: &GitRepo,
+    side: &PackageSide<'_>,
+    tracked_resources: &HashSet<String>,
+) -> Result<HashSet<String>, AppError> {
+    let mut pathspecs = vec![side.dir];
+    pathspecs.extend(tracked_resources.iter().map(String::as_str));
+    git.executable_paths(&pathspecs)
 }
 
 /// Object ids the released work-tree files would be stored under.

@@ -72,6 +72,13 @@ comparison, which is how a deleted packaged file or a path dropped from
 `include` is visible. Every released file counts, so a comment-only or
 formatting-only edit to a packaged `Cargo.toml` is a released content change.
 
+A file's executable bit counts as well, because Cargo carries the mode Git
+records into the archive it builds. A packaged file that becomes executable
+without an edit is therefore a released content change, reported against the
+file with the `old mode` and `new mode` headers Git itself uses. The mode is
+read from the index rather than the filesystem, so the same commit classifies
+identically on a platform that has no executable permission to observe.
+
 ### Where Cargo departs from those rules
 
 Cargo packages a few things the general rules would not select, and

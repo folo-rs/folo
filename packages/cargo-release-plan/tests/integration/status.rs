@@ -57,6 +57,44 @@ fn content_already_on_base_has_unreleased_changes() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
+fn executable_bit_alone_has_unreleased_changes() {
+    let fixture = seeded_package();
+    // The script has to be released content at the anchor, so it lands in the
+    // same commit as the version that anchors the comparison.
+    fixture.write("packages/demo/script.sh", "echo hi\n");
+    write_package(&fixture, "demo", "0.1.1", "");
+    fixture.commit("release with script");
+    let base = fixture.sha("HEAD");
+
+    // The bit is set through the index rather than the filesystem, because a
+    // Windows checkout has no executable permission to set and turns
+    // `core.fileMode` off. Committing without restaging keeps the recorded mode
+    // where `core.fileMode` is on and would otherwise read it back off disk.
+    fixture.git(&["update-index", "--chmod=+x", "packages/demo/script.sh"]);
+    fixture.git(&["commit", "-m", "make script executable"]);
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("unreleased-changes"));
+
+    // The content is untouched, so the mode headers are the only thing that
+    // records the change for a reader of the patch.
+    let out_dir = fixture.path().join("out");
+    run(&RunInput::Report {
+        out_dir: out_dir.clone(),
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let patch = fs::read_to_string(out_dir.join("diffs").join("demo.patch")).unwrap();
+    assert!(patch.contains("old mode 100644"), "{patch}");
+    assert!(patch.contains("new mode 100755"), "{patch}");
+    assert!(!patch.contains("@@"), "{patch}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
 fn added_packaged_file_has_unreleased_changes() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
