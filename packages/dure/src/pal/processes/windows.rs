@@ -318,7 +318,7 @@ fn create_job_handle(breakaway: Breakaway) -> Result<HANDLE, PalError> {
     let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     info.BasicLimitInformation.LimitFlags = match breakaway {
         Breakaway::Permitted => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-        #[cfg(any(test, feature = "private-test-util"))]
+        #[cfg(feature = "private-test-util")]
         Breakaway::Forbidden => JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     // SAFETY: `info` is a stack structure of the size SetInformationJobObject

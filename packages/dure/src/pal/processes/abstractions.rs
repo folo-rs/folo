@@ -31,7 +31,7 @@ pub(crate) enum Breakaway {
     ///
     /// `dure` never confines a session this way. Only the integration harness
     /// builds such a job, to model the launchers `dure run` must refuse.
-    #[cfg(any(test, feature = "private-test-util"))]
+    #[cfg(feature = "private-test-util")]
     Forbidden,
 }
 
