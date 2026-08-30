@@ -196,10 +196,11 @@ the rules, not tolerated.
 expands version groups, rewrites package versions and intra-workspace
 requirements that must follow (including `=` pins in non-publishable members),
 and refreshes the workspace lockfile.
-Manifests are edited structurally so comments and layout survive. A plan that
-cannot be applied in full leaves every manifest untouched, so a rejected target
-or an unreadable manifest never produces a half-applied workspace. `--dry-run`
-reports the manifests that would change and writes nothing.
+Manifests are edited structurally so comments and layout survive. Every reason a
+plan can be rejected — an unknown target, a version that would move backwards,
+an unreadable manifest — is decided before the first manifest is written, so a
+rejected plan changes nothing. `--dry-run` reports the manifests that would
+change and writes nothing.
 
 ### Report artifacts
 
