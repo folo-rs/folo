@@ -72,10 +72,6 @@ hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
 http = { version = "1.2.0", default-features = false, features = ["std"] }
-# Gitignore-style glob matching, which cargo-release-plan reuses for Cargo's
-# `include`/`exclude` rules so both agree on what a pattern selects. The floor
-# records the version the workspace resolves and validates against rather than a
-# capability requirement; no older release is exercised.
 ignore = { version = "0.4.23", default-features = false }
 itertools = { version = "0.15.0", default-features = false, features = [
     "use_std",
