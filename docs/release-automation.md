@@ -70,6 +70,7 @@ that set is four Cargo subcommands:
 | `cargo-bench-history-faker` | `cargo-bench-history-faker` | Unsupported test-support engine; published only so sibling repos can validate `cargo-bench-history` end to end (and fetch it via `cargo binstall`). No stable API or CLI. |
 | `cargo-detect-package`      | `cargo-detect-package`      | Small, fast to build.                              |
 | `cargo-freeze-deps`         | `cargo-freeze-deps`         | Small, fast to build.                              |
+| `dure`                      | `dure`                      | Windows-only, so it restricts its release targets (see [Per-crate targets](#per-crate-targets)). |
 
 `cargo-bench-history-stress` has a binary but is `publish = false`, so the
 derivation correctly excludes it.
@@ -205,13 +206,12 @@ any registry), `[]` (never publish), or a non-empty registry list, so a crate is
 release candidate when it is publishable (`publish` is `null` or a non-empty list)
 **and** owns a `bin` target.
 
-Against the current workspace this yields exactly `cargo-bench-history`,
-`cargo-detect-package`, `cargo-freeze-deps`. On a normal push that just published,
-every target archive is missing → the whole matrix builds. On an ordinary push
-that changed nothing, all archives already exist → the matrix is empty and
-`build-binaries` is skipped. On a re-run after a partial failure, only the still-
-missing `(crate, target)` pairs are emitted — so retries always operate on the
-correct, self-determined set.
+Against the current workspace this yields the crates tabulated above. On a normal
+push that just published, every target archive is missing → the whole matrix
+builds. On an ordinary push that changed nothing, all archives already exist → the
+matrix is empty and `build-binaries` is skipped. On a re-run after a partial
+failure, only the still-missing `(crate, target)` pairs are emitted — so retries
+always operate on the correct, self-determined set.
 
 ### `build-binaries` — build, package, checksum, upload
 
@@ -290,6 +290,27 @@ for macOS (`macos-latest` is Apple Silicon / arm64). There is **no**
 must be pinned by version (`ubuntu-24.04-arm`, `windows-11-arm`) — hence the
 apparent inconsistency with the x64 rows. Bump the pinned ARM images when newer
 ones ship. `x86_64-apple-darwin` (Intel Mac) is intentionally not supported.
+
+#### Per-crate targets
+
+The table above is what a crate gets by default, which suits a portable tool. A
+crate that only functions on some platforms names its subset in its manifest:
+
+```toml
+[package.metadata.folo]
+release-targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+```
+
+`plan-binaries` then reconciles that crate against only those targets, so the
+release carries no archive whose binary could never run. Without this, a
+platform-specific crate would ship installable archives for platforms it does not
+support, and `cargo binstall` would report success while installing something
+inert. Omitting the key means every target, and is the norm.
+
+A declared triple must be one the table offers. A typo would otherwise produce no
+archive for that target and no failure anywhere, so it is rejected twice: `just
+validate-binstall` fails the build before merge, and `plan-binaries` throws rather
+than planning a short release.
 
 ### `alert` — a per-run failure issue
 
@@ -425,7 +446,9 @@ block. A new binary crate copies the block above verbatim into its `Cargo.toml`
 (the build/upload side is already handled by the derivation). CI enforces this:
 `just validate-binstall` fails the build when a publishable binary crate is
 missing the block or has let it drift from the contract, so a forgotten or stale
-block is caught before release rather than by a user hitting a 404.
+block is caught before release rather than by a user hitting a 404. The same
+recipe checks each crate's optional [per-crate targets](#per-crate-targets)
+declaration against the workflow's target table.
 
 ## Manual publishing
 
