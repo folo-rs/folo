@@ -29,6 +29,7 @@ mod session_record;
 mod supervisor;
 mod trace;
 mod types;
+mod wall_clock;
 
 pub use cli::{Cli, EarlyExit};
 pub use run::run;

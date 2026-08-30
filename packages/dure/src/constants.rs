@@ -30,6 +30,13 @@ pub(crate) const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
 /// corrupt length prefix cannot force a huge allocation.
 pub(crate) const MAX_FRAME_LEN: u32 = 1024 * 1024;
 
+/// Largest `Output` payload that fits in one frame.
+///
+/// A frame's length prefix counts the message kind byte as well as the data, so
+/// the data has to stay one byte below the frame cap.
+/// Ref: docs/implementation.md, "Opening output".
+pub(crate) const MAX_OUTPUT_CHUNK_BYTES: usize = (MAX_FRAME_LEN as usize).saturating_sub(1);
+
 /// Output bytes the supervisor will hold for a client before giving up on it.
 ///
 /// A client this far behind is not draining its pipe. `dure` keeps no screen
@@ -62,11 +69,11 @@ pub(crate) const SUPERVISOR_COMMAND: &str = "__supervisor";
 /// Columns used until the first client attach reports a real size.
 ///
 /// VGA text-mode geometry, the historical Windows console default.
-/// Ref: docs/design.md, "Attach, detach, steal".
+/// Ref: docs/design.md, "Terminal pass-through".
 pub(crate) const DEFAULT_PTY_COLS: u16 = 80;
 
 /// Rows used until the first client attach reports a real size.
 ///
 /// VGA text-mode geometry, the historical Windows console default.
-/// Ref: docs/design.md, "Attach, detach, steal".
+/// Ref: docs/design.md, "Terminal pass-through".
 pub(crate) const DEFAULT_PTY_ROWS: u16 = 24;

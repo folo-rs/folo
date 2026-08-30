@@ -6,7 +6,8 @@ use crate::gc::live_sessions;
 use crate::list_fmt::format_list;
 use crate::pal::processes::Processes;
 use crate::pal::session_store::SessionStore;
-use crate::trace::Trace;
+use crate::trace::{Trace, trace};
+use crate::wall_clock::unix_now_ms;
 
 /// Print live sessions.
 pub(crate) fn execute(
@@ -15,7 +16,9 @@ pub(crate) fn execute(
     trace: Trace,
 ) -> Result<(), AppError> {
     let live = live_sessions(store, processes, trace)?;
-    println!("{}", format_list(&live));
+    let now = unix_now_ms();
+    trace!(trace, "ages are measured against unix time {now} ms");
+    println!("{}", format_list(&live, now));
     Ok(())
 }
 

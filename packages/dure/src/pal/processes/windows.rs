@@ -323,7 +323,7 @@ fn create_job_handle(breakaway: Breakaway) -> Result<HANDLE, PalError> {
     };
     // SAFETY: `info` is a stack structure of the size SetInformationJobObject
     // expects for JobObjectExtendedLimitInformation.
-    unsafe {
+    let configured = unsafe {
         SetInformationJobObject(
             handle,
             JobObjectExtendedLimitInformation,
@@ -331,8 +331,16 @@ fn create_job_handle(breakaway: Breakaway) -> Result<HANDLE, PalError> {
             u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
                 .expect("job info size fits in u32"),
         )
+    };
+    if configured.is_err() {
+        // The job exists but does not have the limits the caller asked for, so
+        // it is never returned and nothing else can close it.
+        // SAFETY: `handle` is the job just created and is not used again.
+        unsafe {
+            _ = CloseHandle(handle);
+        }
+        return Err(PalError::new(PalErrorKind::Other));
     }
-    .map_err(|_error| PalError::new(PalErrorKind::Other))?;
     Ok(handle)
 }
 

@@ -7,7 +7,9 @@ process keeps running after the terminal that launched it goes away — a closed
 window, a dropped SSH connection, or a killed foreground process. A later
 terminal attaches to the same process.
 
-`dure` is a Windows tool and builds only for Windows targets.
+`dure` runs only on Windows. Other targets build, so the workspace stays
+buildable everywhere, but the resulting binary does nothing except report that
+the platform is unsupported.
 
 ```text
 cargo binstall dure

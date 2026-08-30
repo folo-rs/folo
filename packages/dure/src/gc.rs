@@ -80,20 +80,31 @@ fn reap_orphan_reservations(
         .list_reservations()
         .map_err(|_error| StoreError::new())?;
     for (id, owner) in reservations {
-        if processes.probe(&owner) == ProcessLiveness::Dead {
-            trace!(
-                trace,
-                "id {id} was claimed by pid {} which is gone, so the claim is released", owner.pid
-            );
-            store
-                .delete_owned_by(id, &owner)
-                .map_err(|_error| StoreError::new())?;
-        } else {
-            trace!(
-                trace,
-                "id {id} is claimed by pid {} which is still starting up, so the id stays taken",
-                owner.pid
-            );
+        match processes.probe(&owner) {
+            ProcessLiveness::Dead => {
+                trace!(
+                    trace,
+                    "id {id} was claimed by pid {} which is gone, so the claim is released",
+                    owner.pid
+                );
+                store
+                    .delete_owned_by(id, &owner)
+                    .map_err(|_error| StoreError::new())?;
+            }
+            ProcessLiveness::Live => {
+                trace!(
+                    trace,
+                    "id {id} is claimed by pid {} which is still starting up, so the id stays taken",
+                    owner.pid
+                );
+            }
+            ProcessLiveness::InspectFailed => {
+                trace!(
+                    trace,
+                    "id {id} is claimed by pid {} which could not be inspected, so the id stays taken",
+                    owner.pid
+                );
+            }
         }
     }
     Ok(())

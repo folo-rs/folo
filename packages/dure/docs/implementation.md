@@ -116,7 +116,9 @@ without a console:
   above the values it names however long a command line is. Widths count
   characters rather than bytes, because a byte count would over-pad any row
   holding a non-ASCII path. The final column is not padded, which keeps trailing
-  blanks out of a line something else may compare.
+  blanks out of a line something else may compare. The current time arrives as an
+  argument rather than being read here, which keeps the whole table a pure
+  function of its inputs and the age column testable without a clock.
 * `path_display` renders a stored path for a human. The session store keeps
   canonical paths, which on Windows carry the extended-length `\\?\` prefix;
   that prefix is dropped for display, and the UNC form `\\?\UNC\server\share` is
@@ -130,6 +132,24 @@ without a console:
   inputs behind a decision, not just its result, per the workspace convention in
   `docs/standalone-binaries.md` at the repository root. The wording itself is not
   a behavioral contract, so the note-producing helpers carry `mutants::skip`.
+
+### Session age
+
+The wall clock is read in exactly two places, both of them for the age column:
+once by the supervisor to stamp the record it publishes, and once per `list` or
+resume prompt to age that stamp. Nothing else consults it. Session identity and
+liveness deliberately do not: a process is alive or not regardless of what the
+clock says, and a clock that jumps must not be able to resurrect or bury a
+session.
+
+`unix_now_ms` reports an unreadable or pre-epoch clock as the epoch rather than
+as an error, and rendering clamps a stamp that is ahead of now to no elapsed
+time. A user whose clock has moved sees a wrong age; nothing else misbehaves,
+and no command fails over a display value.
+
+The rendered age carries two units at most. The narrower a fixed column is, the
+less it pushes the directory and command columns around, and a session list is
+consulted to tell sessions apart rather than to measure them.
 
 ## Testing
 
@@ -319,6 +339,13 @@ screen.
 What is held is bounded by the same measure as a live client's backlog, keeping
 the earliest bytes, because an arriving client is served better by the app's
 first screen than by the tail of a burst it has no context for.
+
+That bound is several frames' worth, so the hold is relayed as a run of `Output`
+messages rather than one. A receiver rejects an oversized frame instead of
+reassembling it, so a single message would fail the very attach it exists to
+open, and it would fail precisely when the app had the most to say. Chunk size
+is one byte below the frame cap, because a frame's length prefix counts the
+message kind byte as well as the data.
 
 ### Displacement
 

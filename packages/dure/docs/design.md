@@ -74,12 +74,12 @@ such a session discarded unreported.
 `dure resume` attaches using auto-detect. `dure resume --id <id>` attaches to
 that live session and skips auto-detect.
 
-`dure list` prints live sessions: id, launch directory, command, whether a
-client is currently attached, supervisor pid. A record is discarded only when
-the same supervisor process is gone; reuse of its numeric process id by another
-process does not keep the record live. Attached means the supervisor still has
-a client connection; a hung client may still appear attached. Resume steals
-anyway.
+`dure list` prints live sessions: id, whether a client is currently attached,
+supervisor pid, how long the session has been running, launch directory, and
+command. A record is discarded only when the same supervisor process is gone;
+reuse of its numeric process id by another process does not keep the record live.
+Attached means the supervisor still has a client connection; a hung client may
+still appear attached. Resume steals anyway.
 
 `dure kill --id <id>` abruptly terminates the supervisor process for that
 session. The app and its ordinary descendants die with it. `--id` is required;
@@ -251,6 +251,17 @@ carry a `\\?\` prefix that the shell does not use and that a user cannot paste
 back; `list` and `--verbose` show the plain path instead. Matching still uses
 the canonical path, so what is displayed is a rendering choice and never changes
 which session `resume` finds.
+
+Age is how long the session has been running, measured from when its supervisor
+published the session and rendered to the two coarsest units that apply, so a
+session started moments ago and one started days ago are told apart at a glance
+without the column growing wide enough to push the directory around. It is a
+display value: nothing selects, orders, or reaps a session by it, and a machine
+whose clock has moved shows a misleading age rather than behaving differently.
+
+The same table is printed when `resume` cannot auto-detect and has to ask which
+session to take, so the id being typed is chosen from the same information
+`list` gives.
 
 ## Lifetime
 

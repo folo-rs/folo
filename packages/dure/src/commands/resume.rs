@@ -16,6 +16,7 @@ use crate::session_id::SessionId;
 use crate::session_record::SessionRecord;
 use crate::trace::{Trace, trace};
 use crate::types::Outcome;
+use crate::wall_clock::unix_now_ms;
 use crate::{
     CanonicalizeError, CurrentDirectoryError, NoLiveSessionsError, PalFailedError,
     PromptFailedError, SessionNotFoundError, parse_prompted_id,
@@ -81,7 +82,7 @@ where
         DetectOutcome::None => Err(NoLiveSessionsError::new().into()),
         DetectOutcome::Unique(id) => Ok(id),
         DetectOutcome::Ambiguous(sessions) => {
-            println!("{}", format_list(&sessions));
+            println!("{}", format_list(&sessions, unix_now_ms()));
             if !console.stdin_is_terminal() {
                 return Err(PromptFailedError::new().into());
             }

@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ohno::AppError;
 
 use crate::constants::{
     CONNECT_TIMEOUT, DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS, MAX_CLIENT_BACKLOG_BYTES,
+    MAX_OUTPUT_CHUNK_BYTES,
 };
 use crate::outbox::Outbox;
 use crate::pal::error::{PalError, PalErrorKind};
@@ -21,6 +21,7 @@ use crate::pal::transport::Transport;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
 use crate::session_record::{ProcessIdentity, SessionRecord};
+use crate::wall_clock::unix_now_ms;
 use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError};
 
 /// Size used until the first client attaches.
@@ -195,11 +196,6 @@ where
         .map_err(|_error| StoreError::new())?;
     guard.session = Some((session_id, identity));
 
-    let started_at_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        });
     let record = SessionRecord {
         id: session_id.get(),
         supervisor_pid: identity.pid,
@@ -207,7 +203,7 @@ where
         pipe_name,
         launch_directory,
         command,
-        started_at_unix_ms,
+        started_at_unix_ms: unix_now_ms(),
         attached: false,
     };
     store.publish(&record).map_err(|_error| StoreError::new())?;
@@ -364,6 +360,18 @@ impl<T: Transport, C> Shared<T, C> {
             .take()
             .filter(|held| !held.is_empty())
     }
+}
+
+/// Splits output held for the first client into frames the transport accepts.
+///
+/// The hold grows to `MAX_CLIENT_BACKLOG_BYTES`, which is several frames' worth,
+/// and a receiver rejects any frame past the cap rather than reassembling it. A
+/// single `Output` message would therefore fail the attach it is meant to open
+/// exactly when the app had the most to say.
+/// Ref: docs/implementation.md, "Opening output".
+fn preamble_messages(held: &[u8]) -> impl Iterator<Item = Message> + use<'_> {
+    held.chunks(MAX_OUTPUT_CHUNK_BYTES)
+        .map(|chunk| Message::Output(chunk.to_vec()))
 }
 
 // Blocking serve loop. A mutation that returns before the accept and PTY threads
@@ -597,7 +605,9 @@ where
                     return;
                 }
                 if let Some(held) = shared.take_preamble() {
-                    outbox.send(Message::Output(held));
+                    for message in preamble_messages(&held) {
+                        outbox.send(message);
+                    }
                 }
                 slot.replace(Client {
                     conn,
@@ -728,7 +738,7 @@ mod tests {
     use crate::pal::pseudoconsole::MemoryPseudoconsole;
     use crate::pal::session_store::FsSessionStore;
     use crate::pal::transport::MemoryTransport;
-    use crate::protocol::Message;
+    use crate::protocol::{Message, encode, payload_len_ok};
     use crate::session_record::ProcessIdentity;
 
     /// Arbitrary nonzero status the mock app exits with, so a test can tell a
@@ -1225,6 +1235,42 @@ mod tests {
             shared.take_preamble().map(|held| held.len()),
             Some(MAX_CLIENT_BACKLOG_BYTES)
         );
+    }
+
+    #[test]
+    fn a_preamble_too_large_for_one_frame_is_split_into_frames_a_receiver_accepts() {
+        // A hold the transport could not carry in one frame, which is reachable
+        // because the hold cap is several frames' worth.
+        let held = vec![b'x'; MAX_OUTPUT_CHUNK_BYTES.saturating_add(1)];
+        const {
+            assert!(
+                MAX_CLIENT_BACKLOG_BYTES > MAX_OUTPUT_CHUNK_BYTES,
+                "a hold that cannot outgrow one frame would make this test vacuous"
+            );
+        }
+
+        let messages: Vec<Message> = preamble_messages(&held).collect();
+
+        assert!(messages.len() > 1, "the hold was not split");
+        let mut rejoined = Vec::new();
+        for message in &messages {
+            let frame = encode(message);
+            let prefix: [u8; 4] = frame
+                .get(..4)
+                .expect("a frame carries a length prefix")
+                .try_into()
+                .unwrap();
+            assert!(
+                payload_len_ok(u32::from_le_bytes(prefix)),
+                "a receiver would reject this frame"
+            );
+            match message {
+                Message::Output(bytes) => rejoined.extend_from_slice(bytes),
+                other => panic!("the hold must be relayed as output, got {other:?}"),
+            }
+        }
+        // Splitting must not lose or reorder what the app said.
+        assert_eq!(rejoined, held);
     }
 
     /// Session with a live pty, no client attached.

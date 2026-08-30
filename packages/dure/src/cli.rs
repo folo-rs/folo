@@ -25,7 +25,7 @@ use crate::types::{Command, RunInput};
     disable_version_flag = true
 )]
 pub struct Cli {
-    /// Explain auto-detect decisions on stderr.
+    /// Explain on stderr what each command inspects and decides.
     #[arg(long, global = true)]
     verbose: bool,
 
