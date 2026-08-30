@@ -44,12 +44,12 @@ Describe 'Get-PublishableBinaryCrate (real cargo metadata on a fixture workspace
     }
 
     It 'projects a declared release-target restriction onto the crate' {
-        ($script:Crates | Where-Object Name -EQ 'win-tool').Triple |
+        ($script:Crates | Where-Object Name -EQ 'win-tool').ReleaseTargets |
             Should -Be @('x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc')
     }
 
     It 'leaves the restriction empty for a crate that declares none' {
-        @(($script:Crates | Where-Object Name -EQ 'pub-bin').Triple).Count | Should -Be 0
+        @(($script:Crates | Where-Object Name -EQ 'pub-bin').ReleaseTargets).Count | Should -Be 0
     }
 }
 
@@ -425,9 +425,9 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
     Context 'per-crate release-target restriction' {
         It 'reconciles a restricted crate against only the targets it declares' {
             $crate = [pscustomobject]@{
-                Name    = 'restricted'
-                Version = '6.0.0'
-                Triple  = @('aarch64-apple-darwin')
+                Name           = 'restricted'
+                Version        = '6.0.0'
+                ReleaseTargets = @('aarch64-apple-darwin')
             }
             $rows = Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets
             $rows.Count | Should -Be 1
@@ -436,7 +436,7 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
         }
 
         It 'treats an empty restriction as the full target set' {
-            $crate = [pscustomobject]@{ Name = 'restricted'; Version = '6.0.0'; Triple = @() }
+            $crate = [pscustomobject]@{ Name = 'restricted'; Version = '6.0.0'; ReleaseTargets = @() }
             $rows = Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets
             $rows.Count | Should -Be $script:TwoTargets.Count
         }
@@ -445,9 +445,9 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
             # Silently building nothing for that target would leave the crate short of archives
             # with no failure anywhere, so a typo must be loud.
             $crate = [pscustomobject]@{
-                Name    = 'restricted'
-                Version = '6.0.0'
-                Triple  = @('aarch64-apple-darwin', 's390x-unknown-linux-gnu')
+                Name           = 'restricted'
+                Version        = '6.0.0'
+                ReleaseTargets = @('aarch64-apple-darwin', 's390x-unknown-linux-gnu')
             }
             { Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets } |
                 Should -Throw '*s390x-unknown-linux-gnu*'
@@ -455,7 +455,7 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
 
         It 'restricts only the declaring crate, leaving its neighbours on the full set' {
             $crates = @(
-                [pscustomobject]@{ Name = 'restricted'; Version = '6.0.0'; Triple = @('aarch64-apple-darwin') }
+                [pscustomobject]@{ Name = 'restricted'; Version = '6.0.0'; ReleaseTargets = @('aarch64-apple-darwin') }
                 [pscustomobject]@{ Name = 'empty-release'; Version = '4.0.0' }
             )
             $rows = Get-MissingBinaryMatrix -Crate $crates -Target $script:TwoTargets
@@ -502,9 +502,9 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
 
         It 'names both the declared and the skipped targets of a restricted crate' {
             $crate = [pscustomobject]@{
-                Name    = 'restricted'
-                Version = '6.0.0'
-                Triple  = @('aarch64-apple-darwin')
+                Name           = 'restricted'
+                Version        = '6.0.0'
+                ReleaseTargets = @('aarch64-apple-darwin')
             }
             $messages = Get-VerboseMessage -Crate $crate
             ($messages -join "`n") | Should -Match 'restricts its release targets to: aarch64-apple-darwin'
