@@ -370,7 +370,7 @@ impl<T: Transport, C> Shared<T, C> {
 /// exactly when the app had the most to say.
 /// Ref: docs/implementation.md, "Opening output".
 fn preamble_messages(held: &[u8]) -> impl Iterator<Item = Message> + use<'_> {
-    held.chunks(MAX_OUTPUT_CHUNK_BYTES)
+    held.chunks(MAX_OUTPUT_CHUNK_BYTES.get())
         .map(|chunk| Message::Output(chunk.to_vec()))
 }
 
@@ -1247,10 +1247,10 @@ mod tests {
     fn a_preamble_too_large_for_one_frame_is_split_into_frames_a_receiver_accepts() {
         // A hold the transport could not carry in one frame, which is reachable
         // because the hold cap is several frames' worth.
-        let held = vec![b'x'; MAX_OUTPUT_CHUNK_BYTES.saturating_add(1)];
+        let held = vec![b'x'; MAX_OUTPUT_CHUNK_BYTES.get().saturating_add(1)];
         const {
             assert!(
-                MAX_CLIENT_BACKLOG_BYTES > MAX_OUTPUT_CHUNK_BYTES,
+                MAX_CLIENT_BACKLOG_BYTES > MAX_OUTPUT_CHUNK_BYTES.get(),
                 "a hold that cannot outgrow one frame would make this test vacuous"
             );
         }

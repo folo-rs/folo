@@ -1,5 +1,6 @@
 //! Literal values that encode design and implementation decisions.
 
+use std::num::NonZero;
 use std::time::Duration;
 
 /// Bound so `resume` fails instead of hanging when the supervisor is alive but
@@ -33,9 +34,16 @@ pub(crate) const MAX_FRAME_LEN: u32 = 1024 * 1024;
 /// Largest `Output` payload that fits in one frame.
 ///
 /// A frame's length prefix counts the message kind byte as well as the data, so
-/// the data has to stay one byte below the frame cap.
+/// the data has to stay one byte below the frame cap. It is a chunk size, and a
+/// chunk size of zero would divide the payload into infinitely many pieces, so
+/// a frame cap too small to carry any payload is a contradiction rather than a
+/// value to carry forward.
 /// Ref: docs/implementation.md, "Opening output".
-pub(crate) const MAX_OUTPUT_CHUNK_BYTES: usize = (MAX_FRAME_LEN as usize).saturating_sub(1);
+pub(crate) const MAX_OUTPUT_CHUNK_BYTES: NonZero<usize> =
+    match NonZero::new((MAX_FRAME_LEN as usize).saturating_sub(1)) {
+        Some(size) => size,
+        None => panic!("the frame cap must leave room for payload"),
+    };
 
 /// Output bytes the supervisor will hold for a client before giving up on it.
 ///
