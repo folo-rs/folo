@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::session_store::SessionStore;
-use crate::pal::session_store::windows::move_file_replace;
+use crate::pal::session_store::windows::{RecordFile, move_file_replace};
 use crate::session_id::SessionId;
 use crate::session_record::{ProcessIdentity, SessionRecord, StoredSession};
 
@@ -50,15 +50,6 @@ impl FsSessionStore {
 
     fn record_path(&self, id: SessionId) -> PathBuf {
         self.root.join(format!("{}.json", id.get()))
-    }
-
-    /// Removes the record file for this id. Missing files succeed.
-    fn remove_record(&self, id: SessionId) -> Result<(), PalError> {
-        match fs::remove_file(self.record_path(id)) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(PalError::from_io(error)),
-        }
     }
 
     /// Every readable record file, paired with the id its name encodes.
@@ -210,11 +201,16 @@ impl SessionStore for FsSessionStore {
     }
 
     fn delete_owned_by(&self, id: SessionId, owner: &ProcessIdentity) -> Result<(), PalError> {
-        let bytes = match fs::read(self.record_path(id)) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        // Reading and deleting through one handle is what makes this safe to race: ids are
+        // reused, so between deciding and deleting the name can come to mean a live session
+        // somebody else just published. The handle addresses the file the decision was made
+        // about, so such a replacement is never the file removed.
+        let file = match RecordFile::open(&self.record_path(id)) {
+            Ok(file) => file,
+            Err(error) if is_absent(&error) => return Ok(()),
             Err(error) => return Err(PalError::from_io(error)),
         };
+        let bytes = file.read().map_err(PalError::from_io)?;
         // A file that no longer names `owner` belongs to whoever claimed the id
         // after the caller read it, and a file nothing can parse names nobody.
         let owned = match parse_stored(&bytes) {
@@ -225,7 +221,13 @@ impl SessionStore for FsSessionStore {
         if !owned {
             return Ok(());
         }
-        self.remove_record(id)
+        match file.delete() {
+            Ok(()) => Ok(()),
+            // Somebody else unlinked the name first. The file this handle addresses is already
+            // on its way out, which is the outcome asked for.
+            Err(error) if is_absent(&error) => Ok(()),
+            Err(error) => Err(PalError::from_io(error)),
+        }
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, PalError> {
@@ -235,6 +237,14 @@ impl SessionStore for FsSessionStore {
     fn current_dir(&self) -> Result<PathBuf, PalError> {
         env::current_dir().map_err(PalError::from_io)
     }
+}
+
+/// Whether a failure means the name simply is not there.
+///
+/// Both halves of a delete report this: the open when nothing holds the name, and the delete
+/// itself when another process unlinked the file first. Neither is a fault.
+fn is_absent(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::NotFound)
 }
 
 /// Whether an exclusive-create failure means the id is already reserved.
@@ -496,7 +506,9 @@ mod tests {
         let id = SessionId::MIN;
         fs::create_dir_all(dir.path().join(format!("{}.json", id.get()))).unwrap();
         store.read(id).unwrap_err();
-        store.remove_record(id).unwrap_err();
+        store
+            .delete_owned_by(id, &ProcessIdentity::for_test(1))
+            .unwrap_err();
     }
 
     #[test]
@@ -537,7 +549,36 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn deleting_an_absent_record_succeeds() {
         let (_dir, store) = store();
-        store.remove_record(SessionId::MIN).unwrap();
+        store
+            .delete_owned_by(SessionId::MIN, &ProcessIdentity::for_test(1))
+            .unwrap();
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_record_that_replaced_the_one_inspected_survives_the_delete() {
+        let (dir, store) = store();
+        let owner = ProcessIdentity::for_test(1);
+        let id = store.allocate_id(&owner).unwrap();
+        let path = dir.path().join(format!("{}.json", id.get()));
+
+        // Stands in for the record the caller decided to remove, held open so the decision and
+        // the removal are separated by exactly the window the ids-are-reused race needs.
+        let inspected = RecordFile::open(&path).unwrap();
+        // Whoever held the id lets it go and someone else takes it, all under the same name.
+        fs::remove_file(&path).unwrap();
+        let successor = record(id, dir.path());
+        store.publish(&successor).unwrap();
+
+        inspected.delete().unwrap();
+        drop(inspected);
+
+        // The delete landed on the file it inspected, not on the name it was reached through.
+        assert_eq!(store.list().unwrap().len(), 1);
+        // And the successor can still be found and removed by the owner it names.
+        store.delete_owned_by(id, &successor.identity()).unwrap();
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

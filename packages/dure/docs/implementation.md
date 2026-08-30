@@ -440,15 +440,20 @@ forever. A claim is reported as absent to everything except that reaping.
 
 Ids are reused, so every delete is conditional on the file still naming the
 process the caller means to remove; the store offers no unconditional delete to
-reach for by mistake. Without that condition, a stale read could reap the
-session that took the id in the meantime. Two windows remain and are accepted
-rather than designed around, because closing either needs a store-wide lock and
-the harm is a duplicated id rather than a lost session. A claim written by a
-supervisor killed between creating the file and writing its owner names nobody
-and is not reaped; that window is a single unbuffered write wide. The ownership
-check and the removal are also separate filesystem operations, so a record
-deleted and re-claimed between them is removed on the strength of the old
-content.
+reach for by mistake. Deciding and deleting are one step rather than two: the
+record is opened once, and both the ownership check and the removal go through
+that handle. Windows removes the file the handle addresses, so a name that has
+come to mean a different session in the meantime is never the thing removed —
+the delete lands on the file that was inspected, which by then is nobody's.
+Losing that race to another deleter is reported as success, since the outcome
+asked for has happened; a file this process genuinely may not delete is still
+an error, because the two are distinguished rather than conflated.
+
+One window remains and is accepted rather than designed around, because closing
+it needs a store-wide lock. A claim written by a supervisor killed between
+creating the file and writing its owner names nobody and is not reaped; that
+window is a single unbuffered write wide, and the cost is an id that stays
+occupied, never a session that cannot be found.
 
 ## Pseudoconsole
 
