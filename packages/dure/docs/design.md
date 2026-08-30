@@ -16,7 +16,9 @@ running. SSH is the mainstream case, not a privileged one.
 * **One supervisor per app.** There is no shared daemon. Supervisors coordinate
   through per-user files on the machine.
 * **Transparent once attached.** After attach, keyboard and console I/O are a
-  direct funnel. No prefix key, no in-band detach, no `dure` UI inside the app.
+  direct funnel, and so are the terminal attributes around them: window size and
+  control sequences pass through in both directions rather than being
+  interpreted. No prefix key, no in-band detach, no `dure` UI inside the app.
 * **Detach is losing the client.** Anything that kills the foreground `dure`
   process leaves the supervisor and app running.
 * **Resume is not a replay.** Attach does not reconstruct prior screen contents.
@@ -197,6 +199,45 @@ the user typed it. `dure` converts the console it attaches to for the duration
 of the relay and converts it back on the way out, so a shell that shares that
 console before or after a session is unaffected.
 
+## Terminal pass-through
+
+An app under `dure` behaves as though it were talking to the user's terminal
+directly. The relay is transparent rather than interpretive: it carries the
+terminal's state and the user's intent through to the app's console instead of
+deciding what either of them means.
+
+**Window size.** The app always sees the size of the terminal it is currently
+being viewed through. The attaching client's size is applied to the app's
+console before the relay starts, and a resize while attached is carried through
+as it happens, so an app that redraws on resize reflows immediately. A resize is
+therefore not a detach-and-resume affair; it works in the middle of a live
+session. While no client is attached the console keeps the size the last client
+gave it, and the next attach replaces it. This is what makes a session portable
+between terminals: resuming from a differently sized window is a resize, not a
+broken layout.
+
+**Keyboard.** Keys arrive at the app the way the terminal sent them, including
+the ones that are sequences rather than characters — arrows, function keys, Home
+and End, and modifier chords. Ctrl+C is delivered to the app rather than acted on
+by the client.
+
+**Control sequences.** The app's output is relayed byte for byte, so cursor
+movement, colors and styling, the alternate screen buffer, scroll regions, and
+window-title sequences all reach the terminal unchanged. `dure` does not parse,
+rewrite, or filter this stream.
+
+Mouse reporting is deliberately not carried, and neither are console events that
+describe the window rather than the user's input, such as focus changes and menu
+activity. An app that would use the mouse in the user's terminal does not get it
+under `dure`.
+
+Everything in this section follows from the relay being byte-transparent and
+size-aware; none of it is per-application support, so an app that works in the
+user's terminal is expected to work under `dure` without knowing `dure` exists.
+The limits are the ones already stated under [Console I/O](#console-io): what
+the terminal itself cannot provide stays unavailable, and screen contents from
+before an attach are not replayed.
+
 ## Listing sessions
 
 `list` prints a table: a heading row and one row per live session, columns
@@ -253,7 +294,8 @@ unsupported and exits with a failure status.
 ## Screen contents
 
 Attach does not replay prior output. The new client sees an empty screen, then
-live bytes. The supervisor applies the attaching client's window size.
+live bytes. The window size is the attaching client's, so an app that redraws
+on resize repaints itself at the right geometry without any replay.
 
 The one exception is the app's opening output. `dure run` starts the app and
 only then attaches, so an app that prints immediately would otherwise speak

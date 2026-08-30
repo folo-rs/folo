@@ -146,6 +146,7 @@ fn consume_records(handle: HANDLE, count: usize) -> Result<(), PalError> {
 /// Consumes leading `WINDOW_BUFFER_SIZE_EVENT` records so a later `ReadFile`
 /// is not blocked behind them. Window changes are console input records, not
 /// VT bytes, which is why attach cannot learn resizes from `ReadFile` alone.
+/// Ref: docs/implementation.md, "Window size".
 fn take_leading_resize(handle: HANDLE) -> Result<Option<WindowSize>, PalError> {
     let (peek, count) = peek_input(handle)?;
     let leading_resizes = peek
@@ -162,6 +163,8 @@ fn take_leading_resize(handle: HANDLE) -> Result<Option<WindowSize>, PalError> {
 }
 
 /// Drops focus/menu/mouse records so they cannot hide a later resize or key.
+/// This is what excludes mouse reporting from pass-through.
+/// Ref: docs/implementation.md, "Window size".
 fn discard_leading_noise(handle: HANDLE) -> Result<bool, PalError> {
     let (peek, count) = peek_input(handle)?;
     let leading_noise = peek
@@ -228,6 +231,7 @@ impl LocalConsole for BuildTargetConsole {
         // Disable cooked input so keystrokes reach the app immediately. Enable
         // VT input for CSI sequences and window-input so resizes appear as
         // `WINDOW_BUFFER_SIZE_EVENT` records rather than being dropped.
+        // Ref: docs/implementation.md, "Console modes".
         let raw_in = CONSOLE_MODE(
             (in_mode.0 & !(ENABLE_ECHO_INPUT.0 | ENABLE_LINE_INPUT.0 | ENABLE_PROCESSED_INPUT.0))
                 | ENABLE_VIRTUAL_TERMINAL_INPUT.0

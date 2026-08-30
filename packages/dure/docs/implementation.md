@@ -434,6 +434,64 @@ app stay attached to the pseudoconsole until the job ends them, and closing a
 pseudoconsole waits for its attached clients, so the other order can stall on a
 grandchild that outlived the app.
 
+### Console modes
+
+Terminal pass-through (`design.md`, "Terminal pass-through") is not a feature
+built on top of the relay; it is what the relay does once the client's console
+is put in the right mode and the size is carried as its own message. The modes
+`enter_raw_relay` sets are the whole mechanism:
+
+On input, `ENABLE_ECHO_INPUT`, `ENABLE_LINE_INPUT`, and `ENABLE_PROCESSED_INPUT`
+are cleared so keystrokes reach the app as they are typed instead of being
+echoed locally, buffered until a newline, or turned into a Ctrl+C signal for the
+client. `ENABLE_VIRTUAL_TERMINAL_INPUT` is set so the console encodes keys that
+are not characters — arrows, function keys, modifier chords — as the VT
+sequences an app already knows how to read, which is why no per-key mapping
+exists anywhere in this crate. `ENABLE_WINDOW_INPUT` is set so window changes
+arrive as `WINDOW_BUFFER_SIZE_EVENT` records rather than being dropped.
+
+On output, `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, `ENABLE_PROCESSED_OUTPUT`, and
+`ENABLE_WRAP_AT_EOL_OUTPUT` are set so the local console host renders the
+sequences the app wrote through its pseudoconsole. Nothing in the relay inspects
+that stream, so cursor addressing, colors, the alternate screen buffer, scroll
+regions, and title sequences all work by not being touched.
+
+Bits other than these are preserved from the console's own mode and restored
+along with them.
+
+### Window size
+
+Size travels on the same connection as bytes but as its own message, because it
+is console state rather than console content: `Message::Attach` carries the
+size the client starts with, and `Message::Resize` carries each later change.
+Both end at `Pseudoconsole::resize`, which is what makes the app observe a
+console resize rather than receive bytes describing one.
+
+The attach size is applied only once the connection owns the client slot. The
+app redraws in response to a size change, and that redraw belongs to the client
+that asked for the size, so applying it earlier would paint the previous client's
+screen. Until the first attach the pseudoconsole runs at `DEFAULT_PTY_SIZE`,
+which exists only so the app has some geometry during the window between spawn
+and attach.
+
+Reading resizes is the one place the client cannot simply read bytes. Window
+changes are console *input records*, not VT input, so a `ReadFile` on stdin
+neither reports them nor returns while one is queued ahead of it. `read_input`
+therefore inspects the record queue before every read: it reports a leading
+`WINDOW_BUFFER_SIZE_EVENT` as `ConsoleInput::Resize`, waits for the handle to
+signal when nothing is pending, inspects again because a resize can arrive
+during the wait, and only reaches `ReadFile` when the queue starts with a key.
+
+The same inspection drops leading records that are neither a resize nor a key —
+focus, menu, and mouse events — which would otherwise sit at the head of the
+queue and keep `ReadFile` from ever returning. Discarding them is what excludes
+mouse reporting from pass-through.
+
+A resize failure is ignored on both paths. It means the pseudoconsole is already
+gone, which `wait_app` and the output pump observe on their own and act on by
+ending the relay; treating it as an error here would only report the same fact
+twice, and earlier than the paths that can act on it.
+
 ### Console encoding
 
 A pseudoconsole produces and consumes UTF-8. A console, in contrast, applies a

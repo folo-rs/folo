@@ -44,6 +44,10 @@ where
     console
         .enter_raw_relay()
         .map_err(|_error| PalFailedError::new())?;
+    // Read after entering the raw relay so the size is the one the app will be
+    // rendered at, and sent with `Attach` so the supervisor can apply it as
+    // part of taking the client slot.
+    // Ref: docs/implementation.md, "Window size".
     let size = console
         .window_size()
         .map_err(|_error| PalFailedError::new())?;

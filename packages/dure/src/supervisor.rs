@@ -26,8 +26,8 @@ use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError
 /// Size used until the first client attaches.
 ///
 /// VGA text-mode geometry (`DEFAULT_PTY_COLS` by `DEFAULT_PTY_ROWS`). The first
-/// attach always resizes to the client's real size (design.md, "Attach, detach,
-/// steal").
+/// attach always resizes to the client's real size (design.md, "Terminal
+/// pass-through").
 const DEFAULT_PTY_SIZE: WindowSize = WindowSize {
     cols: DEFAULT_PTY_COLS,
     rows: DEFAULT_PTY_ROWS,
@@ -625,6 +625,7 @@ where
             // the client that asked for the size. Resize failure means the pty
             // is already gone; wait_app and read_output observe that and stop
             // the relay.
+            // Ref: docs/implementation.md, "Window size".
             _ = shared
                 .pty_host
                 .resize(shared.pty, WindowSize { cols, rows });
