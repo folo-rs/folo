@@ -375,6 +375,13 @@ disconnecting would be the very thing that discards the notice, and a user who
 does not know their session was taken has a worse problem than a supervisor
 holding one idle thread.
 
+The relay applies an input or resize message under the same lock that confirms
+the sender still owns the session, so a message that was in flight when the
+session was stolen cannot reach the app afterwards. That hold does not depend
+on the app: the console host accepts input into its own queue whether or not
+the app reads standard input, so an app that ignores input neither stalls the
+relay nor delays a steal.
+
 ## Transport
 
 A per-session named pipe carries a framed protocol containing console bytes,

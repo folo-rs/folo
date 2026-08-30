@@ -663,7 +663,10 @@ where
     while let Ok(message) = shared.transport.recv(conn) {
         // Ownership is checked and the message applied under one lock: a client
         // displaced while its receive was in flight must not reach the app
-        // after the new client became the live console.
+        // after the new client became the live console. Holding the lock across
+        // the write is bounded because the console host drains its input pipe
+        // whether or not the app reads it.
+        // Ref: docs/implementation.md, "Displacement".
         let slot = shared.client();
         if slot.as_ref().map(|client| client.conn) != Some(conn) {
             break;
