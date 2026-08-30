@@ -302,7 +302,8 @@ Command lines appear in `list` output. Secrets do not belong on the app argv.
 
 Crate and binary name: `dure`, published to crates.io and installed with
 `cargo binstall dure` under the same prebuilt-archive contract as the other
-published binaries in this repository.
+published binaries in this repository. Prebuilt archives exist for Windows only,
+so an install on any other target falls back to building from source.
 
 `dure` is a Windows tool. On other targets the binary reports that it is
 unsupported and exits with a failure status.

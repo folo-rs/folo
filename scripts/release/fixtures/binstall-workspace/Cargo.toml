@@ -4,8 +4,9 @@
 #   good-tool      publishable + bin, compliant binstall block   -> selected, passes
 #   bad-tool       publishable + bin, drifted binstall block      -> selected, fails
 #   nometa-tool    publishable + bin, no binstall block           -> selected, fails
+#   badtarget-tool publishable + bin, unbuildable release target  -> selected, fails
 #   some-lib       publishable + lib                              -> excluded (library)
 #   nopublish-tool publish = false + bin, no binstall block       -> excluded (not publishable)
 [workspace]
 resolver = "2"
-members = ["good-tool", "bad-tool", "nometa-tool", "some-lib", "nopublish-tool"]
+members = ["good-tool", "bad-tool", "nometa-tool", "badtarget-tool", "some-lib", "nopublish-tool"]

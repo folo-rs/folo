@@ -40,7 +40,50 @@ Describe 'Get-PublishableBinaryCrate (real cargo metadata on a fixture workspace
     }
 
     It 'returns crates sorted by name' {
-        $script:Crates.Name | Should -Be @('demo-tool', 'pub-bin')
+        $script:Crates.Name | Should -Be @('demo-tool', 'pub-bin', 'win-tool')
+    }
+
+    It 'projects a declared release-target restriction onto the crate' {
+        ($script:Crates | Where-Object Name -EQ 'win-tool').Triple |
+            Should -Be @('x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc')
+    }
+
+    It 'leaves the restriction empty for a crate that declares none' {
+        @(($script:Crates | Where-Object Name -EQ 'pub-bin').Triple).Count | Should -Be 0
+    }
+}
+
+Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
+    It 'returns nothing for a package with no metadata field at all' {
+        @(Get-DeclaredReleaseTarget -Package ([pscustomobject]@{ name = 'crafted' })).Count | Should -Be 0
+    }
+
+    It 'returns nothing for a package whose metadata has no folo section' {
+        $pkg = [pscustomobject]@{
+            name     = 'crafted'
+            metadata = [pscustomobject]@{ binstall = [pscustomobject]@{ 'pkg-fmt' = 'zip' } }
+        }
+        @(Get-DeclaredReleaseTarget -Package $pkg).Count | Should -Be 0
+    }
+
+    It 'returns nothing for a folo section that declares no release targets' {
+        $pkg = [pscustomobject]@{
+            name     = 'crafted'
+            metadata = [pscustomobject]@{ folo = [pscustomobject]@{ 'something-else' = 'value' } }
+        }
+        @(Get-DeclaredReleaseTarget -Package $pkg).Count | Should -Be 0
+    }
+
+    It 'yields one triple per declared target, unrolled by the pipeline' {
+        $pkg = [pscustomobject]@{
+            name     = 'crafted'
+            metadata = [pscustomobject]@{
+                folo = [pscustomobject]@{ 'release-targets' = @('x86_64-pc-windows-msvc') }
+            }
+        }
+        $declared = @(Get-DeclaredReleaseTarget -Package $pkg)
+        $declared.Count | Should -Be 1
+        $declared[0] | Should -Be 'x86_64-pc-windows-msvc'
     }
 }
 
@@ -157,7 +200,7 @@ Describe 'Get-PublishableCrate (real cargo metadata on a fixture workspace)' {
     }
 
     It 'returns crates sorted by name with versions' {
-        $script:AllCrates.Name | Should -Be @('demo-tool', 'demo-tool-core', 'pub-bin', 'pub-lib')
+        $script:AllCrates.Name | Should -Be @('demo-tool', 'demo-tool-core', 'pub-bin', 'pub-lib', 'win-tool')
         ($script:AllCrates | Where-Object Name -EQ 'demo-tool').Version | Should -Be '2.3.4'
     }
 }
@@ -288,6 +331,10 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
                     $global:LASTEXITCODE = 0
                     '{"assets":[]}'
                 }
+                'restricted-v6.0.0' {
+                    $global:LASTEXITCODE = 0
+                    '{"assets":[]}'
+                }
                 'no-release-v3.0.0' {
                     # gh prints this to stderr and exits 1 when the release does not exist.
                     $global:LASTEXITCODE = 1
@@ -375,6 +422,48 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
         $emptyRows.triple | Should -Contain 'aarch64-apple-darwin'
     }
 
+    Context 'per-crate release-target restriction' {
+        It 'reconciles a restricted crate against only the targets it declares' {
+            $crate = [pscustomobject]@{
+                Name    = 'restricted'
+                Version = '6.0.0'
+                Triple  = @('aarch64-apple-darwin')
+            }
+            $rows = Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets
+            $rows.Count | Should -Be 1
+            $rows[0].triple | Should -Be 'aarch64-apple-darwin'
+            $rows[0].os | Should -Be 'macos-latest'
+        }
+
+        It 'treats an empty restriction as the full target set' {
+            $crate = [pscustomobject]@{ Name = 'restricted'; Version = '6.0.0'; Triple = @() }
+            $rows = Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets
+            $rows.Count | Should -Be $script:TwoTargets.Count
+        }
+
+        It 'throws when a crate declares a target the table does not offer' {
+            # Silently building nothing for that target would leave the crate short of archives
+            # with no failure anywhere, so a typo must be loud.
+            $crate = [pscustomobject]@{
+                Name    = 'restricted'
+                Version = '6.0.0'
+                Triple  = @('aarch64-apple-darwin', 's390x-unknown-linux-gnu')
+            }
+            { Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets } |
+                Should -Throw '*s390x-unknown-linux-gnu*'
+        }
+
+        It 'restricts only the declaring crate, leaving its neighbours on the full set' {
+            $crates = @(
+                [pscustomobject]@{ Name = 'restricted'; Version = '6.0.0'; Triple = @('aarch64-apple-darwin') }
+                [pscustomobject]@{ Name = 'empty-release'; Version = '4.0.0' }
+            )
+            $rows = Get-MissingBinaryMatrix -Crate $crates -Target $script:TwoTargets
+            @($rows | Where-Object { $_.name -eq 'restricted' }).Count | Should -Be 1
+            @($rows | Where-Object { $_.name -eq 'empty-release' }).Count | Should -Be $script:TwoTargets.Count
+        }
+    }
+
     Context 'verbose decision history (-Verbose)' {
         BeforeAll {
             function Get-VerboseMessage {
@@ -409,6 +498,17 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
         It 'reports the final missing-archive count' {
             $messages = Get-VerboseMessage -Crate ([pscustomobject]@{ Name = 'empty-release'; Version = '4.0.0' })
             ($messages -join "`n") | Should -Match 'Reconciliation complete: 2 missing \(crate, target\) archives'
+        }
+
+        It 'names both the declared and the skipped targets of a restricted crate' {
+            $crate = [pscustomobject]@{
+                Name    = 'restricted'
+                Version = '6.0.0'
+                Triple  = @('aarch64-apple-darwin')
+            }
+            $messages = Get-VerboseMessage -Crate $crate
+            ($messages -join "`n") | Should -Match 'restricts its release targets to: aarch64-apple-darwin'
+            ($messages -join "`n") | Should -Match 'not built for it: x86_64-unknown-linux-gnu'
         }
 
         It 'uses the singular noun for a single missing archive' {
