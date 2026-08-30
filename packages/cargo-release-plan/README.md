@@ -61,6 +61,12 @@ evidence that the rules need fixing, not a condition to tolerate.
 
 ### `apply`
 
+The tool does not choose increment levels. Deciding whether a change is
+breaking, additive, or neither is a semantic judgement, and nothing here
+compiles code or compares API surfaces. `report` supplies what that judgement
+needs; a caller records a level per package in a plan; `apply` then owns the
+mechanical part, including deriving the resulting version numbers.
+
 Reads an approved plan and:
 
 * sets each listed package's `version`

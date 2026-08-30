@@ -16,32 +16,58 @@ pub(crate) struct FileDiff {
     pub(crate) deletions: usize,
 }
 
+/// One end of a file comparison.
+///
+/// The mode travels with the content because Cargo carries a packaged file's
+/// executable bit into the archive, so a patch that recreates the file has to
+/// recreate its mode too. Pairing the two inside an `Option` means an absent
+/// side cannot carry a mode. Ref: `docs/design.md`, "Released content".
+#[derive(Clone, Copy)]
+pub(crate) struct FileVersion<'a> {
+    pub(crate) content: &'a [u8],
+    pub(crate) mode: &'a str,
+}
+
 /// Renders one released file's change, or reports that it is binary.
-pub(crate) fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileDiff {
+pub(crate) fn file_diff(
+    path: &str,
+    old: Option<FileVersion<'_>>,
+    new: Option<FileVersion<'_>>,
+) -> FileDiff {
     let (old_present, new_present) = (old.is_some(), new.is_some());
+    // An addition or a deletion changes the file's mode as much as its content,
+    // and only the extended headers can carry that. A file present at both ends
+    // keeps its own mode headers out of here, because `mode_change_diff` renders
+    // them for the modes it observed.
+    let header = match (old, new) {
+        (None, Some(new)) => presence_header(path, "new", new.mode),
+        (Some(old), None) => presence_header(path, "deleted", old.mode),
+        _ => String::new(),
+    };
+    let (old, new) = (old.map(|side| side.content), new.map(|side| side.content));
     // A unified diff can only describe text, and validating here lets both sides
     // be borrowed rather than copied out of a lossy conversion.
     let (Ok(old), Ok(new)) = (
         str::from_utf8(old.unwrap_or_default()),
         str::from_utf8(new.unwrap_or_default()),
     ) else {
-        return binary_diff(path, old_present, new_present);
+        return binary_diff(&header, path, old_present, new_present);
     };
     // A NUL byte is valid UTF-8 but not something a patch reader can consume, so
     // it is the same signal Git uses to call a file binary.
     if old.contains('\0') || new.contains('\0') {
-        return binary_diff(path, old_present, new_present);
+        return binary_diff(&header, path, old_present, new_present);
     }
-    unified_diff(path, old, old_present, new, new_present)
+    unified_diff(&header, path, old, old_present, new, new_present)
 }
 
 /// Reports a change the unified format cannot describe.
-fn binary_diff(path: &str, old_present: bool, new_present: bool) -> FileDiff {
+fn binary_diff(header: &str, path: &str, old_present: bool, new_present: bool) -> FileDiff {
     FileDiff {
         // The same side labels as a text diff, so a consumer reads an added or
         // deleted binary file as such rather than as a modification.
         text: format!(
-            "Binary files {} and {} differ\n",
+            "{header}Binary files {} and {} differ\n",
             side_label(old_present, "a", path),
             side_label(new_present, "b", path)
         ),
@@ -58,6 +84,7 @@ fn binary_diff(path: &str, old_present: bool, new_present: bool) -> FileDiff {
 /// hunk header whose line numbers use the preceding line when a side
 /// contributes no lines.
 fn unified_diff(
+    header: &str,
     path: &str,
     old: &str,
     old_present: bool,
@@ -108,39 +135,24 @@ fn unified_diff(
     }
     let old_label = side_label(old_present, "a", path);
     let new_label = side_label(new_present, "b", path);
-    // A patch reader takes the work to do from the hunks, so an added or
-    // deleted empty file — which has none — would read as a no-op and never be
-    // created or removed. Git's extended headers carry that case instead, and
-    // are emitted only for it: every other addition and deletion already
-    // carries hunks that describe it.
-    let extended = if hunks.is_empty() {
-        empty_file_header(path, old_present)
-    } else {
-        String::new()
-    };
     FileDiff {
-        text: format!("{extended}--- {old_label}\n+++ {new_label}\n{hunks}"),
+        text: format!("{header}--- {old_label}\n+++ {new_label}\n{hunks}"),
         insertions,
         deletions,
     }
 }
 
-/// Mode the extended headers record for an added or deleted empty file.
+/// Git's extended headers for a file's creation or deletion.
 ///
-/// The renderer does not carry file modes, so this is Git's ordinary-file mode
-/// rather than an observation. An empty blob cannot be a symbolic link, whose
-/// blob holds its target, and a `.patch` artifact is read for the content
-/// change rather than for permissions.
-const EMPTY_FILE_MODE: &str = "100644";
-
-/// Git's extended headers for an empty file's creation or deletion.
-fn empty_file_header(path: &str, old_present: bool) -> String {
-    let change = if old_present { "deleted" } else { "new" };
+/// They are emitted for every addition and deletion, not only for one whose
+/// content renders no hunks: `diff -U0` produces them too, and they are the
+/// only part of the artifact that records the mode the file is created with.
+fn presence_header(path: &str, change: &str, mode: &str) -> String {
     // Each side is quoted the way the `---` and `+++` labels quote theirs, with
     // the prefix inside the quotes, so one reader handles every header here.
     let old_name = quote_path(&format!("a/{path}")).into_owned();
     let new_name = quote_path(&format!("b/{path}")).into_owned();
-    format!("diff --git {old_name} {new_name}\n{change} file mode {EMPTY_FILE_MODE}\n")
+    format!("diff --git {old_name} {new_name}\n{change} file mode {mode}\n")
 }
 
 /// Git's extended headers for a change of a file's mode.
@@ -455,9 +467,30 @@ fn push_diff_line(out: &mut String, marker: char, line: &str) {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::git::tree_mode;
 
     fn render(old: Option<&str>, new: Option<&str>) -> FileDiff {
-        file_diff("src/lib.rs", old.map(str::as_bytes), new.map(str::as_bytes))
+        file_diff(
+            "src/lib.rs",
+            old.map(|text| regular(text.as_bytes())),
+            new.map(|text| regular(text.as_bytes())),
+        )
+    }
+
+    /// A side holding an ordinary, non-executable file.
+    fn regular(content: &[u8]) -> FileVersion<'_> {
+        FileVersion {
+            content,
+            mode: tree_mode(false),
+        }
+    }
+
+    /// A side holding a file Git records as executable.
+    fn executable(content: &[u8]) -> FileVersion<'_> {
+        FileVersion {
+            content,
+            mode: tree_mode(true),
+        }
     }
 
     fn count(script: &[Edit], wanted: Edit) -> usize {
@@ -467,14 +500,14 @@ mod tests {
     #[test]
     fn an_addition_reports_the_absent_side_as_dev_null() {
         let diff = render(None, Some("a\n"));
-        assert!(diff.text.starts_with("--- /dev/null\n+++ b/src/lib.rs\n"));
+        assert!(diff.text.contains("--- /dev/null\n+++ b/src/lib.rs\n"));
         assert!(diff.text.contains("@@ -0,0 +1,1 @@\n+a\n"));
         assert_eq!((diff.insertions, diff.deletions), (1, 0));
     }
 
     #[test]
     fn a_diff_header_quotes_an_unusual_file_name() {
-        let diff = file_diff("od\"d.rs", Some(b"a\n"), Some(b"b\n"));
+        let diff = file_diff("od\"d.rs", Some(regular(b"a\n")), Some(regular(b"b\n")));
         assert!(
             diff.text.starts_with("--- \"a/od\\\"d.rs\"\n"),
             "{}",
@@ -489,7 +522,7 @@ mod tests {
 
     #[test]
     fn a_binary_diff_quotes_an_unusual_file_name() {
-        let diff = file_diff("od\"d.bin", Some(b"\0"), Some(b"\0\0"));
+        let diff = file_diff("od\"d.bin", Some(regular(b"\0")), Some(regular(b"\0\0")));
         assert!(
             diff.text
                 .contains("Binary files \"a/od\\\"d.bin\" and \"b/od\\\"d.bin\" differ"),
@@ -501,7 +534,7 @@ mod tests {
     #[test]
     fn a_deletion_reports_the_absent_side_as_dev_null() {
         let diff = render(Some("a\n"), None);
-        assert!(diff.text.starts_with("--- a/src/lib.rs\n+++ /dev/null\n"));
+        assert!(diff.text.contains("--- a/src/lib.rs\n+++ /dev/null\n"));
         assert!(diff.text.contains("@@ -1,1 +0,0 @@\n-a\n"));
         assert_eq!((diff.insertions, diff.deletions), (0, 1));
     }
@@ -528,7 +561,7 @@ mod tests {
     #[test]
     fn an_empty_file_addition_still_renders_headers() {
         // A reader takes its work from the hunks, and an empty file has none,
-        // so the creation is carried by Git's extended headers instead.
+        // so the extended headers are the whole record of the creation.
         let diff = render(None, Some(""));
         assert_eq!(
             diff.text,
@@ -573,13 +606,63 @@ mod tests {
     }
 
     #[test]
-    fn a_non_empty_addition_carries_no_extended_headers() {
-        // Its hunk already tells a reader to create the file.
+    fn a_non_empty_addition_records_the_mode_it_is_created_with() {
         let diff = render(None, Some("a\n"));
         assert_eq!(
             diff.text,
-            "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1,1 @@\n+a\n"
+            "diff --git a/src/lib.rs b/src/lib.rs\nnew file mode 100644\n--- /dev/null\n+++ \
+             b/src/lib.rs\n@@ -0,0 +1,1 @@\n+a\n"
         );
+    }
+
+    /// An added executable file is recreated executable.
+    ///
+    /// Cargo carries the bit into the archive, so a patch that recreated the
+    /// file without it would not describe the released content.
+    #[test]
+    fn an_added_executable_file_records_the_executable_mode() {
+        let diff = file_diff("run.sh", None, Some(executable(b"#!/bin/sh\n")));
+        assert!(
+            diff.text
+                .starts_with("diff --git a/run.sh b/run.sh\nnew file mode 100755\n"),
+            "{}",
+            diff.text
+        );
+    }
+
+    /// A deleted executable file records the mode it was removed at.
+    #[test]
+    fn a_deleted_executable_file_records_the_executable_mode() {
+        let diff = file_diff("run.sh", Some(executable(b"#!/bin/sh\n")), None);
+        assert!(
+            diff.text
+                .starts_with("diff --git a/run.sh b/run.sh\ndeleted file mode 100755\n"),
+            "{}",
+            diff.text
+        );
+    }
+
+    /// An added empty executable file records the executable mode too.
+    ///
+    /// It renders no hunks, so the headers carry the whole change and getting
+    /// the mode wrong there would lose it entirely.
+    #[test]
+    fn an_added_empty_executable_file_records_the_executable_mode() {
+        let diff = file_diff("run.sh", None, Some(executable(b"")));
+        assert_eq!(
+            diff.text,
+            "diff --git a/run.sh b/run.sh\nnew file mode 100755\n--- /dev/null\n+++ b/run.sh\n"
+        );
+    }
+
+    /// A file present at both ends carries no creation or deletion header.
+    ///
+    /// `mode_change_diff` renders the mode headers for that case, so emitting
+    /// them here as well would contradict it.
+    #[test]
+    fn a_modification_carries_no_presence_header() {
+        let diff = render(Some("a\n"), Some("b\n"));
+        assert!(!diff.text.contains("diff --git"), "{}", diff.text);
     }
 
     #[test]
@@ -598,7 +681,11 @@ mod tests {
 
     #[test]
     fn binary_content_is_reported_without_a_hunk() {
-        let diff = file_diff("data.bin", Some(&[0xff, 0xfe]), Some(&[0xfe, 0xff]));
+        let diff = file_diff(
+            "data.bin",
+            Some(regular(&[0xff, 0xfe])),
+            Some(regular(&[0xfe, 0xff])),
+        );
         assert_eq!(diff.text, "Binary files a/data.bin and b/data.bin differ\n");
         assert_eq!((diff.insertions, diff.deletions), (0, 0));
     }
@@ -662,23 +749,36 @@ mod tests {
 
     #[test]
     fn nul_bytes_are_reported_as_binary_even_though_they_are_valid_utf8() {
-        let diff = file_diff("data.dat", Some(b"one\n"), Some(b"one\0two\n"));
+        let diff = file_diff(
+            "data.dat",
+            Some(regular(b"one\n")),
+            Some(regular(b"one\0two\n")),
+        );
         assert_eq!(diff.text, "Binary files a/data.dat and b/data.dat differ\n");
         assert_eq!((diff.insertions, diff.deletions), (0, 0));
     }
 
     #[test]
     fn binary_changes_use_the_dev_null_placeholder_for_an_absent_side() {
-        let added = file_diff("logo.png", None, Some(&[0xFF, 0xFE, 0x00]));
-        assert_eq!(added.text, "Binary files /dev/null and b/logo.png differ\n");
-
-        let deleted = file_diff("logo.png", Some(&[0xFF, 0xFE, 0x00]), None);
+        let added = file_diff("logo.png", None, Some(regular(&[0xFF, 0xFE, 0x00])));
         assert_eq!(
-            deleted.text,
-            "Binary files a/logo.png and /dev/null differ\n"
+            added.text,
+            "diff --git a/logo.png b/logo.png\nnew file mode 100644\nBinary files /dev/null and \
+             b/logo.png differ\n"
         );
 
-        let modified = file_diff("logo.png", Some(&[0xFF, 0x00]), Some(&[0xFF, 0x01]));
+        let deleted = file_diff("logo.png", Some(regular(&[0xFF, 0xFE, 0x00])), None);
+        assert_eq!(
+            deleted.text,
+            "diff --git a/logo.png b/logo.png\ndeleted file mode 100644\nBinary files a/logo.png \
+             and /dev/null differ\n"
+        );
+
+        let modified = file_diff(
+            "logo.png",
+            Some(regular(&[0xFF, 0x00])),
+            Some(regular(&[0xFF, 0x01])),
+        );
         assert_eq!(
             modified.text,
             "Binary files a/logo.png and b/logo.png differ\n"

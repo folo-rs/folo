@@ -142,11 +142,6 @@ trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.36", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 
-# Revision cargo-release-plan classifies against when no --base is passed.
-# CI passes the merge-base explicitly; this is the local-run default.
-[workspace.metadata.release-plan]
-base = "origin/main"
-
 # Cargo packages that form one logical unit belong to one version group, and the
 # members of a version group must share a version. cargo-release-plan expands an
 # increment across every member of a version group and rewrites intra-workspace

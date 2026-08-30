@@ -30,9 +30,10 @@ Two kinds of automation follow, and each has its own command:
   an increment or a version group disagrees with itself. A pull request cannot
   merge until every package whose published content it changed has been
   incremented.
-* **Deciding the increments.** `report` describes what changed, per package,
-  in enough detail to choose an increment level for each; `apply` then edits
-  the manifests to carry that decision out.
+* **Deciding the increments.** `report` gathers the evidence a version
+  decision rests on: which packages need an increment, and exactly what changed
+  in each. Choosing the increment level is not part of it. `apply` then edits
+  the manifests to carry a decision out once one has been made.
 
 Two terms carry the rest of this document. The **release baseline** is the
 revision a workspace is compared against: the tip of the branch releases are
@@ -42,8 +43,8 @@ record of what the currently declared version released.
 
 ## Commands
 
-`report --out-dir <dir>` writes `report.json` and a unified diff for each
-package that needs an increment on account of a file difference. The report includes
+`report --out-dir <dir>` writes `report.json` and a unified diff for each package
+that needs an increment on account of a file difference. The report includes
 intra-workspace dependencies and dependents so version decisions can cascade.
 Only edges that survive into the published manifest are reported: normal and
 build dependencies cascade, as do dev dependencies that declare a version
@@ -83,6 +84,27 @@ reverted with the version control system rather than by the tool.
 All three read the workspace named by `--manifest-path`, defaulting to the
 manifest discovered from the working directory, and take the release baseline
 from `--base`.
+
+### Between report and apply
+
+`report` establishes facts and `apply` executes a decision. The decision itself
+is made in between, and not by this tool.
+
+Choosing an increment level means judging whether a change is breaking,
+additive, or neither, which requires reading the change against what the package
+promises its consumers. The tool never compiles anything, never compares API
+surfaces, and never infers a level from a diff. What it supplies is what that
+judgement needs: the packages that need an increment, the file diffs, the
+inherited workspace values and locked dependencies that changed, and the
+intra-workspace dependents a breaking change would propagate to.
+
+A caller — a person, or an agent skill automating the routine cases — reads the
+report, decides a level for each package, and records those decisions in a plan.
+`apply` owns everything mechanical about carrying that plan out: expanding
+version groups, deriving the resulting version numbers, rewriting the
+requirements that must follow, and refreshing the lockfile. So the tool decides
+*whether* a package must be incremented and *what the new version number is*
+once a level is chosen; it does not decide the level.
 
 ## The release baseline
 

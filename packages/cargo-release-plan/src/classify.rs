@@ -13,7 +13,7 @@ use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, Presence, TimelineEntry, resolve_anchor};
-use crate::diff::{file_diff, mode_change_diff};
+use crate::diff::{FileVersion, file_diff, mode_change_diff};
 use crate::git::{DefaultBase, GitRepo, TreeEntry, join_git_rel, tree_mode};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
@@ -795,7 +795,23 @@ fn diff_package(
             Some(path) => read_optional_bytes(&git.root().join(path), name, path)?,
             None => None,
         };
-        let file_diff = file_diff(rel, old.as_deref(), new.as_deref());
+        let old_side = old.as_deref().map(|content| FileVersion {
+            content,
+            mode: tree_mode(
+                anchor_files
+                    .get(rel)
+                    .is_some_and(|path| anchor_exec.contains(path.as_str())),
+            ),
+        });
+        let new_side = new.as_deref().map(|content| FileVersion {
+            content,
+            mode: tree_mode(
+                work_files
+                    .get(rel)
+                    .is_some_and(|path| work_exec.contains(path.as_str())),
+            ),
+        });
+        let file_diff = file_diff(rel, old_side, new_side);
         insertions = insertions.saturating_add(file_diff.insertions);
         deletions = deletions.saturating_add(file_diff.deletions);
         patch.push_str(&file_diff.text);

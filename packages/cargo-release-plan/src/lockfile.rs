@@ -116,18 +116,13 @@ impl Lockfile {
     ///
     /// A registry crate may share a workspace member's name, and only the member
     /// is the package being published. Cargo records no `source` for a package
-    /// it resolved from a path, which is what tells the two apart.
+    /// it resolved from a path, so the member is the source-less entry and
+    /// nothing else: a lockfile predating the member holds no such entry, which
+    /// is the unresolved root this reports as `None`.
     fn root_index(&self, root: &str) -> Option<usize> {
-        let named = || {
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.name == root)
-        };
-        named()
-            .find(|(_, entry)| entry.source.is_none())
-            .or_else(|| named().next())
-            .map(|(index, _)| index)
+        self.entries
+            .iter()
+            .position(|entry| entry.name == root && entry.source.is_none())
     }
 
     /// Indices of the entries a dependency reference names.
@@ -141,6 +136,10 @@ impl Lockfile {
                         .version
                         .as_ref()
                         .is_none_or(|version| &entry.version == version)
+                    && dep
+                        .source
+                        .as_ref()
+                        .is_none_or(|source| entry.source.as_deref() == Some(source.as_str()))
             })
             .map(|(index, _)| index)
             .collect()
@@ -173,13 +172,17 @@ impl LockEntry {
 
 /// A dependency named by a lockfile entry.
 ///
-/// Cargo spells a dependency as a bare name while the name is unambiguous and
-/// adds the version once it is not, so the version is optional here rather than
-/// a property of the lockfile format version.
+/// Cargo spells a dependency as a bare name while the name is unambiguous, adds
+/// the version once it is not, and adds the source once name and version are
+/// still not enough. Every part beyond the name is therefore optional here, and
+/// every part that is present has to take part in matching: Cargo only wrote it
+/// because something else would otherwise answer to the same reference.
 #[derive(Debug)]
 struct DepRef {
     name: String,
     version: Option<String>,
+    /// Where the dependency resolves from, as a `[[package]]` entry spells it.
+    source: Option<String>,
 }
 
 impl DepRef {
@@ -187,9 +190,16 @@ impl DepRef {
         let mut parts = text.split_whitespace();
         Self {
             name: parts.next().unwrap_or_default().to_owned(),
-            // Lockfiles written before version 3 append the source in
-            // parentheses, which names no entry the walk needs.
             version: parts.next().map(ToOwned::to_owned),
+            // A dependency wraps the source in parentheses while a `[[package]]`
+            // entry's `source` key does not, so the wrapper comes off here and
+            // the two are compared in the same spelling. A source holds no
+            // whitespace, so it survives the split whole.
+            source: parts
+                .next()
+                .and_then(|part| part.strip_prefix('('))
+                .and_then(|part| part.strip_suffix(')'))
+                .map(ToOwned::to_owned),
         }
     }
 }
@@ -386,6 +396,80 @@ version = \"1.0.0\"
 ";
         let closure = closure_of(text, "tool");
         assert_eq!(closure.keys().collect::<Vec<_>>(), vec!["helper"]);
+    }
+
+    /// A registry crate alone never stands in for an absent workspace member.
+    ///
+    /// A lockfile predating the member resolves no member entry, and answering
+    /// with a same-named registry crate would invent a closure for a package
+    /// the lockfile knows nothing about.
+    #[test]
+    fn a_registry_crate_does_not_stand_in_for_an_absent_member() {
+        let text = "\
+[[package]]
+name = \"tool\"
+version = \"9.9.9\"
+source = \"registry+https://example.invalid\"
+dependencies = [\"helper\"]
+
+[[package]]
+name = \"helper\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+";
+        assert!(
+            Lockfile::parse(text, LABEL)
+                .unwrap()
+                .closure("tool")
+                .is_none()
+        );
+    }
+
+    /// A dependency naming a source follows only the entry from that source.
+    ///
+    /// Cargo spells the source out precisely when the name and version do not
+    /// identify one entry, so ignoring it would walk into the wrong package.
+    #[test]
+    fn a_dependency_naming_a_source_selects_that_source() {
+        let text = "\
+[[package]]
+name = \"tool\"
+version = \"0.1.0\"
+dependencies = [\"dup 1.0.0 (git+https://example.invalid/dup)\"]
+
+[[package]]
+name = \"dup\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+dependencies = [\"from-registry\"]
+
+[[package]]
+name = \"dup\"
+version = \"1.0.0\"
+source = \"git+https://example.invalid/dup\"
+dependencies = [\"from-git\"]
+
+[[package]]
+name = \"from-registry\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+
+[[package]]
+name = \"from-git\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+";
+        let closure = closure_of(text, "tool");
+        assert_eq!(
+            closure.keys().collect::<Vec<_>>(),
+            vec!["dup", "from-git"],
+            "{closure:?}"
+        );
+        let dup = closure.get("dup").unwrap();
+        assert_eq!(
+            dup.iter().collect::<Vec<_>>(),
+            vec!["1.0.0 (git+https://example.invalid/dup)"]
+        );
     }
 
     #[test]
