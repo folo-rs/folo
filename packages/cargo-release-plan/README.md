@@ -5,10 +5,10 @@ version **anchor**, reports changes to **released content**, and applies an
 approved increment plan (group expansion, `=`-pin rewrites, lockfile refresh).
 
 A package has unreleased changes when its released content differs between its
-version anchor and the work tree without an increase in its declared version; it
-is pending release once that version has been raised. The anchor is the most
-recent commit on the release baseline's first-parent line in which the package's
-parsed `version` changed.
+version anchor and the work tree. Such a package is pending release once its
+declared version has been raised past the anchor, and needs an increment until
+then. The anchor is the most recent commit on the release baseline's first-parent
+line in which the package's parsed `version` changed.
 
 ## Usage
 
@@ -31,7 +31,7 @@ remote advertises, falling back to `origin/main`. `--manifest-path` defaults to
 ### `report`
 
 Writes `<dir>/report.json` plus a `<dir>/diffs/<package>.patch` for each package
-whose unreleased changes include a file difference. The JSON names each
+that needs an increment on account of a file difference. The JSON names each
 package's status, anchor, changed paths, inherited workspace fields,
 intra-workspace dependencies, and version groups, and is the complete verdict.
 
@@ -44,8 +44,8 @@ needs an increment.
 
 ### `check`
 
-Exits non-zero when any publishable package has unreleased changes or any
-version group declares inconsistent versions. Failure text describes the
+Exits non-zero when any publishable package needs an increment or any version
+group declares inconsistent versions. Failure text describes the
 self-contained recovery workflow: run `report`, prepare a plan, and run `apply`.
 In this repository it additionally names the `increment-versions` agent skill,
 which automates that workflow.
@@ -98,7 +98,7 @@ Each increment must supply exactly one of `level` or `version`.
 
 `report.json` uses the same schema revision. Top-level fields are
 `schema_version`, `head`, `packages`, and `groups`. Each package object includes
-`name`, `declared_version`, `status` (`pending-release` / `unreleased-changes` /
+`name`, `declared_version`, `status` (`pending-release` / `needs-increment` /
 `released`), `changed`, `stat`, `dependencies`, and `dependents`, plus omitted
 when empty: `group`, `anchor`, `diff_path`, `untracked`. A change is one of
 `{"path","change","source":"package"}`, `{"field","source":"inherited"}`, or
@@ -109,20 +109,21 @@ change increments it.
 
 ## Classification
 
-| Status               | Condition                                                |
-| -------------------- | -------------------------------------------------------- |
-| `pending-release`    | version increased since the anchor                       |
-| `unreleased-changes` | version unchanged, released content changed since anchor |
-| `released`           | version unchanged, released content unchanged            |
+| Status            | Condition                                                |
+| ----------------- | -------------------------------------------------------- |
+| `pending-release` | version increased since the anchor                       |
+| `needs-increment` | version unchanged, released content changed since anchor |
+| `released`        | version unchanged, released content unchanged            |
 
-`check` fails on `unreleased-changes` alone. Packages with `publish = false` are
-ignored. Untracked files are advisory only. Versions only move forwards: a
+`check` fails on `needs-increment` alone. A `pending-release` package still holds
+unreleased changes; merging is what releases them. Packages with
+`publish = false` are ignored. Untracked files are advisory only. Versions only move forwards: a
 declared version below the anchor's version is an error rather than a status.
 
 A package that publishes an executable also releases its resolved dependency
 closure, because `cargo install --locked` builds from the lockfile in the
 archive. A workspace lockfile change that moves such a package's dependencies is
-therefore an unreleased change; the same change against a library is not.
+therefore a released-content change; the same change against a library is not.
 
 A packaged file's executable bit is released content too, since Cargo carries
 the mode Git records into the archive. Making a packaged file executable is

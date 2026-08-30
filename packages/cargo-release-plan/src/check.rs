@@ -1,4 +1,4 @@
-// `check` command: fail on unreleased changes or an inconsistent group.
+// `check` command: fail on a needed increment or an inconsistent group.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,7 +59,7 @@ pub(crate) fn run_check(
     let passed = classification
         .packages
         .iter()
-        .all(|package| package.status() != PackageStatus::UnreleasedChanges)
+        .all(|package| package.status() != PackageStatus::NeedsIncrement)
         && classification
             .groups
             .values()
@@ -98,11 +98,11 @@ fn render_diagnostics(
         .collect();
     let mut lines = Vec::new();
     for package in packages {
-        if package.status() != PackageStatus::UnreleasedChanges {
+        if package.status() != PackageStatus::NeedsIncrement {
             continue;
         }
         let anchor = package.anchor().expect(
-            "a package can only fail against an anchor, so an unreleased-changes verdict always carries the commit it was compared with",
+            "a package can only fail against an anchor, so a needs-increment verdict always carries the commit it was compared with",
         );
         let anchor = format!("{} ({})", short_commit(&anchor.commit), anchor.version);
         let group_text = match &package.group {
@@ -130,14 +130,14 @@ fn render_diagnostics(
             None => "released content changed".to_string(),
         };
         let text = format!(
-            "{}: unreleased-changes since {anchor}; {changed}.{group_text} {}",
+            "{}: needs-increment since {anchor}; {changed}.{group_text} {}",
             quote_path(&package.name),
             remedy(base)
         );
         if format == CheckFormat::Github {
             let file = os_path(&package.manifest_path);
             lines.push(format!(
-                "::error file={},title=unreleased-changes::{}",
+                "::error file={},title=needs-increment::{}",
                 escape_property(&file),
                 escape_data(&text)
             ));
@@ -381,7 +381,7 @@ mod tests {
     /// Only status, name, anchor, group, and changed items reach the rendered
     /// text, so every other field carries a value the assertions never observe.
     fn failing(name: &str, changed: Vec<ChangedItem>) -> PackageClass {
-        PackageClass::unreleased_changes(
+        PackageClass::needs_increment(
             name,
             Version::new(0, 1, 0),
             Anchor {
@@ -452,7 +452,7 @@ mod tests {
 
     /// A package without changed items still reports.
     ///
-    /// A package can reach `unreleased-changes` through an inherited value alone, which leaves no
+    /// A package can reach `needs-increment` through an inherited value alone, which leaves no
     /// changed path to name.
     #[test]
     fn a_package_without_changed_items_still_reports() {
@@ -546,14 +546,14 @@ mod tests {
             lines
                 .next()
                 .expect("a failing package renders at least one line")
-                .starts_with("::error file=packages/demo/Cargo.toml,title=unreleased-changes::"),
+                .starts_with("::error file=packages/demo/Cargo.toml,title=needs-increment::"),
             "{text}"
         );
         assert!(
             lines
                 .next()
                 .expect("the annotation is followed by the plain diagnostic")
-                .starts_with("demo: unreleased-changes"),
+                .starts_with("demo: needs-increment"),
             "{text}"
         );
     }

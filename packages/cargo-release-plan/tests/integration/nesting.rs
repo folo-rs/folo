@@ -21,8 +21,8 @@ fn nested_package_content_belongs_only_to_the_nested_package() {
     // `inner` is a member only because `outer` depends on it by path, so it must
     // be reconstructed at the anchor too, or the change would look like a brand
     // new package. Its files belong to `inner` alone, so `outer` stays released.
-    assert!(message.contains("inner: unreleased-changes"), "{message}");
-    assert!(!message.contains("outer: unreleased-changes"), "{message}");
+    assert!(message.contains("inner: needs-increment"), "{message}");
+    assert!(!message.contains("outer: needs-increment"), "{message}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -60,8 +60,8 @@ fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root
     // before the nested-package boundary is applied.
     let (passed, message) = check_workspace(&base, fixture.path().join("sub").join("Cargo.toml"));
     assert!(!passed, "{message}");
-    assert!(message.contains("inner: unreleased-changes"), "{message}");
-    assert!(!message.contains("outer: unreleased-changes"), "{message}");
+    assert!(message.contains("inner: needs-increment"), "{message}");
+    assert!(!message.contains("outer: needs-increment"), "{message}");
 }
 
 /// A path dependency without a manifest at the anchor is not a member there.
@@ -94,7 +94,7 @@ fn a_path_dependency_without_a_manifest_at_the_anchor_is_not_a_member_there() {
     let (passed, message) = check(&fixture, &base);
 
     assert!(!passed, "{message}");
-    assert!(message.contains("outer: unreleased-changes"), "{message}");
+    assert!(message.contains("outer: needs-increment"), "{message}");
     assert!(message.contains("inner/src/lib.rs"), "{message}");
 }
 
@@ -118,7 +118,7 @@ fn a_nested_manifest_the_work_tree_deleted_no_longer_stops_packing() {
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("demo: unreleased-changes"), "{message}");
+    assert!(message.contains("demo: needs-increment"), "{message}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

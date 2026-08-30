@@ -28,7 +28,7 @@ pub enum RunInput {
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
     },
-    /// `check` — fail on unreleased changes or an inconsistent group.
+    /// `check` — fail on a needed increment or an inconsistent group.
     Check {
         /// Release baseline whose first-parent line supplies anchors.
         ///
@@ -92,7 +92,7 @@ pub enum RunOutcome {
 /// # Errors
 ///
 /// Returns an application error when the requested operation cannot be
-/// completed. Unreleased changes are a [`RunOutcome::Check`] with
+/// completed. A package needing an increment is a [`RunOutcome::Check`] with
 /// `passed: false`, not an error.
 #[doc(hidden)]
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {

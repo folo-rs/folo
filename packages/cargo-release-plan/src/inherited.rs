@@ -162,7 +162,7 @@ fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String
 /// Cargo removes `path` when it normalises a member's manifest for packaging,
 /// and the root manifest is not shipped at all, so a root edit that only moves a
 /// path leaves every inheriting package's released content byte-identical.
-/// Attributing it would be a false `unreleased-changes` verdict. Ref:
+/// Attributing it would be a false `needs-increment` verdict. Ref:
 /// docs/design.md, "Inherited workspace values".
 fn is_unpublished_dependency_key(key: &str) -> bool {
     key == "path"

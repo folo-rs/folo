@@ -119,22 +119,22 @@ pub(crate) fn write_report(
     fs::write(&report_path, report.as_bytes())
         .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
 
-    let unreleased = classification
+    let needing_increment = classification
         .packages
         .iter()
-        .filter(|package| package.status() == PackageStatus::UnreleasedChanges)
+        .filter(|package| package.status() == PackageStatus::NeedsIncrement)
         .count();
     Ok(format!(
-        "Wrote {} ({} with unreleased changes)",
+        "Wrote {} ({} needing an increment)",
         quote_path(&report_path.display().to_string()),
-        unreleased
+        needing_increment
     ))
 }
 
 // Patch files are a dump of `package.patch`; bytes are covered by `naive_patch`.
 #[cfg_attr(test, mutants::skip)]
 fn write_diff(diffs_dir: &Path, package: &PackageClass) -> Result<Option<String>, AppError> {
-    // Patches are emitted only for `unreleased-changes`; classify clears others.
+    // Patches are emitted only for `needs-increment`; classify clears others.
     if package.patch().is_empty() {
         return Ok(None);
     }

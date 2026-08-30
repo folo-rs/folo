@@ -121,9 +121,9 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Write report.json and per-package diffs for unreleased changes.
+    /// Write report.json and per-package diffs for the changes needing a release.
     Report(ReportArgs),
-    /// Fail on unreleased changes or an inconsistent version group.
+    /// Fail on a needed version increment or an inconsistent version group.
     Check(CheckArgs),
     /// Apply an approved increment plan to manifests and the lockfile.
     Apply(ApplyArgs),

@@ -28,7 +28,7 @@ fn increment_early_in_a_branch_with_later_changes_is_pending_release() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn content_already_on_base_has_unreleased_changes() {
+fn content_already_on_base_needs_an_increment() {
     let fixture = seeded_package();
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 2; }\n");
     fixture.commit("content without version bump");
@@ -36,7 +36,7 @@ fn content_already_on_base_has_unreleased_changes() {
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("unreleased-changes"));
+    assert!(message.contains("needs-increment"));
     assert!(message.contains("increment-versions"));
     let out_dir = fixture.path().join("out");
     let outcome = run(&RunInput::Report {
@@ -48,7 +48,7 @@ fn content_already_on_base_has_unreleased_changes() {
     .unwrap();
     match outcome {
         RunOutcome::Report { message } => {
-            assert!(message.contains("1 with unreleased changes"));
+            assert!(message.contains("1 needing an increment"));
         }
         other => panic!("expected report, got {other:?}"),
     }
@@ -57,7 +57,7 @@ fn content_already_on_base_has_unreleased_changes() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn executable_bit_alone_has_unreleased_changes() {
+fn executable_bit_alone_needs_an_increment() {
     let fixture = seeded_package();
     // The script has to be released content at the anchor, so it lands in the
     // same commit as the version that anchors the comparison.
@@ -75,7 +75,7 @@ fn executable_bit_alone_has_unreleased_changes() {
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("unreleased-changes"));
+    assert!(message.contains("needs-increment"));
 
     // The content is untouched, so the mode headers are the only thing that
     // records the change for a reader of the patch.
@@ -95,7 +95,7 @@ fn executable_bit_alone_has_unreleased_changes() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn added_packaged_file_has_unreleased_changes() {
+fn added_packaged_file_needs_an_increment() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     fixture.write("packages/demo/README.md", "hello\n");
@@ -108,7 +108,7 @@ fn added_packaged_file_has_unreleased_changes() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn deleted_packaged_file_has_unreleased_changes() {
+fn deleted_packaged_file_needs_an_increment() {
     let fixture = Fixture::new("");
     write_package(
         &fixture,
@@ -130,7 +130,7 @@ fn deleted_packaged_file_has_unreleased_changes() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn path_dropped_from_include_has_unreleased_changes() {
+fn path_dropped_from_include_needs_an_increment() {
     let fixture = Fixture::new("");
     write_package(
         &fixture,
@@ -184,7 +184,7 @@ fn moved_package_directory_is_compared_by_name() {
 /// Ref: docs/design.md, "Released content".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn manifest_reformat_without_version_change_has_unreleased_changes() {
+fn manifest_reformat_without_version_change_needs_an_increment() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     fixture.write(

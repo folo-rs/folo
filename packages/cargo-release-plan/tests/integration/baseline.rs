@@ -26,7 +26,7 @@ fn the_recorded_remote_head_supplies_the_baseline() {
 
     let (passed, message) = check_discovering_base(&fixture).unwrap();
     assert!(!passed, "{message}");
-    assert!(message.contains("demo: unreleased-changes"), "{message}");
+    assert!(message.contains("demo: needs-increment"), "{message}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

@@ -131,7 +131,7 @@ fn a_withdrawn_package_is_still_anchored_to_its_last_release() {
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("demo: unreleased-changes"), "{message}");
+    assert!(message.contains("demo: needs-increment"), "{message}");
 
     write_package(&fixture, "demo", "0.2.0", "");
     let (passed, message) = check(&fixture, &base);
@@ -168,7 +168,7 @@ fn merging_the_baseline_into_the_branch_keeps_the_verdict() {
     // content edit is unreleased.
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("demo: unreleased-changes"), "{message}");
+    assert!(message.contains("demo: needs-increment"), "{message}");
 
     write_package(&fixture, "demo", "0.3.0", "");
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 1; }\n");

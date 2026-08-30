@@ -121,7 +121,7 @@ boundaries are read off the tracked manifests beneath the package rather than of
 the member list. Cargo stops packing at any directory that carries its own
 `Cargo.toml`, whether or not the workspace claims it, so a fixture package the
 workspace excludes would otherwise have its files attributed to the enclosing
-package and produce unreleased-change verdicts for content that is never
+package and produce needs-increment verdicts for content that is never
 released. Each side of the comparison reads its own boundaries from its own file
 listing, so a package that appears or disappears between the anchor and the work
 tree moves the boundary with it.

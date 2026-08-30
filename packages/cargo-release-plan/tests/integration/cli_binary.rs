@@ -54,7 +54,7 @@ fn failing_check_writes_stderr_and_exits_failure() {
     let output = release_plan(&["check", "--base", &base], Some(&fixture));
 
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("unreleased-changes"));
+    assert!(stderr(&output).contains("needs-increment"));
     assert!(stdout(&output).is_empty());
 }
 

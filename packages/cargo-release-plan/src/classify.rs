@@ -87,7 +87,7 @@ impl PackageClass {
         match &self.verdict {
             Verdict::New | Verdict::PendingRelease { .. } => PackageStatus::PendingRelease,
             Verdict::Released { .. } => PackageStatus::Released,
-            Verdict::UnreleasedChanges { .. } => PackageStatus::UnreleasedChanges,
+            Verdict::NeedsIncrement { .. } => PackageStatus::NeedsIncrement,
         }
     }
 
@@ -97,7 +97,7 @@ impl PackageClass {
             Verdict::New => None,
             Verdict::PendingRelease { anchor, .. }
             | Verdict::Released { anchor }
-            | Verdict::UnreleasedChanges { anchor, .. } => Some(anchor),
+            | Verdict::NeedsIncrement { anchor, .. } => Some(anchor),
         }
     }
 
@@ -105,15 +105,16 @@ impl PackageClass {
     pub(crate) fn changed(&self) -> &[ChangedItem] {
         match &self.verdict {
             Verdict::New | Verdict::Released { .. } => &[],
-            Verdict::PendingRelease { changed, .. }
-            | Verdict::UnreleasedChanges { changed, .. } => changed,
+            Verdict::PendingRelease { changed, .. } | Verdict::NeedsIncrement { changed, .. } => {
+                changed
+            }
         }
     }
 
-    /// The rendered patch, empty unless the package has unreleased changes.
+    /// The rendered patch, empty unless the package needs an increment.
     pub(crate) fn patch(&self) -> &str {
         match &self.verdict {
-            Verdict::UnreleasedChanges { patch, .. } => patch,
+            Verdict::NeedsIncrement { patch, .. } => patch,
             Verdict::New | Verdict::PendingRelease { .. } | Verdict::Released { .. } => "",
         }
     }
@@ -158,7 +159,7 @@ impl PackageClass {
         )
     }
 
-    pub(crate) fn unreleased_changes(
+    pub(crate) fn needs_increment(
         name: &str,
         declared_version: Version,
         anchor: Anchor,
@@ -168,7 +169,7 @@ impl PackageClass {
         Self::with_verdict(
             name,
             declared_version,
-            Verdict::UnreleasedChanges {
+            Verdict::NeedsIncrement {
                 anchor,
                 changed,
                 patch: String::new(),
@@ -222,7 +223,7 @@ enum Verdict {
     /// The declared version did not increase, and neither did the content.
     Released { anchor: Anchor },
     /// Released content differs from the anchor without a version increase.
-    UnreleasedChanges {
+    NeedsIncrement {
         anchor: Anchor,
         changed: Vec<ChangedItem>,
         patch: String,
@@ -234,7 +235,7 @@ enum Verdict {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackageStatus {
     PendingRelease,
-    UnreleasedChanges,
+    NeedsIncrement,
     Released,
 }
 
@@ -554,7 +555,7 @@ fn classify_one(
     } else if changed.is_empty() {
         Verdict::Released { anchor }
     } else {
-        Verdict::UnreleasedChanges {
+        Verdict::NeedsIncrement {
             anchor,
             changed,
             patch,

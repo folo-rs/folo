@@ -53,7 +53,7 @@ fn locked_workspace() -> Fixture {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_moved_dependency_is_unreleased_for_a_binary_package() {
+fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
     let fixture = locked_workspace();
     let base = fixture.sha("HEAD");
 
@@ -62,7 +62,7 @@ fn a_moved_dependency_is_unreleased_for_a_binary_package() {
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("tool: unreleased-changes"), "{message}");
+    assert!(message.contains("tool: needs-increment"), "{message}");
     assert!(message.contains("widget"), "{message}");
 }
 
@@ -78,7 +78,7 @@ fn a_moved_dependency_leaves_a_library_package_released() {
     fixture.commit("update the locked widget");
 
     let (_, message) = check(&fixture, &base);
-    assert!(!message.contains("helper: unreleased-changes"), "{message}");
+    assert!(!message.contains("helper: needs-increment"), "{message}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -113,7 +113,7 @@ fn an_untouched_lockfile_leaves_a_binary_package_released() {
     fixture.commit("edit helper only");
 
     let (_, message) = check(&fixture, &base);
-    assert!(!message.contains("tool: unreleased-changes"), "{message}");
+    assert!(!message.contains("tool: needs-increment"), "{message}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -131,5 +131,5 @@ fn a_workspace_without_a_lockfile_classifies() {
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
-    assert!(message.contains("tool: unreleased-changes"), "{message}");
+    assert!(message.contains("tool: needs-increment"), "{message}");
 }

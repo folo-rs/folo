@@ -241,7 +241,7 @@ fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
 /// Git converts content on its way into the object database, so a work-tree file and the blob
 /// recording it need not hold the same bytes. Comparing the two representations directly would
 /// report every such file as modified on a clean checkout, which would mark whole packages
-/// `unreleased-changes` forever.
+/// `needs-increment` forever.
 ///
 /// The divergence is provoked here with a line-ending rule, which needs no
 /// external tooling, but it is the same divergence Git LFS produces: this
@@ -279,7 +279,7 @@ fn an_edit_to_a_converted_file_is_still_reported_as_changed() {
     let (passed, message) = check(&fixture, &base);
 
     assert!(!passed, "{message}");
-    assert!(message.contains("demo: unreleased-changes"), "{message}");
+    assert!(message.contains("demo: needs-increment"), "{message}");
 }
 
 /// Package whose released content includes a file Git rewrites as it stores it.

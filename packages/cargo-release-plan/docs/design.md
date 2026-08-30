@@ -8,21 +8,28 @@ only if every package whose published content changed also carries a version
 number that has not been published yet, and nothing enforces that by reading a
 diff.
 
-`cargo-release-plan` decides, for every publishable package in a workspace,
-which of these two things is true of it:
+A package has **unreleased changes** when the content it would publish differs
+from the content of its last release. That is a statement about content alone.
+Raising a version number does not change what the registry is serving today, so
+it does not take a package out of this state; only releasing it does, which in
+this workspace means merging.
 
-* It has **unreleased changes**: the content it would publish differs from the
-  content of its last release, and its declared version has not moved since. In
-  this state a merge would ship changed code under a version number that is
-  already on the registry.
-* It is **pending release**: its declared version has already been raised past
-  its last release, so a merge publishes it.
+What raising the version does decide is what the merge will do, and that is
+what `cargo-release-plan` reports for every publishable package:
+
+* A package with unreleased changes whose declared version has already been
+  raised past its last release is **pending release**. The merge publishes it,
+  and its changes stop being unreleased at that moment.
+* A package with unreleased changes whose declared version has not moved
+  **needs an increment**. A merge would ship changed content under a version
+  number that is already on the registry, and nothing would publish it.
 
 Two kinds of automation follow, and each has its own command:
 
-* **Gating a merge.** `check` reports failure for as long as any package has
-  unreleased changes or a version group disagrees with itself. A pull request
-  cannot merge until every package it changed has been incremented.
+* **Gating a merge.** `check` reports failure for as long as any package needs
+  an increment or a version group disagrees with itself. A pull request cannot
+  merge until every package whose published content it changed has been
+  incremented.
 * **Deciding the increments.** `report` describes what changed, per package,
   in enough detail to choose an increment level for each; `apply` then edits
   the manifests to carry that decision out.
@@ -36,14 +43,14 @@ record of what the currently declared version released.
 ## Commands
 
 `report --out-dir <dir>` writes `report.json` and a unified diff for each
-package whose unreleased changes include a file difference. The report includes
+package that needs an increment on account of a file difference. The report includes
 intra-workspace dependencies and dependents so version decisions can cascade.
 Only edges that survive into the published manifest are reported: normal and
 build dependencies cascade, as do dev dependencies that declare a version
 requirement. A path-only dev dependency does not, because Cargo strips it when
 it normalises the manifest for packaging.
 
-`check` exits non-zero when any package has unreleased changes or any version
+`check` exits non-zero when any package needs an increment or any version
 group is inconsistent, with one actionable diagnostic line that names the
 `increment-versions` skill. `--format github` adds workflow annotations.
 
@@ -103,7 +110,7 @@ this is what makes `check` useful before committing.
 
 ## Anchors
 
-A package has unreleased changes when its released content differs between its
+A package needs an increment when its released content differs between its
 **anchor** and the work tree while its declared version has not increased since
 that anchor.
 
@@ -277,10 +284,10 @@ closure, so incrementing a binary package is never itself a further change to
 that package. A workspace with no lockfile contributes nothing to the
 comparison rather than an invented difference.
 
-A dependency update that touches a binary's closure marks that binary as having
-unreleased changes even though no file in it was edited. This is deliberate: the
-executable really would be built from different code. The state settles once the
-binary is incremented, because its declared version has then moved past the
+A dependency update that touches a binary's closure marks that binary as needing
+an increment even though no file in it was edited. This is deliberate: the
+executable really would be built from different code. It becomes pending release
+once it is incremented, because its declared version has then moved past the
 anchor.
 
 A `Cargo.lock` nested deeper inside a package, rather than the one governing the
@@ -317,17 +324,20 @@ A global inherited change therefore marks every inheriting package.
 
 ## Package status
 
-| Status               | Condition                                                |
-| -------------------- | -------------------------------------------------------- |
-| `pending-release`    | version increased since the anchor                       |
-| `unreleased-changes` | version unchanged, released content changed since anchor |
-| `released`           | version unchanged, released content unchanged            |
+| Status            | Condition                                                |
+| ----------------- | -------------------------------------------------------- |
+| `pending-release` | version increased since the anchor                       |
+| `needs-increment` | version unchanged, released content changed since anchor |
+| `released`        | version unchanged, released content unchanged            |
 
-`check` reports failure when any package is `unreleased-changes`; the other two
-statuses are states a release branch can merge from.
+`check` reports failure when any package is `needs-increment`; the other two
+statuses are states a release branch can merge from. A `pending-release` package
+still holds unreleased changes — it is merging that releases them — but the
+merge will publish them under a version number that is not yet on the registry,
+which is what the gate is there to guarantee.
 
 `publish = false` packages are excluded. Group consistency is a separate
-group-level condition: a package may have unreleased changes *and* belong to an
+group-level condition: a package may need an increment *and* belong to an
 inconsistent group, and both are reported.
 
 ### Version groups
