@@ -52,8 +52,11 @@ helper follows the same rule for the same reason.
 
 Workspace-wide commands therefore still build and lint the workspace on any
 platform without `dure` contributing dead abstractions to satisfy them. The
-consequence is that `dure` contributes no tests off Windows, which is why the
-workspace test and coverage recipes treat an empty test run as a pass.
+consequence is that `dure` has no behavior to exercise off Windows, where a test
+run narrowed to this package alone would otherwise find no tests and report that
+as a failure. A single placeholder test compiled only off Windows keeps that
+admission inside the package it concerns, instead of every package in the
+workspace having to tolerate an empty test run.
 
 ## PAL slicing
 
