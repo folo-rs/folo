@@ -541,6 +541,24 @@ mod tests {
     #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
+    fn a_record_too_large_to_read_in_one_go_is_still_its_owner_s_to_delete() {
+        let (dir, store) = store();
+        let owner = ProcessIdentity::for_test(1);
+        let id = store.allocate_id(&owner).unwrap();
+        // A launch directory and a command line are as long as the user made them, and Windows
+        // permits command lines far longer than any convenient buffer size.
+        let mut record = record(id, &dir.path().join("d".repeat(9_000)));
+        record.command = vec!["app.exe".to_string(), "a".repeat(20_000)];
+        store.publish(&record).unwrap();
+
+        // A record read short would parse as nobody's and be declined, stranding the id.
+        store.delete_owned_by(id, &record.identity()).unwrap();
+        assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn deleting_an_absent_record_succeeds() {
         let (_dir, store) = store();
         store

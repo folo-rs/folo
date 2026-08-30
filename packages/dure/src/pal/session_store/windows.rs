@@ -77,24 +77,32 @@ impl RecordFile {
 
     /// Reads the whole file.
     ///
-    /// A record is a small JSON object written in one shot, so it is read into a buffer that
-    /// holds any record this program writes and a partial read simply yields fewer bytes, which
-    /// the caller already treats as content it cannot trust.
+    /// A record has no bounded size — a launch directory and a command line are both as long
+    /// as the user made them — so the file's own length decides how much is read. Reading
+    /// short would hand the caller unparseable content, which it would read as a record
+    /// belonging to nobody and decline to delete, stranding the id forever.
     pub(crate) fn read(&self) -> io::Result<Vec<u8>> {
-        // Ample for a record of a few short strings and integers.
-        let mut buf = vec![0_u8; 8192];
-        let mut transferred = 0_u32;
-        // SAFETY: `self.handle` is a live read handle and `buf` is exclusive here.
-        unsafe {
-            ReadFile(
-                self.handle,
-                Some(&mut buf),
-                Some(&raw mut transferred),
-                None,
-            )
+        let len = usize::try_from(self.standard_info()?.EndOfFile)
+            .map_err(|_error| io::Error::from(io::ErrorKind::InvalidData))?;
+        let mut buf = vec![0_u8; len];
+        let mut filled = 0_usize;
+        while filled < buf.len() {
+            let dest = buf
+                .get_mut(filled..)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+            let mut transferred = 0_u32;
+            // SAFETY: `self.handle` is a live read handle and `dest` is exclusive here.
+            unsafe { ReadFile(self.handle, Some(dest), Some(&raw mut transferred), None) }
+                .map_err(|_error| last_error())?;
+            if transferred == 0 {
+                // The file is shorter than it just said it was, so this is all of it.
+                buf.truncate(filled);
+                break;
+            }
+            filled = filled
+                .checked_add(transferred as usize)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
         }
-        .map_err(|_error| last_error())?;
-        buf.truncate(transferred as usize);
         Ok(buf)
     }
 
@@ -132,6 +140,13 @@ impl RecordFile {
     /// Windows refuses a second deletion of the same file, so this is what separates losing
     /// that race from being unable to delete the file at all.
     fn is_going_away(&self) -> io::Result<bool> {
+        let info = self.standard_info()?;
+        Ok(info.DeletePending || info.NumberOfLinks == 0)
+    }
+
+    /// What the filesystem currently says about this file: its length and whether it still
+    /// has a name.
+    fn standard_info(&self) -> io::Result<FILE_STANDARD_INFO> {
         let mut info = FILE_STANDARD_INFO::default();
         let size =
             u32::try_from(size_of::<FILE_STANDARD_INFO>()).expect("FILE_STANDARD_INFO fits in u32");
@@ -146,7 +161,7 @@ impl RecordFile {
             )
         }
         .map_err(|_error| last_error())?;
-        Ok(info.DeletePending || info.NumberOfLinks == 0)
+        Ok(info)
     }
 }
 
