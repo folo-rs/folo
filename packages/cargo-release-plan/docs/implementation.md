@@ -287,8 +287,10 @@ rather than the name inside it.
 Plan application rewrites manifests structurally so comments and layout
 survive: every affected manifest is parsed and patched in memory before writes
 begin. A later write can still fail after earlier files have been updated.
-Exact `=` pins are rewritten; other path-dependency requirements are rewritten
-only when they would no longer match the new version. Every workspace member's
+A path-dependency requirement is rewritten only when it would no longer match
+the new version. Being exact is not the same as no longer matching: `=1.2`
+admits every 1.2.x, so it survives a patch increment untouched, while `=1.2.3`
+does not and is re-pinned to the new version. Every workspace member's
 manifest is visited, not just the publishable ones: a `publish = false` member
 can pin a package the plan increments, and a stale pin left behind would break
 the lockfile refresh. Registry dependencies

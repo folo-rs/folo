@@ -445,23 +445,29 @@ fn set_formatted(formatted: &mut Formatted<String>, rewritten: String) -> bool {
 
 /// The requirement a dependent must declare once its target is incremented.
 ///
-/// An exact pin names one version and stops matching the moment that version
-/// moves, so it follows the plan; a range that still admits the new version is
-/// already correct and is left exactly as the author wrote it, down to its
-/// spelling. A requirement that neither pins nor admits the new version is
-/// replaced by the bare new version, which is also what an unparsable
-/// requirement gets: Cargo would reject it anyway, so the apply leaves behind a
-/// manifest Cargo can read rather than one it cannot.
+/// Whether the requirement still admits the new version is asked first, so a
+/// requirement that is already correct is left exactly as the author wrote it,
+/// down to its spelling. That question is not the same as whether the
+/// requirement is exact: `=1.2` is an exact comparator that nonetheless admits
+/// every 1.2.x, so narrowing it to the new version would rewrite a dependent
+/// that needed no change.
+///
+/// A requirement that no longer admits the new version is replaced. An exact
+/// comparator is replaced by an exact pin on the new version, keeping the
+/// lockstep the author asked for; anything else becomes the bare new version,
+/// which is also what an unparsable requirement gets: Cargo would reject that
+/// anyway, so the apply leaves behind a manifest Cargo can read rather than one
+/// it cannot.
 /// Ref: docs/implementation.md, "Plan application".
 fn rewrite_req(old: &str, new_version: &Version) -> String {
     let trimmed = old.trim();
-    if trimmed.starts_with('=') {
-        return format!("={new_version}");
-    }
     if let Ok(req) = VersionReq::parse(trimmed)
         && req.matches(new_version)
     {
         return old.to_string();
+    }
+    if trimmed.starts_with('=') {
+        return format!("={new_version}");
     }
     new_version.to_string()
 }
@@ -625,6 +631,27 @@ mod tests {
         assert_eq!(rewrite_req("^0.1", &new), "^0.1");
         assert_eq!(rewrite_req("=0.1.0", &new), "=0.1.1");
         assert_eq!(rewrite_req("0.1.0", &v("0.2.0")), "0.2.0");
+    }
+
+    /// An exact comparator that omits the patch still admits every patch release
+    /// under it, so incrementing the patch leaves it correct and it must survive
+    /// untouched rather than being narrowed to the new version.
+    #[test]
+    fn rewrite_req_leaves_a_partial_exact_comparator_that_still_matches() {
+        assert_eq!(rewrite_req("=0.1", &v("0.1.1")), "=0.1");
+        assert_eq!(rewrite_req(" =0.1 ", &v("0.1.1")), " =0.1 ");
+        assert_eq!(rewrite_req("=1", &v("1.5.0")), "=1");
+
+        // The same comparator no longer admits a minor bump, so it is pinned to it.
+        assert_eq!(rewrite_req("=0.1", &v("0.2.0")), "=0.2.0");
+    }
+
+    /// An unparsable requirement cannot be asked whether it matches, so the
+    /// exact-comparator branch still decides its shape.
+    #[test]
+    fn rewrite_req_pins_an_unparsable_exact_requirement() {
+        assert_eq!(rewrite_req("=not-a-version", &v("0.2.0")), "=0.2.0");
+        assert_eq!(rewrite_req("not-a-version", &v("0.2.0")), "0.2.0");
     }
 
     #[test]

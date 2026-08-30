@@ -200,7 +200,9 @@ Manifests are edited structurally so comments and layout survive. Every reason a
 plan can be rejected — an unknown target, a version that would move backwards,
 an unreadable manifest — is decided before the first manifest is written, so a
 rejected plan changes nothing. `--dry-run` reports the manifests that would
-change and writes nothing.
+change and writes nothing. Writes themselves are sequential, so a plan that is
+accepted and then fails on an I/O error can leave earlier manifests updated; the
+work tree is reverted with the version control system rather than by the tool.
 
 ### Report artifacts
 

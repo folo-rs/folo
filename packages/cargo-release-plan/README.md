@@ -71,8 +71,10 @@ Reads an approved plan and:
 Manifests are edited structurally, so comments and layout are preserved. Every
 reason a plan can be rejected is found before anything is written: an unknown
 target, a version that would move backwards, or an unreadable manifest is
-reported while every manifest is still untouched. `--dry-run` reports the
-manifests that would change and writes nothing.
+reported while every manifest is still untouched. Writes themselves are
+sequential, so an accepted plan that then fails on an I/O error can leave earlier
+manifests updated; revert the work tree with `git` in that case. `--dry-run`
+reports the manifests that would change and writes nothing.
 
 The plan schema is:
 
