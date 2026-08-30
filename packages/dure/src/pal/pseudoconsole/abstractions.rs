@@ -32,6 +32,13 @@ pub(crate) trait Pseudoconsole: Send + Sync + fmt::Debug + 'static {
     /// Read bytes from the app's console output. Blocks until some data arrives.
     fn read_output(&self, pty: PtyId) -> Result<Vec<u8>, PalError>;
 
-    /// Close the pseudoconsole.
+    /// End the app console, leaving its remaining output readable.
+    ///
+    /// Reads keep delivering what the app already wrote and then report the end
+    /// of the stream, so a reader can finish the output before the session
+    /// reports the exit. The pseudoconsole is released by `close`.
+    fn finish(&self, pty: PtyId);
+
+    /// Release the pseudoconsole, abandoning output nobody has read yet.
     fn close(&self, pty: PtyId);
 }

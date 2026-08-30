@@ -457,12 +457,13 @@ where
     // Descendants of the app stay attached to the pseudoconsole until this job
     // ends them, and closing a pseudoconsole waits for its attached clients.
     processes.close_job(job);
-    // The app has exited, so closing the pseudoconsole flushes what it still
-    // holds and ends the output loop with a read failure. Joining the pump
-    // before announcing the exit is what orders the app's final output ahead
-    // of `AppExited` instead of racing it.
-    pty_host.close(pty);
+    // The app has exited, so ending the pseudoconsole flushes what it still
+    // holds and lets the output loop finish those bytes before the read fails.
+    // Joining the pump before announcing the exit is what orders the app's final
+    // output ahead of `AppExited` instead of racing it.
+    pty_host.finish(pty);
     _ = pty_pump.join();
+    pty_host.close(pty);
 
     // Both under the attach lock, which `client_loop` also takes for the whole
     // attach transaction. An attach therefore either completes before the slot
@@ -925,6 +926,12 @@ mod tests {
 
             // The supervisor creates exactly one pty on this host, so it holds
             // the first allocated id.
+            //
+            // Withholding puts the bytes past the pump's reach, modelling output
+            // still in flight when the app exits. Only an orderly shutdown can
+            // deliver them, so a teardown that abandons the console instead
+            // fails here rather than intermittently.
+            pty.withhold_output(PtyId(1));
             pty.push_output(PtyId(1), b"bye");
             {
                 let (lock, cvar) = &*exit;
@@ -1571,7 +1578,7 @@ mod tests {
 
         pty_host.push_output(shared.pty, b"out");
         // Ends the loop once the output has been drained.
-        pty_host.close(shared.pty);
+        pty_host.finish(shared.pty);
 
         pty_output_loop(&shared);
         outbox.finish();
@@ -1598,7 +1605,7 @@ mod tests {
 
         pty_host.push_output(shared.pty, b"out");
         // Ends the loop once the undeliverable output has been drained.
-        pty_host.close(shared.pty);
+        pty_host.finish(shared.pty);
 
         // The pump must not be the thread that notices, so it completes even
         // though nothing can be delivered.

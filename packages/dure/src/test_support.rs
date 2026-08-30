@@ -9,9 +9,7 @@ use crate::pal::ids::{AppId, JobId, PtyId};
 use crate::pal::processes::{
     AppSpawn, Breakaway, BuildTargetProcesses, Processes, ProcessesFacade,
 };
-use crate::pal::pseudoconsole::{
-    Pseudoconsole, PseudoconsoleFacade, WindowSize, close_without_cancel,
-};
+use crate::pal::pseudoconsole::{Pseudoconsole, PseudoconsoleFacade, WindowSize};
 
 /// A process started inside a test-owned pseudoconsole.
 ///
@@ -106,7 +104,7 @@ impl ConsoleProcess {
     /// A pseudoconsole keeps its read side open for as long as this process
     /// holds it, so a caller waiting for a phrase the child never printed would
     /// wait forever, including under mutation testing where the workspace
-    /// watchdog is disabled. Closing the pseudoconsole once the child is gone
+    /// watchdog is disabled. Ending the pseudoconsole once the child is gone
     /// ends the stream instead, turning that wait into a failed assertion,
     /// after delivering everything the child did write.
     /// Ref: docs/testing.md, "Tests must not hang".
@@ -132,11 +130,12 @@ impl ConsoleProcess {
         });
         thread::spawn({
             let processes = self.processes.clone();
+            let pty_host = self.pty_host.clone();
             let app = self.app;
             let pty = self.pty;
             move || {
                 _ = processes.wait_app(app);
-                close_without_cancel(pty);
+                pty_host.finish(pty);
             }
         });
         receiver

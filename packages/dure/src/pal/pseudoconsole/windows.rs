@@ -20,10 +20,12 @@ use crate::pal::raw_handle::PipeHandle;
 ///
 /// The pipe ends are shared owners because `read_output` and `write_input`
 /// release the table lock before their blocking I/O, so a concurrent `close`
-/// must not free a handle they are still using.
+/// must not free a handle they are still using. The `HPCON` is taken by
+/// whichever of `finish` and `close` runs first, so it is closed exactly once
+/// and no later call can hand out a pseudoconsole that is already gone.
 /// Ref: docs/implementation.md, "Pseudoconsole".
 struct Pty {
-    hpcon: HPCON,
+    hpcon: Option<HPCON>,
     host_input: Arc<PipeHandle>,
     host_output: Arc<PipeHandle>,
 }
@@ -68,25 +70,7 @@ pub(crate) fn hpcon_for(pty: PtyId) -> Option<HPCON> {
         .expect("pty table")
         .ptys
         .get(&pty.0)
-        .map(|pty| pty.hpcon)
-}
-
-/// Close the pseudoconsole, leaving a pending read to finish on its own.
-///
-/// `close` cancels pending reads, which discards output the app wrote but the
-/// reader has not picked up yet. A caller draining the output of an app that has
-/// already exited wants those last bytes, and then the end of the stream that
-/// closing the host side produces on its own.
-#[cfg(feature = "private-test-util")]
-pub(crate) fn close_without_cancel(pty: PtyId) {
-    let Some(entry) = table().lock().expect("pty table").ptys.remove(&pty.0) else {
-        return;
-    };
-    // SAFETY: `entry.hpcon` is the unique HPCON created for this pty and is not
-    // used after this call.
-    unsafe {
-        ClosePseudoConsole(entry.hpcon);
-    }
+        .and_then(|pty| pty.hpcon)
 }
 
 /// Real Windows `ConPTY` host.
@@ -139,7 +123,7 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
         table().lock().expect("pty table").ptys.insert(
             id,
             Pty {
-                hpcon,
+                hpcon: Some(hpcon),
                 host_input: PipeHandle::new(input_write),
                 host_output: PipeHandle::new(output_read),
             },
@@ -153,10 +137,11 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
         let hpcon = table
             .ptys
             .get(&pty.0)
-            .map(|pty| pty.hpcon)
+            .and_then(|pty| pty.hpcon)
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
         // SAFETY: `hpcon` is borrowed from the table entry for `pty`. The guard
-        // is held for this nonblocking call so `close` cannot free it first.
+        // is held for this nonblocking call so `finish` and `close` cannot free
+        // it first.
         unsafe { ResizePseudoConsole(hpcon, coord) }
             .map_err(|_error| PalError::new(PalErrorKind::Other))
     }
@@ -224,14 +209,47 @@ impl Pseudoconsole for BuildTargetPseudoconsole {
         Ok(buf)
     }
 
+    fn finish(&self, pty: PtyId) {
+        // The HPCON is taken under the lock but closed outside it. Closing waits
+        // for the clients attached to the pseudoconsole, and those clients can
+        // only make progress while `read_output` keeps emptying the output pipe,
+        // which needs this same lock.
+        let taken = table()
+            .lock()
+            .expect("pty table")
+            .ptys
+            .get_mut(&pty.0)
+            .and_then(|entry| {
+                entry
+                    .hpcon
+                    .take()
+                    .map(|hpcon| (hpcon, Arc::clone(&entry.host_input)))
+            });
+        let Some((hpcon, host_input)) = taken else {
+            return;
+        };
+        // SAFETY: `hpcon` was taken out of the table, so this is the only call
+        // that closes it and no later `resize` can hand it out.
+        unsafe {
+            ClosePseudoConsole(hpcon);
+        }
+        // Only the input side is cancelled: a relay thread blocked writing to an
+        // app that is gone has nothing left to deliver, while the output side
+        // still holds bytes the app wrote. Those reads end on their own once the
+        // pseudoconsole host drops its end of the pipe.
+        host_input.cancel();
+    }
+
     fn close(&self, pty: PtyId) {
         let Some(entry) = table().lock().expect("pty table").ptys.remove(&pty.0) else {
             return;
         };
-        // SAFETY: `entry.hpcon` is the unique HPCON created for this pty and is
-        // not used after this call.
-        unsafe {
-            ClosePseudoConsole(entry.hpcon);
+        if let Some(hpcon) = entry.hpcon {
+            // SAFETY: `entry` was removed from the table, so `hpcon` is not
+            // reachable from anywhere else and is not used after this call.
+            unsafe {
+                ClosePseudoConsole(hpcon);
+            }
         }
         // A relay thread may be blocked reading or writing these handles.
         // Cancelling releases it; the handles close once it drops its

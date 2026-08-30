@@ -488,6 +488,23 @@ app stay attached to the pseudoconsole until the job ends them, and closing a
 pseudoconsole waits for its attached clients, so the other order can stall on a
 grandchild that outlived the app.
 
+The pseudoconsole then ends in two steps, because the app's last bytes and the
+handles that carry them have different lifetimes. `finish` closes the
+pseudoconsole itself, which flushes what it still holds into the output pipe and
+drops the host's end of that pipe; reads keep succeeding until the pipe is empty
+and then report the end of the stream. Only once the output pump has run to that
+end does `close` release the handles. Releasing them in one step instead would
+cancel whatever read was in flight, and the pump treats a failed read as the end
+of the app's output, so bytes the app had already written would be dropped and
+`AppExited` would reach the client in their place. `close` on its own remains the
+abandon path, used when a session is torn down before it ever served anyone.
+
+Only the input side is cancelled by `finish`. A relay blocked writing to an app
+that is gone has nothing left to deliver, while the output side still holds
+bytes worth reading. The pseudoconsole handle is taken out of the table under
+the lock and closed outside it, since closing waits for attached clients and
+those clients only make progress while the output pump keeps emptying the pipe.
+
 ### Console modes
 
 Terminal pass-through (`design.md`, "Terminal pass-through") is not a feature

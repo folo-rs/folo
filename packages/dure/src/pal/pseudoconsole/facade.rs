@@ -80,6 +80,14 @@ impl Pseudoconsole for PseudoconsoleFacade {
         }
     }
 
+    fn finish(&self, pty: PtyId) {
+        match self {
+            Self::Target(inner) => inner.finish(pty),
+            #[cfg(test)]
+            Self::Memory(inner) => inner.finish(pty),
+        }
+    }
+
     fn close(&self, pty: PtyId) {
         match self {
             Self::Target(inner) => inner.close(pty),

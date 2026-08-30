@@ -14,6 +14,14 @@ struct PtyState {
     input: VecDeque<u8>,
     output: VecDeque<u8>,
     closed: bool,
+    /// Withholds output from readers until the pty is finished.
+    ///
+    /// A real app can write bytes that are still sitting in the pipe when the
+    /// session tears down, which no ordering of test steps reproduces on its
+    /// own: whatever a test pushes, the pump is free to read first. Holding
+    /// reads lets a test put output beyond a reader's reach and then require
+    /// that shutdown still delivers it.
+    withheld: bool,
 }
 
 struct Inner {
@@ -54,6 +62,18 @@ impl MemoryPseudoconsole {
         }
     }
 
+    /// Withhold output from readers until this pty is finished.
+    ///
+    /// A reader already parked in `read_output` stays parked, so a test can put
+    /// output out of reach of the pump and then require that shutdown still
+    /// delivers it.
+    pub(crate) fn withhold_output(&self, pty: PtyId) {
+        let mut ptys = self.inner.ptys.lock().expect("pty map lock");
+        if let Some(state) = ptys.get_mut(&pty) {
+            state.withheld = true;
+        }
+    }
+
     /// Take input the supervisor wrote to the app.
     pub(crate) fn take_input(&self, pty: PtyId) -> Vec<u8> {
         let mut ptys = self.inner.ptys.lock().expect("pty map lock");
@@ -85,6 +105,7 @@ impl Pseudoconsole for MemoryPseudoconsole {
                 input: VecDeque::new(),
                 output: VecDeque::new(),
                 closed: false,
+                withheld: false,
             },
         );
         Ok(id)
@@ -121,7 +142,9 @@ impl Pseudoconsole for MemoryPseudoconsole {
             let Some(state) = ptys.get_mut(&pty) else {
                 return Err(PalError::new(PalErrorKind::NotFound));
             };
-            if !state.output.is_empty() {
+            // Withheld output becomes readable once the pty is finished, which
+            // is what makes shutdown the only path that can deliver it.
+            if !state.output.is_empty() && (state.closed || !state.withheld) {
                 return Ok(state.output.drain(..).collect());
             }
             if state.closed {
@@ -131,11 +154,16 @@ impl Pseudoconsole for MemoryPseudoconsole {
         }
     }
 
-    fn close(&self, pty: PtyId) {
+    fn finish(&self, pty: PtyId) {
         let mut ptys = self.inner.ptys.lock().expect("pty map lock");
         if let Some(state) = ptys.get_mut(&pty) {
             state.closed = true;
         }
+        self.inner.cond.notify_all();
+    }
+
+    fn close(&self, pty: PtyId) {
+        self.inner.ptys.lock().expect("pty map lock").remove(&pty);
         self.inner.cond.notify_all();
     }
 }
