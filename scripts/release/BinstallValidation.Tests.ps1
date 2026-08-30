@@ -2,10 +2,11 @@
 
 # Pester suite for BinstallValidation.psm1. Get-PublishableBinaryPackage runs a real
 # `cargo metadata` against a self-contained fixture workspace whose members cover every branch of
-# the validator (a compliant binary crate, a drifted one, one with no binstall block, a library,
-# and a non-publishable binary). Test-BinstallMetadata is then exercised on those real package
-# objects, and Invoke-BinstallValidation is checked both against the fixture (which must fail) and
-# with a mocked package set (which must pass), so no test depends on the live repo manifest.
+# the validator (a compliant binary crate, a drifted one, one with no binstall block, one that
+# names an unbuildable release target, a library, and a non-publishable binary). Test-BinstallMetadata
+# and Test-ReleaseTargetMetadata are then exercised on those real package objects, and
+# Invoke-BinstallValidation is checked both against the fixture (which must fail) and with a mocked
+# package set (which must pass), so no test depends on the live repo manifest.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'BinstallValidation.psm1') -Force
@@ -82,12 +83,37 @@ Describe 'Test-BinstallMetadata (crafted package objects)' {
     }
 }
 
+Describe 'Test-ReleaseTargetMetadata' {
+    It 'reports no problems for a crate that declares no release targets' {
+        $good = $script:Packages | Where-Object name -EQ 'good-tool'
+        @(Test-ReleaseTargetMetadata -Package $good).Count | Should -Be 0
+    }
+
+    It 'flags a release target the workflow does not build' {
+        $bad = $script:Packages | Where-Object name -EQ 'badtarget-tool'
+        $problems = @(Test-ReleaseTargetMetadata -Package $bad)
+        $problems.Count | Should -Be 1
+        $problems[0] | Should -Match "release target 's390x-unknown-linux-gnu' is not one the release workflow builds"
+    }
+
+    It 'accepts a restriction drawn from the workflow target table' {
+        $pkg = [pscustomobject]@{
+            name     = 'crafted'
+            metadata = [pscustomobject]@{
+                folo = [pscustomobject]@{ 'release-targets' = @('x86_64-pc-windows-msvc') }
+            }
+        }
+        @(Test-ReleaseTargetMetadata -Package $pkg).Count | Should -Be 0
+    }
+}
+
 Describe 'Invoke-BinstallValidation' {
     It 'throws and names every non-compliant crate when run against the fixture' {
         $err = { Invoke-BinstallValidation -ManifestPath $script:FixtureManifest } | Should -Throw -PassThru
         $message = $err.Exception.Message
         $message | Should -Match 'bad-tool'
         $message | Should -Match 'nometa-tool'
+        $message | Should -Match 'badtarget-tool'
         # The compliant crate must not appear in the failure report.
         ($message -split "`n" | Where-Object { $_ -match '^good-tool:' }) | Should -BeNullOrEmpty
     }

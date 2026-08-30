@@ -36,12 +36,37 @@ function Get-ReleaseTarget {
     )
 }
 
+function Get-DeclaredReleaseTarget {
+    # The target triples a crate restricts its prebuilt binaries to, read from its manifest's
+    # `[package.metadata.folo] release-targets`. Returns an empty array when the crate declares
+    # nothing, which means every target in Get-ReleaseTarget - the default, and what a portable
+    # crate wants. A crate that only functions on some platforms names that subset so the workflow
+    # does not publish archives whose binary could never run. Takes a `cargo metadata` package
+    # object; StrictMode makes an absent property throw, so every hop is guarded explicitly.
+    # PowerShell unrolls a single-element result, so callers wrap the call in @().
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object] $Package
+    )
+
+    if ($Package.PSObject.Properties.Name -notcontains 'metadata') { return @() }
+    if ($null -eq $Package.metadata) { return @() }
+    if ($Package.metadata.PSObject.Properties.Name -notcontains 'folo') { return @() }
+
+    $folo = $Package.metadata.folo
+    if ($null -eq $folo) { return @() }
+    if ($folo.PSObject.Properties.Name -notcontains 'release-targets') { return @() }
+
+    @($folo.'release-targets')
+}
+
 function Get-PublishableBinaryCrate {
     # Derives the crates this workflow releases: publishable to a registry AND owning a `bin`
     # target. In `cargo metadata` the `publish` field is null (any registry), an empty list
     # (never publish), or a non-empty registry list, so "publishable" is null-or-non-empty.
-    # Returns {Name, Version} objects sorted by name. Runs the real `cargo metadata` (offline
-    # with --no-deps); tests point it at a fixture workspace via -ManifestPath.
+    # Returns {Name, Version, ReleaseTargets} objects sorted by name, where ReleaseTargets is the
+    # crate's declared release-target restriction (empty for the usual "all targets" case). Runs the
+    # real `cargo metadata` (offline with --no-deps); tests point it at a fixture via -ManifestPath.
     [CmdletBinding()]
     param(
         [string] $ManifestPath
@@ -54,7 +79,13 @@ function Get-PublishableBinaryCrate {
     $metadata.packages |
         Where-Object { ($null -eq $_.publish) -or ($_.publish.Count -gt 0) } |
         Where-Object { $_.targets | Where-Object { $_.kind -contains 'bin' } } |
-        ForEach-Object { [pscustomobject]@{ Name = $_.name; Version = $_.version } } |
+        ForEach-Object {
+            [pscustomobject]@{
+                Name           = $_.name
+                Version        = $_.version
+                ReleaseTargets = @(Get-DeclaredReleaseTarget -Package $_)
+            }
+        } |
         Sort-Object -Property Name -Unique
 }
 
@@ -174,7 +205,8 @@ function Get-MissingBinaryMatrix {
     # `{Name}-v{Version}-{triple}.zip`; every expected archive not already uploaded becomes a
     # matrix row {name, version, tag, triple, os}. This is what makes the workflow self-healing:
     # a re-run rebuilds only what is still missing, from the actual published state, with no
-    # hand-maintained crate list.
+    # hand-maintained crate list. A crate that carries a release-target restriction (a `ReleaseTargets`
+    # list, as Get-PublishableBinaryCrate projects it) is reconciled against only those targets.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object[]] $Crate,
@@ -195,6 +227,31 @@ function Get-MissingBinaryMatrix {
     foreach ($crateInfo in $Crate) {
         $tag = "$($crateInfo.Name)-v$($crateInfo.Version)"
         Write-Verbose "Crate '$($crateInfo.Name)' v$($crateInfo.Version): expected release tag '$tag'."
+
+        # A crate may restrict itself to the targets it functions on (Get-DeclaredReleaseTarget);
+        # declaring nothing means the whole table. StrictMode makes the absent property throw, so
+        # the projection is guarded - callers may pass bare {Name, Version} objects.
+        $declaredTargets = @()
+        if (($crateInfo.PSObject.Properties.Name -contains 'ReleaseTargets') -and ($null -ne $crateInfo.ReleaseTargets)) {
+            $declaredTargets = @($crateInfo.ReleaseTargets)
+        }
+
+        $crateTargets = $Target
+        if ($declaredTargets.Count -gt 0) {
+            # A triple the table does not contain would silently build nothing for that target,
+            # leaving the crate short of archives with no failure anywhere. Fail loudly instead.
+            $unknown = @($declaredTargets | Where-Object { $_ -notin $Target.Triple })
+            if ($unknown.Count -gt 0) {
+                $noun = if ($unknown.Count -eq 1) { 'release target' } else { 'release targets' }
+                throw "Crate '$($crateInfo.Name)' declares $noun '$($unknown -join ", ")' that the release target table does not offer. Either add the target to Get-ReleaseTarget or correct the crate's [package.metadata.folo] release-targets."
+            }
+
+            $crateTargets = @($Target | Where-Object { $_.Triple -in $declaredTargets })
+            $skipped = @($Target.Triple | Where-Object { $_ -notin $declaredTargets })
+            $skippedText = if ($skipped.Count -gt 0) { $skipped -join ', ' } else { '(none)' }
+            Write-Verbose "  Crate restricts its release targets to: $($declaredTargets -join ', ') (declared in [package.metadata.folo] release-targets), so these targets are not built for it: $skippedText."
+        }
+
         $assets = Get-BinaryReleaseAsset -Tag $tag
         if ($null -eq $assets) {
             Write-Verbose "  No GitHub release '$tag' found yet; skipping this crate (nothing to reconcile until its release exists)."
@@ -204,7 +261,7 @@ function Get-MissingBinaryMatrix {
         $uploaded = if ($assets.Count -gt 0) { $assets -join ', ' } else { '(none)' }
         Write-Verbose "  Release '$tag' found; already-uploaded archives: $uploaded."
 
-        foreach ($releaseTarget in $Target) {
+        foreach ($releaseTarget in $crateTargets) {
             $archive = "$($crateInfo.Name)-v$($crateInfo.Version)-$($releaseTarget.Triple).zip"
             if ($assets -contains $archive) {
                 Write-Verbose "  Target $($releaseTarget.Triple): '$archive' already uploaded - skipping."
@@ -372,6 +429,7 @@ function Set-GitHubOutput {
 
 Export-ModuleMember -Function `
     Get-ReleaseTarget, `
+    Get-DeclaredReleaseTarget, `
     Get-PublishableBinaryCrate, `
     Get-PublishableCrate, `
     Get-CrateIndexPath, `

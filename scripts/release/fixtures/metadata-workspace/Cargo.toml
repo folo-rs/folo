@@ -3,9 +3,10 @@
 # pulls it in. Members deliberately cover every branch of the publishable-binary filter:
 #   pub-bin        publishable + bin  -> selected
 #   demo-tool      publishable + bin  -> selected (name-prefix pair with demo-tool-core)
+#   win-tool       publishable + bin  -> selected, with a release-target restriction
 #   demo-tool-core publishable + lib  -> excluded (library)
 #   pub-lib        publishable + lib  -> excluded (library)
 #   nopub-bin      publish = false    -> excluded (not publishable)
 [workspace]
 resolver = "2"
-members = ["pub-bin", "demo-tool", "demo-tool-core", "pub-lib", "nopub-bin"]
+members = ["pub-bin", "demo-tool", "win-tool", "demo-tool-core", "pub-lib", "nopub-bin"]

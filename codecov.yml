@@ -39,5 +39,10 @@ codecov:
 # covered, and the book build fails on a broken include) plus the book build itself — not by line
 # coverage of its SVG rendering and its `cbh-figures` generator binary, which line coverage cannot
 # meaningfully measure. Excluding it keeps the coverage signal focused on shipped logic.
+# `dure-test-helper` is the child process the `dure` Windows integration tests supervise, plus the
+# logic that locates its binary. It is test scaffolding rather than shipped logic, and the parts of
+# it that run as a child process are measured in a separate process the coverage instrumentation
+# does not follow, so its reported coverage says nothing about the product.
 ignore:
   - "packages/cargo-bench-history-figures"
+  - "packages/dure-test-helper"

@@ -1,0 +1,91 @@
+[package]
+name = "dure"
+description = "Detachable Windows console sessions that outlive the terminal"
+publish = true
+version = "0.1.1"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+include = ["Cargo.toml", "README.md", "docs/**/*", "src/**/*"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+# The release workflow publishes prebuilt archives under release-plz's `<crate>-v<version>` tag,
+# which cargo-binstall cannot derive on its own. Ref: docs/release-automation.md.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+# A non-Windows build compiles to a stub that only reports the unsupported platform
+# (docs/implementation.md, "Platform gate"), so a prebuilt archive for any other target would
+# install a binary that can never run. Ref: docs/release-automation.md, "Per-crate targets".
+[package.metadata.folo]
+release-targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+
+# The Windows integration tests are gated behind `private-test-util`, so a default-feature build
+# compiles none of them and the helper they drive looks unused. Same reason as `many_cpus`.
+[package.metadata.cargo-udeps.ignore]
+development = ["dure-test-helper"]
+
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type here trips the check so accidental exposures are caught.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "clap_builder::derive::Args",
+    "clap_builder::derive::CommandFactory",
+    "clap_builder::derive::FromArgMatches",
+    "clap_builder::derive::Parser",
+    "ohno::app::error::AppError",
+]
+
+[features]
+# Exposes the in-crate test support the Windows integration tests drive the real
+# PAL through. Not part of the product.
+private-test-util = []
+
+# Every dependency is Windows-only because the crate itself is: a non-Windows build compiles to a
+# stub that only reports the unsupported platform (docs/implementation.md, "Platform gate"), so
+# declaring them unconditionally would make them genuinely unused there.
+[target.'cfg(windows)'.dependencies]
+clap = { workspace = true, features = ["derive"] }
+mimalloc = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+rand = { workspace = true, features = ["thread_rng"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+
+# The non-Windows stub carries a mutation skip of its own, so unlike every other
+# dependency this one is named on both platforms.
+[dev-dependencies]
+mutants = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+dure-test-helper = { path = "../dure-test-helper" }
+mockall = { workspace = true }
+static_assertions = { workspace = true }
+tempfile = { workspace = true }
+testing = { path = "../testing" }
+
+[lints]
+workspace = true

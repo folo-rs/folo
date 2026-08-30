@@ -38,12 +38,34 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'packages/cargo-bench-history-figures/**'
         $values | Should -Contain 'packages/cbh_detect/src/detect/examples.rs'
         $values | Should -Contain 'packages/cbh_detect/src/detect/scatter.rs'
+        $values | Should -Contain 'packages/dure/src/pal/*/windows.rs'
+        $values | Should -Contain 'packages/dure/src/pal/*/memory.rs'
+        $values | Should -Contain 'packages/dure/src/pal/raw_handle.rs'
+        $values | Should -Contain 'packages/dure/src/outbox.rs'
+        $values | Should -Contain 'packages/dure-test-helper/**/*.rs'
+        $values | Should -Contain 'packages/dure/src/test_support.rs'
+    }
+
+    It 'excludes the whole Windows-only dure package off Windows' {
+        $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $false -IsLinuxPlatform $true)
+        $values | Should -Contain "'packages/dure/**/*.rs'"
+    }
+
+    It 'keeps the dure package in scope on Windows' {
+        $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $true -IsLinuxPlatform $false)
+        $values | Should -Not -Contain 'packages/dure/**/*.rs'
     }
 
     It 'does not exclude windows sources when running on Windows' {
         $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $true -IsLinuxPlatform $false)
         $values | Should -Not -Contain 'windows'
-        ($values -join ' ') | Should -Not -Match 'windows\.rs'
+        $values | Should -Not -Contain '**/*windows.rs'
+    }
+
+    It 'single-quotes the always-excluded dure paths off Windows' {
+        $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $false -IsLinuxPlatform $true)
+        $values | Should -Contain "'packages/dure/src/pal/raw_handle.rs'"
+        $values | Should -Contain "'packages/dure/src/outbox.rs'"
     }
 
     It 'excludes windows and linux sources on a third platform (e.g. macOS)' {
@@ -69,6 +91,7 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain "'**/*facade.rs'"
         $values | Should -Contain "'packages/testing/**'"
         $values | Should -Contain "'packages/cargo-bench-history-figures/**'"
+        $values | Should -Contain "'packages/dure/src/pal/*/windows.rs'"
         # Plain package names are still passed literally, without quoting.
         $values | Should -Contain 'many_cpus_benchmarking'
     }

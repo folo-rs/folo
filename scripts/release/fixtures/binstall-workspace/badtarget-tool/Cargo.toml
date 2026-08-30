@@ -1,0 +1,14 @@
+[package]
+name = "badtarget-tool"
+version = "1.0.0"
+edition = "2021"
+
+# Compliant binstall block, so a failure can only come from the release-target declaration below.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+# Names a target the release workflow does not build, which would silently yield no archive.
+[package.metadata.folo]
+release-targets = ["x86_64-pc-windows-msvc", "s390x-unknown-linux-gnu"]

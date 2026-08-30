@@ -95,7 +95,26 @@ function Get-MutantsExcludeArgument {
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
         # of code that is only testable in a multi-processor system.
-        '-e', (protect 'packages/par_bench/src/resource_usage_ext.rs')
+        '-e', (protect 'packages/par_bench/src/resource_usage_ext.rs'),
+
+        # The platform-bound leaves of the `dure` PAL: `windows.rs` is a thin Win32 binding
+        # exercised through integration tests rather than unit tests. `memory.rs` is a test
+        # fake. `raw_handle.rs` is the same kind of Win32 binding without the `windows.rs`
+        # suffix: a handle wrapper whose whole behaviour is `CancelIoEx` and `CloseHandle`.
+        # The portable PAL logic above them stays in scope.
+        '-e', (protect 'packages/dure/src/pal/*/windows.rs'),
+        '-e', (protect 'packages/dure/src/pal/*/memory.rs'),
+        '-e', (protect 'packages/dure/src/pal/raw_handle.rs'),
+
+        # The `dure` outbox is a queue guarded by a mutex and a condvar with a writer thread
+        # behind it, so nearly every mutation there stops the writer from making progress and
+        # hangs the test rather than failing it. Same reason as the synchronization-primitive
+        # packages above. The policy it enforces lives in `constants.rs`, which stays in scope.
+        '-e', (protect 'packages/dure/src/outbox.rs'),
+
+        # The integration-test helper package and in-crate test support are not product code.
+        '-e', (protect 'packages/dure-test-helper/**/*.rs'),
+        '-e', (protect 'packages/dure/src/test_support.rs')
     )
 
     if (-not $IsWindowsPlatform) {
@@ -103,6 +122,13 @@ function Get-MutantsExcludeArgument {
         $exclude += (protect '**/*windows.rs')
         $exclude += '-e'
         $exclude += 'windows'
+
+        # `dure` is a Windows-only tool whose crate root is `#![cfg(windows)]`, so on any other
+        # platform it compiles to an empty stub with no tests. cargo-mutants reads source rather
+        # than compiled code, so it would still generate mutants there - and every one of them
+        # would be reported as missed because there is nothing to kill it.
+        $exclude += '-e'
+        $exclude += (protect 'packages/dure/**/*.rs')
     }
 
     if (-not $IsLinuxPlatform) {

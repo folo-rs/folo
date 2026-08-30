@@ -1,0 +1,9 @@
+[package]
+name = "win-tool"
+version = "5.0.0"
+edition = "2021"
+
+# Restricts its prebuilt binaries to the targets it functions on, the way a platform-specific
+# tool does.
+[package.metadata.folo]
+release-targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
