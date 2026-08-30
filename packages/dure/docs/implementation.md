@@ -393,6 +393,14 @@ outstanding on the handle, which is what unblocks a waiting reader, and the
 handle is closed once the last operation releases it. The pseudoconsole PAL owns
 its host pipe handles the same way, for the same reason.
 
+Because these are stack-allocated overlapped structures paired with an event
+handle that is closed on return, no path may abandon an operation the kernel
+still owns. Cancellation is a request, not a completion, so a caller giving up
+on an operation asks for cancellation and then blocks until the operation
+reports back before reclaiming either object. Shared handle ownership is what
+makes that wait bounded: the pipe outlives the operation issued on it, so the
+cancellation always completes.
+
 Every supervisor-side write to a client is queued and delivered by a thread that
 owns that connection. A pipe write blocks while the peer is not draining, so
 writing directly would let one wedged client hold whichever supervisor path made

@@ -236,6 +236,24 @@ fn wait_event(event: HANDLE, timeout_ms: u32) -> Result<(), PalError> {
     Ok(())
 }
 
+/// Gives up on an overlapped operation and waits for the kernel to let go of it.
+///
+/// `CancelIoEx` only asks for cancellation; it does not wait for one. Until the operation
+/// actually completes the kernel may still write its result into the `OVERLAPPED` and signal
+/// the event, both of which this thread is about to reclaim, so the blocking
+/// `GetOverlappedResult` is what makes reclaiming them sound. It cannot block indefinitely
+/// because every caller holds the `Arc<PipeHandle>` the operation was issued on, so the pipe
+/// outlives the cancellation and the cancellation always completes.
+fn abandon_operation(handle: HANDLE, overlapped: &OVERLAPPED) {
+    // SAFETY: `handle` is the pipe this operation was issued on and `overlapped` addresses
+    // that operation, which no other thread is waiting on.
+    _ = unsafe { CancelIoEx(handle, Some(&raw const *overlapped)) };
+    let mut transferred = 0_u32;
+    // SAFETY: as above. Waiting is the point: it returns only once `overlapped` is the
+    // caller's again. The outcome is irrelevant because the operation is being discarded.
+    _ = unsafe { GetOverlappedResult(handle, &raw const *overlapped, &raw mut transferred, true) };
+}
+
 fn connect_instance(handle: HANDLE) -> Result<(), PalError> {
     let event = create_event()?;
     let mut overlapped = OVERLAPPED {
@@ -262,15 +280,15 @@ fn connect_instance(handle: HANDLE) -> Result<(), PalError> {
         return Err(PalError::new(PalErrorKind::Other));
     }
     if let Err(error) = wait_event(event, INFINITE) {
-        // SAFETY: cancel so `overlapped` can drop if the listener was closed.
-        _ = unsafe { CancelIoEx(handle, Some(&raw const overlapped)) };
+        abandon_operation(handle, &overlapped);
         close(event);
         return Err(error);
     }
     let mut transferred = 0_u32;
-    // SAFETY: the wait succeeded; `overlapped` still addresses this connect.
+    // SAFETY: the wait succeeded; `overlapped` still addresses this connect. Waiting rather
+    // than polling means a result that is somehow not in yet is awaited instead of abandoned.
     let completed =
-        unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, false) };
+        unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, true) };
     close(event);
     completed.map_err(|_error| PalError::new(PalErrorKind::Disconnected))
 }
@@ -307,14 +325,14 @@ fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
                 return Err(PalError::new(io_error_kind(err)));
             }
             if let Err(error) = wait_event(event, INFINITE) {
-                // SAFETY: cancel the pending read so the OVERLAPPED can drop.
-                _ = unsafe { CancelIoEx(handle, Some(&raw const overlapped)) };
+                abandon_operation(handle, &overlapped);
                 close(event);
                 return Err(error);
             }
-            // SAFETY: the wait succeeded; `overlapped` still addresses this read.
+            // SAFETY: the wait succeeded; `overlapped` still addresses this read. Waiting rather
+            // than polling means a result that is somehow not in yet is awaited, not abandoned.
             if unsafe {
-                GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, false)
+                GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, true)
             }
             .is_err()
             {
@@ -365,14 +383,14 @@ fn write_all(handle: HANDLE, mut buf: &[u8]) -> Result<(), PalError> {
                 return Err(PalError::new(PalErrorKind::Other));
             }
             if let Err(error) = wait_event(event, INFINITE) {
-                // SAFETY: cancel the pending write so the OVERLAPPED can drop.
-                _ = unsafe { CancelIoEx(handle, Some(&raw const overlapped)) };
+                abandon_operation(handle, &overlapped);
                 close(event);
                 return Err(error);
             }
-            // SAFETY: the wait succeeded; `overlapped` still addresses this write.
+            // SAFETY: the wait succeeded; `overlapped` still addresses this write. Waiting rather
+            // than polling means a result that is somehow not in yet is awaited, not abandoned.
             if unsafe {
-                GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, false)
+                GetOverlappedResult(handle, &raw const overlapped, &raw mut transferred, true)
             }
             .is_err()
             {
