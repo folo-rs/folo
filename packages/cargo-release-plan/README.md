@@ -47,8 +47,9 @@ needs an increment.
 Exits non-zero when any publishable package needs an increment or any version
 group declares inconsistent versions. Failure text describes the
 self-contained recovery workflow: run `report`, prepare a plan, and run `apply`.
-In this repository it additionally names the `increment-versions` agent skill,
-which automates that workflow.
+It additionally reserves the `increment-versions` agent-skill name for the
+automated workflow supplied by the release-versioning stack's separate skill
+layer.
 
 `--format github` also emits GitHub Actions workflow annotations.
 

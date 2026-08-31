@@ -52,12 +52,6 @@ pub(crate) struct WorkTree {
     pub(crate) groups: Groups,
 }
 
-/// Target kinds whose packages include `Cargo.lock` when packaged.
-///
-/// Ref: the `cargo metadata` documentation, which fixes the set of kinds a
-/// target may declare.
-const LOCKFILE_TARGET_KINDS: [&str; 2] = ["bin", "example"];
-
 /// One publishable workspace member in the work tree.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkPackage {
@@ -106,14 +100,6 @@ struct MetadataPackage {
     publish: Option<Vec<String>>,
     #[serde(default)]
     dependencies: Vec<MetadataDep>,
-    #[serde(default)]
-    targets: Vec<MetadataTarget>,
-}
-
-/// One build target from the metadata document.
-#[derive(Debug, Deserialize)]
-struct MetadataTarget {
-    kind: Vec<String>,
 }
 
 /// One declared dependency from the metadata document.
@@ -177,7 +163,7 @@ impl TrackedMetadata<'_> {
 }
 
 /// Loads the current workspace while restricting release inputs to tracked files.
-pub(crate) fn load_classification_work_tree(
+pub(crate) fn load_tracked_work_tree(
     manifest_path: &Path,
 ) -> Result<(WorkTree, GitRepo), AppError> {
     let metadata = query_metadata(manifest_path)?;
@@ -189,13 +175,8 @@ pub(crate) fn load_classification_work_tree(
         git: &git,
         workspace_root: &workspace_root,
     };
-    let work_tree = work_tree_from_metadata(&metadata, Some(&tracked))?;
+    let work_tree = work_tree_from_metadata(&metadata, &tracked)?;
     Ok((work_tree, git))
-}
-
-pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError> {
-    let metadata = query_metadata(manifest_path)?;
-    work_tree_from_metadata(&metadata, None)
 }
 
 fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
@@ -226,10 +207,10 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
 
 fn work_tree_from_metadata(
     metadata: &MetadataJson,
-    tracked: Option<&TrackedMetadata<'_>>,
+    tracked: &TrackedMetadata<'_>,
 ) -> Result<WorkTree, AppError> {
     let workspace_root = PathBuf::from(&metadata.workspace_root);
-    let member_ids: HashSet<&str> = metadata
+    let cargo_member_ids: HashSet<&str> = metadata
         .workspace_members
         .iter()
         .map(String::as_str)
@@ -237,10 +218,8 @@ fn work_tree_from_metadata(
     let selected_member_ids: HashSet<&str> = metadata
         .packages
         .iter()
-        .filter(|package| member_ids.contains(package.id.as_str()))
-        .filter(|package| {
-            tracked.is_none_or(|tracked| tracked.contains_manifest(&package.manifest_path))
-        })
+        .filter(|package| cargo_member_ids.contains(package.id.as_str()))
+        .filter(|package| tracked.contains_manifest(&package.manifest_path))
         .map(|package| package.id.as_str())
         .collect();
 
@@ -250,10 +229,24 @@ fn work_tree_from_metadata(
         .filter(|package| selected_member_ids.contains(package.id.as_str()))
         .map(|package| package.name.clone())
         .collect();
-    let members_by_dir: BTreeMap<PathBuf, String> = metadata
+    let release_members_by_dir: BTreeMap<PathBuf, String> = metadata
         .packages
         .iter()
         .filter(|package| selected_member_ids.contains(package.id.as_str()))
+        .filter_map(|package| {
+            Path::new(&package.manifest_path)
+                .parent()
+                .map(|dir| (dir.to_path_buf(), package.name.clone()))
+        })
+        .collect();
+    // Apply visits every member Cargo can see so an untracked or ignored
+    // dependent cannot retain a stale exact pin. This set is deliberately wider
+    // than the tracked package set accepted as plan targets.
+    // Ref: docs/implementation.md, "Plan application".
+    let members_by_dir: BTreeMap<PathBuf, String> = metadata
+        .packages
+        .iter()
+        .filter(|package| cargo_member_ids.contains(package.id.as_str()))
         .filter_map(|package| {
             Path::new(&package.manifest_path)
                 .parent()
@@ -296,7 +289,12 @@ fn work_tree_from_metadata(
             .dependencies
             .iter()
             .filter(|dep| {
-                is_intra_workspace_released(dep, &members_by_dir, &manifest_doc, &root_manifest)
+                is_intra_workspace_released(
+                    dep,
+                    &release_members_by_dir,
+                    &manifest_doc,
+                    &root_manifest,
+                )
             })
             .map(|dep| ReportedDep {
                 name: dep.name.clone(),
@@ -306,15 +304,7 @@ fn work_tree_from_metadata(
             .collect();
 
         packages.push(WorkPackage {
-            has_lockfile_target: match tracked {
-                Some(tracked) => tracked.has_lockfile_target(&manifest)?,
-                None => package.targets.iter().any(|target| {
-                    target
-                        .kind
-                        .iter()
-                        .any(|kind| LOCKFILE_TARGET_KINDS.contains(&kind.as_str()))
-                }),
-            },
+            has_lockfile_target: tracked.has_lockfile_target(&manifest)?,
             manifest,
             manifest_path: path,
             dependencies,

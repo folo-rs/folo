@@ -201,9 +201,12 @@ stale JSON and a partial patch set as one complete assessment.
 publishable package. Levels combine by taking the highest and matching explicit
 versions coalesce. Mixed decision kinds and conflicting explicit versions fail.
 
-`apply` parses and rewrites every affected manifest in memory before writing any
-of them. It visits non-publishable members too because they may carry exact pins
-to a package being incremented. A dependency requirement is changed only when:
+`apply` accepts plan targets and validates groups against the same Git-tracked
+publishable package set as classification. It parses and rewrites every affected
+manifest in memory before writing any of them. All Cargo-visible members remain
+rewrite candidates, including non-publishable, untracked, and ignored members,
+because they may carry exact pins to a package being incremented. A dependency
+requirement is changed only when:
 
 * the entry has a path,
 * that path resolves to the named workspace member,

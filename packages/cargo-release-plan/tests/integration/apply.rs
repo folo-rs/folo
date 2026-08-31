@@ -146,6 +146,82 @@ fn apply_rewrites_pins_declared_by_a_non_publishable_member() {
     assert!(tool.contains("version = \"=0.2.0\""), "{tool}");
 }
 
+/// An untracked package is not a release-plan target.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_rejects_an_untracked_package_as_a_plan_target() {
+    let fixture = seeded_package();
+    write_package(&fixture, "untracked", "0.1.0", "");
+    fixture.write(
+        "plan.json",
+        r#"{ "schema_version": 1, "increments": [{ "name": "untracked", "level": "patch" }] }"#,
+    );
+
+    let result = run(&RunInput::Apply {
+        plan: fixture.path().join("plan.json"),
+        dry_run: true,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    });
+
+    let error = result.expect_err("an untracked package cannot be a plan target");
+    assert!(
+        error.to_string().contains("not a publishable package"),
+        "{error}"
+    );
+}
+
+/// An untracked member still follows a tracked package's increment.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_rewrites_a_pin_declared_by_an_untracked_member() {
+    let fixture = seeded_package();
+    write_package(
+        &fixture,
+        "tool",
+        "0.1.0",
+        "\n[dependencies]\ndemo = { version = \"=0.1.0\", path = \"../demo\" }\n",
+    );
+
+    apply_increment(&fixture, "demo", "minor");
+
+    let tool = fixture.read("packages/tool/Cargo.toml");
+    assert!(tool.contains("version = \"=0.2.0\""), "{tool}");
+}
+
+/// Version groups cannot use an ignored package as a release member.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_validates_groups_against_tracked_members() {
+    let fixture = Fixture::new(
+        r#"
+[workspace.metadata.release-plan.groups]
+g = ["demo", "ignored"]
+"#,
+    );
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write(".gitignore", "packages/ignored/\n");
+    fixture.commit("seed");
+    write_package(&fixture, "ignored", "0.1.0", "");
+    fixture.write(
+        "plan.json",
+        r#"{ "schema_version": 1, "increments": [{ "name": "demo", "level": "patch" }] }"#,
+    );
+
+    let result = run(&RunInput::Apply {
+        plan: fixture.path().join("plan.json"),
+        dry_run: true,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    });
+
+    let error = result.expect_err("an ignored package cannot satisfy a version group");
+    assert!(
+        error.to_string().contains("unknown workspace package"),
+        "{error}"
+    );
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_rewrites_a_pin_under_a_target_specific_dependency_table() {

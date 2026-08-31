@@ -23,9 +23,7 @@ use crate::manifest::{
     is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
     parse_workspace_members, to_git_separators,
 };
-use crate::metadata::{
-    ReportedDep, WorkPackage, WorkTree, dependents_of, load_classification_work_tree,
-};
+use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree};
 use crate::packaging::{PackagingRules, relativize};
 use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
@@ -305,7 +303,7 @@ pub(crate) fn classify(
     base: Option<&str>,
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
-    let (mut work_tree, git) = load_classification_work_tree(manifest_path)?;
+    let (mut work_tree, git) = load_tracked_work_tree(manifest_path)?;
     let base = match base {
         Some(base) => base.to_owned(),
         None => {

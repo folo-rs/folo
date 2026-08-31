@@ -12,7 +12,7 @@ use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 use crate::command::run_capture;
 use crate::inherited::is_workspace_inherit;
 use crate::manifest::{DEPENDENCY_TABLES, parse_document};
-use crate::metadata::{WorkTree, load_work_tree};
+use crate::metadata::{WorkTree, load_tracked_work_tree};
 use crate::plan::{ExpandedPlan, PlanFile, expand_plan};
 use crate::text::plural;
 use crate::verbose::Verbose;
@@ -88,10 +88,11 @@ pub(crate) fn run_apply(
     let plan: PlanFile =
         serde_json::from_str(&plan).map_err(|error| ParsePlanError::caused_by(plan_path, error))?;
 
-    let work_tree = load_work_tree(manifest_path)?;
-    // Every workspace member `apply` may edit, at the version it declares today.
-    // Membership decides which plan targets are valid; the versions are the
-    // increment base. Ref: docs/implementation.md, "Plan application".
+    let (work_tree, _) = load_tracked_work_tree(manifest_path)?;
+    // Git-tracked publishable members decide which plan targets are valid and
+    // supply their increment bases. All Cargo-visible member manifests remain
+    // available below for dependent-pin rewrites.
+    // Ref: docs/implementation.md, "Plan application".
     let publishable: BTreeMap<String, Version> = work_tree
         .packages
         .iter()
