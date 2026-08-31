@@ -350,6 +350,41 @@ fn a_malformed_work_tree_lockfile_is_an_error() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
+fn an_anchor_lockfile_with_an_unresolved_dependency_is_an_error() {
+    let fixture = Fixture::new("");
+    write_binary_package(&fixture, "tool", "0.1.0", "");
+    fixture.write(
+        "Cargo.lock",
+        r#"version = 4
+
+[[package]]
+name = "tool"
+version = "0.1.0"
+dependencies = ["absent"]
+"#,
+    );
+    fixture.commit("seed an incomplete lockfile");
+    let base = fixture.sha("HEAD");
+
+    fixture.write(
+        "Cargo.lock",
+        r#"version = 4
+
+[[package]]
+name = "tool"
+version = "0.1.0"
+"#,
+    );
+    fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
+    fixture.commit("restore the lockfile and edit the binary");
+
+    let error = check_error(&fixture, &base);
+    assert!(error.contains("Cargo.lock"), "{error}");
+    assert!(error.contains("resolved dependencies"), "{error}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
 fn an_anchor_lockfile_that_does_not_resolve_the_binary_is_an_error() {
     let fixture = Fixture::new("");
     write_binary_package(&fixture, "tool", "0.1.0", "");

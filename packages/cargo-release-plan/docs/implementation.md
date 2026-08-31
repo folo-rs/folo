@@ -160,9 +160,10 @@ is insufficient because that dependency can also be source-less.
 
 Dependency references are matched by every component Cargo writes: name, then
 version and source when present. Parsing indexes these components and resolves
-each textual edge to entry indices once, so closure walks do not search the
-package list. A visited set terminates cycles. The root is excluded from the
-result even if a dependency cycle reaches it.
+each textual edge to exactly one entry index once, so closure walks do not
+search the package list. An unresolved or ambiguous edge makes the lockfile
+incomplete and stops classification. A visited set terminates cycles. The root
+is excluded from the result even if a dependency cycle reaches it.
 
 The parsed work-tree lockfile is shared across all lockfile-bearing packages.
 Historical lockfiles are shared by packages with the same anchor commit, so a

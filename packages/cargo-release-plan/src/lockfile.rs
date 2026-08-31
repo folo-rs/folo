@@ -64,7 +64,10 @@ impl Lockfile {
                     let Some(text) = value.as_str() else {
                         return Err(MalformedLockfileError::new(label).into());
                     };
-                    dependencies.push(DepRef::parse(text));
+                    let Some(dependency) = DepRef::parse(text) else {
+                        return Err(MalformedLockfileError::new(label).into());
+                    };
+                    dependencies.push(dependency);
                 }
             }
             pending.push(PendingEntry {
@@ -90,19 +93,22 @@ impl Lockfile {
                     .or_insert(entry_index);
             }
         }
-        let entries = pending
-            .into_iter()
-            .map(|entry| LockEntry {
+        let mut entries = Vec::with_capacity(pending.len());
+        for entry in pending {
+            let mut dependencies = Vec::with_capacity(entry.dependencies.len());
+            for dependency in &entry.dependencies {
+                let Some(entry_index) = index.matching(dependency) else {
+                    return Err(MalformedLockfileError::new(label).into());
+                };
+                dependencies.push(entry_index);
+            }
+            entries.push(LockEntry {
                 name: entry.name,
                 version: entry.version,
                 source: entry.source,
-                dependencies: entry
-                    .dependencies
-                    .iter()
-                    .flat_map(|dependency| index.matching(dependency).iter().copied())
-                    .collect(),
-            })
-            .collect();
+                dependencies,
+            });
+        }
         Ok(Self { entries, roots })
     }
 
@@ -233,33 +239,41 @@ impl DependencyIndex {
             matches.all.push(entry_index);
             let version = matches.versions.entry(entry.version.clone()).or_default();
             version.all.push(entry_index);
-            if let Some(source) = &entry.source {
-                version
+            match &entry.source {
+                Some(source) => version
                     .sources
                     .entry(source.clone())
                     .or_default()
-                    .push(entry_index);
+                    .push(entry_index),
+                None => version.source_less.push(entry_index),
             }
         }
         index
     }
 
-    fn matching(&self, dependency: &DepRef) -> &[usize] {
-        let Some(name) = self.names.get(&dependency.name) else {
-            return &[];
-        };
-        match (&dependency.version, &dependency.source) {
-            (None, _) => &name.all,
-            (Some(version), None) => name
-                .versions
-                .get(version)
-                .map_or(&[], |matches| matches.all.as_slice()),
+    fn matching(&self, dependency: &DepRef) -> Option<usize> {
+        let name = self.names.get(&dependency.name)?;
+        let matches: &[usize] = match (&dependency.version, &dependency.source) {
+            (None, _) => name.all.as_slice(),
+            (Some(version), None) => name.versions.get(version).map_or(&[], |matches| {
+                if matches.all.len() == 1 {
+                    matches.all.as_slice()
+                } else {
+                    // Cargo omits the source for a path dependency even when a
+                    // sourced package shares its name and version.
+                    matches.source_less.as_slice()
+                }
+            }),
             (Some(version), Some(source)) => name
                 .versions
                 .get(version)
                 .and_then(|matches| matches.sources.get(source))
                 .map_or(&[], Vec::as_slice),
-        }
+        };
+        let [entry_index] = matches else {
+            return None;
+        };
+        Some(*entry_index)
     }
 }
 
@@ -274,6 +288,7 @@ struct NameMatches {
 #[derive(Debug, Default)]
 struct VersionMatches {
     all: Vec<usize>,
+    source_less: Vec<usize>,
     sources: HashMap<String, Vec<usize>>,
 }
 
@@ -293,21 +308,23 @@ struct DepRef {
 }
 
 impl DepRef {
-    fn parse(text: &str) -> Self {
+    fn parse(text: &str) -> Option<Self> {
         let mut parts = text.split_whitespace();
-        Self {
-            name: parts.next().unwrap_or_default().to_owned(),
-            version: parts.next().map(ToOwned::to_owned),
-            // A dependency wraps the source in parentheses while a `[[package]]`
-            // entry's `source` key does not, so the wrapper comes off here and
-            // the two are compared in the same spelling. A source holds no
-            // whitespace, so it survives the split whole.
-            source: parts
-                .next()
-                .and_then(|part| part.strip_prefix('('))
-                .and_then(|part| part.strip_suffix(')'))
-                .map(ToOwned::to_owned),
+        let name = parts.next()?;
+        let version = parts.next();
+        let source = parts.next();
+        if parts.next().is_some() {
+            return None;
         }
+        let source = match source {
+            Some(source) => Some(source.strip_prefix('(')?.strip_suffix(')')?.to_owned()),
+            None => None,
+        };
+        Some(Self {
+            name: name.to_owned(),
+            version: version.map(ToOwned::to_owned),
+            source,
+        })
     }
 }
 
@@ -415,14 +432,15 @@ source = \"registry+https://example.invalid\"
     }
 
     #[test]
-    fn an_unresolved_dependency_reference_contributes_nothing() {
+    fn an_unresolved_dependency_reference_is_malformed() {
         let text = "\
 [[package]]
 name = \"tool\"
 version = \"0.1.0\"
 dependencies = [\"absent\"]
 ";
-        assert!(closure_of(text, "tool", "0.1.0").is_empty());
+        let error = Lockfile::parse(text, LABEL).unwrap_err();
+        assert!(error.find_source::<MalformedLockfileError>().is_some());
     }
 
     #[test]
@@ -495,7 +513,7 @@ source = \"registry+https://example.invalid\"
     }
 
     #[test]
-    fn a_bare_dependency_selects_every_matching_identity() {
+    fn an_ambiguous_dependency_reference_is_malformed() {
         let text = "\
 [[package]]
 name = \"tool\"
@@ -512,13 +530,43 @@ name = \"dup\"
 version = \"2.0.0\"
 source = \"registry+https://example.invalid\"
 ";
+        let error = Lockfile::parse(text, LABEL).unwrap_err();
+        assert!(error.find_source::<MalformedLockfileError>().is_some());
+    }
+
+    #[test]
+    fn a_sourceless_reference_selects_a_path_package_on_an_identity_collision() {
+        let text = "\
+[[package]]
+name = \"tool\"
+version = \"0.1.0\"
+dependencies = [\"dup 1.0.0\"]
+
+[[package]]
+name = \"dup\"
+version = \"1.0.0\"
+dependencies = [\"from-path\"]
+
+[[package]]
+name = \"dup\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+dependencies = [\"from-registry\"]
+
+[[package]]
+name = \"from-path\"
+version = \"1.0.0\"
+
+[[package]]
+name = \"from-registry\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+";
         let closure = closure_of(text, "tool", "0.1.0");
+        assert_eq!(closure.keys().collect::<Vec<_>>(), vec!["dup", "from-path"]);
         assert_eq!(
             closure.get("dup").unwrap().iter().collect::<Vec<_>>(),
-            vec![
-                "1.0.0 (registry+https://example.invalid)",
-                "2.0.0 (registry+https://example.invalid)",
-            ]
+            vec!["1.0.0"]
         );
     }
 
@@ -705,6 +753,10 @@ source = \"registry+https://example.invalid\"
             "[[package]]\nname = \"a\"\n",
             "[[package]]\nname = \"a\"\nversion = \"1.0.0\"\ndependencies = \"b\"\n",
             "[[package]]\nname = \"a\"\nversion = \"1.0.0\"\ndependencies = [1]\n",
+            "[[package]]\nname = \"a\"\nversion = \"1.0.0\"\ndependencies = [\"\"]\n",
+            "[[package]]\nname = \"a\"\nversion = \"1.0.0\"\ndependencies = [\"b 1.0.0 source\"]\n",
+            "[[package]]\nname = \"a\"\nversion = \"1.0.0\"\n\
+dependencies = [\"b 1.0.0 (source) extra\"]\n",
         ] {
             let error = Lockfile::parse(text, LABEL).unwrap_err();
             assert!(error.find_source::<MalformedLockfileError>().is_some());
