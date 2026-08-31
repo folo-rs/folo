@@ -155,7 +155,11 @@ impl GitRepo {
     }
 
     pub(crate) fn rev_parse(&self, rev: &str) -> Result<String, AppError> {
-        match run_capture("git", &["rev-parse", "--verify", rev], &self.root) {
+        match run_capture(
+            "git",
+            &["rev-parse", "--verify", "--end-of-options", rev],
+            &self.root,
+        ) {
             Ok(stdout) => Ok(stdout.trim().to_string()),
             Err(error) => Err(UnresolvedBaseError::caused_by(rev, error).into()),
         }
@@ -884,6 +888,23 @@ mod tests {
             HashSet::from(["packages/foo/run.sh".to_string()])
         );
         assert!(repo.executable_paths(&[]).unwrap().is_empty());
+    }
+
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn an_option_like_revision_resolves_only_as_a_ref() {
+        let temp = tempdir().unwrap();
+        let repo = init_repo(temp.path());
+        let expected = repo.rev_parse("HEAD").unwrap();
+        // Git accepts this full ref even though the shorthand is also an option.
+        run_capture(
+            "git",
+            &["update-ref", "refs/heads/--all", "HEAD"],
+            temp.path(),
+        )
+        .unwrap();
+
+        assert_eq!(repo.rev_parse("--all").unwrap(), expected);
     }
 
     /// Work-tree mode records overlay the index without confusing content edits.

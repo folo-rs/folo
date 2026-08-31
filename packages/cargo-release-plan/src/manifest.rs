@@ -335,13 +335,16 @@ impl<'a> WorkspaceInherit<'a> {
 /// edges are followed as well.
 fn inherited_path_dependencies(doc: &DocumentMut, workspace: &WorkspaceInherit<'_>) -> Vec<String> {
     let mut names = Vec::new();
-    for_each_dependency_table(doc.as_table(), &mut |dependencies: &dyn TableLike| {
-        for (name, dependency) in dependencies.iter() {
-            if is_workspace_inherit(dependency) {
-                names.push(name.to_string());
+    for_each_dependency_table(
+        doc.as_table(),
+        &mut |_kind, dependencies: &dyn TableLike| {
+            for (name, dependency) in dependencies.iter() {
+                if is_workspace_inherit(dependency) {
+                    names.push(name.to_string());
+                }
             }
-        }
-    });
+        },
+    );
     names
         .iter()
         .filter_map(|name| {
@@ -361,16 +364,19 @@ fn inherited_path_dependencies(doc: &DocumentMut, workspace: &WorkspaceInherit<'
 /// membership can only match Cargo once these edges are known.
 fn path_dependencies(doc: &DocumentMut) -> Vec<String> {
     let mut paths = Vec::new();
-    for_each_dependency_table(doc.as_table(), &mut |dependencies: &dyn TableLike| {
-        for (_, dependency) in dependencies.iter() {
-            let Some(dependency) = dependency.as_table_like() else {
-                continue;
-            };
-            if let Some(path) = dependency.get("path").and_then(Item::as_str) {
-                paths.push(path.to_string());
+    for_each_dependency_table(
+        doc.as_table(),
+        &mut |_kind, dependencies: &dyn TableLike| {
+            for (_, dependency) in dependencies.iter() {
+                let Some(dependency) = dependency.as_table_like() else {
+                    continue;
+                };
+                if let Some(path) = dependency.get("path").and_then(Item::as_str) {
+                    paths.push(path.to_string());
+                }
             }
-        }
-    });
+        },
+    );
     paths
 }
 
@@ -381,9 +387,11 @@ fn path_dependencies(doc: &DocumentMut) -> Vec<String> {
 /// would also collect look-alikes such as `[package.metadata.dependencies]`,
 /// which carry no dependency semantics, and would then attribute workspace
 /// membership and inherited keys to entries that are not dependencies at all.
+/// The visitor receives the table name so consumers can preserve dependency
+/// kinds when Cargo's packaging behavior differs between them.
 pub(crate) fn for_each_dependency_table(
     manifest: &dyn TableLike,
-    visit: &mut dyn FnMut(&dyn TableLike),
+    visit: &mut dyn FnMut(&str, &dyn TableLike),
 ) {
     visit_dependency_tables(manifest, visit);
     let Some(target) = manifest.get("target").and_then(Item::as_table_like) else {
@@ -396,10 +404,10 @@ pub(crate) fn for_each_dependency_table(
     }
 }
 
-fn visit_dependency_tables(table: &dyn TableLike, visit: &mut dyn FnMut(&dyn TableLike)) {
+fn visit_dependency_tables(table: &dyn TableLike, visit: &mut dyn FnMut(&str, &dyn TableLike)) {
     for name in DEPENDENCY_TABLES {
         if let Some(dependencies) = table.get(name).and_then(Item::as_table_like) {
-            visit(dependencies);
+            visit(name, dependencies);
         }
     }
 }

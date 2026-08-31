@@ -251,6 +251,10 @@ Values a package inherits from `[workspace.package]` or
 `[workspace.dependencies]` are part of its published manifest. A changed
 inherited value therefore affects each package that uses it.
 
+Cargo omits a versionless dev dependency from the published manifest. Changes to
+such a dependency's inherited workspace entry do not affect released content
+while the entry remains versionless; adding or removing its version does.
+
 `[workspace.lints]` is not published behavior and does not participate.
 
 ### Path case

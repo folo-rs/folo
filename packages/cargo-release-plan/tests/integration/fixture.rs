@@ -124,6 +124,13 @@ const HERMETIC_CONFIG: &[&str] = &[
     "core.autocrlf=false",
 ];
 
+/// Empty global configuration source understood by the platform's Git executable.
+#[cfg(windows)]
+const EMPTY_GIT_CONFIG: &str = "NUL";
+/// Empty global configuration source understood by the platform's Git executable.
+#[cfg(not(windows))]
+const EMPTY_GIT_CONFIG: &str = "/dev/null";
+
 /// A `git` command carrying the pinned configuration and no working directory.
 ///
 /// `Fixture::git` runs inside an existing fixture; a test that creates a
@@ -131,8 +138,33 @@ const HERMETIC_CONFIG: &[&str] = &[
 /// one.
 pub(crate) fn hermetic_git() -> Command {
     let mut command = Command::new("git");
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", EMPTY_GIT_CONFIG)
+        .env_remove("GIT_CONFIG")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS");
     command.args(HERMETIC_CONFIG);
     command
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+#[test]
+fn hermetic_git_ignores_the_users_global_configuration() {
+    let home = tempfile::tempdir().unwrap();
+    fs::write(
+        home.path().join(".gitconfig"),
+        "[core]\nhooksPath = unwanted-hooks\n",
+    )
+    .unwrap();
+    let output = hermetic_git()
+        .env("HOME", home.path())
+        .args(["config", "--global", "--get", "core.hooksPath"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
 }
 
 /// Writes a package whose only target is an executable.

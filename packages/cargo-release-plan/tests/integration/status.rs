@@ -265,6 +265,69 @@ license = "Apache-2.0"
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
+fn versionless_inherited_dev_dependency_changes_are_not_released() {
+    let fixture = Fixture::new(
+        r#"
+[workspace.dependencies]
+helper = { path = "packages/helper", features = ["a"] }
+"#,
+    );
+    write_package(&fixture, "helper", "0.1.0", "[features]\na = []\nb = []\n");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "[dev-dependencies]\nhelper.workspace = true\n",
+    );
+    fixture.commit("seed inherited dev dependency");
+    let base = fixture.sha("HEAD");
+    fixture.write_workspace(
+        r#"
+[workspace.dependencies]
+helper = { path = "packages/helper", features = ["b"] }
+"#,
+    );
+    fixture.commit("change unpublished dev dependency fields");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn adding_an_inherited_dev_dependency_version_is_released() {
+    let fixture = Fixture::new(
+        r#"
+[workspace.dependencies]
+helper = { path = "packages/helper" }
+"#,
+    );
+    write_package(&fixture, "helper", "0.1.0", "");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "[dev-dependencies]\nhelper.workspace = true\n",
+    );
+    fixture.commit("seed inherited dev dependency");
+    let base = fixture.sha("HEAD");
+    fixture.write_workspace(
+        r#"
+[workspace.dependencies]
+helper = { path = "packages/helper", version = "0.1.0" }
+"#,
+    );
+    fixture.commit("publish the inherited dev dependency");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo"), "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
 fn declared_version_below_the_anchor_is_an_error() {
     let fixture = seeded_package();
     write_package(&fixture, "demo", "0.2.0", "");

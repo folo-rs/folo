@@ -22,6 +22,11 @@ pub(crate) struct InheritedChange {
 pub(crate) struct InheritedKeys {
     pub(crate) package: Vec<String>,
     pub(crate) dependencies: Vec<String>,
+    /// Dependencies inherited exclusively through dev-dependency tables.
+    ///
+    /// Cargo omits these from a published manifest while their shared workspace
+    /// declarations remain versionless.
+    dev_only_dependencies: Vec<String>,
 }
 
 /// Compares inherited workspace values at the package's anchor vs the work tree.
@@ -45,6 +50,12 @@ pub(crate) fn inherited_changes(
     for dep in &keys.dependencies {
         let old = workspace_dependency_fields(workspace_at_anchor, dep);
         let new = workspace_dependency_fields(workspace_at_work_tree, dep);
+        if keys.dev_only_dependencies.binary_search(dep).is_ok()
+            && !old.contains_key("version")
+            && !new.contains_key("version")
+        {
+            continue;
+        }
         if old == new {
             continue;
         }
@@ -77,17 +88,26 @@ pub(crate) fn collect_inherited_keys(doc: &DocumentMut) -> InheritedKeys {
             }
         }
     }
-    for_each_dependency_table(doc.as_table(), &mut |dependencies| {
+    let mut dependency_usage = BTreeMap::new();
+    for_each_dependency_table(doc.as_table(), &mut |kind, dependencies| {
         for (name, item) in dependencies.iter() {
-            if is_workspace_inherit(item) {
-                keys.dependencies.push(name.to_string());
+            if !is_workspace_inherit(item) {
+                continue;
             }
+            let is_dev = kind == "dev-dependencies";
+            dependency_usage
+                .entry(name.to_string())
+                .and_modify(|dev_only| *dev_only &= is_dev)
+                .or_insert(is_dev);
         }
     });
     keys.package.sort();
     keys.package.dedup();
-    keys.dependencies.sort();
-    keys.dependencies.dedup();
+    keys.dependencies = dependency_usage.keys().cloned().collect();
+    keys.dev_only_dependencies = dependency_usage
+        .into_iter()
+        .filter_map(|(name, dev_only)| dev_only.then_some(name))
+        .collect();
     keys
 }
 
@@ -280,6 +300,7 @@ semver = { version = "1.0.0" }
         let keys = InheritedKeys {
             package: vec![],
             dependencies: vec!["bar".to_string()],
+            ..InheritedKeys::default()
         };
         let old =
             doc("[workspace.dependencies]\nbar = { version = \"1\", features = [\"a,b\"] }\n");
@@ -299,6 +320,7 @@ semver = { version = "1.0.0" }
         let keys = InheritedKeys {
             package: vec!["edition".to_string()],
             dependencies: vec![],
+            ..InheritedKeys::default()
         };
         let old = doc("[workspace.package]\nedition = \"2021\"\n");
         let new = doc("[workspace.package]\nedition = \"2024\"\n");
@@ -324,6 +346,7 @@ semver = { version = "1.0.0" }
         let keys = InheritedKeys {
             package: vec![],
             dependencies: vec!["bar".to_string()],
+            ..InheritedKeys::default()
         };
         let old = doc(
             "[workspace.dependencies]\nbar = { version = \"1.0.0\", path = \"packages/bar\" }\n",
@@ -345,6 +368,7 @@ semver = { version = "1.0.0" }
         let keys = InheritedKeys {
             package: vec!["edition".to_string()],
             dependencies: vec![],
+            ..InheritedKeys::default()
         };
         let old = doc("[workspace.package]\nedition = \"2024\"\n");
         let new = doc("[workspace.package]\n  edition = \"2024\"\n");
@@ -451,6 +475,7 @@ semver = { version = "1.0.0" }
         let keys = InheritedKeys {
             package: vec![],
             dependencies: vec!["bar".to_string()],
+            ..InheritedKeys::default()
         };
         let inline_old = doc(
             "[workspace.dependencies]\nbar = { version = \"1.0.0\", path = \"packages/bar\" }\n",
@@ -493,6 +518,45 @@ baz.workspace = true
 "#);
         let keys = collect_inherited_keys(&package);
         assert_eq!(keys.dependencies, vec!["bar", "baz"]);
+        assert_eq!(keys.dev_only_dependencies, vec!["baz"]);
+    }
+
+    #[test]
+    fn dependency_used_normally_and_for_development_is_not_dev_only() {
+        let package = doc("[dependencies]\nbar.workspace = true\n\
+             [dev-dependencies]\nbar.workspace = true\n");
+
+        let keys = collect_inherited_keys(&package);
+
+        assert_eq!(keys.dependencies, vec!["bar"]);
+        assert!(keys.dev_only_dependencies.is_empty());
+    }
+
+    #[test]
+    fn a_versionless_dev_dependency_change_is_not_published() {
+        let keys = collect_inherited_keys(&doc("[dev-dependencies]\nbar.workspace = true\n"));
+        let old = doc("[workspace.dependencies]\nbar = { path = \"old\", features = [\"a\"] }\n");
+        let new = doc("[workspace.dependencies]\nbar = { path = \"new\", features = [\"b\"] }\n");
+
+        assert!(inherited_changes(&keys, &old, &new).is_empty());
+    }
+
+    #[test]
+    fn adding_or_removing_a_dev_dependency_version_is_published() {
+        let keys = collect_inherited_keys(&doc("[dev-dependencies]\nbar.workspace = true\n"));
+        let versionless = doc("[workspace.dependencies]\nbar = { path = \"packages/bar\" }\n");
+        let versioned = doc(
+            "[workspace.dependencies]\nbar = { path = \"packages/bar\", version = \"1.0.0\" }\n",
+        );
+
+        for (old, new) in [(&versionless, &versioned), (&versioned, &versionless)] {
+            assert_eq!(
+                inherited_changes(&keys, old, new),
+                vec![InheritedChange {
+                    field: "workspace.dependencies.bar.version".to_string(),
+                }]
+            );
+        }
     }
 
     #[test]
@@ -500,6 +564,7 @@ baz.workspace = true
         let keys = InheritedKeys {
             package: vec![],
             dependencies: vec!["bar".to_string()],
+            ..InheritedKeys::default()
         };
         let old = doc("[workspace.dependencies]\nbar = { version = \"1.0.0\" }\n");
         let new = doc("# a comment\n[workspace.dependencies]\nbar = { version = \"1.0.0\" }\n");

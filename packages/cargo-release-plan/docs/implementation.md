@@ -62,7 +62,9 @@ snapshots across packages.
 Each snapshot resolves the package fields that may inherit from
 `[workspace.package]` and the path dependencies inherited through
 `[workspace.dependencies]`. Typed TOML values are retained for comparisons so
-formatting changes do not masquerade as inherited-value changes.
+formatting changes do not masquerade as inherited-value changes. Dependency
+table kinds are retained so versionless dev dependencies omitted by Cargo do not
+create false inherited-value changes.
 
 ## Classification
 
