@@ -17,7 +17,7 @@ use crate::diff::{FileVersion, file_diff, mode_change_diff};
 use crate::git::{DefaultBase, GitRepo, TreeEntry, join_git_rel, tree_mode};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
-use crate::lockfile::{ClosureChange, Lockfile, closure_changes};
+use crate::lockfile::{Closure, ClosureChange, Lockfile, closure_changes};
 use crate::manifest::{
     DEFAULT_README_FILES, PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers,
     is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
@@ -34,6 +34,8 @@ use crate::{
 
 /// Name Cargo requires for a workspace lockfile.
 const LOCKFILE_FILE_NAME: &str = "Cargo.lock";
+/// Name Cargo requires for a package manifest.
+const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 
 /// Workspace classification: every publishable package plus its group verdicts.
 ///
@@ -519,21 +521,21 @@ fn classify_one(
 
     log_untracked(verbose, name, untracked.len());
 
-    if package.has_binary {
+    if anchor_pkg.has_lockfile_target || package.has_lockfile_target {
         for (dependency, change) in lockfile_closure_changes(
             lockfiles,
             git,
             work_tree,
             name,
-            &anchor.version,
-            &package.manifest.version,
+            anchor_pkg,
+            package,
             &anchor.commit,
         )? {
             verbose.note(|| {
                 format!(
                     "{shown}: the locked identity of {} is {} between the anchor and the work \
-                     tree, and this package installs as an executable built from the lockfile \
-                     its archive carries, so the dependency is released content",
+                     tree, and this package has a binary or example target at one or both \
+                     endpoints, so the dependency is released content",
                     quote_path(&dependency),
                     change.as_str()
                 )
@@ -1256,6 +1258,8 @@ struct HistoricalPackage {
     resources: BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
+    /// Whether Cargo ships this package's resolved dependency closure.
+    has_lockfile_target: bool,
 }
 
 /// Workspace members and root manifest at one commit.
@@ -1312,19 +1316,23 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
     let root_doc = parse_document(Path::new(&root_rel), &root_content)?;
     let members = parse_workspace_members(&root_content, Path::new(&root_rel), case)?;
     // `members` globs are written relative to the workspace root, which need not be
-    // the git root, while `ls_tree_manifests` yields git-root-relative paths. Rebase
-    // before matching, or a nested workspace would find no members and silently
-    // classify every package as absent from the base revision.
-    let workspace_prefix = root_rel.strip_suffix("Cargo.toml").unwrap_or("");
+    // the git root, while Git yields git-root-relative paths. Rebase before
+    // matching, or a nested workspace would find no members and silently classify
+    // every package as absent from the base revision.
+    let workspace_prefix = root_rel.strip_suffix(MANIFEST_FILE_NAME).unwrap_or("");
     let workspace = WorkspaceInherit::from_root(&root_doc);
+    let tree_paths = git.ls_tree_paths(commit)?;
 
     let mut manifest_paths: BTreeMap<String, String> = BTreeMap::new();
-    for path in git.ls_tree_manifests(commit)? {
+    for path in tree_paths
+        .iter()
+        .filter(|path| path.rsplit('/').next() == Some(MANIFEST_FILE_NAME))
+    {
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
             continue;
         };
-        manifest_paths.insert(member_dir.to_string(), path);
+        manifest_paths.insert(member_dir.to_string(), path.clone());
     }
 
     let mut manifests = GitManifestSource {
@@ -1353,6 +1361,12 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
                 packaging: parsed.packaging.clone(),
                 resources: resolve_resources(parsed, &parsed.directory, workspace_prefix),
                 auto_readme: parsed.auto_readme,
+                has_lockfile_target: parsed.targets.has_lockfile_target(
+                    tree_paths
+                        .iter()
+                        .filter_map(|path| relativize(path, &parsed.directory)),
+                    case,
+                ),
             },
         );
     }
@@ -1489,11 +1503,11 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
     Some(segments.join("/"))
 }
 
-/// Parsed lockfiles shared by binary-package classifications.
+/// Parsed lockfiles shared by lockfile-bearing package classifications.
 ///
 /// The work-tree endpoint is common to every package, while packages that share
 /// an anchor commit also share its historical endpoint. Retaining both avoids
-/// reparsing workspace-sized lockfiles for every binary package.
+/// reparsing workspace-sized lockfiles for every lockfile-bearing package.
 /// Ref: docs/implementation.md, "Lockfile closures".
 #[derive(Debug, Default)]
 struct LockfileCache {
@@ -1555,36 +1569,46 @@ impl LockfileCache {
 
 /// Dependencies whose locked identity changed between the anchor and the work tree.
 ///
-/// Both ends are read the way every other comparison reads them: the anchor from
-/// the commit, the work tree from disk. Both lockfiles must exist and resolve the
-/// package at its corresponding declared version; otherwise the published
-/// dependency closure cannot be reconstructed and the assessment stops.
-/// Ref: docs/design.md, "Lockfiles of binary packages".
+/// Each endpoint that has a binary or example target must have a lockfile that
+/// resolves the package at its corresponding declared version. An endpoint without
+/// either target releases no closure and therefore contributes an empty closure.
+/// Ref: docs/design.md, "Lockfiles of binary and example targets".
 fn lockfile_closure_changes(
     cache: &mut LockfileCache,
     git: &GitRepo,
     work_tree: &WorkTree,
     name: &str,
-    anchor_version: &Version,
-    work_version: &Version,
+    anchor_package: &HistoricalPackage,
+    work_package: &WorkPackage,
     anchor_commit: &str,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
-    let anchor = cache.anchor(git, name, anchor_commit, &git_path)?;
-    let Some(anchor) = anchor.closure(name, &anchor_version.to_string()) else {
-        return Err(LockfileClosureUnavailableError::new(
-            name,
-            "the anchor Cargo.lock does not resolve the package at its declared version",
-        )
-        .into());
+    let anchor = if anchor_package.has_lockfile_target {
+        let lockfile = cache.anchor(git, name, anchor_commit, &git_path)?;
+        let Some(closure) = lockfile.closure(name, &anchor_package.version.to_string()) else {
+            return Err(LockfileClosureUnavailableError::new(
+                name,
+                "the anchor Cargo.lock does not resolve the package at its declared version",
+            )
+            .into());
+        };
+        closure
+    } else {
+        Closure::new()
     };
-    let work = cache.work(work_tree, name, &git_path)?;
-    let Some(work) = work.closure(name, &work_version.to_string()) else {
-        return Err(LockfileClosureUnavailableError::new(
-            name,
-            "the work-tree Cargo.lock does not resolve the package at its declared version; refresh Cargo.lock",
-        )
-        .into());
+    let work = if work_package.has_lockfile_target {
+        let lockfile = cache.work(work_tree, name, &git_path)?;
+        let Some(closure) = lockfile.closure(name, &work_package.manifest.version.to_string())
+        else {
+            return Err(LockfileClosureUnavailableError::new(
+                name,
+                "the work-tree Cargo.lock does not resolve the package at its declared version; refresh Cargo.lock",
+            )
+            .into());
+        };
+        closure
+    } else {
+        Closure::new()
     };
     Ok(closure_changes(&anchor, &work))
 }
@@ -1735,6 +1759,7 @@ mod tests {
                 packaging: PackagingRules::default(),
                 resources: BTreeMap::new(),
                 auto_readme: false,
+                has_lockfile_target: false,
             },
         );
         base.unpublished.insert("withdrawn".to_string());
@@ -2203,6 +2228,7 @@ mod tests {
             resource_paths: local.iter().map(|path| (*path).to_string()).collect(),
             inherited_resource_paths: inherited.iter().map(|path| (*path).to_string()).collect(),
             auto_readme: false,
+            targets: crate::manifest::TargetDiscovery::default(),
         }
     }
 

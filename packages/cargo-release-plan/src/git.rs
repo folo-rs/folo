@@ -475,20 +475,14 @@ impl GitRepo {
         run_capture_bytes("git", &["cat-file", "blob", id], &self.root)
     }
 
-    /// Manifest paths at `commit`, used to reconstruct historical workspace members.
-    ///
-    /// `git ls-tree` matches its path arguments literally, so it cannot select
-    /// manifests by pattern: the tree is listed once and filtered here.
-    pub(crate) fn ls_tree_manifests(&self, commit: &str) -> Result<Vec<String>, AppError> {
+    /// Every path at `commit`, used to reconstruct historical package metadata.
+    pub(crate) fn ls_tree_paths(&self, commit: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture_bytes(
             "git",
             &["ls-tree", "-r", "--name-only", "-z", commit],
             &self.root,
         )?;
-        Ok(split_z(&stdout)?
-            .into_iter()
-            .filter(|path| is_manifest_path(path))
-            .collect())
+        split_z(&stdout)
     }
 }
 
@@ -498,11 +492,6 @@ impl GitRepo {
 /// so trimming whitespace would silently rename it.
 fn strip_terminator(value: &str) -> &str {
     value.strip_suffix('\n').unwrap_or(value)
-}
-
-/// Whether a repository-relative tree path names a Cargo manifest.
-fn is_manifest_path(path: &str) -> bool {
-    path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
 }
 
 /// Command-line budget one `git hash-object` invocation may spend on paths.
@@ -803,15 +792,6 @@ mod tests {
         assert!(!is_absent_git_path("fatal: bad object abc"));
     }
 
-    #[test]
-    fn manifest_paths_are_selected_by_file_name() {
-        assert!(is_manifest_path("Cargo.toml"));
-        assert!(is_manifest_path("packages/foo/Cargo.toml"));
-        assert!(!is_manifest_path("packages/foo/Cargo.toml.bak"));
-        assert!(!is_manifest_path("packages/foo/src/lib.rs"));
-        assert!(!is_manifest_path("packages/Cargo.toml/inner.rs"));
-    }
-
     /// Tree records are parsed into mode and object.
     ///
     /// The mode and object id are read off the record's own fields, so a path that itself looks
@@ -1103,7 +1083,7 @@ mod tests {
         repo.ls_files("").unwrap_err();
         repo.ls_untracked("").unwrap_err();
         repo.ls_tree("HEAD", &[""]).unwrap_err();
-        repo.ls_tree_manifests("HEAD").unwrap_err();
+        repo.ls_tree_paths("HEAD").unwrap_err();
         repo.hash_objects(&["Cargo.toml"]).unwrap_err();
         repo.rev_parse("HEAD").unwrap_err();
     }

@@ -449,7 +449,7 @@ impl RefUnwindSafe for SymlinkReleasedError {}
 ///
 /// The lockfile is machine-written, so a lockfile that does not parse means the
 /// tool is reading something other than what it believes. Guessing a closure
-/// from it would silently under-report the dependencies a binary ships.
+/// from it would silently under-report the dependencies a packaged target ships.
 #[ohno::error]
 #[display("Failed to read the resolved dependencies in '{}'", path.quoted())]
 pub(crate) struct MalformedLockfileError {
@@ -459,13 +459,13 @@ pub(crate) struct MalformedLockfileError {
 impl UnwindSafe for MalformedLockfileError {}
 impl RefUnwindSafe for MalformedLockfileError {}
 
-/// A binary package's published dependency closure cannot be reconstructed.
+/// A package's published dependency closure cannot be reconstructed.
 ///
-/// Classification requires a workspace lockfile at both comparison endpoints
-/// that resolves the package at the version declared there.
+/// Classification requires a workspace lockfile at every comparison endpoint
+/// where the package has a binary or example target.
 #[ohno::error]
 #[display(
-    "Cannot assess locked dependencies for binary package '{}': {reason}",
+    "Cannot assess locked dependencies for package '{}' with a binary or example target: {reason}",
     package.quoted()
 )]
 pub(crate) struct LockfileClosureUnavailableError {

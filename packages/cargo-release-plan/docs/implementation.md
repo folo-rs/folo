@@ -78,7 +78,7 @@ baseline first-parent commits
                                       |
 work-tree metadata -------------------+-> released-content comparison
                                       +-> inherited-value comparison
-workspace lockfiles ------------------+-> binary closure comparison
+workspace lockfiles ------------------+-> binary/example closure comparison
 ```
 
 ### Anchor and change set
@@ -147,11 +147,11 @@ no textual hunk.
 
 ### Lockfile closures
 
-`lockfile` parses only package identities and dependency references. Each binary
-package starts a breadth-first walk from the source-less entry matching both its
-name and declared version. Name alone is insufficient because another path
-dependency can share it; missing source alone is insufficient because that
-dependency can also be source-less.
+`lockfile` parses only package identities and dependency references. Each
+package with a binary or example target starts a breadth-first walk from the
+source-less entry matching both its name and declared version. Name alone is
+insufficient because another path dependency can share it; missing source alone
+is insufficient because that dependency can also be source-less.
 
 Dependency references are matched by every component Cargo writes: name, then
 version and source when present. Parsing indexes these components and resolves
@@ -159,15 +159,22 @@ each textual edge to entry indices once, so closure walks do not search the
 package list. A visited set terminates cycles. The root is excluded from the
 result even if a dependency cycle reaches it.
 
-The parsed work-tree lockfile is shared across all binary packages. Historical
-lockfiles are shared by packages with the same anchor commit, so a workspace-sized
-endpoint is parsed once rather than once per binary.
+The parsed work-tree lockfile is shared across all lockfile-bearing packages.
+Historical lockfiles are shared by packages with the same anchor commit, so a
+workspace-sized endpoint is parsed once rather than once per package.
 
-Both endpoint lockfiles must exist and resolve the binary package at its
-corresponding declared version. Missing or incomplete lockfile data stops
-classification because regenerating historical resolution would violate the
-offline, no-full-resolution boundary. A binary package absent from the baseline
-returns as new before lockfile comparison because it has no historical artifact.
+Work-tree target shape comes from Cargo metadata. Historical snapshots reconstruct
+binary and example targets from explicit manifest target declarations and Cargo's
+automatic target layouts, while respecting the manifest's `autobins` and
+`autoexamples` controls.
+
+Each endpoint that has a binary or example target must have a lockfile resolving
+the package at its corresponding declared version. An endpoint without either
+target contributes an empty closure and does not require a lockfile. Missing or
+incomplete required lockfile data stops classification because regenerating
+historical resolution would violate the offline, no-full-resolution boundary. A
+package absent from the baseline returns as new before lockfile comparison
+because it has no historical artifact.
 
 ## Check and report
 

@@ -52,6 +52,48 @@ pub(crate) struct PackageManifest {
     /// the first that exists. Which name that is depends on what the end being
     /// examined holds, so only the choice to probe is recorded here.
     pub(crate) auto_readme: bool,
+    /// How Cargo discovers lockfile-bearing targets for this package.
+    pub(crate) targets: TargetDiscovery,
+}
+
+/// Manifest controls for discovering binary and example targets.
+///
+/// Historical snapshots cannot ask Cargo about an old tree, so they combine
+/// these controls with that tree's paths to reconstruct whether Cargo would
+/// include a package-specific lockfile in the published artifact.
+/// Ref: docs/design.md, "Lockfiles of binary and example targets".
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TargetDiscovery {
+    explicit: bool,
+    autobins: bool,
+    autoexamples: bool,
+}
+
+impl TargetDiscovery {
+    /// Whether `package_paths` contain any target that ships a lockfile.
+    pub(crate) fn has_lockfile_target<'a>(
+        self,
+        package_paths: impl IntoIterator<Item = &'a str>,
+        case: PathCase,
+    ) -> bool {
+        self.explicit
+            || package_paths.into_iter().any(|path| {
+                (self.autobins && is_auto_binary(path, case))
+                    || (self.autoexamples && is_auto_example(path, case))
+            })
+    }
+}
+
+impl Default for TargetDiscovery {
+    fn default() -> Self {
+        Self {
+            // Cargo discovers conventional targets unless the package opts out.
+            // Ref: Cargo reference, "Target auto-discovery".
+            explicit: false,
+            autobins: true,
+            autoexamples: true,
+        }
+    }
 }
 
 /// Workspace member patterns from the root manifest, compiled for repeated queries.
@@ -207,6 +249,7 @@ pub(crate) fn parse_package_manifest(
     let directory = directory_of(manifest_path);
     let (resource_paths, inherited_resource_paths, auto_readme) =
         resource_paths(package, workspace);
+    let targets = target_discovery(&doc, package);
     Ok(Some(PackageManifest {
         name: name.to_string(),
         version,
@@ -219,7 +262,82 @@ pub(crate) fn parse_package_manifest(
         resource_paths,
         inherited_resource_paths,
         auto_readme,
+        targets,
     }))
+}
+
+/// Conventional source path for a package's default binary.
+const AUTO_BINARY_MAIN: &str = "src/main.rs";
+/// Directory in which Cargo discovers additional binary targets.
+const AUTO_BINARY_DIR: &str = "src/bin";
+/// Directory in which Cargo discovers example targets.
+const AUTO_EXAMPLE_DIR: &str = "examples";
+/// Rust source suffix Cargo recognises during target auto-discovery.
+const RUST_SOURCE_SUFFIX: &str = ".rs";
+/// File name Cargo recognises as a directory target's entry point.
+const TARGET_MAIN_FILE: &str = "main.rs";
+
+fn target_discovery(doc: &DocumentMut, package: &dyn TableLike) -> TargetDiscovery {
+    let explicit = ["bin", "example"].iter().any(|key| {
+        doc.get(key)
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(|targets| !targets.is_empty())
+    });
+    TargetDiscovery {
+        explicit,
+        autobins: package
+            .get("autobins")
+            .and_then(Item::as_bool)
+            .unwrap_or(true),
+        autoexamples: package
+            .get("autoexamples")
+            .and_then(Item::as_bool)
+            .unwrap_or(true),
+    }
+}
+
+fn is_auto_binary(path: &str, case: PathCase) -> bool {
+    case.same_path(path, AUTO_BINARY_MAIN) || is_auto_directory_target(path, AUTO_BINARY_DIR, case)
+}
+
+fn is_auto_example(path: &str, case: PathCase) -> bool {
+    is_auto_directory_target(path, AUTO_EXAMPLE_DIR, case)
+}
+
+/// Whether `path` follows either auto-discovered layout beneath `directory`.
+fn is_auto_directory_target(path: &str, directory: &str, case: PathCase) -> bool {
+    let path_parts: Vec<&str> = path.split('/').collect();
+    let directory_parts: Vec<&str> = directory.split('/').collect();
+    match (directory_parts.as_slice(), path_parts.as_slice()) {
+        ([directory], [held, file]) => {
+            case.same_path(directory, held)
+                && is_visible_target_name(file)
+                && file.ends_with(RUST_SOURCE_SUFFIX)
+        }
+        ([directory], [held, name, main]) => {
+            case.same_path(directory, held)
+                && is_visible_target_name(name)
+                && case.same_path(main, TARGET_MAIN_FILE)
+        }
+        ([parent, directory], [held_parent, held_directory, file]) => {
+            case.same_path(parent, held_parent)
+                && case.same_path(directory, held_directory)
+                && is_visible_target_name(file)
+                && file.ends_with(RUST_SOURCE_SUFFIX)
+        }
+        ([parent, directory], [held_parent, held_directory, name, main]) => {
+            case.same_path(parent, held_parent)
+                && case.same_path(directory, held_directory)
+                && is_visible_target_name(name)
+                && case.same_path(main, TARGET_MAIN_FILE)
+        }
+        _ => false,
+    }
+}
+
+/// Cargo excludes dotfile entries from automatic target discovery.
+fn is_visible_target_name(name: &str) -> bool {
+    !name.starts_with('.')
 }
 
 /// `[package]` keys naming a file Cargo packs alongside the sources.
@@ -1281,6 +1399,91 @@ b.workspace = true
         .unwrap()
         .unwrap();
         assert!(parsed.inherited_path_dependencies.is_empty());
+    }
+
+    /// Cargo's conventional binary and example layouts are reconstructed.
+    ///
+    /// Historical target shape is inferred without invoking Cargo, so every layout
+    /// that can make Cargo package a lockfile must be recognised from tree paths.
+    #[test]
+    fn conventional_lockfile_targets_are_discovered() {
+        let targets = TargetDiscovery::default();
+
+        for path in [
+            "src/main.rs",
+            "src/bin/tool.rs",
+            "src/bin/tool/main.rs",
+            "examples/demo.rs",
+            "examples/demo/main.rs",
+        ] {
+            assert!(
+                targets.has_lockfile_target([path], PathCase::Sensitive),
+                "{path} should be a lockfile-bearing target"
+            );
+        }
+        for path in [
+            "src/lib.rs",
+            "src/bin/tool/data.rs",
+            "src/bin/.scratch.rs",
+            "src/bin/.scratch/main.rs",
+            "examples/demo/data.rs",
+            "examples/.scratch.rs",
+            "examples/.scratch/main.rs",
+            "tests/demo.rs",
+        ] {
+            assert!(
+                !targets.has_lockfile_target([path], PathCase::Sensitive),
+                "{path} should not be a lockfile-bearing target"
+            );
+        }
+        assert!(targets.has_lockfile_target(["SRC/MAIN.rs"], PathCase::Insensitive));
+        assert!(!targets.has_lockfile_target(["SRC/MAIN.rs"], PathCase::Sensitive));
+    }
+
+    /// Explicit target declarations remain targets when auto-discovery is disabled.
+    #[test]
+    fn explicit_targets_override_disabled_auto_discovery() {
+        let explicit = parse_package_manifest(
+            r#"
+[package]
+name = "foo"
+version = "0.1.0"
+autobins = false
+autoexamples = false
+
+[[example]]
+name = "demo"
+path = "demo.rs"
+"#,
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            explicit
+                .targets
+                .has_lockfile_target(std::iter::empty(), PathCase::Sensitive)
+        );
+
+        let disabled = parse_package_manifest(
+            r#"
+[package]
+name = "foo"
+version = "0.1.0"
+autobins = false
+autoexamples = false
+"#,
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            !disabled
+                .targets
+                .has_lockfile_target(["src/main.rs", "examples/demo.rs"], PathCase::Sensitive)
+        );
     }
 
     fn root_doc(content: &str) -> DocumentMut {

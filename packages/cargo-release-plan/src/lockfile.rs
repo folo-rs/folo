@@ -1,12 +1,13 @@
 // Resolved dependency closures read from Cargo lockfiles.
 //
-// Cargo puts a lockfile into every archive it builds, and that lockfile carries
-// the packaged crate's own resolved closure rather than the whole workspace's.
-// A consumer installing a binary with `cargo install --locked` builds from it,
-// so the closure is part of what that consumer receives.
-// Ref: docs/design.md, "Lockfiles of binary packages".
+// Cargo puts a lockfile into an archive that carries a binary or example target,
+// and that lockfile carries the packaged crate's own resolved closure rather
+// than the whole workspace's. A consumer building either target kind receives
+// that resolution, so the closure is released content.
+// Ref: docs/design.md, "Lockfiles of binary and example targets".
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+#[cfg(any(test, feature = "private-test-util"))]
 use std::iter;
 
 use ohno::AppError;
@@ -205,7 +206,7 @@ impl LockEntry {
 ///
 /// Parsing retains Cargo's textual dependency references only until all package
 /// identities are indexed. Converting them once avoids searching the package
-/// list for every edge during every binary package's closure walk.
+/// list for every edge during every lockfile-bearing package's closure walk.
 #[derive(Debug)]
 struct PendingEntry {
     name: String,

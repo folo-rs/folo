@@ -17,6 +17,8 @@ use crate::command::run_capture;
 use crate::groups::Groups;
 #[cfg(test)]
 use crate::inherited::InheritedKeys;
+#[cfg(test)]
+use crate::manifest::TargetDiscovery;
 use crate::manifest::{
     PackageManifest, WorkspaceInherit, for_each_dependency_table, parse_document,
     parse_package_manifest, repo_relative_path,
@@ -48,11 +50,11 @@ pub(crate) struct WorkTree {
     pub(crate) groups: Groups,
 }
 
-/// Target kind Cargo reports for an executable.
+/// Target kinds whose packages include `Cargo.lock` when packaged.
 ///
 /// Ref: the `cargo metadata` documentation, which fixes the set of kinds a
 /// target may declare.
-const BINARY_TARGET_KIND: &str = "bin";
+const LOCKFILE_TARGET_KINDS: [&str; 2] = ["bin", "example"];
 
 /// One publishable workspace member in the work tree.
 #[derive(Clone, Debug)]
@@ -60,13 +62,10 @@ pub(crate) struct WorkPackage {
     pub(crate) manifest: PackageManifest,
     pub(crate) manifest_path: PathBuf,
     pub(crate) dependencies: Vec<ReportedDep>,
-    /// Whether the package builds an executable.
+    /// Whether the package builds a target that causes Cargo to ship its lockfile.
     ///
-    /// A consumer installs an executable with `cargo install`, which can build
-    /// it from the lockfile the archive carries, so only these packages release
-    /// their resolved dependency closure.
-    /// Ref: docs/design.md, "Lockfiles of binary packages".
-    pub(crate) has_binary: bool,
+    /// Ref: docs/design.md, "Lockfiles of binary and example targets".
+    pub(crate) has_lockfile_target: bool,
     /// Files Cargo packs because a manifest key names them.
     ///
     /// Keyed by the path each takes inside the package archive.
@@ -226,10 +225,12 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
             manifest,
             manifest_path: path,
             dependencies,
-            has_binary: package
-                .targets
-                .iter()
-                .any(|target| target.kind.iter().any(|kind| kind == BINARY_TARGET_KIND)),
+            has_lockfile_target: package.targets.iter().any(|target| {
+                target
+                    .kind
+                    .iter()
+                    .any(|kind| LOCKFILE_TARGET_KINDS.contains(&kind.as_str()))
+            }),
             resources: BTreeMap::new(),
         });
     }
@@ -684,10 +685,11 @@ mod tests {
                     resource_paths: Vec::new(),
                     inherited_resource_paths: Vec::new(),
                     auto_readme: false,
+                    targets: TargetDiscovery::default(),
                 },
                 manifest_path: PathBuf::from(format!("packages/{name}/Cargo.toml")),
                 dependencies,
-                has_binary: false,
+                has_lockfile_target: false,
                 resources: BTreeMap::new(),
             }
         }

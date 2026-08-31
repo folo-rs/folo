@@ -43,7 +43,8 @@ version.
 The question is not whether files in a package directory changed. It is whether
 the content Cargo would publish changed. Package rules, inherited manifest
 values, executable bits, manifest-named resources, package boundaries, and
-binary lockfile closures therefore participate where they affect the artifact.
+binary and example lockfile closures therefore participate where they affect
+the artifact.
 
 ### Evidence and judgement stay separate
 
@@ -233,24 +234,29 @@ Cargo includes several inputs outside ordinary package rules:
   target bytes while Git stores the target path, so Git history alone cannot
   compare the artifact correctly.
 
-### Lockfiles of binary packages
+### Lockfiles of binary and example targets
 
-A binary package releases its resolved dependency closure because
-`cargo install --locked` builds from the lockfile included in its artifact. A
-library's archived lockfile does not govern downstream resolution and is ignored.
+A **lockfile-bearing target** is a binary or example target whose presence makes
+Cargo include the package's resolved dependency closure in its artifact. A
+library-only package does not release that closure, even when an unrelated
+workspace lockfile happens to resolve it.
 
 The package-specific closure is compared rather than the workspace lockfile's
-bytes, so unrelated dependency movement does not affect every binary. Entries
-are identified by name, version, and source. The root package is selected by its
-name and declared version, and excluded from its own closure so incrementing it
-does not create another change.
+bytes, so unrelated dependency movement does not affect every lockfile-bearing
+package. Entries are identified by name, version, and source. The root package
+is selected by its name and declared version, and excluded from its own closure
+so incrementing it does not create another change.
 
-The assessment requires a workspace lockfile at the package anchor and in the
-work tree, with each lockfile resolving the binary package at the version
-declared at that endpoint. If either closure cannot be reconstructed, the
-assessment stops rather than treating unknown released content as unchanged.
-A new binary package has no anchor artifact to compare and is classified as new
-without a historical closure.
+Target shape is resolved independently at the anchor and in the work tree. An
+endpoint with a lockfile-bearing target requires a workspace lockfile that
+resolves the package at the version declared there. An endpoint without one
+contributes an empty closure and requires no lockfile. This makes adding the
+first binary or example compare an empty anchor closure with the current
+resolution, while removing the last one compares the historical resolution with
+an empty work-tree closure. If a required closure cannot be reconstructed, the
+assessment stops rather than treating unknown released content as unchanged. A
+new package has no anchor artifact to compare and is classified as new without a
+historical closure.
 
 ### Inherited workspace values
 

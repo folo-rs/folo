@@ -1,14 +1,16 @@
 //! Released-content consequences of the workspace lockfile.
 //!
-//! Cargo puts a lockfile into every archive it builds and `cargo install
-//! --locked` builds an executable from it, so a package with a binary target
-//! releases its resolved dependency closure while a library does not.
-//! Ref: docs/design.md, "Lockfiles of binary packages".
+//! Cargo puts a lockfile into archives that carry binary or example targets,
+//! so those packages release their resolved dependency closure while a
+//! library-only package does not.
+//! Ref: docs/design.md, "Lockfiles of binary and example targets".
 
 use std::fs;
 
+use serde_json::{Value, json};
+
 use crate::fixture::{Fixture, write_binary_package, write_package};
-use crate::harness::{check, check_verbose};
+use crate::harness::{check, check_verbose, report_json};
 
 /// Writes a workspace lockfile resolving `tool` onto `helper` and `widget`.
 ///
@@ -71,8 +73,8 @@ fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_moved_dependency_leaves_a_library_package_unchanged() {
-    // `helper` publishes no executable, so nothing a consumer builds against
-    // comes from the lockfile even though the archive still carries one.
+    // `helper` publishes no binary or example target, so its package-specific
+    // archive does not carry a resolved dependency closure.
     let fixture = locked_workspace();
     let base = fixture.sha("HEAD");
 
@@ -158,6 +160,121 @@ fn a_new_binary_package_needs_no_historical_lockfile() {
     let (passed, message) = check(&fixture, &base);
 
     assert!(passed, "{message}");
+}
+
+/// Adding the first binary starts the released lockfile closure at an empty endpoint.
+///
+/// The anchor is a library-only package, so no anchor lockfile is required and
+/// every dependency in the work-tree closure is reported as added.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_library_that_adds_its_first_binary_needs_no_anchor_lockfile() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "tool", "0.1.0", "");
+    write_package(&fixture, "helper", "0.1.0", "");
+    fixture.commit("seed library");
+    let base = fixture.sha("HEAD");
+
+    fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
+    write_lockfile(&fixture, "1.0.0");
+    fixture.commit("add binary");
+
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("tool: needs-increment"), "{message}");
+    assert_lockfile_change(&fixture, &base, "added");
+}
+
+/// A workspace lockfile does not invent a library-only anchor closure.
+///
+/// The anchor lockfile exists for another binary and happens to resolve the
+/// library package too. The library's endpoint is nevertheless empty.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_unrelated_anchor_lockfile_does_not_create_a_library_closure() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "tool", "0.1.0", "");
+    write_package(&fixture, "helper", "0.1.0", "");
+    write_binary_package(&fixture, "runner", "0.1.0", "");
+    write_lockfile(&fixture, "1.0.0");
+    fixture.write(
+        "Cargo.lock",
+        &format!(
+            "{}\n[[package]]\nname = \"runner\"\nversion = \"0.1.0\"\n",
+            fixture.read("Cargo.lock")
+        ),
+    );
+    fixture.commit("seed library beside a binary");
+    let base = fixture.sha("HEAD");
+
+    fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
+    fixture.commit("add binary");
+
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert_lockfile_change(&fixture, &base, "added");
+}
+
+/// Removing the last binary ends the released lockfile closure.
+///
+/// The work-tree endpoint is library-only, so it needs no lockfile and reports
+/// the anchor closure as removed.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn removing_the_last_binary_needs_no_work_tree_lockfile() {
+    let fixture = locked_workspace();
+    let base = fixture.sha("HEAD");
+
+    fs::remove_file(fixture.path().join("packages/tool/src/main.rs")).unwrap();
+    fixture.write("packages/tool/src/lib.rs", "pub fn f() {}\n");
+    fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
+    fixture.commit("replace binary with library");
+
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert_lockfile_change(&fixture, &base, "deleted");
+}
+
+/// Example targets release the same lockfile closure as binary targets.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_moved_dependency_needs_an_increment_for_an_example_target() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "tool", "0.1.0", "");
+    fixture.write("packages/tool/examples/demo.rs", "fn main() {}\n");
+    write_package(&fixture, "helper", "0.1.0", "");
+    write_lockfile(&fixture, "1.0.0");
+    fixture.commit("seed example");
+    let base = fixture.sha("HEAD");
+
+    write_lockfile(&fixture, "1.0.1");
+    fixture.commit("update the locked widget");
+
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("tool: needs-increment"), "{message}");
+    assert_lockfile_change(&fixture, &base, "modified");
+}
+
+/// Historical `src/bin/*.rs` discovery feeds lockfile classification.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_moved_dependency_needs_an_increment_for_an_auto_discovered_binary() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "tool", "0.1.0", "");
+    fixture.write("packages/tool/src/bin/secondary.rs", "fn main() {}\n");
+    write_package(&fixture, "helper", "0.1.0", "");
+    write_lockfile(&fixture, "1.0.0");
+    fixture.commit("seed auto-discovered binary");
+    let base = fixture.sha("HEAD");
+
+    write_lockfile(&fixture, "1.0.1");
+    fixture.commit("update the locked widget");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("tool: needs-increment"), "{message}");
+    assert_lockfile_change(&fixture, &base, "modified");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -249,5 +366,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 fn check_error(fixture: &Fixture, base: &str) -> String {
     crate::harness::check_result(fixture, base)
-        .expect_err("classification must stop when a binary closure is unavailable")
+        .expect_err("classification must stop when a released closure is unavailable")
+}
+
+fn assert_lockfile_change(fixture: &Fixture, base: &str, change: &str) {
+    let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
+    let changed = report
+        .get("packages")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
+        .and_then(|package| package.get("changed"))
+        .and_then(Value::as_array)
+        .unwrap();
+
+    assert!(
+        changed.contains(&json!({
+            "dependency": "widget",
+            "change": change,
+            "source": "lockfile"
+        })),
+        "{changed:?}"
+    );
 }
