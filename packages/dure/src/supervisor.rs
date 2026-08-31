@@ -1071,7 +1071,14 @@ mod tests {
         });
     }
 
-    fn assert_rejected_startup_rolls_back(acknowledgement: Option<Message>) {
+    /// Client behavior that rejects a provisional startup transaction.
+    enum RejectedStartup {
+        Disconnect,
+        Message(Message),
+        Timeout,
+    }
+
+    fn assert_rejected_startup_rolls_back(rejection: RejectedStartup) {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
@@ -1107,10 +1114,12 @@ mod tests {
                 panic!("expected exactly one record");
             };
             let session_pipe = record.pipe_name.clone();
-            if let Some(acknowledgement) = acknowledgement {
-                transport.send(startup_conn, &acknowledgement).unwrap();
-            } else {
-                transport.disconnect(startup_conn);
+            match rejection {
+                RejectedStartup::Disconnect => transport.disconnect(startup_conn),
+                RejectedStartup::Message(acknowledgement) => {
+                    transport.send(startup_conn, &acknowledgement).unwrap();
+                }
+                RejectedStartup::Timeout => transport.timeout_next_recv(),
             }
 
             let error = supervisor.join().unwrap().unwrap_err();
@@ -1126,14 +1135,21 @@ mod tests {
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
     fn a_session_without_startup_commit_is_rolled_back() {
-        assert_rejected_startup_rolls_back(None);
+        assert_rejected_startup_rolls_back(RejectedStartup::Disconnect);
     }
 
     #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
     fn a_session_with_an_invalid_startup_commit_is_rolled_back() {
-        assert_rejected_startup_rolls_back(Some(Message::StartupErr));
+        assert_rejected_startup_rolls_back(RejectedStartup::Message(Message::StartupErr));
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_startup_commit_timeout_is_rolled_back() {
+        assert_rejected_startup_rolls_back(RejectedStartup::Timeout);
     }
 
     #[test]

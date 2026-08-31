@@ -84,10 +84,17 @@ impl Deadline {
         if remaining.is_zero() {
             return Err(PalError::new(PalErrorKind::Timeout));
         }
-        Ok(u32::try_from(remaining.as_millis())
+        Ok(u32::try_from(ceil_millis(remaining))
             .unwrap_or(MAX_FINITE_WAIT_MILLIS)
             .clamp(MIN_FINITE_WAIT_MILLIS, MAX_FINITE_WAIT_MILLIS))
     }
+}
+
+/// Convert to the whole milliseconds Windows accepts without shortening a deadline.
+fn ceil_millis(duration: Duration) -> u128 {
+    duration
+        .as_nanos()
+        .div_ceil(Duration::from_millis(1).as_nanos())
 }
 
 fn table() -> &'static Mutex<PipeTable> {
@@ -597,7 +604,7 @@ impl Transport for BuildTargetTransport {
             // and `u32::MAX` (`NMPWAIT_WAIT_FOREVER`) waits without a deadline.
             // Clamping into the interval between them keeps a live deadline from
             // collapsing into "do not wait" or expanding into "wait forever".
-            let timeout_ms = u32::try_from(remaining.as_millis())
+            let timeout_ms = u32::try_from(ceil_millis(remaining))
                 .unwrap_or(u32::MAX)
                 .clamp(2, u32::MAX - 1);
             // SAFETY: `name` is a NUL-terminated pipe path. WaitNamedPipeW does not

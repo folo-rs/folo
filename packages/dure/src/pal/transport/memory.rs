@@ -38,6 +38,8 @@ struct Inner {
     fail_next_send: AtomicBool,
     /// Makes the next accept report a timeout without waiting.
     timeout_next_accept: AtomicBool,
+    /// Makes the next timed receive report a timeout once its connection is idle.
+    timeout_next_recv: AtomicBool,
     /// Guards the pending-connection predicate under `listener_state`. A
     /// `Condvar` may only ever be paired with one mutex, so the connection side
     /// has its own below.
@@ -69,6 +71,7 @@ impl MemoryTransport {
                 startup_commits: AtomicUsize::new(0),
                 fail_next_send: AtomicBool::new(false),
                 timeout_next_accept: AtomicBool::new(false),
+                timeout_next_recv: AtomicBool::new(false),
                 listener_cond: Condvar::new(),
                 conn_cond: Condvar::new(),
             }),
@@ -108,6 +111,12 @@ impl MemoryTransport {
 
     pub(crate) fn timeout_next_accept(&self) {
         self.inner.timeout_next_accept.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn timeout_next_recv(&self) {
+        let _conns = self.inner.conns.lock().expect("conn map lock");
+        self.inner.timeout_next_recv.store(true, Ordering::SeqCst);
+        self.inner.conn_cond.notify_all();
     }
 
     fn accept_inner(
@@ -164,6 +173,9 @@ impl MemoryTransport {
             }
             if state.closed {
                 return Err(PalError::new(PalErrorKind::Disconnected));
+            }
+            if timeout.is_some() && self.inner.timeout_next_recv.swap(false, Ordering::SeqCst) {
+                return Err(PalError::new(PalErrorKind::Timeout));
             }
             conns = if let Some(timeout) = timeout {
                 let remaining = timeout.saturating_sub(started.elapsed());
