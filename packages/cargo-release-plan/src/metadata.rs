@@ -11,13 +11,15 @@ use ohno::AppError;
 use semver::Version;
 use serde::Deserialize;
 use serde_json::Value;
+use toml_edit::{DocumentMut, Item};
 
 use crate::command::run_capture;
 use crate::groups::Groups;
 #[cfg(test)]
 use crate::inherited::InheritedKeys;
 use crate::manifest::{
-    PackageManifest, WorkspaceInherit, parse_document, parse_package_manifest, repo_relative_path,
+    PackageManifest, WorkspaceInherit, for_each_dependency_table, parse_document,
+    parse_package_manifest, repo_relative_path,
 };
 #[cfg(test)]
 use crate::packaging::PackagingRules;
@@ -119,6 +121,8 @@ struct MetadataDep {
     name: String,
     req: String,
     #[serde(default)]
+    rename: Option<String>,
+    #[serde(default)]
     path: Option<String>,
     #[serde(default)]
     kind: Option<String>,
@@ -188,16 +192,18 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
             continue;
         }
         let path = PathBuf::from(&package.manifest_path);
-        let manifest =
+        let manifest_text =
             fs::read_to_string(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
         let git_manifest_path = repo_relative_path(&workspace_root, &path);
-        let Some(mut manifest) = parse_package_manifest(&manifest, &git_manifest_path, &workspace)?
+        let Some(mut manifest) =
+            parse_package_manifest(&manifest_text, &git_manifest_path, &workspace)?
         else {
             continue;
         };
         if !manifest.publish {
             continue;
         }
+        let manifest_doc = parse_document(&path, &manifest_text)?;
         manifest.version = package.version.parse::<Version>().map_err(|error| {
             InvalidVersionError::caused_by(&package.name, &package.version, error)
         })?;
@@ -206,7 +212,9 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         let dependencies = package
             .dependencies
             .iter()
-            .filter(|dep| is_intra_workspace_released(dep, &members_by_dir))
+            .filter(|dep| {
+                is_intra_workspace_released(dep, &members_by_dir, &manifest_doc, &root_manifest)
+            })
             .map(|dep| ReportedDep {
                 name: dep.name.clone(),
                 req: dep.req.clone(),
@@ -302,21 +310,75 @@ fn groups_from_metadata(
 ///
 /// Normal and build dependencies are recorded in the published manifest, so a
 /// version decision on the target cascades to this package. A dev dependency
-/// survives packaging only when it declares a version requirement; Cargo strips
-/// the path-only ones, whose requirement `cargo metadata` reports as the `*`
-/// default, and those cannot cascade.
+/// survives packaging only when its manifest declaration supplies a version
+/// requirement; Cargo reports both an explicit wildcard and no requirement as
+/// `*`, so metadata alone cannot distinguish them.
 fn is_intra_workspace_released(
     dep: &MetadataDep,
     members_by_dir: &BTreeMap<PathBuf, String>,
+    manifest: &DocumentMut,
+    workspace_manifest: &DocumentMut,
 ) -> bool {
-    let kind = dep.kind.as_deref().unwrap_or("normal");
-    if kind == "dev" && dep.req == "*" {
-        return false;
-    }
     let Some(path) = &dep.path else {
         return false;
     };
-    members_by_dir.contains_key(Path::new(path))
+    if !members_by_dir.contains_key(Path::new(path)) {
+        return false;
+    }
+    dep.kind.as_deref().unwrap_or("normal") != "dev"
+        || dev_dependency_declares_version(dep, manifest, workspace_manifest)
+}
+
+/// Determines whether a development dependency survives Cargo's manifest normalization.
+///
+/// The package declaration is authoritative. An inherited declaration delegates
+/// version presence to the workspace entry with the same local dependency name.
+fn dev_dependency_declares_version(
+    dep: &MetadataDep,
+    manifest: &DocumentMut,
+    workspace_manifest: &DocumentMut,
+) -> bool {
+    let local_name = dep.rename.as_deref().unwrap_or(&dep.name);
+    let mut declares_version = false;
+    for_each_dependency_table(manifest.as_table(), &mut |kind, dependencies| {
+        if kind != "dev-dependencies" || declares_version {
+            return;
+        }
+        let Some(item) = dependencies.get(local_name) else {
+            return;
+        };
+        if dependency_item_declares_version(item) {
+            declares_version = true;
+            return;
+        }
+        let inherits = item
+            .as_table_like()
+            .and_then(|table| table.get("workspace"))
+            .and_then(Item::as_bool)
+            == Some(true);
+        declares_version =
+            inherits && workspace_dependency_declares_version(workspace_manifest, local_name);
+    });
+    declares_version
+}
+
+/// Determines whether one dependency item explicitly carries a version requirement.
+fn dependency_item_declares_version(item: &Item) -> bool {
+    item.as_str().is_some()
+        || item
+            .as_table_like()
+            .is_some_and(|table| table.get("version").is_some())
+}
+
+/// Determines whether an inherited workspace dependency carries a version requirement.
+fn workspace_dependency_declares_version(manifest: &DocumentMut, name: &str) -> bool {
+    manifest
+        .get("workspace")
+        .and_then(Item::as_table_like)
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(Item::as_table_like)
+        .and_then(|dependencies| dependencies.get(name))
+        .is_some_and(dependency_item_declares_version)
 }
 
 pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String> {
@@ -340,6 +402,10 @@ mod tests {
     /// most cases is simply every workspace member.
     fn all_publishable(names: &HashSet<String>) -> HashSet<&str> {
         names.iter().map(String::as_str).collect()
+    }
+
+    fn doc(text: &str) -> DocumentMut {
+        parse_document(Path::new("Cargo.toml"), text).unwrap()
     }
 
     #[test]
@@ -453,61 +519,153 @@ mod tests {
         let path_dep = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
+            rename: None,
             path: Some("/ws/packages/bar".to_string()),
             kind: None,
         };
-        assert!(is_intra_workspace_released(&path_dep, &dirs));
+        assert!(is_intra_workspace_released(
+            &path_dep,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
         let named = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
+            rename: None,
             path: None,
             kind: Some("normal".to_string()),
         };
-        assert!(!is_intra_workspace_released(&named, &dirs));
+        assert!(!is_intra_workspace_released(
+            &named,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
         let colliding = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
+            rename: None,
             path: Some("/other/bar".to_string()),
             kind: None,
         };
-        assert!(!is_intra_workspace_released(&colliding, &dirs));
+        assert!(!is_intra_workspace_released(
+            &colliding,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
         let build = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
+            rename: None,
             path: Some("/ws/packages/bar".to_string()),
             kind: Some("build".to_string()),
         };
-        assert!(is_intra_workspace_released(&build, &dirs));
+        assert!(is_intra_workspace_released(
+            &build,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
         let dev = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
+            rename: None,
             path: Some("/ws/packages/bar".to_string()),
             kind: Some("dev".to_string()),
         };
-        assert!(is_intra_workspace_released(&dev, &dirs));
+        assert!(is_intra_workspace_released(
+            &dev,
+            &dirs,
+            &doc("[dev-dependencies]\nbar = { path = \"../bar\", version = \"0.1.0\" }\n"),
+            &doc("")
+        ));
         let path_only_dev = MetadataDep {
             name: "bar".to_string(),
             req: "*".to_string(),
+            rename: None,
             path: Some("/ws/packages/bar".to_string()),
             kind: Some("dev".to_string()),
         };
-        assert!(!is_intra_workspace_released(&path_only_dev, &dirs));
+        assert!(!is_intra_workspace_released(
+            &path_only_dev,
+            &dirs,
+            &doc("[dev-dependencies]\nbar = { path = \"../bar\" }\n"),
+            &doc("")
+        ));
+        let wildcard_dev = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        assert!(is_intra_workspace_released(
+            &wildcard_dev,
+            &dirs,
+            &doc("[dev-dependencies]\nbar = { path = \"../bar\", version = \"*\" }\n"),
+            &doc("")
+        ));
         // A normal dependency without a version requirement still survives
         // packaging, because Cargo strips only path-only dev dependencies.
         let path_only_normal = MetadataDep {
             name: "bar".to_string(),
             req: "*".to_string(),
+            rename: None,
             path: Some("/ws/packages/bar".to_string()),
             kind: None,
         };
-        assert!(is_intra_workspace_released(&path_only_normal, &dirs));
+        assert!(is_intra_workspace_released(
+            &path_only_normal,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
         let foreign = MetadataDep {
             name: "serde".to_string(),
             req: "1.0.0".to_string(),
+            rename: None,
             path: None,
             kind: None,
         };
-        assert!(!is_intra_workspace_released(&foreign, &dirs));
+        assert!(!is_intra_workspace_released(
+            &foreign,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+    }
+
+    #[test]
+    fn inherited_wildcard_dev_dependency_is_released() {
+        let dirs = BTreeMap::from([(PathBuf::from("/ws/packages/bar"), "bar".to_string())]);
+        let dep = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            rename: Some("bar_alias".to_string()),
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        let member = doc("[dev-dependencies]\nbar_alias.workspace = true\n");
+        let versionless_workspace = doc(
+            "[workspace.dependencies]\nbar_alias = { package = \"bar\", path = \"packages/bar\" }\n",
+        );
+        assert!(!is_intra_workspace_released(
+            &dep,
+            &dirs,
+            &member,
+            &versionless_workspace
+        ));
+        let versioned_workspace = doc(
+            "[workspace.dependencies]\nbar_alias = { package = \"bar\", path = \"packages/bar\", version = \"*\" }\n",
+        );
+        assert!(is_intra_workspace_released(
+            &dep,
+            &dirs,
+            &member,
+            &versioned_workspace
+        ));
     }
 
     #[test]

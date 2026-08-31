@@ -3,6 +3,7 @@
 use std::fs;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
+use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{report_json, seeded_package};
@@ -55,6 +56,46 @@ g = ["alpha", "beta"]
     assert!(report.contains("\"alpha\""), "{report}");
     assert!(report.contains("\"beta\""), "{report}");
     assert!(report.contains("\"version\": \"0.1.0\""), "{report}");
+}
+
+/// Explicit wildcard requirements survive packaging and remain report relationships.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn report_retains_an_explicitly_versioned_dev_dependency() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "wildcard_helper", "0.1.0", "");
+    write_package(&fixture, "path_only_helper", "0.1.0", "");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        r#"
+[dev-dependencies]
+wildcard_helper = { path = "../wildcard_helper", version = "*" }
+path_only_helper = { path = "../path_only_helper" }
+"#,
+    );
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
+    let demo = report
+        .get("packages")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|package| package.get("name").and_then(Value::as_str) == Some("demo"))
+        .unwrap();
+    let dependencies = demo.get("dependencies").unwrap();
+
+    assert_eq!(
+        dependencies,
+        &json!([{
+            "name": "wildcard_helper",
+            "req": "*",
+            "exact_pin": false
+        }])
+    );
 }
 
 /// Report replaces the diffs of an earlier run.
