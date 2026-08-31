@@ -446,7 +446,8 @@ fn classify_one(
         });
         let side = work_tree_side(package, cache.case());
         let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-        let tracked_resources = git.tracked_paths(&resource_paths)?;
+        let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
+        let tracked_resources = tracked_resources(&side, &tracked_paths);
         let content = released_in_work_tree(git, &side, &tracked_resources)?;
         let untracked =
             untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
@@ -718,7 +719,8 @@ fn diff_package(
     // paths keeps an untracked README from being read off disk and reported as
     // a content change. Ref: docs/design.md, "Released content".
     let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
-    let tracked_resources = git.tracked_paths(&resource_paths)?;
+    let tracked_paths = git.tracked_paths(&resource_paths, work_side.case)?;
+    let tracked_resources = tracked_resources(work_side, &tracked_paths);
 
     let anchor_tree = anchor_tree_entries(git, anchor_commit, anchor)?;
     let anchor_files = released_at_commit(&anchor_tree, anchor);
@@ -841,10 +843,10 @@ fn diff_package(
 fn work_executable_paths(
     git: &GitRepo,
     side: &PackageSide<'_>,
-    tracked_resources: &HashSet<String>,
+    tracked_resources: &BTreeMap<String, String>,
 ) -> Result<HashSet<String>, AppError> {
     let mut pathspecs = vec![side.dir];
-    pathspecs.extend(tracked_resources.iter().map(String::as_str));
+    pathspecs.extend(tracked_resources.values().map(String::as_str));
     git.executable_paths(&pathspecs)
 }
 
@@ -922,7 +924,19 @@ fn anchor_tree_entries(
 ) -> Result<Vec<TreeEntry>, AppError> {
     let mut pathspecs: Vec<&str> = vec![side.dir];
     pathspecs.extend(side.resources.values().map(String::as_str));
-    git.ls_tree(commit, &pathspecs)
+    let entries = git.ls_tree(commit, &pathspecs)?;
+    let all_resources_found = side.resources.values().all(|resource| {
+        entries
+            .iter()
+            .any(|entry| side.case.same_path(&entry.path, resource))
+    });
+    if side.case == PathCase::Insensitive && !all_resources_found {
+        // Unlike `ls-files`, `ls-tree` rejects the `icase` pathspec magic.
+        // Listing the tree is the only reliable way to resolve an external
+        // resource whose recorded spelling differs from the manifest.
+        return git.ls_tree(commit, &[""]);
+    }
+    Ok(entries)
 }
 
 fn released_at_commit(entries: &[TreeEntry], side: &PackageSide<'_>) -> HashMap<String, String> {
@@ -931,10 +945,11 @@ fn released_at_commit(entries: &[TreeEntry], side: &PackageSide<'_>) -> HashMap<
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
     let mut released = released_from_paths(&paths, &paths, side);
+    let resources = tracked_resources(side, &paths);
     // Reading a resource back from the commit yields nothing when the commit
     // did not track it, so the tree itself performs the tracked-only filter the
     // work tree needs `tracked_paths` for.
-    add_resources(&mut released, side.resources.iter());
+    add_resources(&mut released, resources.iter());
     released
 }
 
@@ -953,6 +968,24 @@ fn add_resources<'a>(
     }
 }
 
+/// Resolves manifest-declared resources to the spelling Git records.
+///
+/// Cargo follows the checkout's case rules when it opens the declared path.
+/// Git's index and trees preserve their own spelling, which must be retained so
+/// blob, mode, and historical lookups address the entry Git actually returned.
+fn tracked_resources(side: &PackageSide<'_>, tracked_paths: &[String]) -> BTreeMap<String, String> {
+    side.resources
+        .iter()
+        .filter_map(|(name, declared)| {
+            tracked_paths
+                .iter()
+                .filter(|tracked| side.case.same_path(tracked, declared))
+                .min()
+                .map(|tracked| (name.clone(), tracked.clone()))
+        })
+        .collect()
+}
+
 /// Lists the untracked paths a package's rules would release.
 ///
 /// Paths are package-relative.
@@ -963,7 +996,7 @@ fn add_resources<'a>(
 fn untracked_released(
     git: &GitRepo,
     side: &PackageSide<'_>,
-    tracked_resources: &HashSet<String>,
+    tracked_resources: &BTreeMap<String, String>,
     tracked: &[String],
 ) -> Result<Vec<String>, AppError> {
     let listed: Vec<String> = git.ls_untracked(side.dir)?;
@@ -990,7 +1023,7 @@ fn untracked_released(
     // it takes inside the package archive.
     untracked.extend(side.resources.iter().filter_map(|(name, path)| {
         let present = git.root().join(path).symlink_metadata().is_ok();
-        (present && !tracked_resources.contains(path)).then(|| name.clone())
+        (present && !tracked_resources.contains_key(name)).then(|| name.clone())
     }));
     if side.auto_readme {
         // A README Cargo would detect is packed whatever the packaging rules
@@ -1023,7 +1056,8 @@ pub(crate) fn released_work_tree_paths(
 ) -> Result<BTreeSet<String>, AppError> {
     let side = work_tree_side(package, case);
     let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-    let tracked_resources = git.tracked_paths(&resource_paths)?;
+    let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
+    let tracked_resources = tracked_resources(&side, &tracked_paths);
     let content = released_in_work_tree(git, &side, &tracked_resources)?;
     Ok(content.released.into_keys().collect())
 }
@@ -1051,17 +1085,12 @@ struct WorkTreeContent {
 fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
-    tracked_resources: &HashSet<String>,
+    tracked_resources: &BTreeMap<String, String>,
 ) -> Result<WorkTreeContent, AppError> {
     let tracked = git.ls_files(side.dir)?;
     let present = present_in_work_tree(git, &tracked)?;
     let mut released = released_from_paths(&tracked, &present, side);
-    add_resources(
-        &mut released,
-        side.resources
-            .iter()
-            .filter(|(_, path)| tracked_resources.contains(*path)),
-    );
+    add_resources(&mut released, tracked_resources.iter());
     Ok(WorkTreeContent {
         released,
         present_tracked: present,
@@ -1964,6 +1993,36 @@ mod tests {
         // Keying by the tracked spelling keeps a re-spelling of the file
         // visible as the released-content change it is.
         assert_eq!(released.get("readme.md").unwrap(), "packages/a/readme.md");
+    }
+
+    /// A declared resource follows the probed case rules while retaining Git's spelling.
+    ///
+    /// Cargo opens the manifest's spelling through the filesystem. Git path and
+    /// blob lookups must use the recorded spelling after deciding that both name
+    /// the same resource.
+    #[test]
+    fn a_declared_resource_follows_the_probed_case_rules() {
+        let rules = PackagingRules::default();
+        let resources =
+            BTreeMap::from([("README.md".to_string(), "packages/a/README.md".to_string())]);
+        let tracked = vec!["packages/a/readme.md".to_string()];
+        let strict = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: false,
+            case: PathCase::Sensitive,
+        };
+        assert!(tracked_resources(&strict, &tracked).is_empty());
+
+        let relaxed = PackageSide {
+            case: PathCase::Insensitive,
+            ..strict
+        };
+        assert_eq!(
+            tracked_resources(&relaxed, &tracked),
+            BTreeMap::from([("README.md".to_string(), "packages/a/readme.md".to_string())])
+        );
     }
 
     /// A deleted path no longer shapes the released content.

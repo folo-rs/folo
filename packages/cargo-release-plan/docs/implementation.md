@@ -124,9 +124,10 @@ package are flattened to the archive root, matching Cargo's layout. Their
 tracked state is queried explicitly so an untracked external README cannot affect
 a verdict.
 
-Path case is probed once at the workspace root and reused for member matching and
-default README detection. An inconclusive probe chooses case-sensitive matching,
-which does not widen the selected content.
+Path case is probed once at the workspace root and reused for member matching,
+declared-resource resolution, and default README detection. Git's recorded
+resource spelling is retained for blob and mode lookups. An inconclusive probe
+chooses case-sensitive matching, which does not widen the selected content.
 
 ### Patch rendering
 

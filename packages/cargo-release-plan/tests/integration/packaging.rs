@@ -346,6 +346,39 @@ fn a_readme_excluded_by_include_is_still_released_content() {
     assert!(message.contains("demo"), "{message}");
 }
 
+/// A declared readme follows the checkout's actual case rules.
+///
+/// Git pathspecs are case-sensitive by default even where Cargo can open a
+/// differently cased spelling. The report must resolve both endpoints to Git's
+/// spelling so an edit remains a modification rather than disappearing or
+/// becoming an apparent add/delete.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_declared_readme_uses_the_tracked_spelling_on_a_case_insensitive_checkout() {
+    let fixture = Fixture::new("[workspace.package]\nreadme = \"README.md\"\n");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "readme.workspace = true\ninclude = [\"src/**\", \"Cargo.toml\"]",
+    );
+    fixture.write("readme.md", "docs\n");
+    // Case behavior belongs to the volume, not the operating system. The pure
+    // unit test exercises both paths where this checkout cannot host the scenario.
+    if !fixture.path().join("README.md").exists() {
+        return;
+    }
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("readme.md", "revised docs\n");
+    fixture.commit("revise the readme");
+
+    let report = report_json(&fixture, &base);
+
+    assert!(report.contains("\"path\": \"README.md\""), "{report}");
+    assert!(report.contains("\"change\": \"modified\""), "{report}");
+}
+
 /// A readme cargo detects itself is released content.
 ///
 /// Cargo picks a package's README off disk when the manifest names none, and packs it regardless of

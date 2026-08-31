@@ -10,6 +10,7 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
+use crate::manifest::PathCase;
 use crate::{
     CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
 };
@@ -328,20 +329,26 @@ impl GitRepo {
         split_z(&stdout)
     }
 
-    /// Which of `paths` Git tracks, as a subset of the input.
+    /// Tracked entries matching `paths`, using the spelling Git records.
     ///
     /// Files a manifest names from outside its package directory are not
     /// covered by any per-directory listing, so their tracked state is asked
-    /// for by exact path. An empty input answers without invoking Git, because
-    /// `git ls-files` with no pathspec lists the whole repository.
-    pub(crate) fn tracked_paths(&self, paths: &[&str]) -> Result<HashSet<String>, AppError> {
+    /// for by path. Matching follows the checkout's case rules because Cargo
+    /// opens manifest-declared resources through that checkout. An empty input
+    /// answers without invoking Git, because `git ls-files` with no pathspec
+    /// lists the whole repository.
+    pub(crate) fn tracked_paths(
+        &self,
+        paths: &[&str],
+        case: PathCase,
+    ) -> Result<Vec<String>, AppError> {
         if paths.is_empty() {
-            return Ok(HashSet::new());
+            return Ok(Vec::new());
         }
         let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
-        args.extend(paths.iter().map(|path| dir_pathspec(path)));
+        args.extend(paths.iter().map(|path| cased_pathspec(path, case)));
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        Ok(split_z(&stdout)?.into_iter().collect())
+        split_z(&stdout)
     }
 
     /// Paths under `pathspecs` that Git considers executable in the work tree.
@@ -641,6 +648,18 @@ pub(crate) fn os_path(path: &Path) -> String {
 fn dir_pathspec(dir: &str) -> String {
     let dir = if dir.is_empty() { "." } else { dir };
     format!(":(literal){dir}")
+}
+
+/// Turns a path into a literal pathspec that follows the checkout's case rules.
+///
+/// Cargo opens manifest-declared resources through the filesystem, while Git
+/// pathspecs are case-sensitive by default even on a case-insensitive checkout.
+fn cased_pathspec(path: &str, case: PathCase) -> String {
+    let path = if path.is_empty() { "." } else { path };
+    match case {
+        PathCase::Sensitive => format!(":(literal){path}"),
+        PathCase::Insensitive => format!(":(icase,literal){path}"),
+    }
 }
 
 /// Joins a workspace-relative path onto the workspace's git prefix.
@@ -1193,6 +1212,22 @@ mod tests {
         assert_eq!(dir_pathspec("packages/foo"), ":(literal)packages/foo");
         // Without the magic prefix this would select every sibling package.
         assert_eq!(dir_pathspec("packages/foo*"), ":(literal)packages/foo*");
+    }
+
+    #[test]
+    fn cased_pathspec_follows_the_checkout_case_rules() {
+        assert_eq!(
+            cased_pathspec("Packages/README.md", PathCase::Sensitive),
+            ":(literal)Packages/README.md"
+        );
+        assert_eq!(
+            cased_pathspec("Packages/README.md", PathCase::Insensitive),
+            ":(icase,literal)Packages/README.md"
+        );
+        assert_eq!(
+            cased_pathspec("", PathCase::Insensitive),
+            ":(icase,literal)."
+        );
     }
 
     /// A directory named like a pattern lists only its own files.
