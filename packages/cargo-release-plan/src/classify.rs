@@ -14,7 +14,7 @@ use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, Presence, TimelineEntry, resolve_anchor};
 use crate::diff::{FileVersion, file_diff, mode_change_diff};
-use crate::git::{DefaultBase, GitRepo, TreeEntry, join_git_rel, tree_mode};
+use crate::git::{DefaultBase, GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::lockfile::{Closure, ClosureChange, Lockfile, closure_changes};
@@ -745,7 +745,8 @@ fn diff_package(
         .iter()
         .map(|entry| (entry.path.as_str(), entry.id.as_str()))
         .collect();
-    let work_ids = work_blob_ids(git, name, work_files)?;
+    let work_modes = work_tree_modes(git, work_side, &tracked_resources)?;
+    let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
 
     // Cargo copies the executable bit into the archive, so a file made
     // executable without an edit is released content that changed even though
@@ -755,8 +756,6 @@ fn diff_package(
         .filter(|entry| entry.is_executable())
         .map(|entry| entry.path.as_str())
         .collect();
-    let work_exec = work_executable_paths(git, work_side, &tracked_resources)?;
-
     let rels: BTreeSet<&str> = anchor_files
         .keys()
         .chain(work_files.keys())
@@ -778,7 +777,7 @@ fn diff_package(
         let mode_change = match (anchor_files.get(rel), work_files.get(rel)) {
             (Some(old_path), Some(new_path)) if old_id.is_some() && new_id.is_some() => {
                 let old_mode = tree_mode(anchor_exec.contains(old_path.as_str()));
-                let new_mode = tree_mode(work_exec.contains(new_path.as_str()));
+                let new_mode = tree_mode(work_modes.is_executable(new_path));
                 (old_mode != new_mode).then_some((old_mode, new_mode))
             }
             _ => None,
@@ -798,8 +797,13 @@ fn diff_package(
         if let Some((old_mode, new_mode)) = mode_change {
             patch.push_str(&mode_change_diff(rel, old_mode, new_mode).text);
         }
-        // The content itself is only needed to render what changed, so it is
-        // read for the differing paths alone.
+        // Equal object ids prove the bytes are unchanged. This check comes after
+        // mode rendering so a mode-only binary change cannot gain a false
+        // "Binary files differ" line from the content renderer.
+        if old_id == new_id {
+            continue;
+        }
+        // The content itself is only needed to render an identity change.
         let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
             Some(path) => git.show_file_bytes(anchor_commit, path)?,
             None => None,
@@ -818,7 +822,7 @@ fn diff_package(
             mode: tree_mode(
                 work_files
                     .get(rel)
-                    .is_some_and(|path| work_exec.contains(path.as_str())),
+                    .is_some_and(|path| work_modes.is_executable(path)),
             ),
         });
         let file_diff = file_diff(rel, old_side, new_side);
@@ -837,20 +841,20 @@ fn diff_package(
     Ok((changed, patch, stat, untracked))
 }
 
-/// Released work-tree paths Git records as executable.
+/// Git modes for released work-tree paths.
 ///
 /// The package directory does not cover a manifest resource that lives outside
 /// it, so those paths are asked for alongside the directory. Only tracked
 /// resources are asked for, because an untracked one is not released content
 /// and Git records no mode for it.
-fn work_executable_paths(
+fn work_tree_modes(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
-) -> Result<HashSet<String>, AppError> {
+) -> Result<WorkTreeModes, AppError> {
     let mut pathspecs = vec![side.dir];
     pathspecs.extend(tracked_resources.values().map(String::as_str));
-    git.executable_paths(&pathspecs)
+    git.work_tree_modes(&pathspecs)
 }
 
 /// Object ids the released work-tree files would be stored under.
@@ -865,10 +869,14 @@ fn work_blob_ids(
     git: &GitRepo,
     name: &str,
     released: &HashMap<String, String>,
+    modes: &WorkTreeModes,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut rels = Vec::new();
     let mut paths = Vec::new();
     for (rel, path) in released {
+        if modes.is_symlink(path) {
+            return Err(SymlinkReleasedError::new(name, path).into());
+        }
         match fs::symlink_metadata(git.root().join(path)) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(SymlinkReleasedError::new(name, path).into());

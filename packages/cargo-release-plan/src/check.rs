@@ -322,12 +322,16 @@ fn cargo_package_list(workspace_root: &Path, package: &str) -> Result<Vec<String
         ],
         workspace_root,
     )?;
-    Ok(stdout
+    Ok(parse_package_list(&stdout))
+}
+
+/// Parses the newline-delimited archive paths emitted by `cargo package --list`.
+fn parse_package_list(stdout: &str) -> Vec<String> {
+    stdout
         .lines()
-        .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -346,6 +350,15 @@ mod tests {
 
     /// Stands in for whichever revision a run classified against.
     const BASE: &str = "origin/main";
+
+    /// Package-list parsing preserves whitespace that belongs to a path.
+    #[test]
+    fn package_list_paths_are_preserved_verbatim() {
+        assert_eq!(
+            parse_package_list("ordinary.rs\n leading.rs\ntrailing.rs \n \n\n"),
+            ["ordinary.rs", " leading.rs", "trailing.rs ", " ",]
+        );
+    }
 
     #[test]
     fn the_remedy_names_the_base_the_run_used() {

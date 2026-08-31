@@ -7,7 +7,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
-#[cfg(unix)]
 use cargo_release_plan::{CheckFormat, RunInput, run};
 
 use crate::fixture::{Fixture, write_package};
@@ -193,6 +192,39 @@ fn a_released_symbolic_link_stops_the_run() {
     });
 
     let error = result.expect_err("a released link cannot be classified");
+    let message = error.to_string();
+    assert!(message.contains("link.txt"), "{message}");
+    assert!(message.contains("symbolic link"), "{message}");
+}
+
+/// An indexed symlink stops the run even when the checkout materializes it as a file.
+///
+/// `core.symlinks=false` is the normal Windows configuration. Git then keeps the
+/// symlink mode only in the index while placing its target path in an ordinary
+/// work-tree file, so filesystem metadata alone cannot identify it.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_indexed_symlink_in_a_regular_checkout_stops_the_run() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    let path = "packages/demo/link.txt";
+    fixture.write(path, "src/lib.rs");
+    fixture.git(&["config", "core.symlinks", "false"]);
+    let blob = fixture.git(&["hash-object", "-w", path]).trim().to_string();
+    let cache_info = format!("120000,{blob},{path}");
+    fixture.git(&["update-index", "--add", "--cacheinfo", &cache_info]);
+    fixture.git(&["commit", "-m", "add indexed link"]);
+    fixture.git(&["checkout-index", "--force", "--", path]);
+
+    let result = run(&RunInput::Check {
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    });
+
+    let error = result.expect_err("an indexed link cannot be classified");
     let message = error.to_string();
     assert!(message.contains("link.txt"), "{message}");
     assert!(message.contains("symbolic link"), "{message}");

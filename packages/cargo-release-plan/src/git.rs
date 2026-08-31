@@ -351,7 +351,7 @@ impl GitRepo {
         split_z(&stdout)
     }
 
-    /// Paths under `pathspecs` that Git considers executable in the work tree.
+    /// Modes under `pathspecs` that affect packaged work-tree content.
     ///
     /// The index supplies the baseline mode. `git diff-files` then overlays
     /// changes that Git observes in the work tree, including an unstaged
@@ -362,9 +362,9 @@ impl GitRepo {
     ///
     /// An empty input answers without invoking Git, because `git ls-files` with
     /// no pathspec lists the whole repository.
-    pub(crate) fn executable_paths(&self, pathspecs: &[&str]) -> Result<HashSet<String>, AppError> {
+    pub(crate) fn work_tree_modes(&self, pathspecs: &[&str]) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
-            return Ok(HashSet::new());
+            return Ok(WorkTreeModes::default());
         }
         let mut args = vec![
             "ls-files".to_string(),
@@ -374,11 +374,12 @@ impl GitRepo {
         ];
         args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        let mut executable: HashSet<String> = split_z(&stdout)?
-            .iter()
-            .filter_map(|record| executable_staged_path(record))
-            .map(ToOwned::to_owned)
-            .collect();
+        let mut modes = WorkTreeModes::default();
+        for record in split_z(&stdout)? {
+            if let Some((mode, path)) = staged_path_mode(&record) {
+                modes.set(path, mode);
+            }
+        }
 
         let mut args = vec![
             "diff-files".to_string(),
@@ -389,8 +390,8 @@ impl GitRepo {
         ];
         args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        overlay_work_tree_modes(&stdout, &mut executable)?;
-        Ok(executable)
+        overlay_work_tree_modes(&stdout, &mut modes)?;
+        Ok(modes)
     }
 
     /// Untracked, non-ignored paths under `pathspec`.
@@ -581,23 +582,61 @@ impl TreeEntry {
     }
 }
 
-/// Reads a `<mode> <object> <stage>\t<path>` index record, keeping the path
-/// only when the record carries the executable mode.
+/// Work-tree modes that affect released artifacts or their interpretation.
+///
+/// Executable paths provide the mode Cargo copies into the archive. Symlink
+/// paths must be rejected before hashing because `core.symlinks=false` can
+/// materialize an indexed link as an ordinary work-tree file.
+/// Ref: docs/implementation.md, "Content identity and file modes".
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct WorkTreeModes {
+    executable: HashSet<String>,
+    symlinks: HashSet<String>,
+}
+
+impl WorkTreeModes {
+    /// Whether Git considers `path` an executable regular file.
+    pub(crate) fn is_executable(&self, path: &str) -> bool {
+        self.executable.contains(path)
+    }
+
+    /// Whether Git records `path` as a symbolic link.
+    pub(crate) fn is_symlink(&self, path: &str) -> bool {
+        self.symlinks.contains(path)
+    }
+
+    /// Replaces the artifact-relevant mode for `path`.
+    fn set(&mut self, path: &str, mode: &str) {
+        match mode {
+            EXECUTABLE_TREE_MODE => {
+                self.symlinks.remove(path);
+                self.executable.insert(path.to_string());
+            }
+            SYMLINK_TREE_MODE => {
+                self.executable.remove(path);
+                self.symlinks.insert(path.to_string());
+            }
+            _ => {
+                self.executable.remove(path);
+                self.symlinks.remove(path);
+            }
+        }
+    }
+}
+
+/// Reads a `<mode> <object> <stage>\t<path>` index record.
 ///
 /// The mode is read off the record's own first field rather than matched
 /// anywhere in the record, so a path that itself looks like a mode cannot be
 /// mistaken for one.
-fn executable_staged_path(record: &str) -> Option<&str> {
+fn staged_path_mode(record: &str) -> Option<(&str, &str)> {
     let (metadata, path) = record.split_once('\t')?;
     let mode = metadata.split(' ').next()?;
-    (mode == EXECUTABLE_TREE_MODE).then_some(path)
+    Some((mode, path))
 }
 
 /// Applies the work-tree modes from NUL-delimited `git diff-files --raw` records.
-fn overlay_work_tree_modes(
-    stdout: &[u8],
-    executable: &mut HashSet<String>,
-) -> Result<(), AppError> {
+fn overlay_work_tree_modes(stdout: &[u8], modes: &mut WorkTreeModes) -> Result<(), AppError> {
     let fields = split_z(stdout)?;
     for record in fields.chunks_exact(2) {
         let [header, path] = record else {
@@ -605,14 +644,8 @@ fn overlay_work_tree_modes(
         };
         let mut metadata = header.split_whitespace();
         _ = metadata.next();
-        match metadata.next() {
-            Some(EXECUTABLE_TREE_MODE) => {
-                executable.insert(path.clone());
-            }
-            Some(_) => {
-                executable.remove(path);
-            }
-            None => {}
+        if let Some(mode) = metadata.next() {
+            modes.set(path, mode);
         }
     }
     Ok(())
@@ -833,24 +866,27 @@ mod tests {
         );
     }
 
-    /// Index records yield only the executable paths.
+    /// Index records yield their modes and paths.
     ///
     /// The mode is read off the record's own first field, so a path that itself looks like the
     /// executable mode cannot be mistaken for one.
     #[test]
-    fn index_records_yield_only_the_executable_paths() {
+    fn index_records_yield_modes_and_paths() {
         assert_eq!(
-            executable_staged_path("100755 abc 0\tpackages/foo/run.sh"),
-            Some("packages/foo/run.sh")
+            staged_path_mode("100755 abc 0\tpackages/foo/run.sh"),
+            Some(("100755", "packages/foo/run.sh"))
         );
         assert_eq!(
-            executable_staged_path("100644 abc 0\tpackages/foo/lib.rs"),
-            None
+            staged_path_mode("120000 abc 0\tpackages/foo/link"),
+            Some(("120000", "packages/foo/link"))
         );
         // The path names the executable mode without carrying it.
-        assert_eq!(executable_staged_path("100644 abc 0\t100755"), None);
+        assert_eq!(
+            staged_path_mode("100644 abc 0\t100755"),
+            Some(("100644", "100755"))
+        );
         // Not a record at all: no field separator.
-        assert_eq!(executable_staged_path("100755 abc 0 packages/foo"), None);
+        assert_eq!(staged_path_mode("100755 abc 0 packages/foo"), None);
     }
 
     /// A regular file's mode is chosen by its executable bit.
@@ -866,7 +902,7 @@ mod tests {
     /// paths from every package rather than only the one being classified.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
-    fn executable_paths_include_the_index() {
+    fn work_tree_modes_include_the_index() {
         let temp = tempdir().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("packages/foo")).unwrap();
@@ -891,11 +927,11 @@ mod tests {
             fs::set_permissions(path, permissions).unwrap();
         }
 
-        assert_eq!(
-            repo.executable_paths(&["packages/foo"]).unwrap(),
-            HashSet::from(["packages/foo/run.sh".to_string()])
-        );
-        assert!(repo.executable_paths(&[]).unwrap().is_empty());
+        let modes = repo.work_tree_modes(&["packages/foo"]).unwrap();
+        assert!(modes.is_executable("packages/foo/run.sh"));
+        assert!(!modes.is_executable("packages/foo/lib.rs"));
+        assert!(!modes.is_symlink("packages/foo/run.sh"));
+        assert_eq!(repo.work_tree_modes(&[]).unwrap(), WorkTreeModes::default());
     }
 
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
@@ -918,28 +954,37 @@ mod tests {
     /// Work-tree mode records overlay the index without confusing content edits.
     #[test]
     fn work_tree_modes_overlay_index_modes() {
-        let mut executable =
-            HashSet::from(["made-plain.sh".to_string(), "unchanged.sh".to_string()]);
+        let mut modes = WorkTreeModes::default();
+        modes.set("made-plain.sh", EXECUTABLE_TREE_MODE);
+        modes.set("unchanged.sh", EXECUTABLE_TREE_MODE);
+        modes.set("made-regular-link", SYMLINK_TREE_MODE);
+        modes.set("unchanged-link", SYMLINK_TREE_MODE);
         let records = b":100644 100755 old new M\0made-executable.sh\0\
                         :100755 100644 old new M\0made-plain.sh\0\
+                        :120000 100644 old new M\0made-regular-link\0\
+                        :100644 120000 old new M\0made-link\0\
                         :100644 100644 old new M\0content-only.sh\0";
 
-        overlay_work_tree_modes(records, &mut executable).unwrap();
+        overlay_work_tree_modes(records, &mut modes).unwrap();
 
         assert_eq!(
-            executable,
+            modes.executable,
             HashSet::from(["made-executable.sh".to_string(), "unchanged.sh".to_string(),])
+        );
+        assert_eq!(
+            modes.symlinks,
+            HashSet::from(["made-link".to_string(), "unchanged-link".to_string()])
         );
     }
 
     /// A malformed mode record cannot invent an executable path.
     #[test]
     fn work_tree_mode_without_modes_is_ignored() {
-        let mut executable = HashSet::new();
+        let mut modes = WorkTreeModes::default();
 
-        overlay_work_tree_modes(b":\0script.sh\0", &mut executable).unwrap();
+        overlay_work_tree_modes(b":\0script.sh\0", &mut modes).unwrap();
 
-        assert!(executable.is_empty());
+        assert_eq!(modes, WorkTreeModes::default());
     }
 
     /// Os path rewrites only the platform separator.

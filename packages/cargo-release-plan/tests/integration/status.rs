@@ -103,6 +103,41 @@ fn executable_bit_alone_needs_an_increment() {
     assert!(!patch.contains("@@"), "{patch}");
 }
 
+/// A mode-only binary patch does not claim that equal bytes differ.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn binary_executable_bit_alone_renders_only_modes() {
+    let fixture = seeded_package();
+    fixture.write("packages/demo/asset.bin", "before\0after");
+    write_package(&fixture, "demo", "0.1.1", "");
+    fixture.commit("release with binary asset");
+    let base = fixture.sha("HEAD");
+
+    fixture.git(&["update-index", "--chmod=+x", "packages/demo/asset.bin"]);
+    fixture.git(&["commit", "-m", "make binary asset executable"]);
+    #[cfg(unix)]
+    {
+        let path = fixture.path().join("packages/demo/asset.bin");
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    let out_dir = fixture.path().join("out");
+    run(&RunInput::Report {
+        out_dir: out_dir.clone(),
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+
+    let patch = fs::read_to_string(out_dir.join("diffs").join("demo.patch")).unwrap();
+    assert!(patch.contains("old mode 100644"), "{patch}");
+    assert!(patch.contains("new mode 100755"), "{patch}");
+    assert!(!patch.contains("Binary files"), "{patch}");
+}
+
 #[cfg(unix)]
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]

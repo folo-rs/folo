@@ -110,11 +110,13 @@ unreachable blobs remain subject to ordinary Git garbage collection.
 Historical file modes come from `git ls-tree`. Work-tree modes start from the
 index and overlay `git diff-files --raw`: on a checkout with `core.fileMode`
 enabled, an unstaged executable-bit change is observed; when it is disabled, the
-index remains the stable fallback.
+index remains the stable fallback. Indexed symlink modes are retained as well
+because `core.symlinks = false` can materialize a link as an ordinary work-tree
+file; released symlinks are rejected before content hashing.
 
-File bytes are loaded only after identity or mode differs, because they are
-needed for presentation rather than the verdict. Symbolic links are rejected
-before hashing or reading their targets.
+File bytes are loaded only after object identity differs, because mode-only
+changes render directly and bytes are needed for presentation rather than the
+verdict. Symbolic links are rejected before hashing or reading their targets.
 
 ### Package boundaries and resources
 
