@@ -248,6 +248,40 @@ fn an_indexed_symlink_in_a_regular_checkout_stops_the_run() {
     assert!(message.contains("symbolic link"), "{message}");
 }
 
+/// A new package cannot bypass indexed-link validation.
+///
+/// New packages have no anchor to diff, but their released content must still
+/// satisfy the same representability requirements as an existing package.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_new_package_with_an_indexed_symlink_stops_the_run() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    write_package(&fixture, "fresh", "0.1.0", "");
+    let path = "packages/fresh/link.txt";
+    fixture.write(path, "src/lib.rs");
+    fixture.git(&["config", "core.symlinks", "false"]);
+    fixture.git(&["add", "-A"]);
+    let blob = fixture.git(&["hash-object", "-w", path]).trim().to_string();
+    let cache_info = format!("120000,{blob},{path}");
+    fixture.git(&["update-index", "--add", "--cacheinfo", &cache_info]);
+    fixture.git(&["commit", "-m", "add a new package with an indexed link"]);
+    fixture.git(&["checkout-index", "--force", "--", path]);
+
+    let result = run(&RunInput::Check {
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    });
+
+    let error = result.expect_err("a new package's indexed link cannot be classified");
+    let message = error.to_string();
+    assert!(message.contains("link.txt"), "{message}");
+    assert!(message.contains("symbolic link"), "{message}");
+}
+
 /// A symbolic link released only at the anchor stops the run.
 ///
 /// The refusal has to hold when the link is only in history: it is the anchor side that Git answers

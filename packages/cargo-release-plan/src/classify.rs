@@ -453,6 +453,8 @@ fn classify_one(
         let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
         let tracked_resources = tracked_resources(&side, &tracked_paths);
         let content = released_in_work_tree(git, &side, &tracked_resources)?;
+        let work_modes = work_tree_modes(git, &side, &tracked_resources)?;
+        _ = validated_work_tree_files(git, name, &content.released, &work_modes)?;
         let untracked =
             untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
         log_untracked(verbose, name, untracked.len());
@@ -870,8 +872,28 @@ fn work_blob_ids(
     released: &HashMap<String, String>,
     modes: &WorkTreeModes,
 ) -> Result<HashMap<String, String>, AppError> {
-    let mut rels = Vec::new();
-    let mut paths = Vec::new();
+    let files = validated_work_tree_files(git, name, released, modes)?;
+    let paths: Vec<&str> = files.iter().map(|(_, path)| *path).collect();
+    let ids = git.hash_objects(&paths)?;
+    Ok(files
+        .into_iter()
+        .map(|(rel, _)| rel.to_string())
+        .zip(ids)
+        .collect())
+}
+
+/// Released work-tree files that are present and safe to hash.
+///
+/// Symbolic links stop classification before Git can dereference them. Both
+/// index modes and filesystem metadata are required because either one may be
+/// the only place that identifies a link in the current checkout.
+fn validated_work_tree_files<'a>(
+    git: &GitRepo,
+    name: &str,
+    released: &'a HashMap<String, String>,
+    modes: &WorkTreeModes,
+) -> Result<Vec<(&'a str, &'a str)>, AppError> {
+    let mut files = Vec::with_capacity(released.len());
     for (rel, path) in released {
         if modes.is_symlink(path) {
             return Err(SymlinkReleasedError::new(name, path).into());
@@ -886,11 +908,9 @@ fn work_blob_ids(
                 return Err(ReadFileError::caused_by(git.root().join(path), error).into());
             }
         }
-        rels.push(rel.clone());
-        paths.push(path.as_str());
+        files.push((rel.as_str(), path.as_str()));
     }
-    let ids = git.hash_objects(&paths)?;
-    Ok(rels.into_iter().zip(ids).collect())
+    Ok(files)
 }
 
 /// Stops when the anchor released a symbolic link.
