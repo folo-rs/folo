@@ -23,7 +23,9 @@ use crate::manifest::{
     is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
     parse_workspace_members, to_git_separators,
 };
-use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
+use crate::metadata::{
+    ReportedDep, WorkPackage, WorkTree, dependents_of, load_classification_work_tree,
+};
 use crate::packaging::{PackagingRules, relativize};
 use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
@@ -303,8 +305,7 @@ pub(crate) fn classify(
     base: Option<&str>,
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
-    let mut work_tree = load_work_tree(manifest_path)?;
-    let git = GitRepo::discover(&work_tree.workspace_root)?;
+    let (mut work_tree, git) = load_classification_work_tree(manifest_path)?;
     let base = match base {
         Some(base) => base.to_owned(),
         None => {
@@ -1038,14 +1039,15 @@ fn untracked_released(
     }));
     if side.auto_readme {
         // A README Cargo would detect is packed whatever the packaging rules
-        // say, so an untracked one is worth mentioning — but only while no
-        // tracked candidate outranks it, since that is the one Cargo picks.
-        let tracked_set: HashSet<&str> = tracked.iter().map(String::as_str).collect();
-        if detected_readme(side.dir, &tracked_set, side.case).is_none() {
-            let listed_set: HashSet<&str> = listed.iter().map(String::as_str).collect();
-            if let Some((name, _)) = detected_readme(side.dir, &listed_set, side.case) {
-                untracked.push(name);
-            }
+        // say. Detect across both sets because a higher-priority untracked name
+        // can outrank a tracked fallback; only the selected untracked path is
+        // advisory.
+        let listed_set: HashSet<&str> = listed.iter().map(String::as_str).collect();
+        let present: HashSet<&str> = tracked.iter().chain(&listed).map(String::as_str).collect();
+        if let Some((name, full)) = detected_readme(side.dir, &present, side.case)
+            && listed_set.contains(full.as_str())
+        {
+            untracked.push(name);
         }
     }
     untracked.sort_unstable();

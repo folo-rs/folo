@@ -14,17 +14,19 @@ use serde_json::Value;
 use toml_edit::{DocumentMut, Item};
 
 use crate::command::run_capture;
+use crate::git::{GitRepo, join_git_rel};
 use crate::groups::Groups;
 #[cfg(test)]
 use crate::inherited::InheritedKeys;
 #[cfg(test)]
 use crate::manifest::TargetDiscovery;
 use crate::manifest::{
-    PackageManifest, WorkspaceInherit, for_each_dependency_table, parse_document,
+    PackageManifest, PathCase, WorkspaceInherit, for_each_dependency_table, parse_document,
     parse_package_manifest, repo_relative_path,
 };
 #[cfg(test)]
 use crate::packaging::PackagingRules;
+use crate::packaging::relativize;
 use crate::{
     GroupNameCollisionError, InvalidVersionError, MalformedVersionGroupError,
     MalformedVersionGroupsError, NonPublishableGroupMemberError, ParseMetadataError, ReadFileError,
@@ -127,7 +129,76 @@ struct MetadataDep {
     kind: Option<String>,
 }
 
+/// Git-tracked inputs that constrain Cargo's work-tree metadata.
+///
+/// Cargo still supplies manifest normalization and dependency relationships,
+/// while this scope prevents untracked manifests and auto-discovered targets
+/// from entering the released-content model.
+/// Ref: docs/implementation.md, "Workspace snapshots".
+struct TrackedMetadata<'a> {
+    git: &'a GitRepo,
+    workspace_root: &'a Path,
+    paths: Vec<String>,
+    case: PathCase,
+}
+
+impl TrackedMetadata<'_> {
+    /// Whether Cargo's member manifest is recorded in Git.
+    fn contains_manifest(&self, manifest_path: &str) -> bool {
+        // Cargo paths are first made workspace-relative using Cargo's own root
+        // spelling, then rebased with Git's prefix. Subtracting Git's root from a
+        // Cargo path would fail for equivalent 8.3, symlinked, or substituted
+        // spellings of the same directory.
+        let workspace_path = repo_relative_path(self.workspace_root, Path::new(manifest_path));
+        let manifest_path = join_git_rel(self.git.prefix(), &workspace_path);
+        self.paths
+            .iter()
+            .any(|path| self.case.same_path(path, &manifest_path))
+    }
+
+    /// Whether tracked, present package inputs define a lockfile-bearing target.
+    fn has_lockfile_target(&self, manifest: &PackageManifest) -> Result<bool, AppError> {
+        let package_dir = join_git_rel(self.git.prefix(), &manifest.directory);
+        let mut present = Vec::new();
+        for path in &self.paths {
+            let Some(relative) = relativize(path, &package_dir) else {
+                continue;
+            };
+            match fs::symlink_metadata(self.git.root().join(path)) {
+                Ok(_) => present.push(relative),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ReadFileError::caused_by(self.git.root().join(path), error).into());
+                }
+            }
+        }
+        Ok(manifest.targets.has_lockfile_target(present, self.case))
+    }
+}
+
+/// Loads the current workspace while restricting release inputs to tracked files.
+pub(crate) fn load_classification_work_tree(
+    manifest_path: &Path,
+) -> Result<(WorkTree, GitRepo), AppError> {
+    let metadata = query_metadata(manifest_path)?;
+    let workspace_root = PathBuf::from(&metadata.workspace_root);
+    let git = GitRepo::discover(&workspace_root)?;
+    let tracked = TrackedMetadata {
+        paths: git.ls_files("")?,
+        case: PathCase::probe(&workspace_root),
+        git: &git,
+        workspace_root: &workspace_root,
+    };
+    let work_tree = work_tree_from_metadata(&metadata, Some(&tracked))?;
+    Ok((work_tree, git))
+}
+
 pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError> {
+    let metadata = query_metadata(manifest_path)?;
+    work_tree_from_metadata(&metadata, None)
+}
+
+fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
     // Cargo resolves a relative `--manifest-path` against the child's working
     // directory, so the child inherits this process's directory and the path is
     // passed through unchanged. Deriving the directory from the path instead
@@ -150,26 +221,39 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         ],
         cwd,
     )?;
-    let metadata: MetadataJson =
-        serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?;
+    Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+}
 
+fn work_tree_from_metadata(
+    metadata: &MetadataJson,
+    tracked: Option<&TrackedMetadata<'_>>,
+) -> Result<WorkTree, AppError> {
     let workspace_root = PathBuf::from(&metadata.workspace_root);
     let member_ids: HashSet<&str> = metadata
         .workspace_members
         .iter()
         .map(String::as_str)
         .collect();
+    let selected_member_ids: HashSet<&str> = metadata
+        .packages
+        .iter()
+        .filter(|package| member_ids.contains(package.id.as_str()))
+        .filter(|package| {
+            tracked.is_none_or(|tracked| tracked.contains_manifest(&package.manifest_path))
+        })
+        .map(|package| package.id.as_str())
+        .collect();
 
     let workspace_names: HashSet<String> = metadata
         .packages
         .iter()
-        .filter(|package| member_ids.contains(package.id.as_str()))
+        .filter(|package| selected_member_ids.contains(package.id.as_str()))
         .map(|package| package.name.clone())
         .collect();
     let members_by_dir: BTreeMap<PathBuf, String> = metadata
         .packages
         .iter()
-        .filter(|package| member_ids.contains(package.id.as_str()))
+        .filter(|package| selected_member_ids.contains(package.id.as_str()))
         .filter_map(|package| {
             Path::new(&package.manifest_path)
                 .parent()
@@ -184,7 +268,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     let mut packages = Vec::new();
 
     for package in &metadata.packages {
-        if !member_ids.contains(package.id.as_str()) {
+        if !selected_member_ids.contains(package.id.as_str()) {
             continue;
         }
         if matches!(&package.publish, Some(regs) if regs.is_empty()) {
@@ -222,15 +306,18 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
             .collect();
 
         packages.push(WorkPackage {
+            has_lockfile_target: match tracked {
+                Some(tracked) => tracked.has_lockfile_target(&manifest)?,
+                None => package.targets.iter().any(|target| {
+                    target
+                        .kind
+                        .iter()
+                        .any(|kind| LOCKFILE_TARGET_KINDS.contains(&kind.as_str()))
+                }),
+            },
             manifest,
             manifest_path: path,
             dependencies,
-            has_lockfile_target: package.targets.iter().any(|target| {
-                target
-                    .kind
-                    .iter()
-                    .any(|kind| LOCKFILE_TARGET_KINDS.contains(&kind.as_str()))
-            }),
             resources: BTreeMap::new(),
         });
     }

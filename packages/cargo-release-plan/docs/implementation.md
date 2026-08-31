@@ -49,9 +49,12 @@ into an error.
 
 ## Workspace snapshots
 
-`cargo metadata --no-deps` supplies the current workspace and target kinds.
-Historical workspaces cannot use Cargo without checking out each commit, so
-`SnapshotCache` reconstructs them from tracked manifests.
+`cargo metadata --no-deps` supplies candidate current members and normalized
+dependency relationships. Git-tracked manifests constrain that candidate set,
+so an untracked or ignored manifest found through a member glob cannot become a
+package in the release model. Historical workspaces cannot use Cargo without
+checking out each commit, so `SnapshotCache` reconstructs them from tracked
+manifests.
 
 The reconstruction starts from the root package and declared member patterns,
 then follows in-workspace path dependencies to a fixed point while honoring
@@ -165,10 +168,11 @@ The parsed work-tree lockfile is shared across all lockfile-bearing packages.
 Historical lockfiles are shared by packages with the same anchor commit, so a
 workspace-sized endpoint is parsed once rather than once per package.
 
-Work-tree target shape comes from Cargo metadata. Historical snapshots reconstruct
-binary and example targets from explicit manifest target declarations and Cargo's
-automatic target layouts, while respecting the manifest's `autobins` and
-`autoexamples` controls.
+Both endpoint target shapes come from explicit manifest target declarations and
+Cargo's automatic target layouts, while respecting the manifest's `autobins` and
+`autoexamples` controls. Work-tree automatic discovery considers only tracked
+paths that remain present, so an untracked or ignored source file cannot turn a
+library artifact into a lockfile-bearing artifact.
 
 Each endpoint that has a binary or example target must have a lockfile resolving
 the package at its corresponding declared version. An endpoint without either

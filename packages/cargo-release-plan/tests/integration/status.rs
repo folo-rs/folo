@@ -415,6 +415,24 @@ fn new_package_on_the_branch_is_pending_release() {
     assert!(report.contains("\"status\": \"pending-release\""));
 }
 
+/// Workspace-member discovery cannot promote untracked or ignored manifests.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn untracked_workspace_members_are_not_release_packages() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write(".gitignore", "packages/ignored/\n");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    write_package(&fixture, "untracked", "0.1.0", "");
+    write_package(&fixture, "ignored", "0.1.0", "");
+
+    let report = report_json(&fixture, &base);
+
+    assert!(!report.contains("\"name\": \"untracked\""), "{report}");
+    assert!(!report.contains("\"name\": \"ignored\""), "{report}");
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_new_package_still_reports_its_untracked_paths() {

@@ -85,6 +85,37 @@ fn a_moved_dependency_leaves_a_library_package_unchanged() {
     assert!(!message.contains("helper: needs-increment"), "{message}");
 }
 
+/// An untracked conventional binary does not make the released artifact carry a lockfile.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_untracked_default_binary_does_not_require_a_lockfile() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "tool", "0.1.0", "");
+    fixture.commit("seed library");
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+}
+
+/// An ignored conventional example does not make the released artifact carry a lockfile.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_ignored_example_does_not_require_a_lockfile() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "tool", "0.1.0", "");
+    fixture.write(".gitignore", "packages/tool/examples/\n");
+    fixture.commit("seed library");
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/tool/examples/demo.rs", "fn main() {}\n");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn an_incremented_binary_package_settles() {

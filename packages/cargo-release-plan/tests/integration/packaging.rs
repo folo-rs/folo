@@ -164,6 +164,24 @@ fn an_untracked_auto_detected_readme_is_advisory_even_when_the_rules_exclude_it(
     assert!(report.contains("README.md"), "{report}");
 }
 
+/// Cargo's selected untracked README is advisory even beside a tracked fallback.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_higher_priority_untracked_readme_outranks_a_tracked_fallback() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write("packages/demo/README.txt", "fallback\n");
+    fixture.commit("seed with fallback readme");
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/README.md", "preferred\n");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+    let report = report_json(&fixture, &base);
+    assert!(report.contains("README.md"), "{report}");
+}
+
 /// A released symbolic link stops the run.
 ///
 /// Cargo dereferences a symbolic link when it builds a package archive, so the released bytes are
