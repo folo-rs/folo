@@ -1,5 +1,3 @@
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
-
 //! Binary entry point for the cargo-release-plan tool.
 
 use std::env::args_os;

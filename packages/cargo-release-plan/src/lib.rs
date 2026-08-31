@@ -9,6 +9,14 @@ pub(crate) use errors::*;
 pub use run::{RunInput, RunOutcome, run};
 pub(crate) use text::{quote_path, short_commit};
 
+/// Internal surface used only by this package's benchmarks.
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::diff::benchmark_patch_rendering;
+    pub use crate::lockfile::benchmark_lockfile_closure;
+}
+
 mod anchor;
 mod apply;
 mod check;

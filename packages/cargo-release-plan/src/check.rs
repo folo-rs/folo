@@ -74,7 +74,7 @@ pub(crate) fn run_check(
 
 fn default_success_message(passed: bool, message: &str) -> Option<&'static str> {
     if passed && message.is_empty() {
-        Some("Every publishable package is released or pending release.")
+        Some("Every publishable package is unchanged or pending release.")
     } else {
         None
     }
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn released_packages_produce_no_diagnostics() {
-        let package = PackageClass::released(
+        let package = PackageClass::unchanged(
             "demo",
             Version::new(0, 1, 0),
             Anchor {

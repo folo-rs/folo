@@ -5,8 +5,10 @@
 //! releases its resolved dependency closure while a library does not.
 //! Ref: docs/design.md, "Lockfiles of binary packages".
 
+use std::fs;
+
 use crate::fixture::{Fixture, write_binary_package, write_package};
-use crate::harness::check;
+use crate::harness::{check, check_verbose};
 
 /// Writes a workspace lockfile resolving `tool` onto `helper` and `widget`.
 ///
@@ -60,7 +62,7 @@ fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("update the locked widget");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &base);
     assert!(!passed, "{message}");
     assert!(message.contains("tool: needs-increment"), "{message}");
     assert!(message.contains("widget"), "{message}");
@@ -68,7 +70,7 @@ fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_moved_dependency_leaves_a_library_package_released() {
+fn a_moved_dependency_leaves_a_library_package_unchanged() {
     // `helper` publishes no executable, so nothing a consumer builds against
     // comes from the lockfile even though the archive still carries one.
     let fixture = locked_workspace();
@@ -105,7 +107,7 @@ fn an_incremented_binary_package_settles() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn an_untouched_lockfile_leaves_a_binary_package_released() {
+fn an_untouched_lockfile_leaves_a_binary_package_unchanged() {
     let fixture = locked_workspace();
     let base = fixture.sha("HEAD");
 
@@ -129,7 +131,44 @@ fn a_workspace_without_a_lockfile_classifies() {
     fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
     fixture.commit("edit the binary");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("tool: needs-increment"), "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_missing_work_tree_lockfile_classifies() {
+    let fixture = locked_workspace();
+    let base = fixture.sha("HEAD");
+    fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
+
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(passed, "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_lockfile_that_does_not_resolve_the_binary_classifies() {
+    let fixture = Fixture::new("");
+    write_binary_package(&fixture, "tool", "0.1.0", "");
+    fixture.write(
+        "Cargo.lock",
+        r#"version = 4
+
+[[package]]
+name = "widget"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    );
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
+    fixture.commit("edit the binary");
+
+    let (passed, message) = check_verbose(&fixture, &base);
     assert!(!passed, "{message}");
     assert!(message.contains("tool: needs-increment"), "{message}");
 }

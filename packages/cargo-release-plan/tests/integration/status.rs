@@ -1,14 +1,16 @@
 //! Status verdicts.
 //!
 //! Covers which released-content and manifest changes make a package pending release,
-//! carrying unreleased changes, or already released.
+//! carrying changes that need an increment, or unchanged.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, report_json, seeded_package};
+use crate::harness::{check, check_verbose, report_json, seeded_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -20,7 +22,7 @@ fn increment_early_in_a_branch_with_later_changes_is_pending_release() {
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 1; }\n");
     fixture.commit("later content");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &base);
     assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("\"status\": \"pending-release\""));
@@ -34,7 +36,7 @@ fn content_already_on_base_needs_an_increment() {
     fixture.commit("content without version bump");
     let base = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &base);
     assert!(!passed, "{message}");
     assert!(message.contains("needs-increment"));
     assert!(message.contains("increment-versions"));
@@ -66,12 +68,19 @@ fn executable_bit_alone_needs_an_increment() {
     fixture.commit("release with script");
     let base = fixture.sha("HEAD");
 
-    // The bit is set through the index rather than the filesystem, because a
-    // Windows checkout has no executable permission to set and turns
-    // `core.fileMode` off. Committing without restaging keeps the recorded mode
-    // where `core.fileMode` is on and would otherwise read it back off disk.
+    // Set the committed bit through the index so the test also works on Windows,
+    // where a checkout cannot represent it and `core.fileMode` is off. On Unix,
+    // align the filesystem afterward so the work-tree overlay sees that same
+    // committed mode.
     fixture.git(&["update-index", "--chmod=+x", "packages/demo/script.sh"]);
     fixture.git(&["commit", "-m", "make script executable"]);
+    #[cfg(unix)]
+    {
+        let path = fixture.path().join("packages/demo/script.sh");
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 
     let (passed, message) = check(&fixture, &base);
     assert!(!passed, "{message}");
@@ -91,6 +100,27 @@ fn executable_bit_alone_needs_an_increment() {
     assert!(patch.contains("old mode 100644"), "{patch}");
     assert!(patch.contains("new mode 100755"), "{patch}");
     assert!(!patch.contains("@@"), "{patch}");
+}
+
+#[cfg(unix)]
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn unstaged_executable_bit_needs_an_increment() {
+    let fixture = seeded_package();
+    fixture.write("packages/demo/script.sh", "echo hi\n");
+    write_package(&fixture, "demo", "0.1.1", "");
+    fixture.commit("release with script");
+    let base = fixture.sha("HEAD");
+    fixture.git(&["config", "core.fileMode", "true"]);
+
+    let path = fixture.path().join("packages/demo/script.sh");
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(permissions.mode() | 0o111);
+    fs::set_permissions(path, permissions).unwrap();
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("needs-increment"));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -223,7 +253,7 @@ license = "Apache-2.0"
     );
     fixture.commit("change inherited license");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &base);
     assert!(!passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("workspace.package.license"));
@@ -295,6 +325,8 @@ fn a_new_package_still_reports_its_untracked_paths() {
     fixture.commit("add package");
     fixture.write("packages/fresh/src/extra.rs", "pub fn extra() {}\n");
 
+    let (passed, message) = check_verbose(&fixture, &base);
+    assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("src/extra.rs"), "{report}");
 }

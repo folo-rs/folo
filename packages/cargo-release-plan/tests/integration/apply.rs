@@ -1,8 +1,12 @@
 //! Applying an increment plan to manifests and the workspace lockfile.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 
 use cargo_release_plan::{RunInput, RunOutcome, run};
+#[cfg(unix)]
+use tempfile::tempdir;
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{apply_increment, check, seeded_package};
@@ -43,7 +47,7 @@ shell_impl = { workspace = true }
         plan: plan_path,
         dry_run: false,
         manifest_path: fixture.manifest(),
-        verbose: false,
+        verbose: true,
     })
     .unwrap();
     assert!(matches!(outcome, RunOutcome::Apply { .. }));
@@ -155,10 +159,52 @@ fn apply_rewrites_a_pin_under_a_target_specific_dependency_table() {
     );
     fixture.commit("seed");
 
-    apply_increment(&fixture, "demo", "minor");
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(
+        &plan_path,
+        r#"{ "schema_version": 1, "increments": [{ "name": "demo", "level": "minor" }] }"#,
+    )
+    .unwrap();
+    run(&RunInput::Apply {
+        plan: plan_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: true,
+    })
+    .unwrap();
 
     // A pin buried under a target table still has to follow the package it
     // pins, or the workspace stops resolving on that target alone.
+    let user = fs::read_to_string(fixture.path().join("packages/user/Cargo.toml")).unwrap();
+    assert!(user.contains("version = \"=0.2.0\""), "{user}");
+}
+
+/// Apply follows a path dependency through a symbolic link.
+///
+/// Cargo resolves dependency paths through the filesystem, so a spelling that
+/// does not lexically match a member directory still names that member.
+#[cfg(unix)]
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_rewrites_a_pin_through_a_symbolic_link() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    let links = tempdir().unwrap();
+    let link = links.path().join("demo-link");
+    symlink(fixture.path().join("packages/demo"), &link).unwrap();
+    write_package(
+        &fixture,
+        "user",
+        "0.1.0",
+        &format!(
+            "\n[dependencies]\ndemo = {{ version = \"=0.1.0\", path = \"{}\" }}\n",
+            link.display()
+        ),
+    );
+    fixture.commit("seed");
+
+    apply_increment(&fixture, "demo", "minor");
+
     let user = fs::read_to_string(fixture.path().join("packages/user/Cargo.toml")).unwrap();
     assert!(user.contains("version = \"=0.2.0\""), "{user}");
 }
@@ -223,7 +269,7 @@ fn apply_dry_run_does_not_write() {
         plan: plan_path,
         dry_run: true,
         manifest_path: fixture.manifest(),
-        verbose: false,
+        verbose: true,
     })
     .unwrap();
     match outcome {

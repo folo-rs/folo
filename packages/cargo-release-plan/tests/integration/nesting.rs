@@ -20,7 +20,7 @@ fn nested_package_content_belongs_only_to_the_nested_package() {
     assert!(!passed, "{message}");
     // `inner` is a member only because `outer` depends on it by path, so it must
     // be reconstructed at the anchor too, or the change would look like a brand
-    // new package. Its files belong to `inner` alone, so `outer` stays released.
+    // new package. Its files belong to `inner` alone, so `outer` stays unchanged.
     assert!(message.contains("inner: needs-increment"), "{message}");
     assert!(!message.contains("outer: needs-increment"), "{message}");
 }

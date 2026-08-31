@@ -54,10 +54,11 @@ which automates that workflow.
 
 `--verify-packaging` cross-checks this tool's released-content rules against
 `cargo package --list`. Divergences are printed as warnings and do not fail the
-check: listing a package makes Cargo require a clean work tree, resolve the
-dependency graph, and assemble the package archive, so gating on it would trade
-the tool's offline, no-resolve guarantee for false failures. A divergence is
-evidence that the rules need fixing, not a condition to tolerate.
+check. The probe allows dirty trees, so an untracked input can legitimately
+appear only in Cargo's list. It also resolves the dependency graph and performs
+Cargo's package-preparation work, so gating on it would give up the normal
+offline, no-resolve path. A divergence on a clean tree is evidence that the
+rules need fixing.
 
 ### `apply`
 
@@ -105,7 +106,7 @@ Each increment must supply exactly one of `level` or `version`.
 `report.json` uses the same schema revision. Top-level fields are
 `schema_version`, `head`, `packages`, and `groups`. Each package object includes
 `name`, `declared_version`, `status` (`pending-release` / `needs-increment` /
-`released`), `changed`, `stat`, `dependencies`, and `dependents`, plus omitted
+`unchanged`), `changed`, `stat`, `dependencies`, and `dependents`, plus omitted
 when empty: `group`, `anchor`, `diff_path`, `untracked`. A change is one of
 `{"path","change","source":"package"}`, `{"field","source":"inherited"}`, or
 `{"dependency","change","source":"lockfile"}`.
@@ -119,7 +120,7 @@ change increments it.
 | ----------------- | -------------------------------------------------------- |
 | `pending-release` | version increased since the anchor                       |
 | `needs-increment` | version unchanged, released content changed since anchor |
-| `released`        | version unchanged, released content unchanged            |
+| `unchanged`       | version unchanged, released content unchanged            |
 
 `check` fails on `needs-increment` alone. A `pending-release` package still holds
 unreleased changes; merging is what releases them. Packages with

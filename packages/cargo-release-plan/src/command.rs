@@ -5,7 +5,7 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output};
 
 use ohno::AppError;
 
@@ -35,13 +35,9 @@ pub(crate) fn run_capture_os(
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        let status = match output.status.code() {
-            Some(code) => code.to_string(),
-            None => "signal".to_string(),
-        };
         Err(CommandFailedError::new(
             program,
-            status,
+            failure_status(output.status),
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )
         .into())
@@ -81,13 +77,9 @@ pub(crate) fn run_capture_os_bytes(
     if output.status.success() {
         Ok(output.stdout)
     } else {
-        let status = match output.status.code() {
-            Some(code) => code.to_string(),
-            None => "signal".to_string(),
-        };
         Err(CommandFailedError::new(
             program,
-            status,
+            failure_status(output.status),
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )
         .into())
@@ -112,6 +104,13 @@ pub(crate) fn run_capture_ok_bytes(
             }
         }
     }
+}
+
+/// Renders either the exit code or the signal-only fallback.
+fn failure_status(status: ExitStatus) -> String {
+    status
+        .code()
+        .map_or_else(|| "signal".to_string(), |code| code.to_string())
 }
 
 // Mutations of the spawn arguments cannot be caught without asserting on a real
@@ -147,6 +146,9 @@ fn spawn(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt as _;
+
     use super::*;
     use crate::CommandSpawnError;
 
@@ -195,5 +197,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.find_source::<CommandSpawnError>().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_only_exit_has_a_stable_status() {
+        // POSIX wait status for a process terminated by SIGTERM.
+        let status = ExitStatus::from_raw(15);
+        assert_eq!(failure_status(status), "signal");
     }
 }

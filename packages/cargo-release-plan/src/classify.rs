@@ -86,7 +86,7 @@ impl PackageClass {
     pub(crate) fn status(&self) -> PackageStatus {
         match &self.verdict {
             Verdict::New | Verdict::PendingRelease { .. } => PackageStatus::PendingRelease,
-            Verdict::Released { .. } => PackageStatus::Released,
+            Verdict::Unchanged { .. } => PackageStatus::Unchanged,
             Verdict::NeedsIncrement { .. } => PackageStatus::NeedsIncrement,
         }
     }
@@ -96,7 +96,7 @@ impl PackageClass {
         match &self.verdict {
             Verdict::New => None,
             Verdict::PendingRelease { anchor, .. }
-            | Verdict::Released { anchor }
+            | Verdict::Unchanged { anchor }
             | Verdict::NeedsIncrement { anchor, .. } => Some(anchor),
         }
     }
@@ -104,7 +104,7 @@ impl PackageClass {
     /// Released-content and inherited-value differences against the anchor.
     pub(crate) fn changed(&self) -> &[ChangedItem] {
         match &self.verdict {
-            Verdict::New | Verdict::Released { .. } => &[],
+            Verdict::New | Verdict::Unchanged { .. } => &[],
             Verdict::PendingRelease { changed, .. } | Verdict::NeedsIncrement { changed, .. } => {
                 changed
             }
@@ -115,7 +115,7 @@ impl PackageClass {
     pub(crate) fn patch(&self) -> &str {
         match &self.verdict {
             Verdict::NeedsIncrement { patch, .. } => patch,
-            Verdict::New | Verdict::PendingRelease { .. } | Verdict::Released { .. } => "",
+            Verdict::New | Verdict::PendingRelease { .. } | Verdict::Unchanged { .. } => "",
         }
     }
 }
@@ -128,7 +128,7 @@ impl PackageClass {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl PackageClass {
-    pub(crate) fn released(
+    pub(crate) fn unchanged(
         name: &str,
         declared_version: Version,
         anchor: Anchor,
@@ -137,7 +137,7 @@ impl PackageClass {
         Self::with_verdict(
             name,
             declared_version,
-            Verdict::Released { anchor },
+            Verdict::Unchanged { anchor },
             manifest_path,
         )
     }
@@ -205,7 +205,7 @@ impl PackageClass {
 /// The classifier's outcome for one package, with the evidence it implies.
 ///
 /// Each alternative carries exactly what that outcome can be justified by, so
-/// there is no way to express an anchorless failure or a released package that
+/// there is no way to express an anchorless failure or an unchanged package that
 /// still holds a patch. Ref: `docs/design.md`, "Package status".
 #[derive(Clone, Debug)]
 enum Verdict {
@@ -221,7 +221,7 @@ enum Verdict {
         changed: Vec<ChangedItem>,
     },
     /// The declared version did not increase, and neither did the content.
-    Released { anchor: Anchor },
+    Unchanged { anchor: Anchor },
     /// Released content differs from the anchor without a version increase.
     NeedsIncrement {
         anchor: Anchor,
@@ -236,7 +236,7 @@ enum Verdict {
 pub(crate) enum PackageStatus {
     PendingRelease,
     NeedsIncrement,
-    Released,
+    Unchanged,
 }
 
 /// A released-content, inherited-value or locked-dependency change.
@@ -516,9 +516,15 @@ fn classify_one(
     log_untracked(verbose, name, untracked.len());
 
     if package.has_binary {
-        for (dependency, change) in
-            lockfile_closure_changes(git, work_tree, name, &anchor.commit, verbose)?
-        {
+        for (dependency, change) in lockfile_closure_changes(
+            git,
+            work_tree,
+            name,
+            &anchor.version,
+            &package.manifest.version,
+            &anchor.commit,
+            verbose,
+        )? {
             verbose.note(|| {
                 format!(
                     "{shown}: the locked identity of {} is {} between the anchor and the work \
@@ -553,7 +559,7 @@ fn classify_one(
     let verdict = if version_increased {
         Verdict::PendingRelease { anchor, changed }
     } else if changed.is_empty() {
-        Verdict::Released { anchor }
+        Verdict::Unchanged { anchor }
     } else {
         Verdict::NeedsIncrement {
             anchor,
@@ -1063,21 +1069,6 @@ fn released_in_work_tree(
     })
 }
 
-/// The subset of `paths` the work tree still holds on disk.
-///
-/// Git lists a tracked file whose work-tree copy has been deleted, but Cargo
-/// packages what is on disk: a nested manifest that is gone no longer stops
-/// packing, and a deleted default README is no longer there to be found. The
-/// tracked listing still decides eligibility — released content is defined from
-/// git-tracked files — so this narrower listing is used only for structure.
-/// A dangling symbolic link counts as present, because Git tracks the link
-/// itself rather than what it points at.
-///
-/// Narrowing only ever removes paths, so an untracked nested manifest still
-/// draws no boundary. That is deliberate: untracked paths never enter
-/// classification (docs/design.md, "Released content"), and `cargo package`
-/// refuses a dirty tree, so the artifact this models is always built from a tree
-/// where no untracked file exists.
 /// Whether a group member is too new on the base revision to be held to its
 /// group's declared version.
 ///
@@ -1091,6 +1082,20 @@ fn is_new_on_base(base: &CommitSnapshot, name: &str) -> bool {
     !base.packages.contains_key(name) && !base.unpublished.contains(name)
 }
 
+/// The subset of `paths` the work tree still holds on disk.
+///
+/// Git lists a tracked file whose work-tree copy has been deleted, but Cargo
+/// packages what is on disk: a nested manifest that is gone no longer stops
+/// packing, and a deleted default README is no longer there to be found. The
+/// tracked listing still decides eligibility — released content is defined from
+/// git-tracked files — so this narrower listing is used only for structure.
+/// A dangling symbolic link counts as present, because Git tracks the link
+/// itself rather than what it points at.
+///
+/// An untracked nested manifest draws no boundary because untracked paths never
+/// enter the release verdict. The optional packaging probe still reports when
+/// Cargo would treat one as structural input under `--allow-dirty`.
+/// Ref: docs/design.md, "Released content".
 /// Only a path that is not there is absent; any other failure stops the run,
 /// because reading it as a deletion would silently change what the package
 /// releases.
@@ -1470,6 +1475,8 @@ fn lockfile_closure_changes(
     git: &GitRepo,
     work_tree: &WorkTree,
     name: &str,
+    anchor_version: &Version,
+    work_version: &Version,
     anchor_commit: &str,
     verbose: Verbose,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
@@ -1489,7 +1496,10 @@ fn lockfile_closure_changes(
     };
     let anchor = Lockfile::parse(&decode_lockfile(anchor_bytes, &git_path)?, &git_path)?;
     let work = Lockfile::parse(&decode_lockfile(work_bytes, &git_path)?, &git_path)?;
-    let (Some(anchor), Some(work)) = (anchor.closure(name), work.closure(name)) else {
+    let (Some(anchor), Some(work)) = (
+        anchor.closure(name, &anchor_version.to_string()),
+        work.closure(name, &work_version.to_string()),
+    ) else {
         log_missing_lockfile(
             verbose,
             name,
@@ -1523,7 +1533,7 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
             "{}: {} match packaging rules and are advisory only; released content is defined as \
          the git-tracked files under the package, so untracked paths are never counted as changes \
          even where Cargo would pack them (an untracked nested manifest therefore does not draw a \
-         package boundary either, and `cargo package` refuses a dirty tree in any case)",
+         package boundary either; the optional packaging probe warns about that divergence)",
             quote_path(name),
             plural(count, "untracked path")
         )
@@ -1663,6 +1673,37 @@ mod tests {
         // Withdrawn on the base is still present on it, so the group binds it.
         assert!(!is_new_on_base(&base, "withdrawn"));
         assert!(is_new_on_base(&base, "added"));
+    }
+
+    #[test]
+    fn every_changed_item_source_serializes_its_payload() {
+        let items = [
+            ChangedItem::Package {
+                path: "src/lib.rs".to_string(),
+                change: "modified".to_string(),
+            },
+            ChangedItem::Inherited {
+                field: "workspace.package.license".to_string(),
+            },
+            ChangedItem::Lockfile {
+                dependency: "serde".to_string(),
+                change: "modified".to_string(),
+            },
+        ];
+        let values: Vec<serde_json::Value> = items
+            .iter()
+            .map(|item| serde_json::to_value(item).unwrap())
+            .collect();
+
+        let package = values.first().unwrap();
+        let inherited = values.get(1).unwrap();
+        let lockfile = values.get(2).unwrap();
+        assert_eq!(package.get("source").unwrap(), "package");
+        assert_eq!(package.get("path").unwrap(), "src/lib.rs");
+        assert_eq!(inherited.get("source").unwrap(), "inherited");
+        assert_eq!(inherited.get("field").unwrap(), "workspace.package.license");
+        assert_eq!(lockfile.get("source").unwrap(), "lockfile");
+        assert_eq!(lockfile.get("dependency").unwrap(), "serde");
     }
 
     #[test]

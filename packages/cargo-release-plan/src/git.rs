@@ -340,14 +340,13 @@ impl GitRepo {
         Ok(split_z(&stdout)?.into_iter().collect())
     }
 
-    /// Paths under `pathspecs` that Git records with the executable bit set.
+    /// Paths under `pathspecs` that Git considers executable in the work tree.
     ///
-    /// Git records exactly two modes for a regular file, and it decides which
-    /// one a work-tree file carries from `core.fileMode`, which checkouts on
-    /// Windows switch off. Reading the bit off the filesystem would therefore
-    /// answer differently per platform for one commit. The index holds the mode
-    /// Git would record in a commit, and so the mode the published archive
-    /// carries, which is the question released content asks.
+    /// The index supplies the baseline mode. `git diff-files` then overlays
+    /// changes that Git observes in the work tree, including an unstaged
+    /// executable-bit change when `core.fileMode` is active. With that setting
+    /// disabled, as it normally is on Windows, Git reports no mode change and
+    /// the index remains the portable fallback.
     /// Ref: docs/implementation.md, "Classification".
     ///
     /// An empty input answers without invoking Git, because `git ls-files` with
@@ -364,11 +363,23 @@ impl GitRepo {
         ];
         args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        Ok(split_z(&stdout)?
+        let mut executable: HashSet<String> = split_z(&stdout)?
             .iter()
             .filter_map(|record| executable_staged_path(record))
             .map(ToOwned::to_owned)
-            .collect())
+            .collect();
+
+        let mut args = vec![
+            "diff-files".to_string(),
+            "--raw".to_string(),
+            "-z".to_string(),
+            "--no-renames".to_string(),
+            "--".to_string(),
+        ];
+        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
+        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
+        overlay_work_tree_modes(&stdout, &mut executable)?;
+        Ok(executable)
     }
 
     /// Untracked, non-ignored paths under `pathspec`.
@@ -571,6 +582,31 @@ fn executable_staged_path(record: &str) -> Option<&str> {
     let (metadata, path) = record.split_once('\t')?;
     let mode = metadata.split(' ').next()?;
     (mode == EXECUTABLE_TREE_MODE).then_some(path)
+}
+
+/// Applies the work-tree modes from NUL-delimited `git diff-files --raw` records.
+fn overlay_work_tree_modes(
+    stdout: &[u8],
+    executable: &mut HashSet<String>,
+) -> Result<(), AppError> {
+    let fields = split_z(stdout)?;
+    for record in fields.chunks_exact(2) {
+        let [header, path] = record else {
+            continue;
+        };
+        let mut metadata = header.split_whitespace();
+        _ = metadata.next();
+        match metadata.next() {
+            Some(EXECUTABLE_TREE_MODE) => {
+                executable.insert(path.clone());
+            }
+            Some(_) => {
+                executable.remove(path);
+            }
+            None => {}
+        }
+    }
+    Ok(())
 }
 
 /// Rewrites an operating-system path into the `/`-separated form Git reports.
@@ -816,7 +852,7 @@ mod tests {
     /// paths from every package rather than only the one being classified.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
-    fn executable_paths_are_read_from_the_index() {
+    fn executable_paths_include_the_index() {
         let temp = tempdir().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("packages/foo")).unwrap();
@@ -837,6 +873,33 @@ mod tests {
             HashSet::from(["packages/foo/run.sh".to_string()])
         );
         assert!(repo.executable_paths(&[]).unwrap().is_empty());
+    }
+
+    /// Work-tree mode records overlay the index without confusing content edits.
+    #[test]
+    fn work_tree_modes_overlay_index_modes() {
+        let mut executable =
+            HashSet::from(["made-plain.sh".to_string(), "unchanged.sh".to_string()]);
+        let records = b":100644 100755 old new M\0made-executable.sh\0\
+                        :100755 100644 old new M\0made-plain.sh\0\
+                        :100644 100644 old new M\0content-only.sh\0";
+
+        overlay_work_tree_modes(records, &mut executable).unwrap();
+
+        assert_eq!(
+            executable,
+            HashSet::from(["made-executable.sh".to_string(), "unchanged.sh".to_string(),])
+        );
+    }
+
+    /// A malformed mode record cannot invent an executable path.
+    #[test]
+    fn work_tree_mode_without_modes_is_ignored() {
+        let mut executable = HashSet::new();
+
+        overlay_work_tree_modes(b":\0script.sh\0", &mut executable).unwrap();
+
+        assert!(executable.is_empty());
     }
 
     /// Os path rewrites only the platform separator.

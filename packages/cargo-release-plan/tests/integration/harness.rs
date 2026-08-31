@@ -42,6 +42,20 @@ pub(crate) fn check(fixture: &Fixture, base: &str) -> (bool, String) {
     check_workspace(base, fixture.manifest())
 }
 
+pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
+    match run(&RunInput::Check {
+        base: Some(base.to_string()),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: true,
+    }) {
+        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(other) => panic!("expected check, got {other:?}"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
 pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, String) {
     match run(&RunInput::Check {
         base: Some(base.to_string()),
@@ -63,7 +77,7 @@ pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String)
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
-        verbose: false,
+        verbose: true,
     }) {
         Ok(RunOutcome::Check { passed, message }) => Ok((passed, message)),
         Ok(other) => panic!("expected check, got {other:?}"),
@@ -111,7 +125,7 @@ pub(crate) fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
         plan: plan_path,
         dry_run: false,
         manifest_path: fixture.manifest(),
-        verbose: false,
+        verbose: true,
     })
     .unwrap();
 }

@@ -441,6 +441,71 @@ mod tests {
     }
 
     #[test]
+    fn matching_explicit_versions_merge() {
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            increments: vec![
+                PlanIncrement {
+                    name: "nm".to_string(),
+                    level: None,
+                    version: Some("0.2.0".to_string()),
+                },
+                PlanIncrement {
+                    name: "nm_impl".to_string(),
+                    level: None,
+                    version: Some("0.2.0".to_string()),
+                },
+            ],
+        };
+        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
+        assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
+    }
+
+    #[test]
+    fn explicit_version_supersedes_a_level_in_either_order() {
+        for increments in [
+            vec![
+                PlanIncrement {
+                    name: "nm".to_string(),
+                    level: Some("patch".to_string()),
+                    version: None,
+                },
+                PlanIncrement {
+                    name: "nm_impl".to_string(),
+                    level: None,
+                    version: Some("0.3.0".to_string()),
+                },
+            ],
+            vec![
+                PlanIncrement {
+                    name: "nm".to_string(),
+                    level: None,
+                    version: Some("0.3.0".to_string()),
+                },
+                PlanIncrement {
+                    name: "nm_impl".to_string(),
+                    level: Some("patch".to_string()),
+                    version: None,
+                },
+            ],
+        ] {
+            let plan = PlanFile {
+                schema_version: SCHEMA_VERSION,
+                increments,
+            };
+            let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+            assert_eq!(expanded.packages.get("nm"), Some(&v("0.3.0")));
+            assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.3.0")));
+        }
+    }
+
+    #[test]
+    fn an_unknown_decision_key_has_no_members() {
+        assert!(members_for_key("ghost", &nm_groups(), &current()).is_empty());
+    }
+
+    #[test]
     fn ungrouped_package_is_incremented_alone() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,

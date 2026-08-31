@@ -563,6 +563,7 @@ name = "cargo-release-plan"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "criterion",
  "ignore",
  "mimalloc",
  "mutants",

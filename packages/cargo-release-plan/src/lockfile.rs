@@ -85,8 +85,8 @@ impl Lockfile {
     /// is the declared version the invariant already tracks, so counting it
     /// would make every increment look like a further change and leave the
     /// package permanently unable to settle.
-    pub(crate) fn closure(&self, root: &str) -> Option<Closure> {
-        let root_index = self.root_index(root)?;
+    pub(crate) fn closure(&self, root: &str, version: &str) -> Option<Closure> {
+        let root_index = self.root_index(root, version)?;
         let mut seen = BTreeSet::from([root_index]);
         let mut queue = VecDeque::from([root_index]);
         let mut closure = Closure::new();
@@ -119,10 +119,10 @@ impl Lockfile {
     /// it resolved from a path, so the member is the source-less entry and
     /// nothing else: a lockfile predating the member holds no such entry, which
     /// is the unresolved root this reports as `None`.
-    fn root_index(&self, root: &str) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|entry| entry.name == root && entry.source.is_none())
+    fn root_index(&self, root: &str, version: &str) -> Option<usize> {
+        self.entries.iter().position(|entry| {
+            entry.name == root && entry.version == version && entry.source.is_none()
+        })
     }
 
     /// Indices of the entries a dependency reference names.
@@ -144,6 +144,19 @@ impl Lockfile {
             .map(|(index, _)| index)
             .collect()
     }
+}
+
+/// Parses and walks a lockfile for an in-workspace benchmark.
+#[cfg(any(test, feature = "private-test-util"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[doc(hidden)]
+#[must_use]
+pub fn benchmark_lockfile_closure(text: &str, root: &str, version: &str) -> usize {
+    Lockfile::parse(text, "benchmark lockfile")
+        .expect("the generated benchmark lockfile is valid")
+        .closure(root, version)
+        .expect("the generated benchmark lockfile contains its root package")
+        .len()
 }
 
 /// One `[[package]]` entry of a lockfile.
@@ -247,17 +260,17 @@ mod tests {
 
     const LABEL: &str = "Cargo.lock";
 
-    fn closure_of(text: &str, root: &str) -> Closure {
+    fn closure_of(text: &str, root: &str, version: &str) -> Closure {
         Lockfile::parse(text, LABEL)
             .unwrap()
-            .closure(root)
+            .closure(root, version)
             .expect("the fixtures all resolve the root they are asked about")
     }
 
     #[test]
     fn a_lockfile_without_packages_has_an_empty_closure() {
         let lockfile = Lockfile::parse("version = 4\n", LABEL).unwrap();
-        assert!(lockfile.closure("tool").is_none());
+        assert!(lockfile.closure("tool", "1.0.0").is_none());
     }
 
     #[test]
@@ -270,7 +283,7 @@ version = \"1.0.0\"
         assert!(
             Lockfile::parse(text, LABEL)
                 .unwrap()
-                .closure("tool")
+                .closure("tool", "1.0.0")
                 .is_none()
         );
     }
@@ -299,7 +312,7 @@ name = \"unrelated\"
 version = \"9.0.0\"
 source = \"registry+https://example.invalid\"
 ";
-        let closure = closure_of(text, "tool");
+        let closure = closure_of(text, "tool", "0.1.0");
         assert_eq!(
             closure.keys().collect::<Vec<_>>(),
             vec!["direct", "indirect"]
@@ -322,7 +335,7 @@ name = \"helper\"
 version = \"1.0.0\"
 dependencies = [\"tool\"]
 ";
-        let closure = closure_of(text, "tool");
+        let closure = closure_of(text, "tool", "0.1.0");
         assert_eq!(closure.keys().collect::<Vec<_>>(), vec!["helper"]);
     }
 
@@ -344,7 +357,7 @@ name = \"b\"
 version = \"1.0.0\"
 dependencies = [\"a\"]
 ";
-        let closure = closure_of(text, "tool");
+        let closure = closure_of(text, "tool", "0.1.0");
         assert_eq!(closure.keys().collect::<Vec<_>>(), vec!["a", "b"]);
     }
 
@@ -366,7 +379,7 @@ name = \"dup\"
 version = \"2.0.0\"
 source = \"registry+https://example.invalid\"
 ";
-        let closure = closure_of(text, "tool");
+        let closure = closure_of(text, "tool", "0.1.0");
         let versions = closure.get("dup").unwrap();
         assert_eq!(versions.len(), 1);
         assert!(
@@ -394,7 +407,7 @@ dependencies = [\"helper\"]
 name = \"helper\"
 version = \"1.0.0\"
 ";
-        let closure = closure_of(text, "tool");
+        let closure = closure_of(text, "tool", "0.1.0");
         assert_eq!(closure.keys().collect::<Vec<_>>(), vec!["helper"]);
     }
 
@@ -420,7 +433,28 @@ source = \"registry+https://example.invalid\"
         assert!(
             Lockfile::parse(text, LABEL)
                 .unwrap()
-                .closure("tool")
+                .closure("tool", "1.0.0")
+                .is_none()
+        );
+    }
+
+    /// A source-less package with the same name but another version is not the root.
+    #[test]
+    fn a_path_dependency_does_not_stand_in_for_an_absent_member_version() {
+        let text = "\
+[[package]]
+name = \"tool\"
+version = \"0.9.0\"
+
+[[package]]
+name = \"dependency\"
+version = \"1.0.0\"
+dependencies = [\"tool\"]
+";
+        assert!(
+            Lockfile::parse(text, LABEL)
+                .unwrap()
+                .closure("tool", "1.0.0")
                 .is_none()
         );
     }
@@ -459,7 +493,7 @@ name = \"from-git\"
 version = \"1.0.0\"
 source = \"registry+https://example.invalid\"
 ";
-        let closure = closure_of(text, "tool");
+        let closure = closure_of(text, "tool", "0.1.0");
         assert_eq!(
             closure.keys().collect::<Vec<_>>(),
             vec!["dup", "from-git"],
@@ -488,7 +522,10 @@ version = \"1.0.0\"
 source = \"registry+https://example.invalid\"
 ";
         let patched = plain.replace("example.invalid", "elsewhere.invalid");
-        let changes = closure_changes(&closure_of(plain, "tool"), &closure_of(&patched, "tool"));
+        let changes = closure_changes(
+            &closure_of(plain, "tool", "0.1.0"),
+            &closure_of(&patched, "tool", "0.1.0"),
+        );
         assert_eq!(changes, vec![("dep".to_owned(), ClosureChange::Modified)]);
     }
 

@@ -12,7 +12,9 @@ use std::os::unix::fs::symlink;
 use cargo_release_plan::{CheckFormat, RunInput, run};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, check_verifying_packaging, report_json, seeded_package};
+use crate::harness::{
+    check, check_verbose, check_verifying_packaging, report_json, seeded_package,
+};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -87,7 +89,7 @@ fn an_inherited_readme_is_released_content_for_every_inheriting_package() {
     fixture.write("README.md", "shared, revised\n");
     fixture.commit("revise the shared readme");
 
-    let (passed, message) = check(&fixture, &base);
+    let (passed, message) = check_verbose(&fixture, &base);
 
     assert!(!passed, "{message}");
     assert!(message.contains("demo"), "{message}");

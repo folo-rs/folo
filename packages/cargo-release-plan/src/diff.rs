@@ -61,6 +61,26 @@ pub(crate) fn file_diff(
     unified_diff(&header, path, old, old_present, new, new_present)
 }
 
+/// Runs text patch rendering for an in-workspace benchmark.
+#[cfg(any(test, feature = "private-test-util"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[doc(hidden)]
+#[must_use]
+pub fn benchmark_patch_rendering(old: &str, new: &str) -> (usize, usize, usize) {
+    let diff = file_diff(
+        "benchmark.txt",
+        Some(FileVersion {
+            content: old.as_bytes(),
+            mode: "100644",
+        }),
+        Some(FileVersion {
+            content: new.as_bytes(),
+            mode: "100644",
+        }),
+    );
+    (diff.text.len(), diff.insertions, diff.deletions)
+}
+
 /// Reports a change the unified format cannot describe.
 fn binary_diff(header: &str, path: &str, old_present: bool, new_present: bool) -> FileDiff {
     FileDiff {
