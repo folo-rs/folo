@@ -121,7 +121,9 @@ g = ["alpha", "beta"]
     })
     .unwrap();
     match outcome {
-        RunOutcome::Check { passed, message } => {
+        RunOutcome::Check {
+            passed, message, ..
+        } => {
             assert!(!passed);
             assert!(message.contains("::error"));
         }

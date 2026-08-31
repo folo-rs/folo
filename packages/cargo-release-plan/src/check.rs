@@ -43,7 +43,7 @@ pub(crate) fn run_check(
     format: CheckFormat,
     verify_packaging: bool,
     verbose: Verbose,
-) -> Result<(bool, String), AppError> {
+) -> Result<(bool, String, String), AppError> {
     let classification = classify(manifest_path, base, verbose)?;
     let mut message = render_diagnostics(
         &classification.packages,
@@ -52,9 +52,11 @@ pub(crate) fn run_check(
         format,
     );
 
-    if verify_packaging {
-        append_packaging_warnings(&mut message, &verify_packaging_rules(&classification));
-    }
+    let warnings = if verify_packaging {
+        verify_packaging_rules(&classification)
+    } else {
+        String::new()
+    };
 
     let passed = classification
         .packages
@@ -69,7 +71,7 @@ pub(crate) fn run_check(
         message = success.to_string();
     }
 
-    Ok((passed, message))
+    Ok((passed, message, warnings))
 }
 
 fn default_success_message(passed: bool, message: &str) -> Option<&'static str> {
@@ -212,18 +214,6 @@ fn remedy(base: &str) -> String {
          {INCREMENT_VERSIONS_SKILL} skill to do both.",
         quote_path(base)
     )
-}
-
-// Packaging warnings are non-gating advisory text from `cargo package --list`.
-#[cfg_attr(test, mutants::skip)]
-fn append_packaging_warnings(message: &mut String, warnings: &str) {
-    if warnings.is_empty() {
-        return;
-    }
-    if !message.is_empty() {
-        message.push('\n');
-    }
-    message.push_str(warnings);
 }
 
 // Cross-checks against `cargo package --list`; not practical to mutate in unit tests.
@@ -369,9 +359,9 @@ mod tests {
     }
 
     #[test]
-    fn default_success_message_only_when_passed_and_empty() {
+    fn default_success_message_only_when_passed_without_diagnostics() {
         assert!(default_success_message(true, "").is_some());
-        assert!(default_success_message(true, "warning").is_none());
+        assert!(default_success_message(true, "diagnostic").is_none());
         assert!(default_success_message(false, "").is_none());
         assert!(default_success_message(false, "fail").is_none());
     }
@@ -593,20 +583,6 @@ mod tests {
             difference_text(&odd, &BTreeSet::new()),
             r#""src/\033[2Kgone.rs""#
         );
-    }
-
-    #[test]
-    fn packaging_warnings_are_appended_below_existing_text() {
-        let mut message = "existing".to_string();
-        append_packaging_warnings(&mut message, "");
-        assert_eq!(message, "existing");
-
-        append_packaging_warnings(&mut message, "warning: x");
-        assert_eq!(message, "existing\nwarning: x");
-
-        let mut empty = String::new();
-        append_packaging_warnings(&mut empty, "warning: y");
-        assert_eq!(empty, "warning: y");
     }
 
     #[test]

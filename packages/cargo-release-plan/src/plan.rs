@@ -1,8 +1,8 @@
 // Increment-plan parsing and group expansion.
 //
 // The new version for a group is the highest version declared by any member,
-// raised by the highest required level. An explicit `version` overrides that
-// arithmetic for the named target and its group.
+// raised by the highest required level. Entries affecting the same expanded
+// target must use either increment levels or one matching explicit version.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -13,9 +13,9 @@ use serde::Deserialize;
 
 use crate::groups::Groups;
 use crate::{
-    ConflictingPlanVersionError, InvalidVersionError, PlanIncrementSpecError,
-    PlanVersionRegressionError, UnknownIncrementLevelError, UnknownPlanTargetError,
-    UnsupportedPlanSchemaError, VersionOverflowError,
+    ConflictingPlanIncrementKindError, ConflictingPlanVersionError, InvalidVersionError,
+    PlanIncrementSpecError, PlanVersionRegressionError, UnknownIncrementLevelError,
+    UnknownPlanTargetError, UnsupportedPlanSchemaError, VersionOverflowError,
 };
 
 /// Shared plan and report schema revision.
@@ -168,9 +168,8 @@ enum IncrementSpec {
 impl IncrementSpec {
     /// Folds a further plan entry for the same key into this decision.
     ///
-    /// An explicit version decides the result outright, so it supersedes level
-    /// arithmetic however the two are ordered; two levels take the higher; and
-    /// two different explicit versions contradict each other.
+    /// Two levels take the higher and matching explicit versions coalesce.
+    /// Different explicit versions and mixed decision kinds contradict each other.
     fn merge(self, other: Self, key: &str) -> Result<Self, AppError> {
         match (self, other) {
             (Self::Level(existing), Self::Level(added)) => Ok(Self::Level(existing.max(added))),
@@ -181,8 +180,8 @@ impl IncrementSpec {
                     Err(ConflictingPlanVersionError::new(key).into())
                 }
             }
-            (Self::Version(version), Self::Level(_)) | (Self::Level(_), Self::Version(version)) => {
-                Ok(Self::Version(version))
+            (Self::Version(_), Self::Level(_)) | (Self::Level(_), Self::Version(_)) => {
+                Err(ConflictingPlanIncrementKindError::new(key).into())
             }
         }
     }
@@ -463,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_version_supersedes_a_level_in_either_order() {
+    fn explicit_version_and_level_conflict_in_either_order() {
         for increments in [
             vec![
                 PlanIncrement {
@@ -494,9 +493,12 @@ mod tests {
                 schema_version: SCHEMA_VERSION,
                 increments,
             };
-            let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
-            assert_eq!(expanded.packages.get("nm"), Some(&v("0.3.0")));
-            assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.3.0")));
+            let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+            assert!(
+                error
+                    .find_source::<ConflictingPlanIncrementKindError>()
+                    .is_some()
+            );
         }
     }
 

@@ -280,6 +280,19 @@ pub(crate) struct ConflictingPlanVersionError {
 impl UnwindSafe for ConflictingPlanVersionError {}
 impl RefUnwindSafe for ConflictingPlanVersionError {}
 
+/// Entries affecting one target mix an increment level with an explicit version.
+#[ohno::error]
+#[display(
+    "Plan target '{}' mixes increment levels with explicit versions",
+    target.quoted()
+)]
+pub(crate) struct ConflictingPlanIncrementKindError {
+    target: String,
+}
+
+impl UnwindSafe for ConflictingPlanIncrementKindError {}
+impl RefUnwindSafe for ConflictingPlanIncrementKindError {}
+
 /// A package is listed in more than one version group, or twice in one group.
 #[ohno::error]
 #[display(
@@ -675,6 +688,14 @@ mod tests {
     );
     assert_impl_all!(
         ConflictingPlanVersionError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        ConflictingPlanIncrementKindError: Send,
         Sync,
         Debug,
         error::Error,

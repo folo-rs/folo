@@ -73,8 +73,10 @@ pub enum RunOutcome {
     Check {
         /// Whether every publishable package and version group passed.
         passed: bool,
-        /// Rendered diagnostics or a success summary.
+        /// Rendered gating diagnostics or a success summary.
         message: String,
+        /// Non-gating advisory lines for stderr.
+        warnings: String,
     },
     /// `apply` finished (including `--dry-run`).
     Apply {
@@ -118,14 +120,18 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             verify_packaging,
             verbose,
         } => {
-            let (passed, message) = run_check(
+            let (passed, message, warnings) = run_check(
                 base.as_deref(),
                 manifest_path,
                 *format,
                 *verify_packaging,
                 Verbose::new(*verbose),
             )?;
-            Ok(RunOutcome::Check { passed, message })
+            Ok(RunOutcome::Check {
+                passed,
+                message,
+                warnings,
+            })
         }
         RunInput::Apply {
             plan,

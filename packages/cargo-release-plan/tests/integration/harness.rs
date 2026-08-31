@@ -50,7 +50,9 @@ pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
         verify_packaging: false,
         verbose: true,
     }) {
-        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(RunOutcome::Check {
+            passed, message, ..
+        }) => (passed, message),
         Ok(other) => panic!("expected check, got {other:?}"),
         Err(error) => panic!("{error}"),
     }
@@ -64,7 +66,9 @@ pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, Stri
         verify_packaging: false,
         verbose: false,
     }) {
-        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(RunOutcome::Check {
+            passed, message, ..
+        }) => (passed, message),
         Ok(other) => panic!("expected check, got {other:?}"),
         Err(error) => panic!("{error}"),
     }
@@ -79,7 +83,9 @@ pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String)
         verify_packaging: false,
         verbose: true,
     }) {
-        Ok(RunOutcome::Check { passed, message }) => Ok((passed, message)),
+        Ok(RunOutcome::Check {
+            passed, message, ..
+        }) => Ok((passed, message)),
         Ok(other) => panic!("expected check, got {other:?}"),
         Err(error) => Err(format!("{error}")),
     }
@@ -93,7 +99,9 @@ pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool,
         verify_packaging: true,
         verbose: false,
     }) {
-        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(RunOutcome::Check {
+            passed, warnings, ..
+        }) => (passed, warnings),
         Ok(other) => panic!("expected check, got {other:?}"),
         Err(error) => panic!("{error}"),
     }

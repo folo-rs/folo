@@ -99,7 +99,9 @@ The plan schema is:
 `name` is a package name or a version-group name. `level` is `major`, `minor`,
 or `patch`. An explicit `version` is used as-is for that target (and its group),
 and is rejected when it is lower than a version the target already declares.
-Each increment must supply exactly one of `level` or `version`.
+Each increment must supply exactly one of `level` or `version`. Entries that
+expand to the same target must use the same choice: levels combine by taking the
+highest, while explicit versions must match.
 
 ### Plan and report schema
 

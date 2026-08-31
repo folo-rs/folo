@@ -165,8 +165,8 @@ removed so the directory describes one assessment.
 ## Plan application
 
 `plan` first normalizes package and group entries into one target version per
-publishable package. Explicit versions supersede increment levels, levels combine
-by taking the highest, and conflicting explicit versions fail.
+publishable package. Levels combine by taking the highest and matching explicit
+versions coalesce. Mixed decision kinds and conflicting explicit versions fail.
 
 `apply` parses and rewrites every affected manifest in memory before writing any
 of them. It visits non-publishable members too because they may carry exact pins

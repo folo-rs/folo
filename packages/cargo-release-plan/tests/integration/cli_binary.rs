@@ -44,6 +44,33 @@ fn passing_check_writes_stdout_and_exits_success() {
     assert!(stderr(&output).is_empty());
 }
 
+#[cfg_attr(miri, ignore)] // Spawns the compiled binary, git, and cargo; Miri cannot emulate that.
+#[test]
+fn passing_packaging_warnings_write_stderr_without_replacing_stdout() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    // The tool ignores untracked files while Cargo packages them, deliberately
+    // producing a non-gating warning from the packaging cross-check.
+    fixture.write("packages/demo/src/extra.rs", "pub fn g() {}\n");
+    let output = release_plan(
+        &["check", "--base", &base, "--verify-packaging"],
+        Some(&fixture),
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("Every publishable package is unchanged"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("warning: packaging rule mismatch"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("warning:"));
+}
+
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary and git; Miri cannot emulate that.
 #[test]
 fn failing_check_writes_stderr_and_exits_failure() {

@@ -24,7 +24,9 @@ fn github_format_emits_workflow_annotations() {
     })
     .unwrap();
     match outcome {
-        RunOutcome::Check { passed, message } => {
+        RunOutcome::Check {
+            passed, message, ..
+        } => {
             assert!(!passed);
             assert!(message.contains("::error"));
             assert!(message.contains("increment-versions"));

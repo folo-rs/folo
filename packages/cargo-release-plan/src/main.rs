@@ -41,13 +41,20 @@ fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
-            RunOutcome::Check { passed, message } => {
+            RunOutcome::Check {
+                passed,
+                message,
+                warnings,
+            } => {
                 if !message.is_empty() {
                     if passed {
                         println!("{message}");
                     } else {
                         eprintln!("{message}");
                     }
+                }
+                if !warnings.is_empty() {
+                    eprint!("{warnings}");
                 }
                 if passed {
                     ExitCode::SUCCESS

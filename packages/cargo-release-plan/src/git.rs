@@ -698,6 +698,8 @@ fn split_z(stdout: &[u8]) -> Result<Vec<String>, AppError> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
 
     use tempfile::tempdir;
 
@@ -867,6 +869,15 @@ mod tests {
             root,
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            // Unix work-tree permissions are authoritative, so keep them aligned
+            // with the index state this cross-platform test establishes.
+            let path = root.join("packages/foo/run.sh");
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(permissions.mode() | 0o111);
+            fs::set_permissions(path, permissions).unwrap();
+        }
 
         assert_eq!(
             repo.executable_paths(&["packages/foo"]).unwrap(),

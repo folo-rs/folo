@@ -274,7 +274,9 @@ distinct in reports so a case-only rename stays visible.
 
 Members of a version group share a declared version. If one member needs an
 increment, the plan expands to every member. The target starts from the highest
-declared member version and applies the highest chosen increment level.
+declared member version and applies the highest chosen increment level. Entries
+that expand to the same group must all use increment levels or all use one
+matching exact version.
 
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group
