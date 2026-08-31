@@ -7,10 +7,9 @@ use std::thread;
 use ohno::AppError;
 
 use crate::attach::attach;
-use crate::constants::{CONNECT_TIMEOUT, SUPERVISOR_COMMAND};
+use crate::constants::{CONNECT_TIMEOUT, STARTUP_TIMEOUT, SUPERVISOR_COMMAND};
 use crate::durability::Durability;
 use crate::pal::error::PalErrorKind;
-use crate::pal::ids::ConnId;
 use crate::pal::local_console::LocalConsole;
 use crate::pal::processes::{Processes, SupervisorSpawn};
 use crate::pal::session_store::SessionStore;
@@ -18,61 +17,18 @@ use crate::pal::transport::Transport;
 use crate::path_display::display_path;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
+use crate::startup_watch::StartupWatch;
 use crate::trace::{Trace, trace};
 use crate::types::Outcome;
 use crate::{
-    BreakawayDeniedError, CanonicalizeError, CurrentDirectoryError, EmptyCommandError,
-    NoConsoleError, PalFailedError, StartupFailedError, StoreError,
+    AttachFailedError, BreakawayDeniedError, CanonicalizeError, CurrentDirectoryError,
+    EmptyCommandError, NoConsoleError, PalFailedError, StartupFailedError, StoreError,
 };
 
 /// Said when the session cannot outlive the process that launched it.
 ///
 /// Ref: docs/implementation.md, "Job breakaway".
 const TIED_TO_LAUNCHER_WARNING: &str = "Warning: this session belongs to a Windows job object that will end it when the launcher exits, so it will not survive a disconnect. Launch dure.exe directly instead of through a wrapper such as `cargo run`.";
-
-/// Shared state between the startup handshake and its watchdog.
-///
-/// The watchdog must be able to unblock whichever step the handshake is
-/// currently sitting in, and the handshake must be able to see that the
-/// watchdog already fired before it registered its connection.
-/// Ref: docs/implementation.md, "Process split".
-#[derive(Debug, Default)]
-struct StartupWatch {
-    conn: Option<ConnId>,
-    expired: bool,
-}
-
-impl StartupWatch {
-    /// Mark the handshake expired and take the connection the watchdog owes a
-    /// teardown to, if one was accepted before it fired.
-    fn expire(watch: &Mutex<Self>) -> Option<ConnId> {
-        let mut watch = watch
-            .lock()
-            .expect("startup watch is only read and written here, never across a panic");
-        watch.expired = true;
-        watch.conn
-    }
-
-    /// Register the accepted connection, reporting whether the watchdog had
-    /// already fired. A watchdog that fired first never sees this connection,
-    /// so the caller must tear it down itself.
-    fn register(watch: &Mutex<Self>, conn: ConnId) -> bool {
-        let mut watch = watch
-            .lock()
-            .expect("startup watch is only read and written here, never across a panic");
-        watch.conn = Some(conn);
-        watch.expired
-    }
-
-    /// Release the connection from the watchdog's care after a successful
-    /// handshake, so only the handshake itself tears it down.
-    fn settle(watch: &Mutex<Self>) {
-        let mut watch = watch
-            .lock()
-            .expect("startup watch is only read and written here, never across a panic");
-        watch.conn = None;
-    }
-}
 
 /// Start a new session, spawn the supervisor, and attach.
 pub(crate) fn execute<S, P, T, C>(
@@ -152,10 +108,8 @@ where
             _ => AppError::from(StartupFailedError::new()),
         })?;
 
-    // The watchdog owns both halves of the startup handshake: closing the
-    // listener unblocks a missing connect, and disconnecting the accepted
-    // connection unblocks a supervisor that connects but then stalls before
-    // reporting in.
+    // This watchdog only bounds the supervisor connection. Initialization gets
+    // its own full deadline after the connection is established.
     let startup = Arc::new(Mutex::new(StartupWatch::default()));
     thread::spawn({
         let transport = transport.clone();
@@ -179,34 +133,55 @@ where
         transport.disconnect(conn);
         return Err(StartupFailedError::new().into());
     }
-    let session_id = match transport.recv(conn) {
-        Ok(Message::StartupOk {
-            session_id,
-            durability,
-        }) => {
-            trace!(
-                trace,
-                "supervisor reported in as session {session_id}, durability {}",
-                durability_note(durability)
-            );
-            if durability == Durability::TiedToLauncher {
-                // The supervisor discovers this about itself but has no console
-                // to say it on. Ref: docs/implementation.md, "Job breakaway".
-                eprintln!("{TIED_TO_LAUNCHER_WARNING}");
+    if StartupWatch::settle(&startup) {
+        transport.disconnect(conn);
+        return Err(StartupFailedError::new().into());
+    }
+    transport.close_listener(listener);
+
+    let startup_response = Arc::new(Mutex::new(StartupWatch::for_connection(conn)));
+    thread::spawn({
+        let transport = transport.clone();
+        let startup_response = Arc::clone(&startup_response);
+        move || {
+            thread::sleep(STARTUP_TIMEOUT);
+            if let Some(conn) = StartupWatch::expire(&startup_response) {
+                transport.disconnect(conn);
             }
-            session_id
         }
-        _ => {
-            transport.disconnect(conn);
-            return Err(StartupFailedError::new().into());
-        }
+    });
+
+    let response = transport.recv(conn);
+    if StartupWatch::settle(&startup_response) {
+        transport.disconnect(conn);
+        return Err(StartupFailedError::new().into());
+    }
+    let Ok(Message::StartupOk {
+        session_id,
+        durability,
+    }) = response
+    else {
+        transport.disconnect(conn);
+        return Err(StartupFailedError::new().into());
     };
+    if transport.send(conn, &Message::StartupCommit).is_err() {
+        transport.disconnect(conn);
+        return Err(StartupFailedError::new().into());
+    }
+    trace!(
+        trace,
+        "supervisor reported in as session {session_id}, durability {}",
+        durability_note(durability)
+    );
+    if durability == Durability::TiedToLauncher {
+        // The supervisor discovers this about itself but has no console
+        // to say it on. Ref: docs/implementation.md, "Job breakaway".
+        eprintln!("{TIED_TO_LAUNCHER_WARNING}");
+    }
     // The supervisor reads this connection as the signal that an attach is
     // still on its way, and holds a session whose app exits immediately open
     // until it arrives. So it stays up for as long as this run intends to
     // attach. Ref: docs/implementation.md, "Process split".
-    StartupWatch::settle(&startup);
-
     let outcome = attach_to(store, transport, console, session_id, trace);
     transport.disconnect(conn);
     outcome
@@ -238,7 +213,7 @@ where
     let record = store
         .read(session_id)
         .map_err(|_error| StoreError::new())?
-        .ok_or_else(StartupFailedError::new)?;
+        .ok_or_else(|| AttachFailedError::for_id(session_id))?;
     trace!(
         trace,
         "attaching to session {session_id} on {}", record.pipe_name
@@ -256,29 +231,6 @@ mod tests {
     use crate::pal::session_store::{FsSessionStore, MockSessionStore};
     use crate::pal::transport::MemoryTransport;
     use crate::session_record::ProcessIdentity;
-
-    #[test]
-    fn a_connection_registered_before_the_watchdog_is_torn_down_by_it() {
-        let watch = Mutex::new(StartupWatch::default());
-        let conn = ConnId(7);
-        assert!(!StartupWatch::register(&watch, conn));
-        assert_eq!(StartupWatch::expire(&watch), Some(conn));
-    }
-
-    #[test]
-    fn a_connection_registered_after_the_watchdog_is_torn_down_by_the_caller() {
-        let watch = Mutex::new(StartupWatch::default());
-        assert_eq!(StartupWatch::expire(&watch), None);
-        assert!(StartupWatch::register(&watch, ConnId(7)));
-    }
-
-    #[test]
-    fn a_settled_connection_is_left_to_the_handshake() {
-        let watch = Mutex::new(StartupWatch::default());
-        assert!(!StartupWatch::register(&watch, ConnId(7)));
-        StartupWatch::settle(&watch);
-        assert_eq!(StartupWatch::expire(&watch), None);
-    }
 
     #[test]
     // Talks to the real operating system: the session store is a real directory.
@@ -479,7 +431,7 @@ mod tests {
         console.expect_has_console().return_const(true);
         let console = LocalConsoleFacade::from_mock(console);
 
-        execute(
+        let error = execute(
             &store,
             &processes,
             &transport,
@@ -488,7 +440,9 @@ mod tests {
             None,
             Trace::default(),
         )
-        .unwrap_err()
+        .unwrap_err();
+        assert_eq!(transport.startup_commit_count(), 1);
+        error
     }
 
     #[test]

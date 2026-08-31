@@ -21,6 +21,7 @@ use crate::pal::transport::Transport;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
 use crate::session_record::{ProcessIdentity, SessionRecord};
+use crate::startup_watch::StartupWatch;
 use crate::wall_clock::unix_now_ms;
 use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError};
 
@@ -35,20 +36,27 @@ const DEFAULT_PTY_SIZE: WindowSize = WindowSize {
 };
 
 /// Resources that must be torn down if initialization fails.
-struct InitGuard<'a, P: Processes, S: SessionStore, C: Pseudoconsole> {
+struct InitGuard<'a, P: Processes, S: SessionStore, T: Transport, C: Pseudoconsole> {
     processes: &'a P,
     store: &'a S,
+    transport: &'a T,
     pty_host: &'a C,
     job: Option<JobId>,
     pty: Option<PtyId>,
+    listener: Option<ListenerId>,
     session: Option<(SessionId, ProcessIdentity)>,
     committed: bool,
 }
 
-impl<P: Processes, S: SessionStore, C: Pseudoconsole> Drop for InitGuard<'_, P, S, C> {
+impl<P: Processes, S: SessionStore, T: Transport, C: Pseudoconsole> Drop
+    for InitGuard<'_, P, S, T, C>
+{
     fn drop(&mut self) {
         if self.committed {
             return;
+        }
+        if let Some(listener) = self.listener {
+            self.transport.close_listener(listener);
         }
         if let Some((id, owner)) = self.session {
             _ = self.store.delete_owned_by(id, &owner);
@@ -92,9 +100,11 @@ where
     let mut guard = InitGuard {
         processes,
         store,
+        transport,
         pty_host,
         job: None,
         pty: None,
+        listener: None,
         session: None,
         committed: false,
     };
@@ -118,18 +128,33 @@ where
         }
     };
 
-    // The client may already have dropped the startup pipe. The session is
-    // live either way; resume attaches independently of this acknowledgement.
-    _ = transport.send(
-        startup,
-        &Message::StartupOk {
-            session_id: initialized.session_id,
-            // Only this process can see the job it landed in, and the client is
-            // the one with a console to report it on.
-            // Ref: docs/implementation.md, "Job breakaway".
-            durability: processes.durability(),
-        },
-    );
+    let startup_ok = Message::StartupOk {
+        session_id: initialized.session_id,
+        // Only this process can see the job it landed in, and the client is
+        // the one with a console to report it on.
+        // Ref: docs/implementation.md, "Job breakaway".
+        durability: processes.durability(),
+    };
+    if transport.send(startup, &startup_ok).is_err() {
+        transport.disconnect(startup);
+        return Err(StartupFailedError::new().into());
+    }
+    let startup_commit = Arc::new(Mutex::new(StartupWatch::for_connection(startup)));
+    thread::spawn({
+        let startup_commit = Arc::clone(&startup_commit);
+        let transport = transport.clone();
+        move || {
+            thread::sleep(CONNECT_TIMEOUT);
+            if let Some(conn) = StartupWatch::expire(&startup_commit) {
+                transport.disconnect(conn);
+            }
+        }
+    });
+    let committed = transport.recv(startup);
+    if StartupWatch::settle(&startup_commit) || !matches!(committed, Ok(Message::StartupCommit)) {
+        transport.disconnect(startup);
+        return Err(StartupFailedError::new().into());
+    }
     guard.committed = true;
 
     // The startup connection stays open past the acknowledgement: `serve` reads
@@ -149,7 +174,7 @@ struct Initialized {
 }
 
 fn initialize<P, S, T, C>(
-    guard: &mut InitGuard<'_, P, S, C>,
+    guard: &mut InitGuard<'_, P, S, T, C>,
     processes: &P,
     store: &S,
     transport: &T,
@@ -187,6 +212,7 @@ where
     let listener = transport
         .listen(&pipe_name)
         .map_err(|error| map_startup(&error))?;
+    guard.listener = Some(listener);
 
     let identity = processes
         .current_identity()
@@ -748,7 +774,7 @@ mod tests {
 
     use super::*;
     use crate::durability::Durability;
-    use crate::pal::ids::{AppId, ConnId, JobId};
+    use crate::pal::ids::{AppId, ConnId, JobId, ListenerId};
     use crate::pal::processes::MockProcesses;
     use crate::pal::pseudoconsole::MemoryPseudoconsole;
     use crate::pal::session_store::FsSessionStore;
@@ -759,6 +785,23 @@ mod tests {
     /// Arbitrary nonzero status the mock app exits with, so a test can tell a
     /// forwarded status from a defaulted one.
     const SAMPLE_APP_EXIT: i32 = 7;
+
+    /// Completes the client side of the startup commit handshake.
+    fn commit_startup(
+        transport: &MemoryTransport,
+        listener: ListenerId,
+    ) -> (ConnId, SessionId, Durability) {
+        let conn = transport.accept(listener).unwrap();
+        let Message::StartupOk {
+            session_id,
+            durability,
+        } = transport.recv(conn).unwrap()
+        else {
+            panic!("expected startup ok");
+        };
+        transport.send(conn, &Message::StartupCommit).unwrap();
+        (conn, session_id, durability)
+    }
 
     fn mock_processes(exit: Arc<(Mutex<bool>, Condvar)>) -> MockProcesses {
         mock_processes_with(exit, Durability::Durable, AppWait::Reports)
@@ -836,11 +879,7 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
-            let Message::StartupOk { session_id, .. } = transport.recv(startup_conn).unwrap()
-            else {
-                panic!("expected startup ok");
-            };
+            let (startup_conn, session_id, _durability) = commit_startup(&transport, startup);
             transport.disconnect(startup_conn);
 
             let pipe = transport.pipe_name("nonce");
@@ -909,11 +948,7 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
-            assert!(matches!(
-                transport.recv(startup_conn).unwrap(),
-                Message::StartupOk { .. }
-            ));
+            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
             transport.disconnect(startup_conn);
 
             let client = transport
@@ -985,11 +1020,7 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
-            assert!(matches!(
-                transport.recv(startup_conn).unwrap(),
-                Message::StartupOk { .. }
-            ));
+            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
 
             // The startup connection stays open, which is what holds the
             // session up for the attach that `dure run` is about to make.
@@ -1042,17 +1073,56 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
-            assert!(matches!(
-                transport.recv(startup_conn).unwrap(),
-                Message::StartupOk { .. }
-            ));
+            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
             // Nobody will ever attach, so the gate must open on this instead.
             transport.disconnect(startup_conn);
 
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             let leftover = FsSessionStore::new(dir.path().to_path_buf());
             assert!(leftover.list().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_session_without_startup_commit_is_rolled_back() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let exit = Arc::new((Mutex::new(true), Condvar::new()));
+            let processes = mock_processes(exit);
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                let store = store.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let startup_conn = transport.accept(startup).unwrap();
+            assert!(matches!(
+                transport.recv(startup_conn).unwrap(),
+                Message::StartupOk { .. }
+            ));
+            assert_eq!(store.list().unwrap().len(), 1);
+            transport.disconnect(startup_conn);
+
+            let error = supervisor.join().unwrap().unwrap_err();
+            assert!(error.find_source::<StartupFailedError>().is_some());
+            assert!(store.list().unwrap().is_empty());
         });
     }
 
@@ -1133,12 +1203,8 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
             // Only the client has a console to report this on.
-            let Message::StartupOk { durability, .. } = transport.recv(startup_conn).unwrap()
-            else {
-                panic!("expected startup ok");
-            };
+            let (startup_conn, _session_id, durability) = commit_startup(&transport, startup);
             assert_eq!(durability, Durability::TiedToLauncher);
             transport.disconnect(startup_conn);
             {
@@ -1180,11 +1246,7 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
-            assert!(matches!(
-                transport.recv(startup_conn).unwrap(),
-                Message::StartupOk { .. }
-            ));
+            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
             assert_eq!(store.list().unwrap().len(), 1, "the session was published");
             transport.disconnect(startup_conn);
             {
@@ -1240,11 +1302,7 @@ mod tests {
                 }
             });
 
-            let startup_conn = transport.accept(startup).unwrap();
-            assert!(matches!(
-                transport.recv(startup_conn).unwrap(),
-                Message::StartupOk { .. }
-            ));
+            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
 
             // The app speaks before anyone has attached, which is the window
             // `dure run` spends spawning the supervisor and connecting to it.
@@ -1644,9 +1702,11 @@ mod tests {
             let mut guard = InitGuard {
                 processes: &processes,
                 store: &store,
+                transport: &transport,
                 pty_host: &pty,
                 job: None,
                 pty: None,
+                listener: None,
                 session: None,
                 committed: false,
             };

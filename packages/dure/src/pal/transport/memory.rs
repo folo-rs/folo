@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -32,6 +32,8 @@ struct Inner {
     listeners: Mutex<HashMap<String, ListenerId>>,
     listener_state: Mutex<HashMap<ListenerId, ListenerState>>,
     conns: Mutex<HashMap<ConnId, ConnState>>,
+    /// Successful startup commits, for client-side protocol assertions.
+    startup_commits: AtomicUsize,
     /// Guards the pending-connection predicate under `listener_state`. A
     /// `Condvar` may only ever be paired with one mutex, so the connection side
     /// has its own below.
@@ -60,6 +62,7 @@ impl MemoryTransport {
                 listeners: Mutex::new(HashMap::new()),
                 listener_state: Mutex::new(HashMap::new()),
                 conns: Mutex::new(HashMap::new()),
+                startup_commits: AtomicUsize::new(0),
                 listener_cond: Condvar::new(),
                 conn_cond: Condvar::new(),
             }),
@@ -86,6 +89,10 @@ impl MemoryTransport {
             state.stalled = false;
         }
         self.inner.conn_cond.notify_all();
+    }
+
+    pub(crate) fn startup_commit_count(&self) -> usize {
+        self.inner.startup_commits.load(Ordering::SeqCst)
     }
 }
 
@@ -176,6 +183,8 @@ impl Transport for MemoryTransport {
             .lock()
             .expect("listener state lock");
         let Some(listener_state) = state.get_mut(&listener) else {
+            drop(state);
+            self.disconnect(server);
             return Err(PalError::new(PalErrorKind::Timeout));
         };
         listener_state.pending.push_back(server);
@@ -204,6 +213,9 @@ impl Transport for MemoryTransport {
             return Err(PalError::new(PalErrorKind::NotFound));
         }
         state.incoming.push_back(message.clone());
+        if matches!(message, Message::StartupCommit) {
+            self.inner.startup_commits.fetch_add(1, Ordering::SeqCst);
+        }
         self.inner.conn_cond.notify_all();
         Ok(())
     }
@@ -244,12 +256,17 @@ impl Transport for MemoryTransport {
             .lock()
             .expect("listener map lock")
             .retain(|_, id| *id != listener);
-        self.inner
+        let pending = self
+            .inner
             .listener_state
             .lock()
             .expect("listener state lock")
-            .remove(&listener);
+            .remove(&listener)
+            .map_or_else(VecDeque::new, |state| state.pending);
         self.inner.listener_cond.notify_all();
+        for conn in pending {
+            self.disconnect(conn);
+        }
     }
 
     fn pipe_name(&self, nonce: &str) -> String {

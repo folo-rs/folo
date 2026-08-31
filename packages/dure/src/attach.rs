@@ -15,8 +15,8 @@ use crate::protocol::Message;
 use crate::session_id::SessionId;
 use crate::types::Outcome;
 use crate::{
-    DisplacedError, NoConsoleError, PalFailedError, RelayFailedError, ResumeTimeoutError,
-    StartupFailedError,
+    AttachFailedError, DisplacedError, NoConsoleError, PalFailedError, RelayFailedError,
+    ResumeTimeoutError,
 };
 
 /// Connect to a live supervisor and funnel console I/O until the relay ends.
@@ -57,7 +57,7 @@ where
         Err(error) if error.kind() == PalErrorKind::Timeout => {
             return Err(ResumeTimeoutError::for_id(session_id).into());
         }
-        Err(_) => return Err(StartupFailedError::new().into()),
+        Err(_) => return Err(AttachFailedError::for_id(session_id).into()),
     };
 
     transport
@@ -68,7 +68,7 @@ where
                 rows: size.rows,
             },
         )
-        .map_err(|_error| StartupFailedError::new())?;
+        .map_err(|_error| AttachFailedError::for_id(session_id))?;
 
     match transport.recv(conn) {
         Ok(Message::Attached {
@@ -80,7 +80,7 @@ where
         }
         _ => {
             transport.disconnect(conn);
-            return Err(StartupFailedError::new().into());
+            return Err(AttachFailedError::for_id(session_id).into());
         }
     }
 
@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn handshake_send_failure_is_startup_failure() {
+    fn handshake_send_failure_is_attach_failure() {
         let error = attach(
             &SendFails,
             &TestConsole::new().build(),
@@ -441,14 +441,14 @@ mod tests {
             SessionId::MIN,
         )
         .unwrap_err();
-        assert!(error.find_source::<StartupFailedError>().is_some());
+        assert!(error.find_source::<AttachFailedError>().is_some());
     }
 
     #[test]
     // Spawns threads that outlive the assertion: the relay's console-input
     // thread blocks until the process exits, which Miri reports as a leak.
     #[cfg_attr(miri, ignore)]
-    fn attached_id_mismatch_is_startup_failure() {
+    fn attached_id_mismatch_is_attach_failure() {
         testing::with_watchdog(|| {
             let transport = MemoryTransport::new();
             let listener = transport.listen("pipe").unwrap();
@@ -471,7 +471,7 @@ mod tests {
                 SessionId::MIN,
             )
             .unwrap_err();
-            assert!(error.find_source::<StartupFailedError>().is_some());
+            assert!(error.find_source::<AttachFailedError>().is_some());
         });
     }
 
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn connect_other_is_startup_failure() {
+    fn connect_other_is_attach_failure() {
         let error = attach(
             &ConnectFails(PalErrorKind::Other),
             &TestConsole::new().build(),
@@ -538,7 +538,7 @@ mod tests {
             SessionId::MIN,
         )
         .unwrap_err();
-        assert!(error.find_source::<StartupFailedError>().is_some());
+        assert!(error.find_source::<AttachFailedError>().is_some());
     }
 
     #[test]
