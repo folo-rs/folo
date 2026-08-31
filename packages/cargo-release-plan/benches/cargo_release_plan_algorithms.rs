@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::hint::black_box;
 
-use cargo_release_plan::__private::{benchmark_lockfile_closure, benchmark_patch_rendering};
+use cargo_release_plan::__private::{benchmark_lockfile_closures, benchmark_patch_rendering};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 /// Keeps the low case above trivial fixed-cost behavior.
@@ -22,6 +22,8 @@ const CHANGED_LINE_INTERVAL: usize = 8;
 const LOW_PACKAGE_COUNT: usize = 8;
 /// Exposes closure-walk scaling without measuring process or filesystem work.
 const HIGH_PACKAGE_COUNT: usize = 512;
+/// Represents several binaries sharing one parsed workspace lockfile.
+const CLOSURE_COUNT: usize = 16;
 
 criterion_group!(benches, patch_rendering, lockfile_closure);
 criterion_main!(benches);
@@ -46,10 +48,11 @@ fn lockfile_closure(c: &mut Criterion) {
         let lockfile = lockfile_input(package_count);
         group.bench_function(name, |b| {
             b.iter(|| {
-                black_box(benchmark_lockfile_closure(
+                black_box(benchmark_lockfile_closures(
                     black_box(&lockfile),
                     black_box("root"),
                     black_box("1.0.0"),
+                    black_box(CLOSURE_COUNT),
                 ))
             });
         });

@@ -120,6 +120,33 @@ fn an_untouched_lockfile_leaves_a_binary_package_unchanged() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
+fn multiple_binary_packages_are_classified_from_one_lockfile() {
+    let fixture = Fixture::new("");
+    write_binary_package(&fixture, "first", "0.1.0", "");
+    write_binary_package(&fixture, "second", "0.1.0", "");
+    fixture.write(
+        "Cargo.lock",
+        r#"version = 4
+
+[[package]]
+name = "first"
+version = "0.1.0"
+
+[[package]]
+name = "second"
+version = "0.1.0"
+"#,
+    );
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
 fn a_new_binary_package_needs_no_historical_lockfile() {
     let fixture = Fixture::new("");
     write_package(&fixture, "existing", "0.1.0", "");
@@ -158,6 +185,18 @@ fn a_missing_work_tree_lockfile_is_an_error() {
 
     let error = check_error(&fixture, &base);
     assert!(error.contains("work tree"), "{error}");
+    assert!(error.contains("Cargo.lock"), "{error}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_malformed_work_tree_lockfile_is_an_error() {
+    let fixture = locked_workspace();
+    let base = fixture.sha("HEAD");
+    fixture.write("Cargo.lock", "not = = toml");
+
+    let error = check_error(&fixture, &base);
+
     assert!(error.contains("Cargo.lock"), "{error}");
 }
 

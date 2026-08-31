@@ -14,7 +14,7 @@ pub(crate) use text::{quote_path, short_commit};
 #[doc(hidden)]
 pub mod __private {
     pub use crate::diff::benchmark_patch_rendering;
-    pub use crate::lockfile::benchmark_lockfile_closure;
+    pub use crate::lockfile::benchmark_lockfile_closures;
 }
 
 mod anchor;

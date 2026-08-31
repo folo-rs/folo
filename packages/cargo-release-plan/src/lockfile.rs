@@ -6,7 +6,8 @@
 // so the closure is part of what that consumer receives.
 // Ref: docs/design.md, "Lockfiles of binary packages".
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::iter;
 
 use ohno::AppError;
 use toml_edit::{DocumentMut, Item};
@@ -28,6 +29,7 @@ pub(crate) type Closure = BTreeMap<String, BTreeSet<String>>;
 #[derive(Debug)]
 pub(crate) struct Lockfile {
     entries: Vec<LockEntry>,
+    roots: HashMap<String, HashMap<String, usize>>,
 }
 
 impl Lockfile {
@@ -41,9 +43,10 @@ impl Lockfile {
         let Some(tables) = doc.get("package").and_then(Item::as_array_of_tables) else {
             return Ok(Self {
                 entries: Vec::new(),
+                roots: HashMap::new(),
             });
         };
-        let mut entries = Vec::with_capacity(tables.len());
+        let mut pending = Vec::with_capacity(tables.len());
         for table in tables {
             let Some(name) = table.get("name").and_then(Item::as_str) else {
                 return Err(MalformedLockfileError::new(label).into());
@@ -63,7 +66,7 @@ impl Lockfile {
                     dependencies.push(DepRef::parse(text));
                 }
             }
-            entries.push(LockEntry {
+            pending.push(PendingEntry {
                 name: name.to_owned(),
                 version: version.to_owned(),
                 source: table
@@ -73,7 +76,33 @@ impl Lockfile {
                 dependencies,
             });
         }
-        Ok(Self { entries })
+        let index = DependencyIndex::from_entries(&pending);
+        let mut roots: HashMap<String, HashMap<String, usize>> = HashMap::new();
+        for (entry_index, entry) in pending.iter().enumerate() {
+            if entry.source.is_none() {
+                // Preserve the first match, matching the earlier linear lookup
+                // when malformed input duplicates a source-less identity.
+                roots
+                    .entry(entry.name.clone())
+                    .or_default()
+                    .entry(entry.version.clone())
+                    .or_insert(entry_index);
+            }
+        }
+        let entries = pending
+            .into_iter()
+            .map(|entry| LockEntry {
+                name: entry.name,
+                version: entry.version,
+                source: entry.source,
+                dependencies: entry
+                    .dependencies
+                    .iter()
+                    .flat_map(|dependency| index.matching(dependency).iter().copied())
+                    .collect(),
+            })
+            .collect();
+        Ok(Self { entries, roots })
     }
 
     /// The locked identities `root` transitively depends on.
@@ -101,11 +130,9 @@ impl Lockfile {
                     .or_default()
                     .insert(entry.identity());
             }
-            for dep in &entry.dependencies {
-                for next in self.matching(dep) {
-                    if seen.insert(next) {
-                        queue.push_back(next);
-                    }
+            for &next in &entry.dependencies {
+                if seen.insert(next) {
+                    queue.push_back(next);
                 }
             }
         }
@@ -120,43 +147,34 @@ impl Lockfile {
     /// nothing else: a lockfile predating the member holds no such entry, which
     /// is the unresolved root this reports as `None`.
     fn root_index(&self, root: &str, version: &str) -> Option<usize> {
-        self.entries.iter().position(|entry| {
-            entry.name == root && entry.version == version && entry.source.is_none()
-        })
-    }
-
-    /// Indices of the entries a dependency reference names.
-    fn matching(&self, dep: &DepRef) -> Vec<usize> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                entry.name == dep.name
-                    && dep
-                        .version
-                        .as_ref()
-                        .is_none_or(|version| &entry.version == version)
-                    && dep
-                        .source
-                        .as_ref()
-                        .is_none_or(|source| entry.source.as_deref() == Some(source.as_str()))
-            })
-            .map(|(index, _)| index)
-            .collect()
+        self.roots
+            .get(root)
+            .and_then(|versions| versions.get(version))
+            .copied()
     }
 }
 
-/// Parses and walks a lockfile for an in-workspace benchmark.
+/// Parses and walks several closures for an in-workspace benchmark.
 #[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[doc(hidden)]
 #[must_use]
-pub fn benchmark_lockfile_closure(text: &str, root: &str, version: &str) -> usize {
-    Lockfile::parse(text, "benchmark lockfile")
-        .expect("the generated benchmark lockfile is valid")
-        .closure(root, version)
-        .expect("the generated benchmark lockfile contains its root package")
-        .len()
+pub fn benchmark_lockfile_closures(
+    text: &str,
+    root: &str,
+    version: &str,
+    closure_count: usize,
+) -> usize {
+    let lockfile = Lockfile::parse(text, "benchmark lockfile")
+        .expect("the generated benchmark lockfile is valid");
+    iter::repeat_with(|| {
+        lockfile
+            .closure(root, version)
+            .expect("the generated benchmark lockfile contains its root package")
+            .len()
+    })
+    .take(closure_count)
+    .sum()
 }
 
 /// One `[[package]]` entry of a lockfile.
@@ -166,7 +184,7 @@ struct LockEntry {
     version: String,
     /// Where the package was resolved from; absent for a path dependency.
     source: Option<String>,
-    dependencies: Vec<DepRef>,
+    dependencies: Vec<usize>,
 }
 
 impl LockEntry {
@@ -181,6 +199,81 @@ impl LockEntry {
             None => self.version.clone(),
         }
     }
+}
+
+/// One parsed lockfile entry before dependency names become entry indices.
+///
+/// Parsing retains Cargo's textual dependency references only until all package
+/// identities are indexed. Converting them once avoids searching the package
+/// list for every edge during every binary package's closure walk.
+#[derive(Debug)]
+struct PendingEntry {
+    name: String,
+    version: String,
+    source: Option<String>,
+    dependencies: Vec<DepRef>,
+}
+
+/// Package-entry lookup built while textual dependency references are resolved.
+///
+/// A name can map to several versions, and a version can map to several sources.
+/// The nested maps let each form Cargo writes resolve without allocating a lookup
+/// key or scanning unrelated lockfile entries.
+#[derive(Debug, Default)]
+struct DependencyIndex {
+    names: HashMap<String, NameMatches>,
+}
+
+impl DependencyIndex {
+    fn from_entries(entries: &[PendingEntry]) -> Self {
+        let mut index = Self::default();
+        for (entry_index, entry) in entries.iter().enumerate() {
+            let matches = index.names.entry(entry.name.clone()).or_default();
+            matches.all.push(entry_index);
+            let version = matches.versions.entry(entry.version.clone()).or_default();
+            version.all.push(entry_index);
+            if let Some(source) = &entry.source {
+                version
+                    .sources
+                    .entry(source.clone())
+                    .or_default()
+                    .push(entry_index);
+            }
+        }
+        index
+    }
+
+    fn matching(&self, dependency: &DepRef) -> &[usize] {
+        let Some(name) = self.names.get(&dependency.name) else {
+            return &[];
+        };
+        match (&dependency.version, &dependency.source) {
+            (None, _) => &name.all,
+            (Some(version), None) => name
+                .versions
+                .get(version)
+                .map_or(&[], |matches| matches.all.as_slice()),
+            (Some(version), Some(source)) => name
+                .versions
+                .get(version)
+                .and_then(|matches| matches.sources.get(source))
+                .map_or(&[], Vec::as_slice),
+        }
+    }
+}
+
+/// Lockfile entries sharing a package name.
+#[derive(Debug, Default)]
+struct NameMatches {
+    all: Vec<usize>,
+    versions: HashMap<String, VersionMatches>,
+}
+
+/// Lockfile entries sharing a package name and version.
+#[derive(Debug, Default)]
+struct VersionMatches {
+    all: Vec<usize>,
+    sources: HashMap<String, Vec<usize>>,
 }
 
 /// A dependency named by a lockfile entry.
@@ -321,6 +414,17 @@ source = \"registry+https://example.invalid\"
     }
 
     #[test]
+    fn an_unresolved_dependency_reference_contributes_nothing() {
+        let text = "\
+[[package]]
+name = \"tool\"
+version = \"0.1.0\"
+dependencies = [\"absent\"]
+";
+        assert!(closure_of(text, "tool", "0.1.0").is_empty());
+    }
+
+    #[test]
     fn a_closure_excludes_the_root_itself() {
         // Otherwise incrementing the package would register as a change to its
         // own dependencies and it could never reach a settled state.
@@ -386,6 +490,34 @@ source = \"registry+https://example.invalid\"
             versions
                 .iter()
                 .any(|identity| identity.starts_with("2.0.0"))
+        );
+    }
+
+    #[test]
+    fn a_bare_dependency_selects_every_matching_identity() {
+        let text = "\
+[[package]]
+name = \"tool\"
+version = \"0.1.0\"
+dependencies = [\"dup\"]
+
+[[package]]
+name = \"dup\"
+version = \"1.0.0\"
+source = \"registry+https://example.invalid\"
+
+[[package]]
+name = \"dup\"
+version = \"2.0.0\"
+source = \"registry+https://example.invalid\"
+";
+        let closure = closure_of(text, "tool", "0.1.0");
+        assert_eq!(
+            closure.get("dup").unwrap().iter().collect::<Vec<_>>(),
+            vec![
+                "1.0.0 (registry+https://example.invalid)",
+                "2.0.0 (registry+https://example.invalid)",
+            ]
         );
     }
 

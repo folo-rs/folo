@@ -63,7 +63,8 @@ fn executable_bit_alone_needs_an_increment() {
     let fixture = seeded_package();
     // The script has to be released content at the anchor, so it lands in the
     // same commit as the version that anchors the comparison.
-    fixture.write("packages/demo/script.sh", "echo hi\n");
+    fixture.write(".gitattributes", "*.sh text eol=crlf\n");
+    fixture.write("packages/demo/script.sh", "echo hi\r\n");
     write_package(&fixture, "demo", "0.1.1", "");
     fixture.commit("release with script");
     let base = fixture.sha("HEAD");

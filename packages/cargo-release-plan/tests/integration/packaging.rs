@@ -3,7 +3,6 @@
 //! Also covers the manifest resources Cargo packs from outside the package
 //! directory.
 
-#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -282,6 +281,13 @@ fn an_edit_to_a_converted_file_is_still_reported_as_changed() {
 
     assert!(!passed, "{message}");
     assert!(message.contains("demo: needs-increment"), "{message}");
+    _ = report_json(&fixture, &base);
+    let patch = fs::read_to_string(fixture.path().join("out/diffs/demo.patch")).unwrap();
+    assert!(patch.contains("-two\n"), "{patch:?}");
+    assert!(patch.contains("+three\n"), "{patch:?}");
+    assert!(!patch.contains("-one\n"), "{patch:?}");
+    assert!(!patch.contains("+one\n"), "{patch:?}");
+    assert!(!patch.contains('\r'), "{patch:?}");
 }
 
 /// Package whose released content includes a file Git rewrites as it stores it.

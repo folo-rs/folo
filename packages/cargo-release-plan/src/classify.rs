@@ -352,6 +352,7 @@ pub(crate) fn classify(
     let mut classes = Vec::new();
     let mut exempt = HashSet::new();
     let mut versions = BTreeMap::new();
+    let mut lockfiles = LockfileCache::default();
 
     for package in &work_tree.packages {
         versions.insert(
@@ -367,6 +368,7 @@ pub(crate) fn classify(
             &base_snapshot,
             &work_root_doc,
             &mut cache,
+            &mut lockfiles,
             verbose,
         )?;
         if is_new_on_base(&base_snapshot, &package.manifest.name) {
@@ -407,7 +409,7 @@ pub(crate) fn classify(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "classification needs the work-tree package, both trees, the first-parent walk, and the snapshot cache together"
+    reason = "classification needs the work-tree package, both trees, the first-parent walk, and both snapshot caches together"
 )]
 fn classify_one(
     package: &WorkPackage,
@@ -418,6 +420,7 @@ fn classify_one(
     base_snapshot: &CommitSnapshot,
     work_root_doc: &DocumentMut,
     cache: &mut SnapshotCache,
+    lockfiles: &mut LockfileCache,
     verbose: Verbose,
 ) -> Result<PackageClass, AppError> {
     let name = &package.manifest.name;
@@ -518,6 +521,7 @@ fn classify_one(
 
     if package.has_binary {
         for (dependency, change) in lockfile_closure_changes(
+            lockfiles,
             git,
             work_tree,
             name,
@@ -798,10 +802,7 @@ fn diff_package(
             Some(path) => git.show_file_bytes(anchor_commit, path)?,
             None => None,
         };
-        let new = match work_files.get(rel).filter(|_| new_id.is_some()) {
-            Some(path) => read_optional_bytes(&git.root().join(path), name, path)?,
-            None => None,
-        };
+        let new = new_id.map(|id| git.show_blob_bytes(id)).transpose()?;
         let old_side = old.as_deref().map(|content| FileVersion {
             content,
             mode: tree_mode(
@@ -1488,6 +1489,70 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
     Some(segments.join("/"))
 }
 
+/// Parsed lockfiles shared by binary-package classifications.
+///
+/// The work-tree endpoint is common to every package, while packages that share
+/// an anchor commit also share its historical endpoint. Retaining both avoids
+/// reparsing workspace-sized lockfiles for every binary package.
+/// Ref: docs/implementation.md, "Lockfile closures".
+#[derive(Debug, Default)]
+struct LockfileCache {
+    work: Option<Lockfile>,
+    anchors: HashMap<String, Lockfile>,
+}
+
+impl LockfileCache {
+    fn anchor<'a>(
+        &'a mut self,
+        git: &GitRepo,
+        name: &str,
+        commit: &str,
+        path: &str,
+    ) -> Result<&'a Lockfile, AppError> {
+        if !self.anchors.contains_key(commit) {
+            let Some(bytes) = git.show_file_bytes(commit, path)? else {
+                return Err(LockfileClosureUnavailableError::new(
+                    name,
+                    "the anchor commit does not track a workspace Cargo.lock",
+                )
+                .into());
+            };
+            let lockfile = Lockfile::parse(&decode_lockfile(bytes, path)?, path)?;
+            self.anchors.insert(commit.to_owned(), lockfile);
+        }
+        Ok(self
+            .anchors
+            .get(commit)
+            .expect("the requested anchor lockfile was inserted above when absent"))
+    }
+
+    fn work<'a>(
+        &'a mut self,
+        work_tree: &WorkTree,
+        name: &str,
+        git_path: &str,
+    ) -> Result<&'a Lockfile, AppError> {
+        if self.work.is_none() {
+            let work_path = work_tree.workspace_root.join(LOCKFILE_FILE_NAME);
+            let Some(bytes) = read_optional_bytes(&work_path, name, git_path)? else {
+                return Err(LockfileClosureUnavailableError::new(
+                    name,
+                    "the work tree has no workspace Cargo.lock; restore or refresh Cargo.lock",
+                )
+                .into());
+            };
+            self.work = Some(Lockfile::parse(
+                &decode_lockfile(bytes, git_path)?,
+                git_path,
+            )?);
+        }
+        Ok(self
+            .work
+            .as_ref()
+            .expect("the work-tree lockfile was initialized above when absent"))
+    }
+}
+
 /// Dependencies whose locked identity changed between the anchor and the work tree.
 ///
 /// Both ends are read the way every other comparison reads them: the anchor from
@@ -1496,6 +1561,7 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
 /// dependency closure cannot be reconstructed and the assessment stops.
 /// Ref: docs/design.md, "Lockfiles of binary packages".
 fn lockfile_closure_changes(
+    cache: &mut LockfileCache,
     git: &GitRepo,
     work_tree: &WorkTree,
     name: &str,
@@ -1504,23 +1570,7 @@ fn lockfile_closure_changes(
     anchor_commit: &str,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
-    let Some(anchor_bytes) = git.show_file_bytes(anchor_commit, &git_path)? else {
-        return Err(LockfileClosureUnavailableError::new(
-            name,
-            "the anchor commit does not track a workspace Cargo.lock",
-        )
-        .into());
-    };
-    let work_path = work_tree.workspace_root.join(LOCKFILE_FILE_NAME);
-    let Some(work_bytes) = read_optional_bytes(&work_path, name, &git_path)? else {
-        return Err(LockfileClosureUnavailableError::new(
-            name,
-            "the work tree has no workspace Cargo.lock; restore or refresh Cargo.lock",
-        )
-        .into());
-    };
-    let anchor = Lockfile::parse(&decode_lockfile(anchor_bytes, &git_path)?, &git_path)?;
-    let work = Lockfile::parse(&decode_lockfile(work_bytes, &git_path)?, &git_path)?;
+    let anchor = cache.anchor(git, name, anchor_commit, &git_path)?;
     let Some(anchor) = anchor.closure(name, &anchor_version.to_string()) else {
         return Err(LockfileClosureUnavailableError::new(
             name,
@@ -1528,6 +1578,7 @@ fn lockfile_closure_changes(
         )
         .into());
     };
+    let work = cache.work(work_tree, name, &git_path)?;
     let Some(work) = work.closure(name, &work_version.to_string()) else {
         return Err(LockfileClosureUnavailableError::new(
             name,

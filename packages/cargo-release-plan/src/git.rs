@@ -447,13 +447,17 @@ impl GitRepo {
     /// pointer and a line-ending rule both make the two diverge. Asking Git to
     /// hash the work-tree file applies the same conversion the file would get if
     /// it were staged, which puts both ends of a comparison in one
-    /// representation. Ids come back in the order the paths were given.
+    /// representation. The converted blobs are retained in Git's object database
+    /// so patch rendering can read those exact bytes without running a potentially
+    /// stateful clean filter twice. This changes no ref, index entry, or work-tree
+    /// path; unreachable blobs remain subject to ordinary Git garbage collection.
+    /// Ids come back in the order the paths were given.
     pub(crate) fn hash_objects(&self, rel_paths: &[&str]) -> Result<Vec<String>, AppError> {
         let mut ids = Vec::with_capacity(rel_paths.len());
         for chunk in command_line_batches(rel_paths)? {
             // The paths are handed to the child borrowed: they outlive the call
             // and copying them would duplicate every path in the request.
-            let args = ["hash-object", "--"].into_iter().chain(chunk);
+            let args = ["hash-object", "-w", "--"].into_iter().chain(chunk);
             let stdout = run_capture_os_bytes("git", args, &self.root)?;
             ids.extend(
                 String::from_utf8_lossy(&stdout)
@@ -464,6 +468,11 @@ impl GitRepo {
             );
         }
         Ok(ids)
+    }
+
+    /// Bytes of a blob already present in Git's object database.
+    pub(crate) fn show_blob_bytes(&self, id: &str) -> Result<Vec<u8>, AppError> {
+        run_capture_bytes("git", &["cat-file", "blob", id], &self.root)
     }
 
     /// Manifest paths at `commit`, used to reconstruct historical workspace members.

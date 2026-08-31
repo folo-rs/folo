@@ -101,7 +101,11 @@ README. This keeps moves and changes to packaging structure comparable.
 
 File equality uses Git object ids. `git hash-object` applies the same clean
 filters and line-ending conversion used when committing, so work-tree bytes are
-not compared directly with already-filtered historical blobs.
+not compared directly with already-filtered historical blobs. The cleaned
+work-tree blobs are written into Git's object database and read back by object id
+when a patch needs their bytes. This keeps verdict and presentation on the exact
+same filter result without changing refs, the index, or work-tree files;
+unreachable blobs remain subject to ordinary Git garbage collection.
 
 Historical file modes come from `git ls-tree`. Work-tree modes start from the
 index and overlay `git diff-files --raw`: on a checkout with `core.fileMode`
@@ -150,8 +154,14 @@ dependency can share it; missing source alone is insufficient because that
 dependency can also be source-less.
 
 Dependency references are matched by every component Cargo writes: name, then
-version and source when present. A visited set terminates cycles. The root is
-excluded from the result even if a dependency cycle reaches it.
+version and source when present. Parsing indexes these components and resolves
+each textual edge to entry indices once, so closure walks do not search the
+package list. A visited set terminates cycles. The root is excluded from the
+result even if a dependency cycle reaches it.
+
+The parsed work-tree lockfile is shared across all binary packages. Historical
+lockfiles are shared by packages with the same anchor commit, so a workspace-sized
+endpoint is parsed once rather than once per binary.
 
 Both endpoint lockfiles must exist and resolve the binary package at its
 corresponding declared version. Missing or incomplete lockfile data stops
@@ -216,7 +226,8 @@ tool. Benchmarks instead isolate deterministic in-process work whose cost can
 scale with workspace size:
 
 * bounded patch rendering, across low and high edit distances; and
-* lockfile parsing and dependency-closure walking, across small and large graphs.
+* lockfile parsing and repeated dependency-closure walking, across small and
+  large graphs.
 
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
