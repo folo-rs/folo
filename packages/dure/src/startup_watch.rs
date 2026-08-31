@@ -4,6 +4,10 @@ use std::sync::Mutex;
 
 use crate::pal::ids::ConnId;
 
+/// Indicates that the watchdog claimed connection teardown before settlement.
+#[derive(Debug)]
+pub(crate) struct StartupExpired;
+
 /// Coordinates ownership of a connection with a startup deadline watchdog.
 ///
 /// The blocking operation and its watchdog race through this state so exactly
@@ -30,7 +34,7 @@ impl StartupWatch {
             .lock()
             .expect("startup watch is only read and written here, never across a panic");
         watch.expired = true;
-        watch.conn
+        watch.conn.take()
     }
 
     /// Register an accepted connection and report whether the deadline already expired.
@@ -38,17 +42,24 @@ impl StartupWatch {
         let mut watch = watch
             .lock()
             .expect("startup watch is only read and written here, never across a panic");
+        if watch.expired {
+            return true;
+        }
         watch.conn = Some(conn);
-        watch.expired
+        false
     }
 
-    /// Release the connection and report whether the deadline already expired.
-    pub(crate) fn settle(watch: &Mutex<Self>) -> bool {
+    /// Release the connection unless the watchdog already claimed its teardown.
+    pub(crate) fn settle(watch: &Mutex<Self>) -> Result<(), StartupExpired> {
         let mut watch = watch
             .lock()
             .expect("startup watch is only read and written here, never across a panic");
         watch.conn = None;
-        watch.expired
+        if watch.expired {
+            Err(StartupExpired)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -63,6 +74,7 @@ mod tests {
         let conn = ConnId(7);
         assert!(!StartupWatch::register(&watch, conn));
         assert_eq!(StartupWatch::expire(&watch), Some(conn));
+        assert_eq!(StartupWatch::expire(&watch), None);
     }
 
     #[test]
@@ -70,13 +82,14 @@ mod tests {
         let watch = Mutex::new(StartupWatch::default());
         assert_eq!(StartupWatch::expire(&watch), None);
         assert!(StartupWatch::register(&watch, ConnId(7)));
+        assert_eq!(StartupWatch::expire(&watch), None);
     }
 
     #[test]
     fn a_settled_connection_is_not_owned_by_the_watchdog() {
         let watch = Mutex::new(StartupWatch::default());
         assert!(!StartupWatch::register(&watch, ConnId(7)));
-        assert!(!StartupWatch::settle(&watch));
+        StartupWatch::settle(&watch).unwrap();
         assert_eq!(StartupWatch::expire(&watch), None);
     }
 
@@ -84,6 +97,6 @@ mod tests {
     fn settling_reports_that_expiry_already_won() {
         let watch = Mutex::new(StartupWatch::for_connection(ConnId(7)));
         assert_eq!(StartupWatch::expire(&watch), Some(ConnId(7)));
-        assert!(StartupWatch::settle(&watch));
+        StartupWatch::settle(&watch).unwrap_err();
     }
 }

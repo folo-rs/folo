@@ -133,10 +133,7 @@ where
         transport.disconnect(conn);
         return Err(StartupFailedError::new().into());
     }
-    if StartupWatch::settle(&startup) {
-        transport.disconnect(conn);
-        return Err(StartupFailedError::new().into());
-    }
+    StartupWatch::settle(&startup).map_err(|_expired| StartupFailedError::new())?;
     transport.close_listener(listener);
 
     let startup_response = Arc::new(Mutex::new(StartupWatch::for_connection(conn)));
@@ -152,10 +149,7 @@ where
     });
 
     let response = transport.recv(conn);
-    if StartupWatch::settle(&startup_response) {
-        transport.disconnect(conn);
-        return Err(StartupFailedError::new().into());
-    }
+    StartupWatch::settle(&startup_response).map_err(|_expired| StartupFailedError::new())?;
     let Ok(Message::StartupOk {
         session_id,
         durability,
@@ -383,6 +377,59 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.find_source::<StartupFailedError>().is_some());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_supervisor_that_disconnects_after_startup_ok_is_a_startup_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let transport = MemoryTransport::new();
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_random_nonce()
+            .returning(|| "nonce".to_string());
+        processes
+            .expect_current_exe()
+            .returning(|| Ok(PathBuf::from("dure.exe")));
+        processes.expect_spawn_supervisor().returning({
+            let transport = transport.clone();
+            move |_| {
+                let pipe = transport.pipe_name("startup-nonce");
+                let conn = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
+                transport
+                    .send(
+                        conn,
+                        &Message::StartupOk {
+                            session_id: SessionId::MIN,
+                            durability: Durability::Durable,
+                        },
+                    )
+                    .unwrap();
+                transport.disconnect(conn);
+                Ok(ProcessIdentity {
+                    pid: 10,
+                    creation_time: 100,
+                })
+            }
+        });
+        let mut console = MockLocalConsole::new();
+        console.expect_has_console().return_const(true);
+        let console = LocalConsoleFacade::from_mock(console);
+
+        let error = execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            vec!["app.exe".to_string()],
+            None,
+            Trace::default(),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<StartupFailedError>().is_some());
+        assert_eq!(transport.startup_commit_count(), 0);
     }
 
     /// Drives `execute` through a successful startup handshake against a

@@ -151,7 +151,8 @@ where
         }
     });
     let committed = transport.recv(startup);
-    if StartupWatch::settle(&startup_commit) || !matches!(committed, Ok(Message::StartupCommit)) {
+    StartupWatch::settle(&startup_commit).map_err(|_expired| StartupFailedError::new())?;
+    if !matches!(committed, Ok(Message::StartupCommit)) {
         transport.disconnect(startup);
         return Err(StartupFailedError::new().into());
     }
@@ -1083,10 +1084,7 @@ mod tests {
         });
     }
 
-    #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
-    fn a_session_without_startup_commit_is_rolled_back() {
+    fn assert_rejected_startup_rolls_back(acknowledgement: Option<Message>) {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
@@ -1117,10 +1115,65 @@ mod tests {
                 transport.recv(startup_conn).unwrap(),
                 Message::StartupOk { .. }
             ));
-            assert_eq!(store.list().unwrap().len(), 1);
-            transport.disconnect(startup_conn);
+            let records = store.list().unwrap();
+            let [record] = records.as_slice() else {
+                panic!("expected exactly one record");
+            };
+            let session_pipe = record.pipe_name.clone();
+            if let Some(acknowledgement) = acknowledgement {
+                transport.send(startup_conn, &acknowledgement).unwrap();
+            } else {
+                transport.disconnect(startup_conn);
+            }
 
             let error = supervisor.join().unwrap().unwrap_err();
+            assert!(error.find_source::<StartupFailedError>().is_some());
+            assert!(store.list().unwrap().is_empty());
+            transport
+                .connect(&session_pipe, CONNECT_TIMEOUT)
+                .unwrap_err();
+        });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_session_without_startup_commit_is_rolled_back() {
+        assert_rejected_startup_rolls_back(None);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_session_with_an_invalid_startup_commit_is_rolled_back() {
+        assert_rejected_startup_rolls_back(Some(Message::StartupErr));
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn failure_to_send_startup_ok_rolls_back() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            transport.fail_next_send();
+            let pty = MemoryPseudoconsole::new();
+            let dir = tempfile::TempDir::new().unwrap();
+            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let exit = Arc::new((Mutex::new(true), Condvar::new()));
+            let processes = mock_processes(exit);
+
+            let _startup = transport.listen("startup").unwrap();
+            let error = run_supervisor(
+                &processes,
+                &store,
+                &transport,
+                &pty,
+                "startup",
+                PathBuf::from("/work"),
+                vec!["app.exe".to_string()],
+            )
+            .unwrap_err();
+
             assert!(error.find_source::<StartupFailedError>().is_some());
             assert!(store.list().unwrap().is_empty());
         });

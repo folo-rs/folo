@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -34,6 +34,8 @@ struct Inner {
     conns: Mutex<HashMap<ConnId, ConnState>>,
     /// Successful startup commits, for client-side protocol assertions.
     startup_commits: AtomicUsize,
+    /// Makes the next send fail so callers can exercise transport-failure handling.
+    fail_next_send: AtomicBool,
     /// Guards the pending-connection predicate under `listener_state`. A
     /// `Condvar` may only ever be paired with one mutex, so the connection side
     /// has its own below.
@@ -63,6 +65,7 @@ impl MemoryTransport {
                 listener_state: Mutex::new(HashMap::new()),
                 conns: Mutex::new(HashMap::new()),
                 startup_commits: AtomicUsize::new(0),
+                fail_next_send: AtomicBool::new(false),
                 listener_cond: Condvar::new(),
                 conn_cond: Condvar::new(),
             }),
@@ -93,6 +96,11 @@ impl MemoryTransport {
 
     pub(crate) fn startup_commit_count(&self) -> usize {
         self.inner.startup_commits.load(Ordering::SeqCst)
+    }
+
+    /// Make the next send fail without delivering its message.
+    pub(crate) fn fail_next_send(&self) {
+        self.inner.fail_next_send.store(true, Ordering::SeqCst);
     }
 }
 
@@ -185,7 +193,7 @@ impl Transport for MemoryTransport {
         let Some(listener_state) = state.get_mut(&listener) else {
             drop(state);
             self.disconnect(server);
-            return Err(PalError::new(PalErrorKind::Timeout));
+            return Err(PalError::new(PalErrorKind::NotFound));
         };
         listener_state.pending.push_back(server);
         self.inner.listener_cond.notify_all();
@@ -193,6 +201,9 @@ impl Transport for MemoryTransport {
     }
 
     fn send(&self, conn: ConnId, message: &Message) -> Result<(), PalError> {
+        if self.inner.fail_next_send.swap(false, Ordering::SeqCst) {
+            return Err(PalError::new(PalErrorKind::Other));
+        }
         let mut conns = self.inner.conns.lock().expect("conn map lock");
         let peer = loop {
             let Some(state) = conns.get(&conn) else {
