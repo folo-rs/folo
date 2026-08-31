@@ -13,6 +13,14 @@ use std::time::Duration;
 /// "Accept loop and steal".
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Bound on supervisor initialization after it has connected to the client.
+///
+/// Starting an app may involve executable lookup, security scanning, and operating-system
+/// process setup, so it needs human-scale headroom beyond local IPC. The wait remains bounded
+/// so a supervisor stalled during initialization cannot hang `dure run`.
+/// Ref: docs/implementation.md, "Process split".
+pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Bound on how long `terminate` waits for a killed process to become signaled.
 ///
 /// `TerminateProcess` only initiates termination; the process object signals

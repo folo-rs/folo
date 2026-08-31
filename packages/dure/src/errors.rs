@@ -59,6 +59,19 @@ impl ResumeTimeoutError {
     }
 }
 
+/// The client could not complete the attach handshake.
+#[ohno::error]
+#[display("Failed to attach to session {id}; it may still be running")]
+pub(crate) struct AttachFailedError {
+    id: u32,
+}
+
+impl AttachFailedError {
+    pub(crate) fn for_id(id: SessionId) -> Self {
+        Self::new(id.get())
+    }
+}
+
 /// Kill could not terminate the recorded supervisor.
 #[ohno::error]
 #[display("Failed to terminate session {id}")]
@@ -141,6 +154,7 @@ unwind_safe!(
     NoLiveSessionsError,
     SessionNotFoundError,
     ResumeTimeoutError,
+    AttachFailedError,
     KillFailedError,
     BreakawayDeniedError,
     StartupFailedError,

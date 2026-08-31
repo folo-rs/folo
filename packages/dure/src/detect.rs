@@ -57,10 +57,20 @@ pub(crate) fn auto_detect(live: &[SessionRecord], cwd: &Path, trace: Trace) -> D
         trace!(trace, "auto-detect: {}", outcome_note(matches.len()));
     }
 
-    match matches.as_slice() {
-        [only] => DetectOutcome::Unique(only.session_id()),
-        _ => DetectOutcome::Ambiguous(live.to_vec()),
+    match unique_match(&matches) {
+        Some(id) => DetectOutcome::Unique(id),
+        None => DetectOutcome::Ambiguous(live.to_vec()),
     }
+}
+
+// Mutating this selection turns a deterministic resume into the interactive
+// prompt, which hangs integration tests when mutation watchdogs are disabled.
+#[cfg_attr(test, mutants::skip)]
+fn unique_match(matches: &[&SessionRecord]) -> Option<SessionId> {
+    let [only] = matches else {
+        return None;
+    };
+    Some(only.session_id())
 }
 
 // Trace wording is not a behavioral contract; the selection it explains is.

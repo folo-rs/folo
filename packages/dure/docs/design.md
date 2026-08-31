@@ -71,6 +71,11 @@ An app that exits before `dure run` has finished attaching still reports its
 output and exit status. Only if the `dure run` process itself goes away first is
 such a session discarded unreported.
 
+`run` distinguishes creating a session from attaching to it. A startup failure
+leaves no live session behind. Once the supervisor and client confirm startup,
+an attach failure identifies the session and notes that it may still be running,
+so `list`, `resume`, and `kill` remain available.
+
 `dure resume` attaches using auto-detect. `dure resume --id <id>` attaches to
 that live session and skips auto-detect.
 

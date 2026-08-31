@@ -20,6 +20,7 @@ sequenceDiagram
   S->>A: spawn inside job, attached to pseudoconsole
   S->>S: create session pipe, allocate id, publish record
   S-->>C: StartupOk(id) on startup pipe
+  C->>S: StartupCommit on startup pipe
   C->>S: connect to session pipe, attach
   Note over C,S: startup pipe stays open until the client attaches or gives up
 ```
@@ -30,8 +31,10 @@ pipe, then allocates the session id and atomically publishes the session record.
 It reports the id only after the pipe is accepting connections. An initialization
 failure closes the lifetime job, removes any provisional state, reports
 `StartupErr` on the startup pipe, and exits. The initiating client treats every
-non-`StartupOk` response as a failed start. A client never reports a successful start
-for a session that cannot be resumed.
+non-`StartupOk` response as a failed start. After receiving `StartupOk`, the
+client sends `StartupCommit`; the supervisor retains the session only after that
+acknowledgement. Losing either side of this exchange rolls initialization back,
+so a client never reports a startup failure while leaving a live session behind.
 
 The startup channel stays open past that acknowledgement, as the supervisor's
 signal that `dure run` still intends to attach. An app that exits immediately
@@ -104,9 +107,14 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
   relays. Whether a child *sees* a console is not mocked; that is an integration
   concern.
 
-Bounded waits use `CONNECT_TIMEOUT` as a stuck-supervisor watchdog. Unit tests
-inject timeout and disconnect through the mock transport instead of waiting on
-real time.
+`CONNECT_TIMEOUT` bounds local IPC connection attempts and the startup commit
+acknowledgement. `STARTUP_TIMEOUT` separately bounds supervisor initialization
+after the startup connection is established, so process launch receives its full
+budget instead of sharing the shorter IPC deadline. These deadlines are applied
+by timed transport operations, so receiving a message completes the operation
+before caller scheduling can race with a separate watchdog. Unit tests inject
+timeout and disconnect through the mock transport instead of waiting on real
+time.
 
 ## Output rendering
 

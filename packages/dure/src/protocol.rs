@@ -61,6 +61,8 @@ pub(crate) enum Message {
     },
     /// Supervisor initialization failed.
     StartupErr,
+    /// Client received startup confirmation and accepts ownership of the session.
+    StartupCommit,
 }
 
 // Durability bytes are stable assigned integers, like the kind bytes below.
@@ -78,6 +80,7 @@ const KIND_DISPLACED: u8 = 6;
 const KIND_APP_EXITED: u8 = 7;
 const KIND_STARTUP_OK: u8 = 8;
 const KIND_STARTUP_ERR: u8 = 9;
+const KIND_STARTUP_COMMIT: u8 = 10;
 
 /// Encodes a message as a length-prefixed frame.
 #[must_use]
@@ -123,6 +126,7 @@ pub(crate) fn encode(message: &Message) -> Vec<u8> {
             });
         }
         Message::StartupErr => payload.push(KIND_STARTUP_ERR),
+        Message::StartupCommit => payload.push(KIND_STARTUP_COMMIT),
     }
 
     let len = u32::try_from(payload.len()).expect("frame payload fits in u32");
@@ -171,6 +175,7 @@ pub(crate) fn decode_payload(payload: &[u8]) -> Result<Message, DecodeError> {
             })
         }
         KIND_STARTUP_ERR if rest.is_empty() => Ok(Message::StartupErr),
+        KIND_STARTUP_COMMIT if rest.is_empty() => Ok(Message::StartupCommit),
         _ => Err(DecodeError::Invalid),
     }
 }
@@ -246,6 +251,7 @@ mod tests {
                 durability: Durability::TiedToLauncher,
             },
             Message::StartupErr,
+            Message::StartupCommit,
         ];
         for message in messages {
             let frame = encode(&message);
@@ -281,13 +287,17 @@ mod tests {
     }
 
     #[test]
-    fn displaced_and_startup_err_reject_trailing_bytes() {
+    fn empty_messages_reject_trailing_bytes() {
         assert_eq!(
             decode_payload(&[KIND_DISPLACED, 0]).unwrap_err(),
             DecodeError::Invalid
         );
         assert_eq!(
             decode_payload(&[KIND_STARTUP_ERR, 1]).unwrap_err(),
+            DecodeError::Invalid
+        );
+        assert_eq!(
+            decode_payload(&[KIND_STARTUP_COMMIT, 1]).unwrap_err(),
             DecodeError::Invalid
         );
     }

@@ -66,6 +66,14 @@ impl Transport for TransportFacade {
         }
     }
 
+    fn accept_timeout(&self, listener: ListenerId, timeout: Duration) -> Result<ConnId, PalError> {
+        match self {
+            Self::Target(inner) => inner.accept_timeout(listener, timeout),
+            #[cfg(test)]
+            Self::Memory(inner) => inner.accept_timeout(listener, timeout),
+        }
+    }
+
     fn connect(&self, name: &str, timeout: Duration) -> Result<ConnId, PalError> {
         match self {
             Self::Target(inner) => inner.connect(name, timeout),
@@ -87,6 +95,14 @@ impl Transport for TransportFacade {
             Self::Target(inner) => inner.recv(conn),
             #[cfg(test)]
             Self::Memory(inner) => inner.recv(conn),
+        }
+    }
+
+    fn recv_timeout(&self, conn: ConnId, timeout: Duration) -> Result<Message, PalError> {
+        match self {
+            Self::Target(inner) => inner.recv_timeout(conn, timeout),
+            #[cfg(test)]
+            Self::Memory(inner) => inner.recv_timeout(conn, timeout),
         }
     }
 
