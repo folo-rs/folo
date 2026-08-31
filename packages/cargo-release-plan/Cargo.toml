@@ -14,7 +14,7 @@ rust-version.workspace = true
 # Only the consumer build ships in the published source package. Tests, the
 # agent notes, and development manifests stay in git. Cargo packs the README it
 # detects whatever this says, so naming it here would only imply otherwise.
-# Ref: docs/design.md, "The default README".
+# Ref: docs/design.md, "Where Cargo adds content".
 include = ["src/**"]
 
 # Required so feature-gated public items appear in generated documentation.

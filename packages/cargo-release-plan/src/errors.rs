@@ -459,6 +459,23 @@ pub(crate) struct MalformedLockfileError {
 impl UnwindSafe for MalformedLockfileError {}
 impl RefUnwindSafe for MalformedLockfileError {}
 
+/// A binary package's published dependency closure cannot be reconstructed.
+///
+/// Classification requires a workspace lockfile at both comparison endpoints
+/// that resolves the package at the version declared there.
+#[ohno::error]
+#[display(
+    "Cannot assess locked dependencies for binary package '{}': {reason}",
+    package.quoted()
+)]
+pub(crate) struct LockfileClosureUnavailableError {
+    package: String,
+    reason: String,
+}
+
+impl UnwindSafe for LockfileClosureUnavailableError {}
+impl RefUnwindSafe for LockfileClosureUnavailableError {}
+
 /// The workspace declares `release-plan.groups` as something other than a table.
 #[ohno::error]
 #[display("Workspace metadata key 'release-plan.groups' must be a table of version groups")]
@@ -760,6 +777,14 @@ mod tests {
     );
     assert_impl_all!(
         MalformedLockfileError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        LockfileClosureUnavailableError: Send,
         Sync,
         Debug,
         error::Error,

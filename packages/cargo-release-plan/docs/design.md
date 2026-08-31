@@ -81,9 +81,9 @@ it does not propagate a release decision.
 
 ### Protect a release with `check`
 
-`check` is the merge gate. It fails while any package needs an increment or a
-version group disagrees with itself, and points the maintainer to the
-`increment-versions` skill that prepares a plan.
+`check` is intended for a merge gate. It fails while any package needs an
+increment or a version group disagrees with itself, and points the maintainer to
+the `increment-versions` skill that prepares a plan.
 
 `--format github` additionally emits GitHub Actions error annotations. These are
 structured log records that attach each failure to the affected package
@@ -244,6 +244,13 @@ bytes, so unrelated dependency movement does not affect every binary. Entries
 are identified by name, version, and source. The root package is selected by its
 name and declared version, and excluded from its own closure so incrementing it
 does not create another change.
+
+The assessment requires a workspace lockfile at the package anchor and in the
+work tree, with each lockfile resolving the binary package at the version
+declared at that endpoint. If either closure cannot be reconstructed, the
+assessment stops rather than treating unknown released content as unchanged.
+A new binary package has no anchor artifact to compare and is classified as new
+without a historical closure.
 
 ### Inherited workspace values
 

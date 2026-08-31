@@ -152,6 +152,12 @@ Dependency references are matched by every component Cargo writes: name, then
 version and source when present. A visited set terminates cycles. The root is
 excluded from the result even if a dependency cycle reaches it.
 
+Both endpoint lockfiles must exist and resolve the binary package at its
+corresponding declared version. Missing or incomplete lockfile data stops
+classification because regenerating historical resolution would violate the
+offline, no-full-resolution boundary. A binary package absent from the baseline
+returns as new before lockfile comparison because it has no historical artifact.
+
 ## Check and report
 
 `check` and `report` consume the same `Classification`; neither recomputes release

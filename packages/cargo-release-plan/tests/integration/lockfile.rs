@@ -120,9 +120,22 @@ fn an_untouched_lockfile_leaves_a_binary_package_unchanged() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_workspace_without_a_lockfile_classifies() {
-    // Nothing resolves the closure, so the comparison contributes nothing
-    // rather than inventing a difference.
+fn a_new_binary_package_needs_no_historical_lockfile() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "existing", "0.1.0", "");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    write_binary_package(&fixture, "tool", "0.1.0", "");
+    fixture.commit("add binary package");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_binary_anchor_without_a_lockfile_is_an_error() {
     let fixture = Fixture::new("");
     write_binary_package(&fixture, "tool", "0.1.0", "");
     fixture.commit("seed");
@@ -131,25 +144,26 @@ fn a_workspace_without_a_lockfile_classifies() {
     fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
     fixture.commit("edit the binary");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("tool: needs-increment"), "{message}");
+    let error = check_error(&fixture, &base);
+    assert!(error.contains("anchor commit"), "{error}");
+    assert!(error.contains("Cargo.lock"), "{error}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_missing_work_tree_lockfile_classifies() {
+fn a_missing_work_tree_lockfile_is_an_error() {
     let fixture = locked_workspace();
     let base = fixture.sha("HEAD");
     fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(passed, "{message}");
+    let error = check_error(&fixture, &base);
+    assert!(error.contains("work tree"), "{error}");
+    assert!(error.contains("Cargo.lock"), "{error}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_lockfile_that_does_not_resolve_the_binary_classifies() {
+fn an_anchor_lockfile_that_does_not_resolve_the_binary_is_an_error() {
     let fixture = Fixture::new("");
     write_binary_package(&fixture, "tool", "0.1.0", "");
     fixture.write(
@@ -168,7 +182,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fixture.write("packages/tool/src/main.rs", "fn main() { let _ = 4; }\n");
     fixture.commit("edit the binary");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("tool: needs-increment"), "{message}");
+    let error = check_error(&fixture, &base);
+    assert!(error.contains("anchor Cargo.lock"), "{error}");
+    assert!(error.contains("declared version"), "{error}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_work_tree_lockfile_that_does_not_resolve_the_binary_is_an_error() {
+    let fixture = locked_workspace();
+    let base = fixture.sha("HEAD");
+    fixture.write(
+        "Cargo.lock",
+        r#"version = 4
+
+[[package]]
+name = "widget"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    );
+
+    let error = check_error(&fixture, &base);
+    assert!(error.contains("work-tree Cargo.lock"), "{error}");
+    assert!(error.contains("declared version"), "{error}");
+}
+
+fn check_error(fixture: &Fixture, base: &str) -> String {
+    crate::harness::check_result(fixture, base)
+        .expect_err("classification must stop when a binary closure is unavailable")
 }

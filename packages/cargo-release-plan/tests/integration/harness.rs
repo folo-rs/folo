@@ -42,6 +42,22 @@ pub(crate) fn check(fixture: &Fixture, base: &str) -> (bool, String) {
     check_workspace(base, fixture.manifest())
 }
 
+pub(crate) fn check_result(fixture: &Fixture, base: &str) -> Result<(bool, String), String> {
+    match run(&RunInput::Check {
+        base: Some(base.to_string()),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    }) {
+        Ok(RunOutcome::Check {
+            passed, message, ..
+        }) => Ok((passed, message)),
+        Ok(other) => panic!("expected check, got {other:?}"),
+        Err(error) => Err(format!("{error}")),
+    }
+}
+
 pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
     match run(&RunInput::Check {
         base: Some(base.to_string()),

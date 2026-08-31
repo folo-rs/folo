@@ -28,8 +28,8 @@ use crate::packaging::{PackagingRules, relativize};
 use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
 use crate::{
-    MalformedLockfileError, ReadFileError, SymlinkReleasedError, VersionRegressionError,
-    short_commit,
+    LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
+    VersionRegressionError, short_commit,
 };
 
 /// Name Cargo requires for a workspace lockfile.
@@ -427,8 +427,8 @@ fn classify_one(
     let group = work_tree.groups.group_of(name).map(ToOwned::to_owned);
     let dependents = dependents_of(&work_tree.packages, name);
 
-    let timeline = build_timeline(git, name, commits, cache)?;
     let anchor = if base_snapshot.packages.contains_key(name) {
+        let timeline = build_timeline(git, name, commits, cache)?;
         resolve_anchor(name, &timeline)?
     } else {
         // A package the baseline does not publish has no released version to
@@ -523,7 +523,6 @@ fn classify_one(
             &anchor.version,
             &package.manifest.version,
             &anchor.commit,
-            verbose,
         )? {
             verbose.note(|| {
                 format!(
@@ -1460,16 +1459,12 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
     Some(segments.join("/"))
 }
 
-// Untracked paths are advisory-only; tests cannot observe that a log line was skipped.
-#[cfg_attr(test, mutants::skip)]
 /// Dependencies whose locked identity changed between the anchor and the work tree.
 ///
 /// Both ends are read the way every other comparison reads them: the anchor from
-/// the commit, the work tree from disk. A workspace that does not track a
-/// lockfile, or one whose lockfile predates the package, yields nothing rather
-/// than a fabricated difference — there is no resolved closure to compare, and
-/// treating its absence as a change would report on the lockfile's arrival
-/// instead of on the package.
+/// the commit, the work tree from disk. Both lockfiles must exist and resolve the
+/// package at its corresponding declared version; otherwise the published
+/// dependency closure cannot be reconstructed and the assessment stops.
 /// Ref: docs/design.md, "Lockfiles of binary packages".
 fn lockfile_closure_changes(
     git: &GitRepo,
@@ -1478,34 +1473,38 @@ fn lockfile_closure_changes(
     anchor_version: &Version,
     work_version: &Version,
     anchor_commit: &str,
-    verbose: Verbose,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
     let Some(anchor_bytes) = git.show_file_bytes(anchor_commit, &git_path)? else {
-        log_missing_lockfile(
-            verbose,
+        return Err(LockfileClosureUnavailableError::new(
             name,
-            "the anchor commit tracks no workspace lockfile",
-        );
-        return Ok(Vec::new());
+            "the anchor commit does not track a workspace Cargo.lock",
+        )
+        .into());
     };
     let work_path = work_tree.workspace_root.join(LOCKFILE_FILE_NAME);
     let Some(work_bytes) = read_optional_bytes(&work_path, name, &git_path)? else {
-        log_missing_lockfile(verbose, name, "the work tree holds no workspace lockfile");
-        return Ok(Vec::new());
+        return Err(LockfileClosureUnavailableError::new(
+            name,
+            "the work tree has no workspace Cargo.lock; restore or refresh Cargo.lock",
+        )
+        .into());
     };
     let anchor = Lockfile::parse(&decode_lockfile(anchor_bytes, &git_path)?, &git_path)?;
     let work = Lockfile::parse(&decode_lockfile(work_bytes, &git_path)?, &git_path)?;
-    let (Some(anchor), Some(work)) = (
-        anchor.closure(name, &anchor_version.to_string()),
-        work.closure(name, &work_version.to_string()),
-    ) else {
-        log_missing_lockfile(
-            verbose,
+    let Some(anchor) = anchor.closure(name, &anchor_version.to_string()) else {
+        return Err(LockfileClosureUnavailableError::new(
             name,
-            "a lockfile end does not resolve this package",
-        );
-        return Ok(Vec::new());
+            "the anchor Cargo.lock does not resolve the package at its declared version",
+        )
+        .into());
+    };
+    let Some(work) = work.closure(name, &work_version.to_string()) else {
+        return Err(LockfileClosureUnavailableError::new(
+            name,
+            "the work-tree Cargo.lock does not resolve the package at its declared version; refresh Cargo.lock",
+        )
+        .into());
     };
     Ok(closure_changes(&anchor, &work))
 }
@@ -1513,15 +1512,6 @@ fn lockfile_closure_changes(
 /// Reads lockfile bytes as text, naming `path` if they are not text at all.
 fn decode_lockfile(bytes: Vec<u8>, path: &str) -> Result<String, AppError> {
     String::from_utf8(bytes).map_err(|error| MalformedLockfileError::caused_by(path, error).into())
-}
-
-fn log_missing_lockfile(verbose: Verbose, name: &str, reason: &str) {
-    verbose.note(|| {
-        format!(
-            "{}: {reason}, so no resolved dependency closure is compared for it",
-            quote_path(name)
-        )
-    });
 }
 
 fn log_untracked(verbose: Verbose, name: &str, count: usize) {
