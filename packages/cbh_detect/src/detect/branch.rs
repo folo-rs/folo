@@ -314,6 +314,12 @@ fn select_regime(series: &Series) -> RegimeSelection {
         .collect();
 
     let search_alpha = regime_search_alpha(selector.len());
+    // Check the calibration before recursive segmentation because a broader-than-budget chance
+    // level can make every candidate eligible and drive prohibitively expensive searches.
+    debug_assert!(
+        search_alpha <= noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL,
+        "one regime search cannot consume more than the complete search budget",
+    );
     let mut boundaries = Vec::new();
     collect_supported_boundaries(series.kind, &selector, 0, search_alpha, &mut boundaries);
     extend_current_regime(series.kind, &selector, search_alpha, &mut boundaries);
