@@ -204,14 +204,14 @@ fn escape_property(value: &str) -> String {
 ///
 /// The self-contained path comes first so the message stays actionable without
 /// any tooling beyond this binary; the skill is named as the assisted route.
-/// The base is spelled out even when it came from configuration rather than the
-/// command line, because a report run against a different base does not explain
-/// the failure being reported.
+/// The base is spelled out separately from the copyable command because it can
+/// come from a repository-controlled ref name and diagnostic quoting is not
+/// shell quoting.
 fn remedy(base: &str) -> String {
     format!(
-        "Run `cargo release-plan report --out-dir <dir> --base {}` to inspect the changes, then \
+        "Run `cargo release-plan report --out-dir <dir> --base <base>` to inspect the changes, then \
          `cargo release-plan apply --plan <plan.json>` with an increment plan, or run the \
-         {INCREMENT_VERSIONS_SKILL} skill to do both.",
+         {INCREMENT_VERSIONS_SKILL} skill to do both. Set `<base>` to the base reported here: {}.",
         quote_path(base)
     )
 }
@@ -355,7 +355,25 @@ mod tests {
 
         let text = render_diagnostics(&[package], &BTreeMap::new(), "deadbeef", CheckFormat::Text);
 
-        assert!(text.contains("--base deadbeef"));
+        assert!(text.contains("--base <base>"));
+        assert!(text.contains("base reported here: deadbeef"));
+    }
+
+    #[test]
+    fn remedy_keeps_a_repository_controlled_base_out_of_commands() {
+        let base = "release; echo injected";
+
+        let text = remedy(base);
+        let report_command = text
+            .split('`')
+            .nth(1)
+            .expect("the remedy contains a report command");
+
+        assert_eq!(
+            report_command,
+            "cargo release-plan report --out-dir <dir> --base <base>"
+        );
+        assert!(!report_command.contains(base));
     }
 
     #[test]

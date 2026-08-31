@@ -77,4 +77,31 @@ fn report_replaces_the_diffs_of_an_earlier_run() {
 
     assert!(!stale.exists());
     assert!(out_dir.join("report.json").exists());
+    assert!(!out_dir.join("report.json.tmp").exists());
+}
+
+/// A failed rerun removes the completion marker before changing patches.
+///
+/// A consumer treats `report.json` as the index of one complete report. Leaving
+/// an earlier marker after patch replacement fails would make a mixed artifact
+/// set appear complete.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_failed_rerun_does_not_leave_the_previous_report_marker() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    let out_dir = fixture.path().join("out");
+    report_json(&fixture, &base);
+    fs::remove_dir_all(out_dir.join("diffs")).unwrap();
+    fs::write(out_dir.join("diffs"), "blocks directory creation").unwrap();
+
+    let result = run(&RunInput::Report {
+        out_dir: out_dir.clone(),
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    });
+
+    result.expect_err("report rerun must fail after deleting tracked content");
+    assert!(!out_dir.join("report.json").exists());
 }

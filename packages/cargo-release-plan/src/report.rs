@@ -69,6 +69,49 @@ pub(crate) fn write_report(
     classification: &Classification,
 ) -> Result<String, AppError> {
     fs::create_dir_all(out_dir).map_err(|error| WriteFileError::caused_by(out_dir, error))?;
+    let diff_names: Vec<Option<String>> =
+        classification.packages.iter().map(diff_file_name).collect();
+    let packages = classification
+        .packages
+        .iter()
+        .zip(&diff_names)
+        .map(|(package, diff_name)| {
+            report_package(
+                package,
+                diff_name.as_ref().map(|name| format!("diffs/{name}")),
+            )
+        })
+        .collect();
+    let mut groups = BTreeMap::new();
+    for (name, verdict) in &classification.groups {
+        groups.insert(
+            name.clone(),
+            ReportGroup {
+                members: verdict.members().to_vec(),
+                consistent: verdict.is_consistent(),
+                version: verdict.version().map(ToString::to_string),
+            },
+        );
+    }
+    // The emitted field names are part of the consumer-facing layout documented
+    // in the README, so they are compatibility-sensitive rather than incidental.
+    let report = ReportFile {
+        schema_version: SCHEMA_VERSION,
+        head: classification.head.clone(),
+        packages,
+        groups,
+    };
+    let report = serde_json::to_string_pretty(&report)
+        .expect("the report body contains only JSON-serializable fields");
+
+    // `report.json` is the completion marker. Remove an earlier marker before
+    // touching its patch tree so an interrupted rerun cannot present stale JSON
+    // alongside missing or partially replaced patches.
+    let report_path = out_dir.join("report.json");
+    if report_path.exists() {
+        fs::remove_file(&report_path)
+            .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
+    }
     // Consumer-facing layout: README "report".
     //
     // The subtree belongs to this tool, and the report contract is that it
@@ -82,41 +125,16 @@ pub(crate) fn write_report(
     }
     fs::create_dir_all(&diffs_dir).map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;
 
-    let mut packages = Vec::new();
-    for package in &classification.packages {
-        let diff_path = write_diff(&diffs_dir, package)?;
-        packages.push(report_package(package, diff_path));
+    for (package, diff_name) in classification.packages.iter().zip(&diff_names) {
+        write_diff(&diffs_dir, package, diff_name.as_deref())?;
     }
 
-    let mut groups = BTreeMap::new();
-    for (name, verdict) in &classification.groups {
-        groups.insert(
-            name.clone(),
-            ReportGroup {
-                members: verdict.members().to_vec(),
-                consistent: verdict.is_consistent(),
-                version: verdict.version().map(ToString::to_string),
-            },
-        );
-    }
-
-    // The emitted field names are part of the consumer-facing layout documented
-    // in the README, so they are compatibility-sensitive rather than incidental.
-    let report = ReportFile {
-        schema_version: SCHEMA_VERSION,
-        head: classification.head.clone(),
-        packages,
-        groups,
-    };
-    // Rendering to a string before writing keeps serialization failure - which
-    // this body makes impossible - separate from the I/O failure the caller must
-    // handle, so the only error this step can report is one the caller can act
-    // on. A failed write can still leave a partial file behind; the run fails
-    // with it, so no consumer is told the artifact is complete.
-    let report = serde_json::to_string_pretty(&report)
-        .expect("the report body contains only JSON-serializable fields");
-    let report_path = out_dir.join("report.json");
-    fs::write(&report_path, report.as_bytes())
+    // Write through a staging path so even a partial write is not mistaken for
+    // the completion marker. Keeping both paths together avoids a cross-filesystem rename.
+    let staged_report_path = report_path.with_extension("json.tmp");
+    fs::write(&staged_report_path, report.as_bytes())
+        .map_err(|error| WriteFileError::caused_by(&staged_report_path, error))?;
+    fs::rename(&staged_report_path, &report_path)
         .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
 
     let needing_increment = classification
@@ -131,18 +149,28 @@ pub(crate) fn write_report(
     ))
 }
 
-// Patch files are a dump of `package.patch`; bytes are covered by `naive_patch`.
-#[cfg_attr(test, mutants::skip)]
-fn write_diff(diffs_dir: &Path, package: &PackageClass) -> Result<Option<String>, AppError> {
+fn diff_file_name(package: &PackageClass) -> Option<String> {
     // Patches are emitted only for `needs-increment`; classify clears others.
     if package.patch().is_empty() {
-        return Ok(None);
+        return None;
     }
-    let rel = format!("diffs/{}.patch", package.name);
-    let path = diffs_dir.join(format!("{}.patch", package.name));
+    Some(format!("{}.patch", package.name))
+}
+
+// Patch files are a dump of `package.patch`; bytes are covered by `naive_patch`.
+#[cfg_attr(test, mutants::skip)]
+fn write_diff(
+    diffs_dir: &Path,
+    package: &PackageClass,
+    file_name: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(file_name) = file_name else {
+        return Ok(());
+    };
+    let path = diffs_dir.join(file_name);
     fs::write(&path, package.patch().as_bytes())
         .map_err(|error| WriteFileError::caused_by(&path, error))?;
-    Ok(Some(rel))
+    Ok(())
 }
 
 fn report_package(package: &PackageClass, diff_path: Option<String>) -> ReportPackage {

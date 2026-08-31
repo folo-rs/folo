@@ -166,9 +166,10 @@ as escaped GitHub workflow commands. Its packaging probe compares Cargo's list
 with the exact work-tree selection produced by classification.
 
 `report` serializes the full package and group assessment, then writes patches
-only where file differences exist. Report output is staged in memory before
-individual artifacts are written, and stale patch files from an earlier run are
-removed so the directory describes one assessment.
+only where file differences exist. It removes any earlier `report.json` marker
+before replacing the patch tree and writes the new marker through a same-directory
+staging file after every patch succeeds. A failed rerun therefore cannot present
+stale JSON and a partial patch set as one complete assessment.
 
 ## Plan application
 

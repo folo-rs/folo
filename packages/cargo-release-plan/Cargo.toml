@@ -11,11 +11,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# Only the consumer build ships in the published source package. Tests, the
-# agent notes, and development manifests stay in git. Cargo packs the README it
-# detects whatever this says, so naming it here would only imply otherwise.
+# Only the consumer build and declared benchmark target ship in the published
+# source package. Tests, the agent notes, and development manifests stay in git.
+# Cargo packs the README it detects whatever this says, so naming it here would
+# only imply otherwise.
 # Ref: docs/design.md, "Where Cargo adds content".
-include = ["src/**"]
+include = ["src/**", "benches/cargo_release_plan_algorithms.rs"]
 
 # Required so feature-gated public items appear in generated documentation.
 # Ref: docs/api-documentation.md, "Feature-gated documentation".
