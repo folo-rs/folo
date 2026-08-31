@@ -338,13 +338,12 @@ mod tests {
             Trace::default(),
         )
         .unwrap_err();
-
         assert!(error.find_source::<StartupFailedError>().is_some());
-        assert!(
-            transport
-                .connect(&transport.pipe_name("startup-nonce"), CONNECT_TIMEOUT)
-                .is_err()
-        );
+        assert!(error.find_source::<StartupFailedError>().is_some());
+        let error = transport
+            .connect(&transport.pipe_name("startup-nonce"), CONNECT_TIMEOUT)
+            .unwrap_err();
+        assert_eq!(error.kind(), PalErrorKind::Timeout);
     }
 
     #[test]
