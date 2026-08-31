@@ -348,6 +348,55 @@ mod tests {
     #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
+    fn a_supervisor_that_connects_without_reporting_is_a_startup_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let transport = MemoryTransport::new();
+        transport.timeout_next_recv();
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_random_nonce()
+            .returning(|| "nonce".to_string());
+        processes
+            .expect_current_exe()
+            .returning(|| Ok(PathBuf::from("dure.exe")));
+        processes.expect_spawn_supervisor().returning({
+            let transport = transport.clone();
+            move |_| {
+                let pipe = transport.pipe_name("startup-nonce");
+                _ = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
+                Ok(ProcessIdentity {
+                    pid: 10,
+                    creation_time: 100,
+                })
+            }
+        });
+        let mut console = MockLocalConsole::new();
+        console.expect_has_console().return_const(true);
+        let console = LocalConsoleFacade::from_mock(console);
+
+        let error = execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            vec!["app.exe".to_string()],
+            None,
+            Trace::default(),
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<StartupFailedError>().is_some());
+        assert_eq!(transport.startup_commit_count(), 0);
+        let error = transport
+            .connect(&transport.pipe_name("startup-nonce"), CONNECT_TIMEOUT)
+            .unwrap_err();
+        assert_eq!(error.kind(), PalErrorKind::Timeout);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_reports_failure_is_a_startup_error() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
