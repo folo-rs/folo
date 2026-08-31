@@ -36,6 +36,8 @@ struct Inner {
     startup_commits: AtomicUsize,
     /// Makes the next send fail so callers can exercise transport-failure handling.
     fail_next_send: AtomicBool,
+    /// Makes the next accept report a timeout without waiting.
+    timeout_next_accept: AtomicBool,
     /// Guards the pending-connection predicate under `listener_state`. A
     /// `Condvar` may only ever be paired with one mutex, so the connection side
     /// has its own below.
@@ -66,6 +68,7 @@ impl MemoryTransport {
                 conns: Mutex::new(HashMap::new()),
                 startup_commits: AtomicUsize::new(0),
                 fail_next_send: AtomicBool::new(false),
+                timeout_next_accept: AtomicBool::new(false),
                 listener_cond: Condvar::new(),
                 conn_cond: Condvar::new(),
             }),
@@ -103,11 +106,18 @@ impl MemoryTransport {
         self.inner.fail_next_send.store(true, Ordering::SeqCst);
     }
 
+    pub(crate) fn timeout_next_accept(&self) {
+        self.inner.timeout_next_accept.store(true, Ordering::SeqCst);
+    }
+
     fn accept_inner(
         &self,
         listener: ListenerId,
         timeout: Option<Duration>,
     ) -> Result<ConnId, PalError> {
+        if self.inner.timeout_next_accept.swap(false, Ordering::SeqCst) {
+            return Err(PalError::new(PalErrorKind::Timeout));
+        }
         let started = Instant::now();
         let mut state = self
             .inner
