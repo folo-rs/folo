@@ -7,7 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{ConnId, ListenerId};
@@ -102,6 +102,74 @@ impl MemoryTransport {
     pub(crate) fn fail_next_send(&self) {
         self.inner.fail_next_send.store(true, Ordering::SeqCst);
     }
+
+    fn accept_inner(
+        &self,
+        listener: ListenerId,
+        timeout: Option<Duration>,
+    ) -> Result<ConnId, PalError> {
+        let started = Instant::now();
+        let mut state = self
+            .inner
+            .listener_state
+            .lock()
+            .expect("listener state lock");
+        loop {
+            if let Some(listener_state) = state.get_mut(&listener)
+                && let Some(conn) = listener_state.pending.pop_front()
+            {
+                return Ok(conn);
+            }
+            if !state.contains_key(&listener) {
+                return Err(PalError::new(PalErrorKind::NotFound));
+            }
+            state = if let Some(timeout) = timeout {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return Err(PalError::new(PalErrorKind::Timeout));
+                }
+                self.inner
+                    .listener_cond
+                    .wait_timeout(state, remaining)
+                    .expect("listener condvar")
+                    .0
+            } else {
+                self.inner
+                    .listener_cond
+                    .wait(state)
+                    .expect("listener condvar")
+            };
+        }
+    }
+
+    fn recv_inner(&self, conn: ConnId, timeout: Option<Duration>) -> Result<Message, PalError> {
+        let started = Instant::now();
+        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        loop {
+            let Some(state) = conns.get_mut(&conn) else {
+                return Err(PalError::new(PalErrorKind::NotFound));
+            };
+            if let Some(message) = state.incoming.pop_front() {
+                return Ok(message);
+            }
+            if state.closed {
+                return Err(PalError::new(PalErrorKind::Disconnected));
+            }
+            conns = if let Some(timeout) = timeout {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return Err(PalError::new(PalErrorKind::Timeout));
+                }
+                self.inner
+                    .conn_cond
+                    .wait_timeout(conns, remaining)
+                    .expect("conn condvar")
+                    .0
+            } else {
+                self.inner.conn_cond.wait(conns).expect("conn condvar")
+            };
+        }
+    }
 }
 
 impl Default for MemoryTransport {
@@ -132,26 +200,11 @@ impl Transport for MemoryTransport {
     }
 
     fn accept(&self, listener: ListenerId) -> Result<ConnId, PalError> {
-        let mut state = self
-            .inner
-            .listener_state
-            .lock()
-            .expect("listener state lock");
-        loop {
-            if let Some(listener_state) = state.get_mut(&listener)
-                && let Some(conn) = listener_state.pending.pop_front()
-            {
-                return Ok(conn);
-            }
-            if !state.contains_key(&listener) {
-                return Err(PalError::new(PalErrorKind::NotFound));
-            }
-            state = self
-                .inner
-                .listener_cond
-                .wait(state)
-                .expect("listener condvar");
-        }
+        self.accept_inner(listener, None)
+    }
+
+    fn accept_timeout(&self, listener: ListenerId, timeout: Duration) -> Result<ConnId, PalError> {
+        self.accept_inner(listener, Some(timeout))
     }
 
     fn connect(&self, name: &str, _timeout: Duration) -> Result<ConnId, PalError> {
@@ -232,19 +285,11 @@ impl Transport for MemoryTransport {
     }
 
     fn recv(&self, conn: ConnId) -> Result<Message, PalError> {
-        let mut conns = self.inner.conns.lock().expect("conn map lock");
-        loop {
-            let Some(state) = conns.get_mut(&conn) else {
-                return Err(PalError::new(PalErrorKind::NotFound));
-            };
-            if let Some(message) = state.incoming.pop_front() {
-                return Ok(message);
-            }
-            if state.closed {
-                return Err(PalError::new(PalErrorKind::Disconnected));
-            }
-            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
-        }
+        self.recv_inner(conn, None)
+    }
+
+    fn recv_timeout(&self, conn: ConnId, timeout: Duration) -> Result<Message, PalError> {
+        self.recv_inner(conn, Some(timeout))
     }
 
     fn disconnect(&self, conn: ConnId) {
@@ -282,5 +327,35 @@ impl Transport for MemoryTransport {
 
     fn pipe_name(&self, nonce: &str) -> String {
         format!("memory:{nonce}")
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accept_timeout_returns_timeout_when_no_connection_is_pending() {
+        let transport = MemoryTransport::new();
+        let listener = transport.listen("session").unwrap();
+
+        let error = transport
+            .accept_timeout(listener, Duration::ZERO)
+            .unwrap_err();
+
+        assert_eq!(error.kind(), PalErrorKind::Timeout);
+    }
+
+    #[test]
+    fn recv_timeout_returns_timeout_when_no_message_is_pending() {
+        let transport = MemoryTransport::new();
+        let listener = transport.listen("session").unwrap();
+        let client = transport.connect("session", Duration::ZERO).unwrap();
+        _ = transport.accept(listener).unwrap();
+
+        let error = transport.recv_timeout(client, Duration::ZERO).unwrap_err();
+
+        assert_eq!(error.kind(), PalErrorKind::Timeout);
     }
 }

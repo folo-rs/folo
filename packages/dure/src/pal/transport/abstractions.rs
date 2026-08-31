@@ -19,6 +19,9 @@ pub(crate) trait Transport: Send + Sync + fmt::Debug + 'static {
     /// Block until a client connects.
     fn accept(&self, listener: ListenerId) -> Result<ConnId, PalError>;
 
+    /// Block until a client connects or `timeout` elapses.
+    fn accept_timeout(&self, listener: ListenerId, timeout: Duration) -> Result<ConnId, PalError>;
+
     /// Connect to `name`, failing with [`crate::pal::error::PalErrorKind::Timeout`]
     /// if the wait elapses.
     fn connect(&self, name: &str, timeout: Duration) -> Result<ConnId, PalError>;
@@ -28,6 +31,9 @@ pub(crate) trait Transport: Send + Sync + fmt::Debug + 'static {
 
     /// Receive one framed message, blocking until one arrives or the peer drops.
     fn recv(&self, conn: ConnId) -> Result<Message, PalError>;
+
+    /// Receive one framed message, failing if `timeout` elapses first.
+    fn recv_timeout(&self, conn: ConnId, timeout: Duration) -> Result<Message, PalError>;
 
     /// Drop the connection so the peer unblocks.
     fn disconnect(&self, conn: ConnId);

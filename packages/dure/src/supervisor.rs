@@ -21,7 +21,6 @@ use crate::pal::transport::Transport;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
 use crate::session_record::{ProcessIdentity, SessionRecord};
-use crate::startup_watch::StartupWatch;
 use crate::wall_clock::unix_now_ms;
 use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError};
 
@@ -139,19 +138,7 @@ where
         transport.disconnect(startup);
         return Err(StartupFailedError::new().into());
     }
-    let startup_commit = Arc::new(Mutex::new(StartupWatch::for_connection(startup)));
-    thread::spawn({
-        let startup_commit = Arc::clone(&startup_commit);
-        let transport = transport.clone();
-        move || {
-            thread::sleep(CONNECT_TIMEOUT);
-            if let Some(conn) = StartupWatch::expire(&startup_commit) {
-                transport.disconnect(conn);
-            }
-        }
-    });
-    let committed = transport.recv(startup);
-    StartupWatch::settle(&startup_commit).map_err(|_expired| StartupFailedError::new())?;
+    let committed = transport.recv_timeout(startup, CONNECT_TIMEOUT);
     if !matches!(committed, Ok(Message::StartupCommit)) {
         transport.disconnect(startup);
         return Err(StartupFailedError::new().into());

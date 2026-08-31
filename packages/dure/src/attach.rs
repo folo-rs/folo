@@ -291,6 +291,14 @@ mod tests {
             Err(PalError::new(PalErrorKind::Other))
         }
 
+        fn accept_timeout(
+            &self,
+            _listener: ListenerId,
+            _timeout: Duration,
+        ) -> Result<ConnId, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
         fn connect(&self, _name: &str, _timeout: Duration) -> Result<ConnId, PalError> {
             Err(PalError::new(self.0))
         }
@@ -300,6 +308,10 @@ mod tests {
         }
 
         fn recv(&self, _conn: ConnId) -> Result<Message, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn recv_timeout(&self, _conn: ConnId, _timeout: Duration) -> Result<Message, PalError> {
             Err(PalError::new(PalErrorKind::Other))
         }
 
@@ -326,6 +338,14 @@ mod tests {
             Err(PalError::new(PalErrorKind::Other))
         }
 
+        fn accept_timeout(
+            &self,
+            _listener: ListenerId,
+            _timeout: Duration,
+        ) -> Result<ConnId, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
         fn connect(&self, _name: &str, _timeout: Duration) -> Result<ConnId, PalError> {
             Ok(ConnId(1))
         }
@@ -335,6 +355,10 @@ mod tests {
         }
 
         fn recv(&self, _conn: ConnId) -> Result<Message, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn recv_timeout(&self, _conn: ConnId, _timeout: Duration) -> Result<Message, PalError> {
             Err(PalError::new(PalErrorKind::Other))
         }
 

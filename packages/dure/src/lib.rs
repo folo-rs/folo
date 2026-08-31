@@ -26,7 +26,6 @@ mod protocol;
 mod run;
 mod session_id;
 mod session_record;
-mod startup_watch;
 mod supervisor;
 mod trace;
 mod types;

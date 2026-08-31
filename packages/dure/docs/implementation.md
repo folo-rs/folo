@@ -110,8 +110,11 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
 `CONNECT_TIMEOUT` bounds local IPC connection attempts and the startup commit
 acknowledgement. `STARTUP_TIMEOUT` separately bounds supervisor initialization
 after the startup connection is established, so process launch receives its full
-budget instead of sharing the shorter IPC deadline. Unit tests inject timeout
-and disconnect through the mock transport instead of waiting on real time.
+budget instead of sharing the shorter IPC deadline. These deadlines are applied
+by timed transport operations, so receiving a message completes the operation
+before caller scheduling can race with a separate watchdog. Unit tests inject
+timeout and disconnect through the mock transport instead of waiting on real
+time.
 
 ## Output rendering
 

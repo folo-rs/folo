@@ -1,8 +1,6 @@
 //! `dure run`.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::thread;
 
 use ohno::AppError;
 
@@ -17,7 +15,6 @@ use crate::pal::transport::Transport;
 use crate::path_display::display_path;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
-use crate::startup_watch::StartupWatch;
 use crate::trace::{Trace, trace};
 use crate::types::Outcome;
 use crate::{
@@ -108,48 +105,18 @@ where
             _ => AppError::from(StartupFailedError::new()),
         })?;
 
-    // This watchdog only bounds the supervisor connection. Initialization gets
-    // its own full deadline after the connection is established.
-    let startup = Arc::new(Mutex::new(StartupWatch::default()));
-    thread::spawn({
-        let transport = transport.clone();
-        let startup = Arc::clone(&startup);
-        move || {
-            thread::sleep(CONNECT_TIMEOUT);
-            let conn = StartupWatch::expire(&startup);
+    // Initialization gets its own full deadline after this connection is
+    // established.
+    let conn = match transport.accept_timeout(listener, CONNECT_TIMEOUT) {
+        Ok(conn) => conn,
+        Err(_error) => {
             transport.close_listener(listener);
-            if let Some(conn) = conn {
-                transport.disconnect(conn);
-            }
+            return Err(StartupFailedError::new().into());
         }
-    });
-
-    let conn = transport
-        .accept(listener)
-        .map_err(|_error| StartupFailedError::new())?;
-    if StartupWatch::register(&startup, conn) {
-        // The watchdog fired before this connection was registered, so it will
-        // not disconnect it.
-        transport.disconnect(conn);
-        return Err(StartupFailedError::new().into());
-    }
-    StartupWatch::settle(&startup).map_err(|_expired| StartupFailedError::new())?;
+    };
     transport.close_listener(listener);
 
-    let startup_response = Arc::new(Mutex::new(StartupWatch::for_connection(conn)));
-    thread::spawn({
-        let transport = transport.clone();
-        let startup_response = Arc::clone(&startup_response);
-        move || {
-            thread::sleep(STARTUP_TIMEOUT);
-            if let Some(conn) = StartupWatch::expire(&startup_response) {
-                transport.disconnect(conn);
-            }
-        }
-    });
-
-    let response = transport.recv(conn);
-    StartupWatch::settle(&startup_response).map_err(|_expired| StartupFailedError::new())?;
+    let response = transport.recv_timeout(conn, STARTUP_TIMEOUT);
     let Ok(Message::StartupOk {
         session_id,
         durability,
@@ -493,18 +460,12 @@ mod tests {
     }
 
     #[test]
-    // The startup watchdog outlives the handshake by design, and Miri refuses to
-    // end a test while a thread is still running.
-    #[cfg_attr(miri, ignore)]
     fn a_started_session_is_looked_up_in_the_store() {
         let error = execute_past_startup(Durability::Durable);
         assert!(error.find_source::<StoreError>().is_some());
     }
 
     #[test]
-    // The startup watchdog outlives the handshake by design, and Miri refuses to
-    // end a test while a thread is still running.
-    #[cfg_attr(miri, ignore)]
     fn a_session_tied_to_the_launcher_still_starts() {
         let error = execute_past_startup(Durability::TiedToLauncher);
         assert!(error.find_source::<StoreError>().is_some());

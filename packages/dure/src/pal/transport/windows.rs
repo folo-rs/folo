@@ -59,6 +59,37 @@ struct Conn {
     write: Arc<Mutex<()>>,
 }
 
+/// Tracks one total timeout across a multi-step overlapped operation.
+#[derive(Clone, Copy)]
+struct Deadline {
+    started: Instant,
+    timeout: Duration,
+}
+
+impl Deadline {
+    fn after(timeout: Duration) -> Self {
+        Self {
+            started: Instant::now(),
+            timeout,
+        }
+    }
+
+    fn wait_millis(self) -> Result<u32, PalError> {
+        /// `WaitForSingleObject` reserves zero for polling.
+        const MIN_FINITE_WAIT_MILLIS: u32 = 1;
+        /// `WaitForSingleObject` reserves `u32::MAX` for an infinite wait.
+        const MAX_FINITE_WAIT_MILLIS: u32 = u32::MAX.saturating_sub(1);
+
+        let remaining = self.timeout.saturating_sub(self.started.elapsed());
+        if remaining.is_zero() {
+            return Err(PalError::new(PalErrorKind::Timeout));
+        }
+        Ok(u32::try_from(remaining.as_millis())
+            .unwrap_or(MAX_FINITE_WAIT_MILLIS)
+            .clamp(MIN_FINITE_WAIT_MILLIS, MAX_FINITE_WAIT_MILLIS))
+    }
+}
+
 fn table() -> &'static Mutex<PipeTable> {
     static TABLE: OnceLock<Mutex<PipeTable>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -254,7 +285,28 @@ fn abandon_operation(handle: HANDLE, overlapped: &OVERLAPPED) {
     _ = unsafe { GetOverlappedResult(handle, &raw const *overlapped, &raw mut transferred, true) };
 }
 
-fn connect_instance(pipe: &PipeHandle) -> Result<(), PalError> {
+/// Waits for a pending operation without returning while the kernel still owns its storage.
+fn wait_pending(
+    handle: HANDLE,
+    event: HANDLE,
+    overlapped: &OVERLAPPED,
+    deadline: Option<Deadline>,
+) -> Result<(), PalError> {
+    let wait_millis = match deadline.map_or(Ok(INFINITE), Deadline::wait_millis) {
+        Ok(wait_millis) => wait_millis,
+        Err(error) => {
+            abandon_operation(handle, overlapped);
+            return Err(error);
+        }
+    };
+    if let Err(error) = wait_event(event, wait_millis) {
+        abandon_operation(handle, overlapped);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn connect_instance(pipe: &PipeHandle, deadline: Option<Deadline>) -> Result<(), PalError> {
     let handle = pipe.as_handle();
     let event = create_event()?;
     let mut overlapped = OVERLAPPED {
@@ -285,8 +337,7 @@ fn connect_instance(pipe: &PipeHandle) -> Result<(), PalError> {
         close(event);
         return Err(PalError::new(PalErrorKind::Other));
     }
-    if let Err(error) = wait_event(event, INFINITE) {
-        abandon_operation(handle, &overlapped);
+    if let Err(error) = wait_pending(handle, event, &overlapped, deadline) {
         close(event);
         return Err(error);
     }
@@ -299,7 +350,11 @@ fn connect_instance(pipe: &PipeHandle) -> Result<(), PalError> {
     completed.map_err(|_error| PalError::new(PalErrorKind::Disconnected))
 }
 
-fn read_exact(pipe: &PipeHandle, buf: &mut [u8]) -> Result<(), PalError> {
+fn read_exact_until(
+    pipe: &PipeHandle,
+    buf: &mut [u8],
+    deadline: Option<Deadline>,
+) -> Result<(), PalError> {
     let handle = pipe.as_handle();
     let mut filled = 0_usize;
     while filled < buf.len() {
@@ -334,8 +389,7 @@ fn read_exact(pipe: &PipeHandle, buf: &mut [u8]) -> Result<(), PalError> {
                 close(event);
                 return Err(PalError::new(io_error_kind(err)));
             }
-            if let Err(error) = wait_event(event, INFINITE) {
-                abandon_operation(handle, &overlapped);
+            if let Err(error) = wait_pending(handle, event, &overlapped, deadline) {
                 close(event);
                 return Err(error);
             }
@@ -447,6 +501,59 @@ fn conn_write(conn: ConnId) -> Result<(Arc<PipeHandle>, Arc<Mutex<()>>), PalErro
         .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
 }
 
+fn accept_connection(listener: ListenerId, timeout: Option<Duration>) -> Result<ConnId, PalError> {
+    let deadline = timeout.map(Deadline::after);
+    let (pending, name) = {
+        let table = table().lock().expect("pipe table");
+        let listener = table
+            .listeners
+            .get(&listener.0)
+            .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
+        (Arc::clone(&listener.pending), listener.name.clone())
+    };
+    let connected = connect_instance(&pending, deadline);
+    // After each accept, create the next server instance so another client
+    // can connect while this connection is still live (steal). If
+    // close_listener already removed the listener, this handle must not be
+    // published; dropping the last reference closes it.
+    let mut table = table().lock().expect("pipe table");
+    if !table.listeners.contains_key(&listener.0) {
+        return Err(PalError::new(PalErrorKind::Disconnected));
+    }
+    connected?;
+    let next = create_instance(&name, false)?;
+    {
+        let Some(listener_state) = table.listeners.get_mut(&listener.0) else {
+            close(next);
+            return Err(PalError::new(PalErrorKind::Disconnected));
+        };
+        listener_state.pending = PipeHandle::new(next);
+    }
+    let id = next_id();
+    table.conns.insert(
+        id,
+        Conn {
+            handle: pending,
+            write: Arc::new(Mutex::new(())),
+        },
+    );
+    Ok(ConnId(id))
+}
+
+fn recv_message(conn: ConnId, timeout: Option<Duration>) -> Result<Message, PalError> {
+    let deadline = timeout.map(Deadline::after);
+    let handle = conn_handle(conn)?;
+    let mut header = [0_u8; 4];
+    read_exact_until(&handle, &mut header, deadline)?;
+    let len = u32::from_le_bytes(header);
+    if !payload_len_ok(len) {
+        return Err(PalError::new(PalErrorKind::Other));
+    }
+    let mut payload = vec![0_u8; len as usize];
+    read_exact_until(&handle, &mut payload, deadline)?;
+    decode_payload(&payload).map_err(|_error| PalError::new(PalErrorKind::Other))
+}
+
 /// Real Windows named-pipe transport.
 #[derive(Debug, Default)]
 pub(crate) struct BuildTargetTransport;
@@ -469,41 +576,11 @@ impl Transport for BuildTargetTransport {
     }
 
     fn accept(&self, listener: ListenerId) -> Result<ConnId, PalError> {
-        let (pending, name) = {
-            let table = table().lock().expect("pipe table");
-            let listener = table
-                .listeners
-                .get(&listener.0)
-                .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?;
-            (Arc::clone(&listener.pending), listener.name.clone())
-        };
-        let connected = connect_instance(&pending);
-        // After each accept, create the next server instance so another client
-        // can connect while this connection is still live (steal). If
-        // close_listener already removed the listener, this handle must not be
-        // published; dropping the last reference closes it.
-        let mut table = table().lock().expect("pipe table");
-        if !table.listeners.contains_key(&listener.0) {
-            return Err(PalError::new(PalErrorKind::Disconnected));
-        }
-        connected?;
-        let next = create_instance(&name, false)?;
-        {
-            let Some(listener_state) = table.listeners.get_mut(&listener.0) else {
-                close(next);
-                return Err(PalError::new(PalErrorKind::Disconnected));
-            };
-            listener_state.pending = PipeHandle::new(next);
-        }
-        let id = next_id();
-        table.conns.insert(
-            id,
-            Conn {
-                handle: pending,
-                write: Arc::new(Mutex::new(())),
-            },
-        );
-        Ok(ConnId(id))
+        accept_connection(listener, None)
+    }
+
+    fn accept_timeout(&self, listener: ListenerId, timeout: Duration) -> Result<ConnId, PalError> {
+        accept_connection(listener, Some(timeout))
     }
 
     fn connect(&self, name: &str, timeout: Duration) -> Result<ConnId, PalError> {
@@ -578,16 +655,11 @@ impl Transport for BuildTargetTransport {
     }
 
     fn recv(&self, conn: ConnId) -> Result<Message, PalError> {
-        let handle = conn_handle(conn)?;
-        let mut header = [0_u8; 4];
-        read_exact(&handle, &mut header)?;
-        let len = u32::from_le_bytes(header);
-        if !payload_len_ok(len) {
-            return Err(PalError::new(PalErrorKind::Other));
-        }
-        let mut payload = vec![0_u8; len as usize];
-        read_exact(&handle, &mut payload)?;
-        decode_payload(&payload).map_err(|_error| PalError::new(PalErrorKind::Other))
+        recv_message(conn, None)
+    }
+
+    fn recv_timeout(&self, conn: ConnId, timeout: Duration) -> Result<Message, PalError> {
+        recv_message(conn, Some(timeout))
     }
 
     fn disconnect(&self, conn: ConnId) {
