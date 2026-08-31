@@ -696,17 +696,30 @@ fn cased_pathspec(path: &str, case: PathCase) -> String {
 /// Joins a workspace-relative path onto the workspace's git prefix.
 ///
 /// The result is a pathspec that `git ls-files` and `git show` resolve against
-/// the repository root. Both operands are already in Git's `/`-separated space.
+/// the repository root. Parent components allow Cargo members beside a nested
+/// workspace root to remain addressable. Both operands are already in Git's
+/// `/`-separated space.
 pub(crate) fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
     let prefix = prefix.trim_end_matches('/');
     let rel = workspace_rel.trim_end_matches('/');
-    if prefix.is_empty() || prefix == "." {
+    let joined = if prefix.is_empty() || prefix == "." {
         rel.to_string()
     } else if rel.is_empty() || rel == "." {
         prefix.to_string()
     } else {
         format!("{prefix}/{rel}")
+    };
+    let mut normalized = Vec::new();
+    for component in joined.split('/') {
+        match component {
+            "" | "." => {}
+            ".." if normalized.last().is_some_and(|previous| *previous != "..") => {
+                normalized.pop();
+            }
+            other => normalized.push(other),
+        }
     }
+    normalized.join("/")
 }
 
 /// Whether Git reported a path as absent from the revision.
@@ -1044,6 +1057,9 @@ mod tests {
     #[test]
     fn join_git_rel_prefixes_when_workspace_is_nested() {
         assert_eq!(join_git_rel("inner", "packages/foo"), "inner/packages/foo");
+        assert_eq!(join_git_rel("inner", "../outside"), "outside");
+        assert_eq!(join_git_rel("inner/nested", "../../outside"), "outside");
+        assert_eq!(join_git_rel("inner", "../../outside"), "../outside");
         assert_eq!(join_git_rel("", "packages/foo"), "packages/foo");
         assert_eq!(join_git_rel("inner", ""), "inner");
         assert_eq!(join_git_rel("inner", "."), "inner");

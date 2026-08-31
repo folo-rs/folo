@@ -176,3 +176,121 @@ fn merging_the_baseline_into_the_branch_keeps_the_verdict() {
     let (passed, message) = check(&fixture, &base);
     assert!(passed, "{message}");
 }
+
+/// Explicit members may live beside a nested workspace root.
+///
+/// Cargo accepts this shape when the member points back to the workspace from
+/// its `[package]` table. Both current metadata filtering and historical
+/// snapshot reconstruction must preserve the parent-relative member path.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn member_beside_a_nested_workspace_is_classified() {
+    let fixture = Fixture::with_workspace_manifest(
+        "workspace/Cargo.toml",
+        r#"[workspace]
+members = ["../outside"]
+resolver = "2"
+"#,
+    );
+    fixture.write(
+        "outside/Cargo.toml",
+        r#"[package]
+name = "outside"
+version = "1.0.0"
+edition = "2024"
+workspace = "../workspace"
+"#,
+    );
+    fixture.write("outside/src/lib.rs", "pub fn value() -> u8 { 1 }\n");
+    fixture.commit("seed");
+    fixture.git(&["branch", "base"]);
+
+    fixture.write("outside/src/lib.rs", "pub fn value() -> u8 { 2 }\n");
+    fixture.commit("released content changed");
+
+    let (passed, message) = check(&fixture, "base");
+    assert!(!passed, "{message}");
+    assert!(message.contains("outside: needs-increment"), "{message}");
+}
+
+/// A path dependency can re-enter the workspace from an outside member.
+///
+/// The historical closure must normalize the dependency through repository
+/// path space before rebasing it to the workspace. This also exercises a
+/// parent-relative member glob rather than the literal-member fast path.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn outside_member_path_dependency_reenters_the_workspace() {
+    let fixture = Fixture::with_workspace_manifest(
+        "workspace/Cargo.toml",
+        r#"[workspace]
+members = ["../outside/*"]
+resolver = "2"
+
+[workspace.dependencies]
+inside-inherited = { path = "../workspace/inside-inherited", version = "1.0.0" }
+"#,
+    );
+    fixture.write(
+        "outside/app/Cargo.toml",
+        r#"[package]
+name = "outside-app"
+version = "1.0.0"
+edition = "2024"
+workspace = "../../workspace"
+
+[dependencies]
+inside = { path = "../../workspace/inside", version = "1.0.0" }
+inside-inherited = { workspace = true }
+"#,
+    );
+    fixture.write("outside/app/src/lib.rs", "pub fn value() -> u8 { 1 }\n");
+    fixture.write(
+        "workspace/inside/Cargo.toml",
+        r#"[package]
+name = "inside"
+version = "1.0.0"
+edition = "2024"
+"#,
+    );
+    fixture.write(
+        "workspace/inside/src/lib.rs",
+        "pub fn value() -> u8 { 1 }\n",
+    );
+    fixture.write(
+        "workspace/inside-inherited/Cargo.toml",
+        r#"[package]
+name = "inside-inherited"
+version = "1.0.0"
+edition = "2024"
+"#,
+    );
+    fixture.write(
+        "workspace/inside-inherited/src/lib.rs",
+        "pub fn value() -> u8 { 1 }\n",
+    );
+    fixture.commit("seed");
+    fixture.git(&["branch", "base"]);
+
+    fixture.write(
+        "workspace/inside/src/lib.rs",
+        "pub fn value() -> u8 { 2 }\n",
+    );
+    fixture.write(
+        "workspace/inside-inherited/src/lib.rs",
+        "pub fn value() -> u8 { 2 }\n",
+    );
+    fixture.commit("inside released content changed");
+
+    let (passed, message) = check(&fixture, "base");
+    assert!(!passed, "{message}");
+    assert!(message.contains("inside: needs-increment"), "{message}");
+    assert!(
+        message.contains("inside-inherited: needs-increment"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("outside-app: needs-increment"),
+        "{message}"
+    );
+}

@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::path::{MAIN_SEPARATOR, Path};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::{fmt, fs};
 
 use ignore::overrides::{Override, OverrideBuilder};
@@ -740,13 +740,44 @@ fn directory_of(manifest_path: &str) -> String {
     }
 }
 
-/// Repo-relative form of a work-tree path, in Git's `/`-separated path space.
+/// Workspace-relative form of a work-tree path.
 ///
-/// This is the boundary where an operating-system path enters that space, and
-/// it is crossed before a manifest is parsed, so a parsed manifest only ever
-/// holds paths Git can be asked about.
-pub(crate) fn repo_relative_path(workspace_root: &Path, path: &Path) -> String {
-    os_path(path.strip_prefix(workspace_root).unwrap_or(path))
+/// A member may be outside the workspace root while remaining inside the same
+/// repository. Leading parent components preserve that relationship until the
+/// caller rebases the path into Git's repository-relative path space.
+pub(crate) fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Option<String> {
+    if let Ok(relative) = path.strip_prefix(workspace_root) {
+        return Some(os_path(relative));
+    }
+
+    let workspace: Vec<Component<'_>> = workspace_root.components().collect();
+    let path: Vec<Component<'_>> = path.components().collect();
+    let common = workspace
+        .iter()
+        .zip(&path)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if common == 0 {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for component in workspace.iter().skip(common) {
+        match component {
+            Component::Normal(_) => relative.push(".."),
+            Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    for component in path.iter().skip(common) {
+        match component {
+            Component::Normal(value) => relative.push(value),
+            Component::CurDir => {}
+            Component::ParentDir => relative.push(".."),
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    Some(os_path(&relative))
 }
 
 #[cfg(test)]
@@ -941,6 +972,22 @@ mod tests {
         assert_eq!(to_git_separators(r"odd\name.md", '/'), r"odd\name.md");
         assert_eq!(to_git_separators("../b", '/'), "../b");
         assert_eq!(to_git_separators("../b", '\\'), "../b");
+    }
+
+    #[test]
+    fn a_sibling_manifest_is_relative_to_the_workspace() {
+        let repository = PathBuf::from("repository");
+        let workspace = repository.join("workspace");
+        let sibling = repository.join("outside").join("Cargo.toml");
+
+        assert_eq!(
+            workspace_relative_path(&workspace, &sibling),
+            Some("../outside/Cargo.toml".to_string())
+        );
+        assert_eq!(
+            workspace_relative_path(&workspace, &workspace.join("packages/a/Cargo.toml")),
+            Some("packages/a/Cargo.toml".to_string())
+        );
     }
 
     #[test]

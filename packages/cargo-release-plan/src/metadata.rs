@@ -22,7 +22,7 @@ use crate::inherited::InheritedKeys;
 use crate::manifest::TargetDiscovery;
 use crate::manifest::{
     PackageManifest, PathCase, WorkspaceInherit, for_each_dependency_table, parse_document,
-    parse_package_manifest, repo_relative_path,
+    parse_package_manifest, workspace_relative_path,
 };
 #[cfg(test)]
 use crate::packaging::PackagingRules;
@@ -135,7 +135,11 @@ impl TrackedMetadata<'_> {
         // spelling, then rebased with Git's prefix. Subtracting Git's root from a
         // Cargo path would fail for equivalent 8.3, symlinked, or substituted
         // spellings of the same directory.
-        let workspace_path = repo_relative_path(self.workspace_root, Path::new(manifest_path));
+        let Some(workspace_path) =
+            workspace_relative_path(self.workspace_root, Path::new(manifest_path))
+        else {
+            return false;
+        };
         let manifest_path = join_git_rel(self.git.prefix(), &workspace_path);
         self.paths
             .iter()
@@ -270,7 +274,9 @@ fn work_tree_from_metadata(
         let path = PathBuf::from(&package.manifest_path);
         let manifest_text =
             fs::read_to_string(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
-        let git_manifest_path = repo_relative_path(&workspace_root, &path);
+        let git_manifest_path = workspace_relative_path(&workspace_root, &path).expect(
+            "a selected manifest already matched a tracked path after this same conversion",
+        );
         let Some(mut manifest) =
             parse_package_manifest(&manifest_text, &git_manifest_path, &workspace)?
         else {

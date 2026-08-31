@@ -12,6 +12,7 @@ use tempfile::TempDir;
 /// A temporary Git repository that is also a Cargo workspace.
 pub(crate) struct Fixture {
     dir: TempDir,
+    manifest_path: PathBuf,
 }
 
 impl Fixture {
@@ -20,10 +21,26 @@ impl Fixture {
     /// `extra` is appended to the root manifest, so a caller can add tables such
     /// as `[workspace.metadata.release-plan.groups]` or `[workspace.package]`.
     pub(crate) fn new(extra: &str) -> Self {
-        let dir = TempDir::new().unwrap();
-        let fixture = Self { dir };
-        fixture.git(&["init", "-b", "main"]);
+        let fixture = Self::empty("Cargo.toml");
         fixture.write_workspace(extra);
+        fixture
+    }
+
+    /// Creates the repository with a workspace manifest at `manifest_path`.
+    pub(crate) fn with_workspace_manifest(manifest_path: &str, content: &str) -> Self {
+        let fixture = Self::empty(manifest_path);
+        if let Some(parent) = fixture.manifest_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&fixture.manifest_path, content).unwrap();
+        fixture
+    }
+
+    fn empty(manifest_path: &str) -> Self {
+        let dir = TempDir::new().unwrap();
+        let manifest_path = dir.path().join(manifest_path);
+        let fixture = Self { dir, manifest_path };
+        fixture.git(&["init", "-b", "main"]);
         fixture
     }
 
@@ -31,16 +48,20 @@ impl Fixture {
     pub(crate) fn write_workspace(&self, extra: &str) {
         // Ordinary supported manifest revisions so `cargo metadata` accepts the
         // generated workspace. Tests do not cover resolver or edition behavior.
-        self.write(
-            "Cargo.toml",
-            &format!(
+        if let Some(parent) = self.manifest_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(
+            &self.manifest_path,
+            format!(
                 r#"[workspace]
 members = ["packages/*"]
 resolver = "2"
 {extra}
 "#
             ),
-        );
+        )
+        .unwrap();
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -48,7 +69,7 @@ resolver = "2"
     }
 
     pub(crate) fn manifest(&self) -> PathBuf {
-        self.path().join("Cargo.toml")
+        self.manifest_path.clone()
     }
 
     pub(crate) fn write(&self, rel: &str, contents: &str) {

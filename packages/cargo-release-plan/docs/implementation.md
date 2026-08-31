@@ -58,9 +58,11 @@ manifests.
 
 The reconstruction starts from the root package and declared member patterns,
 then follows in-workspace path dependencies to a fixed point while honoring
-`exclude`. A non-virtual root is always a member. Parsed manifests are cached per
-commit because anchor resolution and content comparison revisit the same
-snapshots across packages.
+`exclude`. Explicit members may use `[package] workspace` from elsewhere in the
+same Git repository; their workspace-relative parent components are retained
+while Git access remains repository-relative. A non-virtual root is always a
+member. Parsed manifests are cached per commit because anchor resolution and
+content comparison revisit the same snapshots across packages.
 
 Each snapshot resolves the package fields that may inherit from
 `[workspace.package]` and the path dependencies inherited through

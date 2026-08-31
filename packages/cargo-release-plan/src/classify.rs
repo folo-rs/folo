@@ -1357,15 +1357,14 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
         .filter(|path| path.rsplit('/').next() == Some(MANIFEST_FILE_NAME))
     {
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
-            continue;
-        };
-        manifest_paths.insert(member_dir.to_string(), path.clone());
+        let member_dir = workspace_relative_dir(dir, workspace_prefix);
+        manifest_paths.insert(member_dir, path.clone());
     }
 
     let mut manifests = GitManifestSource {
         git,
         commit,
+        workspace_prefix,
         workspace,
         paths: manifest_paths,
         parsed: BTreeMap::new(),
@@ -1450,6 +1449,7 @@ trait ManifestSource {
 struct GitManifestSource<'a> {
     git: &'a GitRepo,
     commit: &'a str,
+    workspace_prefix: &'a str,
     workspace: WorkspaceInherit<'a>,
     /// Git-root-relative manifest path of every candidate directory.
     paths: BTreeMap<String, String>,
@@ -1473,6 +1473,30 @@ impl ManifestSource for GitManifestSource<'_> {
             self.parsed.insert(dir.to_string(), parsed);
         }
         Ok(self.parsed.get(dir).and_then(Option::as_ref))
+    }
+
+    fn path_edges(&mut self, dir: &str) -> Result<Vec<String>, AppError> {
+        let workspace_prefix = self.workspace_prefix.trim_end_matches('/');
+        let Some(parsed) = self.manifest(dir)? else {
+            return Ok(Vec::new());
+        };
+        let package_dir = parsed.directory.clone();
+        let local = parsed.path_dependencies.clone();
+        let inherited = parsed.inherited_path_dependencies.clone();
+        Ok(local
+            .iter()
+            .map(|relative| join_relative(&package_dir, relative))
+            .chain(
+                inherited
+                    .iter()
+                    .map(|relative| join_relative(workspace_prefix, relative)),
+            )
+            .flatten()
+            .map(|target| workspace_relative_dir(&target, workspace_prefix))
+            // Cargo implicitly adds path dependencies only when they live below
+            // the workspace root. Explicit member patterns add outside members.
+            .filter(|target| target != ".." && !target.starts_with("../"))
+            .collect())
     }
 }
 
@@ -1731,16 +1755,28 @@ fn root_manifest_rel(git: &GitRepo) -> String {
 /// Rebases a git-root-relative directory onto the workspace root.
 ///
 /// `workspace_prefix` is the git-root-relative workspace directory with a trailing
-/// separator, or empty when the workspace root is the git root. Returns `None` for
-/// paths outside the workspace root, which belong to no member of this workspace.
-fn workspace_relative_dir<'a>(dir: &'a str, workspace_prefix: &str) -> Option<&'a str> {
-    if workspace_prefix.is_empty() {
-        return Some(dir);
-    }
-    if dir == workspace_prefix.trim_end_matches('/') {
-        return Some("");
-    }
-    dir.strip_prefix(workspace_prefix)
+/// separator, or empty when the workspace root is the git root. Leading parent
+/// components preserve members that use `[package] workspace` from beside a
+/// nested workspace root.
+fn workspace_relative_dir(dir: &str, workspace_prefix: &str) -> String {
+    let workspace: Vec<&str> = workspace_prefix
+        .trim_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
+    let directory: Vec<&str> = dir
+        .trim_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
+    let common = workspace
+        .iter()
+        .zip(&directory)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = vec![".."; workspace.len().saturating_sub(common)];
+    relative.extend(directory.iter().skip(common).copied());
+    relative.join("/")
 }
 
 #[cfg(test)]
@@ -1757,19 +1793,22 @@ mod tests {
     #[test]
     fn workspace_relative_dir_rebases_onto_the_workspace_root() {
         // Workspace root is the git root: paths pass through unchanged.
-        assert_eq!(workspace_relative_dir("packages/a", ""), Some("packages/a"));
-        assert_eq!(workspace_relative_dir("", ""), Some(""));
+        assert_eq!(workspace_relative_dir("packages/a", ""), "packages/a");
+        assert_eq!(workspace_relative_dir("", ""), "");
 
         // Workspace root is nested: the prefix is stripped so member globs match.
         assert_eq!(
             workspace_relative_dir("rust/packages/a", "rust/"),
-            Some("packages/a")
+            "packages/a"
         );
-        assert_eq!(workspace_relative_dir("rust", "rust/"), Some(""));
+        assert_eq!(workspace_relative_dir("rust", "rust/"), "");
 
-        // Outside the nested workspace root, so not a member of this workspace.
-        assert_eq!(workspace_relative_dir("dotnet/packages/a", "rust/"), None);
-        assert_eq!(workspace_relative_dir("", "rust/"), None);
+        // Explicit members beside a nested root retain their parent traversal.
+        assert_eq!(
+            workspace_relative_dir("dotnet/packages/a", "rust/"),
+            "../dotnet/packages/a"
+        );
+        assert_eq!(workspace_relative_dir("", "rust/"), "..");
     }
 
     #[test]
