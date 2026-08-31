@@ -58,9 +58,9 @@ pub(crate) struct WorkPackage {
     pub(crate) manifest: PackageManifest,
     pub(crate) manifest_path: PathBuf,
     pub(crate) dependencies: Vec<ReportedDep>,
-    /// Whether the package builds a target that causes Cargo to ship its lockfile.
+    /// Whether the package builds a target that makes its locked closure relevant.
     ///
-    /// Ref: docs/design.md, "Lockfiles of binary and example targets".
+    /// Ref: docs/design.md, "Relevant lockfile closures".
     pub(crate) has_lockfile_target: bool,
     /// Files Cargo packs because a manifest key names them.
     ///

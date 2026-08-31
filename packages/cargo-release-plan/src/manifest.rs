@@ -59,9 +59,9 @@ pub(crate) struct PackageManifest {
 /// Manifest controls for discovering binary and example targets.
 ///
 /// Historical snapshots cannot ask Cargo about an old tree, so they combine
-/// these controls with that tree's paths to reconstruct whether Cargo would
-/// include a package-specific lockfile in the published artifact.
-/// Ref: docs/design.md, "Lockfiles of binary and example targets".
+/// these controls with that tree's paths to reconstruct whether the packaged
+/// lockfile's dependency closure is operationally relevant.
+/// Ref: docs/design.md, "Relevant lockfile closures".
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TargetDiscovery {
     explicit: bool,

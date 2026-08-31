@@ -130,10 +130,13 @@ unreleased changes; merging is what releases them. Packages with
 `publish = false` are ignored. Untracked files are advisory only. Versions only move forwards: a
 declared version below the anchor's version is an error rather than a status.
 
-A package that publishes an executable also releases its resolved dependency
-closure, because `cargo install --locked` builds from the lockfile in the
-archive. A workspace lockfile change that moves such a package's dependencies is
-therefore a released-content change; the same change against a library is not.
+Cargo includes a generated lockfile in every package archive, but a
+library-only consumer resolves the library in its own dependency graph instead
+of using that file. A package that publishes an executable also releases its
+resolved dependency closure because `cargo install --locked` uses the archive's
+lockfile. A workspace lockfile change that moves such a package's dependencies
+is therefore a released-content change; the same change against a library is
+not.
 
 A packaged file's executable bit is released content too, since Cargo carries
 the mode Git records into the archive. Making a packaged file executable is

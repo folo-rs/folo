@@ -1580,7 +1580,7 @@ impl LockfileCache {
 /// Each endpoint that has a binary or example target must have a lockfile that
 /// resolves the package at its corresponding declared version. An endpoint without
 /// either target releases no closure and therefore contributes an empty closure.
-/// Ref: docs/design.md, "Lockfiles of binary and example targets".
+/// Ref: docs/design.md, "Relevant lockfile closures".
 fn lockfile_closure_changes(
     cache: &mut LockfileCache,
     git: &GitRepo,

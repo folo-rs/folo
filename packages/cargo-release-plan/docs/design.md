@@ -67,9 +67,9 @@ survive.
 
 ## Commands
 
-### Prepare a version decision with `report`
+### Produce evidence for versioning decisions with `report`
 
-`report --out-dir <dir>` prepares the evidence needed to choose versions. It
+`report --out-dir <dir>` produces the evidence used to choose versions. It
 writes a machine-readable package report and readable patches for packages whose
 files changed. Dependency and dependent relationships are included so a
 compatibility decision can account for changes that propagate through the
@@ -234,12 +234,16 @@ Cargo includes several inputs outside ordinary package rules:
   target bytes while Git stores the target path, so Git history alone cannot
   compare the artifact correctly.
 
-### Lockfiles of binary and example targets
+### Relevant lockfile closures
 
-A **lockfile-bearing target** is a binary or example target whose presence makes
-Cargo include the package's resolved dependency closure in its artifact. A
-library-only package does not release that closure, even when an unrelated
-workspace lockfile happens to resolve it.
+Cargo includes a generated lockfile in every package artifact. The lockfile does
+not constrain consumers of a library-only package: those consumers resolve the
+library in their own dependency graph. Its dependency changes are therefore not
+released content for this purpose.
+
+A **lockfile-bearing target** is a binary or example target for which the
+package's recorded dependency resolution is operationally relevant. Such a
+target releases its package-specific dependency closure.
 
 The package-specific closure is compared rather than the workspace lockfile's
 bytes, so unrelated dependency movement does not affect every lockfile-bearing

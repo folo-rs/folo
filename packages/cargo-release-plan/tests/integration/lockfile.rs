@@ -1,9 +1,9 @@
 //! Released-content consequences of the workspace lockfile.
 //!
-//! Cargo puts a lockfile into archives that carry binary or example targets,
-//! so those packages release their resolved dependency closure while a
-//! library-only package does not.
-//! Ref: docs/design.md, "Lockfiles of binary and example targets".
+//! Cargo puts a lockfile into every package archive, but only the resolution of
+//! a binary or example target is operationally relevant. Library consumers
+//! resolve the library in their own dependency graph.
+//! Ref: docs/design.md, "Relevant lockfile closures".
 
 use std::fs;
 
@@ -73,8 +73,8 @@ fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn a_moved_dependency_leaves_a_library_package_unchanged() {
-    // `helper` publishes no binary or example target, so its package-specific
-    // archive does not carry a resolved dependency closure.
+    // `helper` publishes no binary or example target, so consumers do not use
+    // the package archive's lockfile to resolve it.
     let fixture = locked_workspace();
     let base = fixture.sha("HEAD");
 

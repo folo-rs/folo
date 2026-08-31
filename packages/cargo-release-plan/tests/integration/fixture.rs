@@ -171,7 +171,7 @@ fn hermetic_git_ignores_the_users_global_configuration() {
 ///
 /// A binary package releases the dependency closure its archive's lockfile
 /// records, which a library package does not.
-/// Ref: docs/design.md, "Lockfiles of binary and example targets".
+/// Ref: docs/design.md, "Relevant lockfile closures".
 pub(crate) fn write_binary_package(fixture: &Fixture, name: &str, version: &str, extra: &str) {
     write_package(fixture, name, version, extra);
     fs::remove_file(fixture.path().join(format!("packages/{name}/src/lib.rs"))).unwrap();

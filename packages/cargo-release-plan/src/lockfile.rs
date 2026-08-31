@@ -1,10 +1,10 @@
 // Resolved dependency closures read from Cargo lockfiles.
 //
-// Cargo puts a lockfile into an archive that carries a binary or example target,
-// and that lockfile carries the packaged crate's own resolved closure rather
-// than the whole workspace's. A consumer building either target kind receives
-// that resolution, so the closure is released content.
-// Ref: docs/design.md, "Lockfiles of binary and example targets".
+// Cargo puts a lockfile into every package archive, but library consumers resolve
+// the library in their own dependency graph and do not use that file. For a
+// package with a binary or example target, the package-specific resolution is
+// operationally relevant and therefore released content.
+// Ref: docs/design.md, "Relevant lockfile closures".
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 #[cfg(any(test, feature = "private-test-util"))]
