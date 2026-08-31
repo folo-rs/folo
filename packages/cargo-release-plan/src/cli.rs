@@ -52,8 +52,9 @@ impl Cli {
 
     /// Translates the parsed arguments into the [`RunInput`] the core logic consumes.
     ///
-    /// Optional arguments are resolved here, so the returned value is fully
-    /// determined and carries no further defaults.
+    /// CLI-owned defaults such as the workspace manifest path are resolved here.
+    /// An absent base remains `None` so execution can use the repository's
+    /// recorded remote default branch, falling back to `origin/main`.
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {

@@ -52,7 +52,7 @@ fn report_defers_base_and_defaults_the_manifest_path() {
             verbose,
         } => {
             assert_eq!(out_dir, PathBuf::from("out"));
-            assert_eq!(base, None, "an unset --base defers to workspace metadata");
+            assert_eq!(base, None, "an unset --base defers to the repository");
             assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
             assert!(!verbose);
         }
