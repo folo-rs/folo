@@ -24,6 +24,9 @@ rebuild the workspace. The complement of this pattern is the rule that a job who
 are **not** Cargo packages — the workflow files themselves, or the standalone PowerShell
 under `scripts/` — must run unconditionally. Delta analysis reports "nothing affected" for
 such a change, so gating those jobs on it would leave the change validated by nothing.
+Version classification (`validate-versions`) is in that class: its inputs are git history
+and manifests, and gating it on the changed-package set would miss packages the pull
+request did not touch.
 
 ## Platform strategy
 
@@ -62,6 +65,14 @@ and Miri passes, `clippy-release`, `careful`) carries a whole-job `github.event_
 'push'` guard, while a job that keeps some legs on a PR (macOS-dropping test/docs, the
 Ubuntu-dropping `miri-x64`) selects its platform list with a `fromJSON` conditional matrix
 keyed on the same event. Both reduce to "the full set on push, the pruned set on a PR".
+A `merge_group` (merge queue) run uses that same pruned set: those guards are false for
+anything that is not `push`. Do not rewrite them as `!= 'pull_request'`, or a queue entry
+would take the full matrix. Push to `main` remains the backstop.
+
+Delta analysis on a queue run uses `merge_group.base_sha` (the commit the queue rebased
+onto) rather than a freshly fetched `origin/main`, so the affected-package set cannot
+drift from the version check's base. Pull requests keep today's `origin/main` baseline.
+Push to `main` still skips delta and validates the whole workspace.
 
 ## External type surface
 
@@ -95,7 +106,10 @@ arrives on the branch, so closing or merging a PR — which pushes nothing to th
 would otherwise leave its in-flight Validation run to burn to completion. A dedicated
 companion workflow closes that gap: it triggers on the PR-close event and joins the target
 workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Validation
-workflow and the PR benchmark-history workflow pair with such a close companion. The exception
+workflow and the PR benchmark-history workflow pair with such a close companion. Validation's
+group (`github.head_ref || github.ref`) already distinguishes merge-queue entries: `head_ref`
+is empty there and `github.ref` is the unique queue ref. The close companion stays
+pull-request-only. The exception
 is history collection on `main`, which is keyed on the commit **SHA**: each commit is a distinct
 measurement, so distinct commits must run in parallel and only a redundant re-trigger of the
 *same* commit is deduplicated. A schedule-driven workflow carries a concurrency block only when
@@ -112,6 +126,26 @@ the steps call, so it runs and is debugged locally instead of only by pushing to
 Logic worth unit-testing goes one level deeper into a module under `scripts/` covered by a
 Pester suite. Every `run:` step uses `pwsh`; the `setup-environment` composite is the sole
 Bash holdout because it bootstraps PowerShell itself.
+
+## Required checks fan-in
+
+`main` is protected by a single required status check named `required-checks`. GitHub's
+required-checks field is a string match on the check name: it cannot express "this matrix
+job, but only the legs that actually ran", and it cannot see a check that was skipped
+rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
+false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay on
+Expected — Waiting for status to be reported forever if they are listed as required.
+
+The ruleset therefore requires only `required-checks`. That job is a fan-in: `if: always()`,
+`needs:` every merge-blocking job in Validation (including `validate-versions` and
+`semver-checks`), succeeds when every dependency succeeded or was skipped, and fails on
+failure, cancelled, or any other result. Advisory jobs stay off that list. `alert` stays
+off it — it files issues on a failed push to `main`, it is not a merge gate.
+
+The job's GitHub check name is the literal `required-checks`, so the ruleset string is
+stable. When a new merge-blocking job is added to Validation it is added to this `needs:`
+list; it is never added to the GitHub ruleset. Matrix jobs that can skip via a job-level
+`if:` can only be made required through this fan-in.
 
 ## Published user guides
 

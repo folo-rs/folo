@@ -113,3 +113,122 @@ check-never-published:
 
     Write-Verbose "Checking crates.io for never-before-published crates" -Verbose
     Test-NeverPublishedCrate -Verbose
+
+# Fails when any publishable package has unreleased changes past its version anchor, or any
+# version group declares inconsistent versions. Thin wrapper over `cargo release-plan check
+# --format github`. `RELEASE_PLAN_BASE` supplies `--base` when set (CI passes the pull-request
+# base SHA or `merge_group.base_sha`); an empty value falls through to the tool default of
+# `origin/main`. When `GITHUB_OUTPUT` is set, a report is written first so the `released`
+# step output reaches `semver-checks` even if the check then fails. Classification stays in
+# the Rust tool; the output list is a filter over `report.json`.
+[group('release')]
+[script]
+validate-versions:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    function Get-ReleasePlanArgument {
+        param([Parameter(Mandatory)][string[]] $Command)
+        $argument = @('run', '-p', 'cargo-release-plan', '--locked', '--') + $Command
+        if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PLAN_BASE)) {
+            $argument += @('--base', $env:RELEASE_PLAN_BASE)
+        }
+        $argument
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PLAN_BASE)) {
+        Write-Verbose "Using RELEASE_PLAN_BASE=$($env:RELEASE_PLAN_BASE) as the version-anchor base (explicit; not the tool default of origin/main)" -Verbose
+    } else {
+        Write-Verbose "Using the tool default base origin/main because RELEASE_PLAN_BASE is unset" -Verbose
+    }
+
+    if ($env:GITHUB_OUTPUT) {
+        Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+        Import-Module "{{ justfile_directory() }}/scripts/release/ReleaseAutomation.psm1" -Force
+
+        $outDir = Join-Path ([System.IO.Path]::GetTempPath()) "release-plan-$(New-Guid)"
+        New-Item -ItemType Directory -Path $outDir | Out-Null
+        cargo @(Get-ReleasePlanArgument -Command @('report', '--out-dir', $outDir))
+        $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
+        # Empty join is `released=` (present, empty). semver-checks treats that as a skip.
+        Set-GitHubOutput -Name released -Value ($released -join ' ')
+    }
+
+    cargo @(Get-ReleasePlanArgument -Command @('check', '--format', 'github'))
+
+# Writes `report.json` (and per-package diffs) under DIR, then runs workspace-wide
+# `cargo semver-checks --all-features`, capturing its output under DIR/semver-checks.log.
+# The skill collect step uses both artifacts. `RELEASE_PLAN_BASE` is forwarded as `--base`
+# when set, matching `validate-versions`. cargo-semver-checks findings (a non-zero exit
+# that names an increment floor) are captured rather than failing the recipe; a canary
+# (`just verify-semver-checks`) already proved the tool can run.
+[group('release')]
+[script]
+release-report DIR:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $dir = "{{ DIR }}"
+    if ([string]::IsNullOrWhiteSpace($dir)) {
+        throw "release-report requires an output directory."
+    }
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+    $reportArgs = @('run', '-p', 'cargo-release-plan', '--locked', '--', 'report', '--out-dir', $dir)
+    if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PLAN_BASE)) {
+        $reportArgs += @('--base', $env:RELEASE_PLAN_BASE)
+        Write-Verbose "Using RELEASE_PLAN_BASE=$($env:RELEASE_PLAN_BASE) as the version-anchor base (explicit; not the tool default of origin/main)" -Verbose
+    } else {
+        Write-Verbose "Using the tool default base origin/main because RELEASE_PLAN_BASE is unset" -Verbose
+    }
+    cargo @reportArgs
+
+    $log = Join-Path $dir 'semver-checks.log'
+    Write-Verbose "Running cargo semver-checks --workspace --all-features; output captured at $log" -Verbose
+    $PSNativeCommandUseErrorActionPreference = $false
+    cargo semver-checks --workspace --all-features 2>&1 | Tee-Object -FilePath $log
+    $semverExit = $LASTEXITCODE
+    $PSNativeCommandUseErrorActionPreference = $true
+    Write-Host "cargo semver-checks exited $semverExit; log written to $log"
+
+# Scoped `cargo semver-checks --all-features` for the packages this pull request releases.
+# Empty `package` means nothing to check (no consumer-visible releasing set) and is a
+# successful skip, not a workspace-wide run. The CI job runs `just verify-semver-checks`
+# first so a broken cargo-semver-checks cannot be read as "no breaking changes".
+[group('release')]
+[script]
+semver-checks:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    if ([string]::IsNullOrWhiteSpace("{{ package }}")) {
+        Write-Host "No packages this pull request releases with a consumer-visible API; skipping cargo-semver-checks."
+        exit 0
+    }
+
+    Write-Verbose "Running cargo semver-checks --all-features for: {{ package }}" -Verbose
+    cargo semver-checks --all-features {{ target_package }}
+
+# Applies an approved increment plan: package versions, version-group expansion, `=`-pin
+# rewrites, and a workspace lockfile refresh. The plan file is an uncommitted working-tree
+# artifact; the version check verifies manifest state, not intent.
+[group('release')]
+[script]
+apply-release-plan PLAN:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $plan = "{{ PLAN }}"
+    if ([string]::IsNullOrWhiteSpace($plan)) {
+        throw "apply-release-plan requires a plan JSON path."
+    }
+    if (-not (Test-Path -LiteralPath $plan)) {
+        throw "apply-release-plan plan file not found: $plan"
+    }
+
+    Write-Verbose "Applying increment plan from $plan via cargo-release-plan apply" -Verbose
+    cargo run -p cargo-release-plan --locked -- apply --plan $plan

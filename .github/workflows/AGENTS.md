@@ -34,4 +34,17 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 - A job whose inputs are not Cargo packages (the workflow files, or anything under
   `scripts/`) must run unconditionally - do not gate it on the `delta` job or `skip_all`, or
   a change touching only those files would be validated by nothing. Package-scoped jobs gate
-  on `delta`.
+  on `delta`. `validate-versions` is in this class: its inputs are git history and
+  manifests, so never gate it on `delta`.
+
+## Required-checks fan-in
+
+- When adding a merge-blocking job to `validation.yml`, add it to the `required-checks`
+  job's `needs:` list. Never add it to the GitHub ruleset. Matrix jobs with a job-level
+  `if:` that can be false can only be required through this fan-in. Advisory jobs
+  (`coverage-notify`) and `alert` stay off that list.
+- The job's GitHub check name is the literal `required-checks` (`name: required-checks`).
+  Do not rename it.
+- Merge-queue runs use the same pruned job set as pull requests. A `github.event_name ==
+  'push'` guard that means "full matrix" must stay keyed on `push`, not on
+  `!= 'pull_request'`, or a `merge_group` run would take the full matrix.
