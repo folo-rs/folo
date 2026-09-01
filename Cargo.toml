@@ -22,6 +22,7 @@ azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.7", path = "packages/cargo-freeze-deps", default-features = false }
+cargo-release-plan = { version = "0.1.1", path = "packages/cargo-release-plan", default-features = false }
 cbh_analyze = { version = "=0.2.2", path = "packages/cbh_analyze", default-features = false }
 cbh_cli = { version = "=0.2.2", path = "packages/cbh_cli", default-features = false }
 cbh_codec = { version = "=0.2.2", path = "packages/cbh_codec", default-features = false }
@@ -71,6 +72,7 @@ hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
 http = { version = "1.2.0", default-features = false, features = ["std"] }
+ignore = { version = "0.4.23", default-features = false }
 itertools = { version = "0.15.0", default-features = false, features = [
     "use_std",
 ] }
@@ -139,6 +141,42 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.36", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
+
+# Cargo packages that form one logical unit belong to one version group, and the
+# members of a version group must share a version. cargo-release-plan expands an
+# increment across every member of a version group and rewrites intra-workspace
+# `=` pins together. Ref: docs/impl-crate-split.md.
+#
+# These version groups must stay in sync with the `version_group` keys in
+# release-plz.toml, which release-plz reads for the same purpose.
+[workspace.metadata.release-plan.groups]
+cargo-bench-history = [
+    "cargo-bench-history",
+    # Test-support package that is not an implementation dependency of the CLI.
+    # It belongs to this group so a faker-only change may increment the whole family.
+    "cargo-bench-history-faker",
+    "cbh_analyze",
+    "cbh_cli",
+    "cbh_codec",
+    "cbh_command",
+    "cbh_config",
+    "cbh_detect",
+    "cbh_diag",
+    "cbh_engines",
+    "cbh_git",
+    "cbh_model",
+    "cbh_probe",
+    "cbh_render",
+    "cbh_stats",
+    "cbh_storage",
+]
+linked = ["linked", "linked_macros", "linked_macros_impl"]
+many_cpus = ["many_cpus", "many_cpus_impl"]
+nm = ["nm", "nm_impl"]
+nm_otel = ["nm_otel", "nm_otel_impl"]
+
+[workspace.metadata.cargo-udeps.ignore]
+development = ["mutants", "static_assertions"]
 
 [workspace.lints.rust]
 # https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html
@@ -355,9 +393,6 @@ useless_let_if_seq = "warn"
 verbose_bit_mask = "warn"
 volatile_composites = "warn"
 while_float = "warn"
-
-[workspace.metadata.cargo-udeps.ignore]
-development = ["mutants", "static_assertions"]
 
 [profile.release]
 # This ensures we have high quality data with proper stack traces when profiling.

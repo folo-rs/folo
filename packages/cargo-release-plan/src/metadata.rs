@@ -1,0 +1,791 @@
+// Work-tree package discovery via `cargo metadata --no-deps`.
+//
+// The design forbids resolving a full graph or compiling. `--no-deps` is the
+// only Cargo invocation used for classification.
+
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use ohno::AppError;
+use semver::Version;
+use serde::Deserialize;
+use serde_json::Value;
+use toml_edit::{DocumentMut, Item};
+
+use crate::command::run_capture;
+use crate::git::{GitRepo, join_git_rel};
+use crate::groups::Groups;
+#[cfg(test)]
+use crate::inherited::InheritedKeys;
+#[cfg(test)]
+use crate::manifest::TargetDiscovery;
+use crate::manifest::{
+    PackageManifest, PathCase, WorkspaceInherit, for_each_dependency_table, parse_document,
+    parse_package_manifest, workspace_relative_path,
+};
+#[cfg(test)]
+use crate::packaging::PackagingRules;
+use crate::packaging::relativize;
+use crate::{
+    GroupNameCollisionError, InvalidVersionError, MalformedVersionGroupError,
+    MalformedVersionGroupsError, NonPublishableGroupMemberError, ParseMetadataError, ReadFileError,
+    UnknownGroupMemberError,
+};
+
+/// Work-tree snapshot from `cargo metadata --no-deps`.
+#[derive(Debug)]
+pub(crate) struct WorkTree {
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) packages: Vec<WorkPackage>,
+    /// Manifest paths of every member, publishable or not.
+    ///
+    /// `apply` rewrites dependency requirements in all of them, because a
+    /// non-publishable member can still pin a package the plan increments.
+    pub(crate) member_manifests: Vec<PathBuf>,
+    /// Declared package name of every member, keyed by its manifest directory.
+    ///
+    /// `apply` rewrites a `path` dependency only after resolving that path to a
+    /// member directory declaring the same package, so a same-named package
+    /// living outside the workspace is left alone.
+    pub(crate) members_by_dir: BTreeMap<PathBuf, String>,
+    pub(crate) groups: Groups,
+}
+
+/// One publishable workspace member in the work tree.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkPackage {
+    pub(crate) manifest: PackageManifest,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) dependencies: Vec<ReportedDep>,
+    /// Whether the package builds a target that makes its locked closure relevant.
+    ///
+    /// Ref: docs/design.md, "Relevant lockfile closures".
+    pub(crate) has_lockfile_target: bool,
+    /// Files Cargo packs because a manifest key names them.
+    ///
+    /// Keyed by the path each takes inside the package archive.
+    ///
+    /// Resolution needs the repository layout, which `cargo metadata` does not
+    /// describe, so classification fills this in once the repository is known.
+    pub(crate) resources: BTreeMap<String, String>,
+}
+
+/// Intra-workspace dependency as exposed in `report.json`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct ReportedDep {
+    pub(crate) name: String,
+    pub(crate) req: String,
+    pub(crate) exact_pin: bool,
+}
+
+/// Raw `cargo metadata` document before conversion to [`WorkTree`].
+#[derive(Debug, Deserialize)]
+struct MetadataJson {
+    packages: Vec<MetadataPackage>,
+    workspace_members: Vec<String>,
+    workspace_root: String,
+    #[serde(default)]
+    metadata: Value,
+}
+
+/// One package object from the metadata document.
+#[derive(Debug, Deserialize)]
+struct MetadataPackage {
+    name: String,
+    version: String,
+    id: String,
+    manifest_path: String,
+    #[serde(default)]
+    publish: Option<Vec<String>>,
+    #[serde(default)]
+    dependencies: Vec<MetadataDep>,
+}
+
+/// One declared dependency from the metadata document.
+#[derive(Debug, Deserialize)]
+struct MetadataDep {
+    name: String,
+    req: String,
+    #[serde(default)]
+    rename: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// Git-tracked inputs that constrain Cargo's work-tree metadata.
+///
+/// Cargo still supplies manifest normalization and dependency relationships,
+/// while this scope prevents untracked manifests and auto-discovered targets
+/// from entering the released-content model.
+/// Ref: docs/implementation.md, "Workspace snapshots".
+struct TrackedMetadata<'a> {
+    git: &'a GitRepo,
+    workspace_root: &'a Path,
+    paths: Vec<String>,
+    case: PathCase,
+}
+
+impl TrackedMetadata<'_> {
+    /// Whether Cargo's member manifest is recorded in Git.
+    fn contains_manifest(&self, manifest_path: &str) -> bool {
+        // Cargo paths are first made workspace-relative using Cargo's own root
+        // spelling, then rebased with Git's prefix. Subtracting Git's root from a
+        // Cargo path would fail for equivalent 8.3, symlinked, or substituted
+        // spellings of the same directory.
+        let Some(workspace_path) =
+            workspace_relative_path(self.workspace_root, Path::new(manifest_path))
+        else {
+            return false;
+        };
+        let manifest_path = join_git_rel(self.git.prefix(), &workspace_path);
+        self.paths
+            .iter()
+            .any(|path| self.case.same_path(path, &manifest_path))
+    }
+
+    /// Whether tracked, present package inputs define a lockfile-bearing target.
+    fn has_lockfile_target(&self, manifest: &PackageManifest) -> Result<bool, AppError> {
+        let package_dir = join_git_rel(self.git.prefix(), &manifest.directory);
+        let mut present = Vec::new();
+        for path in &self.paths {
+            let Some(relative) = relativize(path, &package_dir) else {
+                continue;
+            };
+            match fs::symlink_metadata(self.git.root().join(path)) {
+                Ok(_) => present.push(relative),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ReadFileError::caused_by(self.git.root().join(path), error).into());
+                }
+            }
+        }
+        Ok(manifest.targets.has_lockfile_target(present, self.case))
+    }
+}
+
+/// Loads the current workspace while restricting release inputs to tracked files.
+pub(crate) fn load_tracked_work_tree(
+    manifest_path: &Path,
+) -> Result<(WorkTree, GitRepo), AppError> {
+    let metadata = query_metadata(manifest_path)?;
+    let workspace_root = PathBuf::from(&metadata.workspace_root);
+    let git = GitRepo::discover(&workspace_root)?;
+    let tracked = TrackedMetadata {
+        paths: git.ls_files("")?,
+        case: PathCase::probe(&workspace_root),
+        git: &git,
+        workspace_root: &workspace_root,
+    };
+    let work_tree = work_tree_from_metadata(&metadata, &tracked)?;
+    Ok((work_tree, git))
+}
+
+fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
+    // Cargo resolves a relative `--manifest-path` against the child's working
+    // directory, so the child inherits this process's directory and the path is
+    // passed through unchanged. Deriving the directory from the path instead
+    // would resolve any leading directory component twice.
+    let cwd = Path::new(".");
+    // `--no-deps` is the classification Cargo invocation: no graph resolve and
+    // no crates.io. `--offline` is omitted so a workspace without a lockfile
+    // can still be classified; no registry packages are consulted.
+    // The requested schema version is pinned because the `Metadata*`
+    // projections in this module deserialize exactly that documented contract.
+    let metadata = run_capture(
+        "cargo",
+        &[
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+        ],
+        cwd,
+    )?;
+    Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+}
+
+fn work_tree_from_metadata(
+    metadata: &MetadataJson,
+    tracked: &TrackedMetadata<'_>,
+) -> Result<WorkTree, AppError> {
+    let workspace_root = PathBuf::from(&metadata.workspace_root);
+    let cargo_member_ids: HashSet<&str> = metadata
+        .workspace_members
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let selected_member_ids: HashSet<&str> = metadata
+        .packages
+        .iter()
+        .filter(|package| cargo_member_ids.contains(package.id.as_str()))
+        .filter(|package| tracked.contains_manifest(&package.manifest_path))
+        .map(|package| package.id.as_str())
+        .collect();
+
+    let workspace_names: HashSet<String> = metadata
+        .packages
+        .iter()
+        .filter(|package| selected_member_ids.contains(package.id.as_str()))
+        .map(|package| package.name.clone())
+        .collect();
+    let release_members_by_dir: BTreeMap<PathBuf, String> = metadata
+        .packages
+        .iter()
+        .filter(|package| selected_member_ids.contains(package.id.as_str()))
+        .filter_map(|package| {
+            Path::new(&package.manifest_path)
+                .parent()
+                .map(|dir| (dir.to_path_buf(), package.name.clone()))
+        })
+        .collect();
+    // Apply visits every member Cargo can see so an untracked or ignored
+    // dependent cannot retain a stale exact pin. This set is deliberately wider
+    // than the tracked package set accepted as plan targets.
+    // Ref: docs/implementation.md, "Plan application".
+    let members_by_dir: BTreeMap<PathBuf, String> = metadata
+        .packages
+        .iter()
+        .filter(|package| cargo_member_ids.contains(package.id.as_str()))
+        .filter_map(|package| {
+            Path::new(&package.manifest_path)
+                .parent()
+                .map(|dir| (dir.to_path_buf(), package.name.clone()))
+        })
+        .collect();
+    let root_manifest_path = workspace_root.join("Cargo.toml");
+    let root_manifest = fs::read_to_string(&root_manifest_path)
+        .map_err(|error| ReadFileError::caused_by(&root_manifest_path, error))?;
+    let root_manifest = parse_document(&root_manifest_path, &root_manifest)?;
+    let workspace = WorkspaceInherit::from_root(&root_manifest);
+    let mut packages = Vec::new();
+
+    for package in &metadata.packages {
+        if !selected_member_ids.contains(package.id.as_str()) {
+            continue;
+        }
+        if matches!(&package.publish, Some(regs) if regs.is_empty()) {
+            continue;
+        }
+        let path = PathBuf::from(&package.manifest_path);
+        let manifest_text =
+            fs::read_to_string(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
+        let git_manifest_path = workspace_relative_path(&workspace_root, &path).expect(
+            "a selected manifest already matched a tracked path after this same conversion",
+        );
+        let Some(mut manifest) =
+            parse_package_manifest(&manifest_text, &git_manifest_path, &workspace)?
+        else {
+            continue;
+        };
+        if !manifest.publish {
+            continue;
+        }
+        let manifest_doc = parse_document(&path, &manifest_text)?;
+        manifest.version = package.version.parse::<Version>().map_err(|error| {
+            InvalidVersionError::caused_by(&package.name, &package.version, error)
+        })?;
+        manifest.name.clone_from(&package.name);
+
+        let dependencies = package
+            .dependencies
+            .iter()
+            .filter(|dep| {
+                is_intra_workspace_released(
+                    dep,
+                    &release_members_by_dir,
+                    &manifest_doc,
+                    &root_manifest,
+                )
+            })
+            .map(|dep| ReportedDep {
+                name: dep.name.clone(),
+                req: dep.req.clone(),
+                exact_pin: dep.req.starts_with('='),
+            })
+            .collect();
+
+        packages.push(WorkPackage {
+            has_lockfile_target: tracked.has_lockfile_target(&manifest)?,
+            manifest,
+            manifest_path: path,
+            dependencies,
+            resources: BTreeMap::new(),
+        });
+    }
+
+    packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
+
+    let mut member_manifests: Vec<PathBuf> = members_by_dir
+        .keys()
+        .map(|dir| dir.join("Cargo.toml"))
+        .collect();
+    member_manifests.sort();
+
+    // Group configuration is validated once the publishable set is known,
+    // because a group may only name packages that are actually released.
+    let publishable_names: HashSet<&str> = packages
+        .iter()
+        .map(|package| package.manifest.name.as_str())
+        .collect();
+    let groups = groups_from_metadata(&metadata.metadata, &workspace_names, &publishable_names)?;
+
+    Ok(WorkTree {
+        workspace_root,
+        packages,
+        member_manifests,
+        members_by_dir,
+        groups,
+    })
+}
+
+fn groups_from_metadata(
+    metadata: &Value,
+    workspace_names: &HashSet<String>,
+    publishable_names: &HashSet<&str>,
+) -> Result<Groups, AppError> {
+    let Some(groups) = metadata
+        .get("release-plan")
+        .and_then(|plan| plan.get("groups"))
+    else {
+        return Ok(Groups::default());
+    };
+    // Declaring no groups and declaring them wrongly must not look the same: a
+    // silently ignored table would disable every consistency check and let
+    // lockstep packages drift apart with nothing reported.
+    let Some(groups) = groups.as_object() else {
+        return Err(MalformedVersionGroupsError::new().into());
+    };
+    let mut map = BTreeMap::new();
+    for (name, members) in groups {
+        let Some(array) = members.as_array() else {
+            return Err(MalformedVersionGroupError::new(name).into());
+        };
+        let mut parsed = Vec::new();
+        for item in array {
+            let Some(package) = item.as_str() else {
+                return Err(MalformedVersionGroupError::new(name).into());
+            };
+            if !workspace_names.contains(package) {
+                return Err(UnknownGroupMemberError::new(name, package).into());
+            }
+            if !publishable_names.contains(package) {
+                return Err(NonPublishableGroupMemberError::new(name, package).into());
+            }
+            parsed.push(package.to_owned());
+        }
+        // A plan entry names either a package or a group, and a group wins the
+        // lookup. Naming a group after a package it does not contain would
+        // therefore make an entry increment a different set of packages than
+        // the one its author named, silently.
+        if workspace_names.contains(name) && !parsed.iter().any(|member| member == name) {
+            return Err(GroupNameCollisionError::new(name).into());
+        }
+        map.insert(name.clone(), parsed);
+    }
+    Groups::from_members(map)
+}
+
+/// Reports whether a dependency edge is published and points at a workspace member.
+///
+/// Normal and build dependencies are recorded in the published manifest, so a
+/// version decision on the target cascades to this package. A dev dependency
+/// survives packaging only when its manifest declaration supplies a version
+/// requirement; Cargo reports both an explicit wildcard and no requirement as
+/// `*`, so metadata alone cannot distinguish them.
+fn is_intra_workspace_released(
+    dep: &MetadataDep,
+    members_by_dir: &BTreeMap<PathBuf, String>,
+    manifest: &DocumentMut,
+    workspace_manifest: &DocumentMut,
+) -> bool {
+    let Some(path) = &dep.path else {
+        return false;
+    };
+    if !members_by_dir.contains_key(Path::new(path)) {
+        return false;
+    }
+    dep.kind.as_deref().unwrap_or("normal") != "dev"
+        || dev_dependency_declares_version(dep, manifest, workspace_manifest)
+}
+
+/// Determines whether a development dependency survives Cargo's manifest normalization.
+///
+/// The package declaration is authoritative. An inherited declaration delegates
+/// version presence to the workspace entry with the same local dependency name.
+fn dev_dependency_declares_version(
+    dep: &MetadataDep,
+    manifest: &DocumentMut,
+    workspace_manifest: &DocumentMut,
+) -> bool {
+    let local_name = dep.rename.as_deref().unwrap_or(&dep.name);
+    let mut declares_version = false;
+    for_each_dependency_table(manifest.as_table(), &mut |kind, dependencies| {
+        if kind != "dev-dependencies" || declares_version {
+            return;
+        }
+        let Some(item) = dependencies.get(local_name) else {
+            return;
+        };
+        if dependency_item_declares_version(item) {
+            declares_version = true;
+            return;
+        }
+        let inherits = item
+            .as_table_like()
+            .and_then(|table| table.get("workspace"))
+            .and_then(Item::as_bool)
+            == Some(true);
+        declares_version =
+            inherits && workspace_dependency_declares_version(workspace_manifest, local_name);
+    });
+    declares_version
+}
+
+/// Determines whether one dependency item explicitly carries a version requirement.
+fn dependency_item_declares_version(item: &Item) -> bool {
+    item.as_str().is_some()
+        || item
+            .as_table_like()
+            .is_some_and(|table| table.get("version").is_some())
+}
+
+/// Determines whether an inherited workspace dependency carries a version requirement.
+fn workspace_dependency_declares_version(manifest: &DocumentMut, name: &str) -> bool {
+    manifest
+        .get("workspace")
+        .and_then(Item::as_table_like)
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(Item::as_table_like)
+        .and_then(|dependencies| dependencies.get(name))
+        .is_some_and(dependency_item_declares_version)
+}
+
+pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String> {
+    packages
+        .iter()
+        .filter(|package| package.dependencies.iter().any(|dep| dep.name == name))
+        .map(|package| package.manifest.name.clone())
+        .collect()
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// The publishable set these cases check against.
+    ///
+    /// Group configuration is checked against the publishable set, which for
+    /// most cases is simply every workspace member.
+    fn all_publishable(names: &HashSet<String>) -> HashSet<&str> {
+        names.iter().map(String::as_str).collect()
+    }
+
+    fn doc(text: &str) -> DocumentMut {
+        parse_document(Path::new("Cargo.toml"), text).unwrap()
+    }
+
+    #[test]
+    fn groups_from_metadata_reads_release_plan_table() {
+        let json = json!({
+            "release-plan": {
+                "groups": {
+                    "nm": ["nm", "nm_impl"]
+                }
+            }
+        });
+        let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
+        let groups = groups_from_metadata(&json, &names, &all_publishable(&names)).unwrap();
+        assert_eq!(groups.group_of("nm_impl"), Some("nm"));
+    }
+
+    /// Groups from metadata rejects a non publishable member.
+    ///
+    /// A version group keeps released versions in lockstep, so a member that is never published has
+    /// no version to keep in step and would otherwise be dropped from every decision without a
+    /// word.
+    #[test]
+    fn groups_from_metadata_rejects_a_non_publishable_member() {
+        let json = json!({
+            "release-plan": { "groups": { "nm": ["nm", "nm_impl"] } }
+        });
+        let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
+        let publishable = HashSet::from(["nm"]);
+
+        let error = groups_from_metadata(&json, &names, &publishable).unwrap_err();
+
+        let reported = error
+            .find_source::<NonPublishableGroupMemberError>()
+            .expect("a non-publishable member is refused")
+            .to_string();
+        assert!(reported.contains("nm_impl"), "{reported}");
+    }
+
+    #[test]
+    fn groups_from_metadata_rejects_a_groups_key_that_is_not_a_table() {
+        // Silently ignoring it would read as "no groups configured", which
+        // disables every consistency check the groups exist to enforce.
+        let names = HashSet::from(["nm".to_string()]);
+        let json = json!({
+            "release-plan": { "groups": ["nm"] }
+        });
+
+        let error = groups_from_metadata(&json, &names, &all_publishable(&names)).unwrap_err();
+
+        assert!(error.find_source::<MalformedVersionGroupsError>().is_some());
+    }
+
+    #[test]
+    fn groups_from_metadata_rejects_malformed_and_unknown_members() {
+        let names = HashSet::from(["nm".to_string()]);
+        let malformed = json!({
+            "release-plan": { "groups": { "nm": "nm" } }
+        });
+        let error = groups_from_metadata(&malformed, &names, &all_publishable(&names)).unwrap_err();
+        let source = error
+            .find_source::<MalformedVersionGroupError>()
+            .expect("malformed group");
+        assert_eq!(source.group(), "nm");
+        let non_string = json!({
+            "release-plan": { "groups": { "nm": [1] } }
+        });
+        let error =
+            groups_from_metadata(&non_string, &names, &all_publishable(&names)).unwrap_err();
+        let source = error
+            .find_source::<MalformedVersionGroupError>()
+            .expect("malformed group member");
+        assert_eq!(source.group(), "nm");
+        let unknown = json!({
+            "release-plan": { "groups": { "nm": ["ghost"] } }
+        });
+        let error = groups_from_metadata(&unknown, &names, &all_publishable(&names)).unwrap_err();
+        let source = error
+            .find_source::<UnknownGroupMemberError>()
+            .expect("unknown member");
+        assert_eq!(source.group(), "nm");
+        assert_eq!(source.package(), "ghost");
+    }
+
+    #[test]
+    fn a_group_named_after_a_package_must_contain_that_package() {
+        let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
+        let collision = json!({
+            "release-plan": { "groups": { "nm": ["nm_impl"] } }
+        });
+        let error = groups_from_metadata(&collision, &names, &all_publishable(&names)).unwrap_err();
+        let source = error
+            .find_source::<GroupNameCollisionError>()
+            .expect("group name collision");
+        assert_eq!(source.group(), "nm");
+
+        // A group name that is not a package name is unambiguous, and so is one
+        // that names a package it does contain.
+        let free_name = json!({
+            "release-plan": { "groups": { "nm-family": ["nm_impl"] } }
+        });
+        groups_from_metadata(&free_name, &names, &all_publishable(&names)).unwrap();
+        let contains_itself = json!({
+            "release-plan": { "groups": { "nm": ["nm", "nm_impl"] } }
+        });
+        groups_from_metadata(&contains_itself, &names, &all_publishable(&names)).unwrap();
+    }
+
+    #[test]
+    fn released_intra_workspace_deps_require_a_member_directory() {
+        let dirs = BTreeMap::from([(PathBuf::from("/ws/packages/bar"), "bar".to_string())]);
+        let path_dep = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: None,
+        };
+        assert!(is_intra_workspace_released(
+            &path_dep,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+        let named = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            rename: None,
+            path: None,
+            kind: Some("normal".to_string()),
+        };
+        assert!(!is_intra_workspace_released(
+            &named,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+        let colliding = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            rename: None,
+            path: Some("/other/bar".to_string()),
+            kind: None,
+        };
+        assert!(!is_intra_workspace_released(
+            &colliding,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+        let build = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("build".to_string()),
+        };
+        assert!(is_intra_workspace_released(
+            &build,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+        let dev = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        assert!(is_intra_workspace_released(
+            &dev,
+            &dirs,
+            &doc("[dev-dependencies]\nbar = { path = \"../bar\", version = \"0.1.0\" }\n"),
+            &doc("")
+        ));
+        let path_only_dev = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        assert!(!is_intra_workspace_released(
+            &path_only_dev,
+            &dirs,
+            &doc("[dev-dependencies]\nbar = { path = \"../bar\" }\n"),
+            &doc("")
+        ));
+        let wildcard_dev = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        assert!(is_intra_workspace_released(
+            &wildcard_dev,
+            &dirs,
+            &doc("[dev-dependencies]\nbar = { path = \"../bar\", version = \"*\" }\n"),
+            &doc("")
+        ));
+        // A normal dependency without a version requirement still survives
+        // packaging, because Cargo strips only path-only dev dependencies.
+        let path_only_normal = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            rename: None,
+            path: Some("/ws/packages/bar".to_string()),
+            kind: None,
+        };
+        assert!(is_intra_workspace_released(
+            &path_only_normal,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+        let foreign = MetadataDep {
+            name: "serde".to_string(),
+            req: "1.0.0".to_string(),
+            rename: None,
+            path: None,
+            kind: None,
+        };
+        assert!(!is_intra_workspace_released(
+            &foreign,
+            &dirs,
+            &doc(""),
+            &doc("")
+        ));
+    }
+
+    #[test]
+    fn inherited_wildcard_dev_dependency_is_released() {
+        let dirs = BTreeMap::from([(PathBuf::from("/ws/packages/bar"), "bar".to_string())]);
+        let dep = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            rename: Some("bar_alias".to_string()),
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        let member = doc("[dev-dependencies]\nbar_alias.workspace = true\n");
+        let versionless_workspace = doc(
+            "[workspace.dependencies]\nbar_alias = { package = \"bar\", path = \"packages/bar\" }\n",
+        );
+        assert!(!is_intra_workspace_released(
+            &dep,
+            &dirs,
+            &member,
+            &versionless_workspace
+        ));
+        let versioned_workspace = doc(
+            "[workspace.dependencies]\nbar_alias = { package = \"bar\", path = \"packages/bar\", version = \"*\" }\n",
+        );
+        assert!(is_intra_workspace_released(
+            &dep,
+            &dirs,
+            &member,
+            &versioned_workspace
+        ));
+    }
+
+    #[test]
+    fn dependents_of_lists_packages_that_depend_on_the_name() {
+        fn package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
+            WorkPackage {
+                manifest: PackageManifest {
+                    name: name.to_string(),
+                    version: "0.1.0".parse().unwrap(),
+                    directory: format!("packages/{name}"),
+                    packaging: PackagingRules::default(),
+                    inherited: InheritedKeys::default(),
+                    publish: true,
+                    path_dependencies: Vec::new(),
+                    inherited_path_dependencies: Vec::new(),
+                    resource_paths: Vec::new(),
+                    inherited_resource_paths: Vec::new(),
+                    auto_readme: false,
+                    targets: TargetDiscovery::default(),
+                },
+                manifest_path: PathBuf::from(format!("packages/{name}/Cargo.toml")),
+                dependencies,
+                has_lockfile_target: false,
+                resources: BTreeMap::new(),
+            }
+        }
+
+        let bar = package(
+            "bar",
+            vec![ReportedDep {
+                name: "foo".to_string(),
+                req: "0.1.0".to_string(),
+                exact_pin: false,
+            }],
+        );
+        let foo = package("foo", Vec::new());
+        assert_eq!(dependents_of(&[foo, bar], "foo"), vec!["bar".to_string()]);
+    }
+}

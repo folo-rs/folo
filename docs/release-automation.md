@@ -62,7 +62,7 @@ fail *before* any version or changelog is touched:
 The set of published binary crates is **derived**, so new tools are covered
 automatically and hardcoding can never let one slip through. A package is a
 publishable binary crate iff it is publishable **and** has a `bin` target. Today
-that set is four Cargo subcommands:
+that set is:
 
 | Crate                       | Binary                      | Notes                                              |
 | --------------------------- | --------------------------- | -------------------------------------------------- |
@@ -70,6 +70,7 @@ that set is four Cargo subcommands:
 | `cargo-bench-history-faker` | `cargo-bench-history-faker` | Unsupported test-support engine; published only so sibling repos can validate `cargo-bench-history` end to end (and fetch it via `cargo binstall`). No stable API or CLI. |
 | `cargo-detect-package`      | `cargo-detect-package`      | Small, fast to build.                              |
 | `cargo-freeze-deps`         | `cargo-freeze-deps`         | Small, fast to build.                              |
+| `cargo-release-plan`        | `cargo-release-plan`        | Small, fast to build.                              |
 | `dure`                      | `dure`                      | Windows-only, so it restricts its release targets (see [Per-crate targets](#per-crate-targets)). |
 
 `cargo-bench-history-stress` has a binary but is `publish = false`, so the

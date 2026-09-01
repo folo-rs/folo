@@ -1,4 +1,8 @@
 [workspace]
+# The `version_group` keys below must stay in sync with
+# `[workspace.metadata.release-plan.groups]` in the workspace Cargo.toml, which
+# cargo-release-plan reads for the same purpose.
+
 # TEMP: it currently complains for some unclear reason.
 allow_dirty = true
 
