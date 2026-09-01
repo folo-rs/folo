@@ -341,8 +341,12 @@ host drains independently of the app, so that hold is bounded.
 
 Installing the client slot releases the first-attach lifetime gate before the
 advisory attached flag is written to the session store. The store update happens
-after the attach lock is released, so durable filesystem I/O cannot hold up
-another attach or prevent an app that already exited from delivering its status.
+after both ownership locks are released, so durable filesystem I/O cannot hold
+up another attach or prevent an app that already exited from delivering its
+status. Each client-slot change assigns a generation to its advisory update.
+Store writes are serialized and discard generations older than the latest
+ownership state, so an update delayed by filesystem I/O cannot overwrite a newer
+attach or detach.
 
 Session teardown closes the pseudoconsole and joins the output pump before
 queueing the app's exit status, which is what orders the app's final output

@@ -1,7 +1,7 @@
 //! Supervisor role: own the app, accept clients, last-connect-wins steal.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
@@ -257,6 +257,12 @@ struct Shared<T: Transport, C> {
     /// acknowledge in one order and install in another, letting an older
     /// attach displace a newer one.
     attach: Mutex<()>,
+    /// Monotonic identity of the latest client-slot ownership state.
+    ///
+    /// Advisory store updates carry the generation assigned under the client
+    /// slot, so an older update that waited for store I/O cannot overwrite a
+    /// newer attach or detach.
+    attached_generation: Arc<AtomicU64>,
     /// Output the app produced before anyone attached, kept for the first
     /// client. Taken under the client slot, which is what orders it ahead of
     /// the output that follows the attach.
@@ -335,6 +341,23 @@ impl<T: Transport, C> Shared<T, C> {
         self.client
             .lock()
             .expect("client slot is only copied or replaced, never held across a panic")
+    }
+
+    /// Advances the identity of the client-slot ownership state.
+    // A constant-return mutation makes later ownership updates indistinguishable.
+    // The deterministic stall test then waits for an update that is correctly
+    // discarded, and mutation watchdogs are disabled.
+    #[cfg_attr(test, mutants::skip)]
+    fn next_attached_generation(&self) -> u64 {
+        let previous = self
+            .attached_generation
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("the process cannot perform enough ownership changes to exhaust u64");
+        previous
+            .checked_add(1)
+            .expect("fetch_update only succeeds when the next generation exists")
     }
 
     /// Holds output produced before the first client attached.
@@ -416,6 +439,7 @@ where
     } = *initialized;
 
     let record_live = Arc::new(Mutex::new(true));
+    let attached_generation = Arc::new(AtomicU64::default());
     let shared = Arc::new(Shared {
         transport: transport.clone(),
         pty_host: pty_host.clone(),
@@ -423,6 +447,7 @@ where
         session_id,
         client: Mutex::new(None),
         attach: Mutex::new(()),
+        attached_generation: Arc::clone(&attached_generation),
         preamble: Mutex::new(Some(Vec::new())),
         first_attach: Mutex::new(FirstAttach::default()),
         first_attach_changed: Condvar::new(),
@@ -441,7 +466,12 @@ where
         }
     });
 
-    let store_flag = store_attached_flag(store, session_id, Arc::clone(&record_live));
+    let store_flag = store_attached_flag(
+        store,
+        session_id,
+        Arc::clone(&record_live),
+        attached_generation,
+    );
     thread::spawn({
         let shared = Arc::clone(&shared);
         let transport = transport.clone();
@@ -537,13 +567,14 @@ fn store_attached_flag<S: SessionStore + Clone>(
     store: &S,
     id: SessionId,
     record_live: Arc<Mutex<bool>>,
-) -> impl Fn(bool) + Clone + Send + 'static {
+    current_generation: Arc<AtomicU64>,
+) -> impl Fn(u64, bool) + Clone + Send + 'static {
     let store = store.clone();
-    move |attached: bool| {
+    move |generation: u64, attached: bool| {
         let live = record_live
             .lock()
             .expect("record_live is only set false at delete, never held across a panic");
-        if !*live {
+        if !*live || current_generation.load(Ordering::SeqCst) != generation {
             return;
         }
         if let Ok(Some(mut record)) = store.read(id) {
@@ -562,7 +593,7 @@ fn accept_loop<T, C>(
     shared: &Arc<Shared<T, C>>,
     transport: &T,
     listener: ListenerId,
-    set_attached: impl Fn(bool) + Clone + Send + 'static,
+    set_attached: impl Fn(u64, bool) + Clone + Send + 'static,
 ) where
     T: Transport + Clone,
     C: Pseudoconsole,
@@ -585,7 +616,7 @@ fn accept_loop<T, C>(
 // Blocking recv. A mutation that drops the disconnect path hangs unit tests
 // because watchdogs are disabled under cargo-mutants.
 #[cfg_attr(test, mutants::skip)]
-fn client_loop<T, C>(shared: &Shared<T, C>, conn: ConnId, set_attached: &impl Fn(bool))
+fn client_loop<T, C>(shared: &Shared<T, C>, conn: ConnId, set_attached: &impl Fn(u64, bool))
 where
     T: Transport + Clone,
     C: Pseudoconsole,
@@ -611,7 +642,7 @@ where
                 return;
             }
             let outbox = Outbox::start(shared.transport.clone(), conn);
-            let previous = {
+            let (previous, generation) = {
                 let mut slot = shared.client();
                 // Acknowledging under the client slot keeps `Attached` ahead of
                 // any `Output` on this connection, and installing in the same
@@ -639,10 +670,12 @@ where
                         outbox.send(message);
                     }
                 }
-                slot.replace(Client {
+                let previous = slot.replace(Client {
                     conn,
                     outbox: Arc::clone(&outbox),
-                })
+                });
+                let generation = shared.next_attached_generation();
+                (previous, generation)
             };
             // The client owns the slot now, so an app that already exited can
             // finish serving it. The advisory store update below may perform
@@ -677,7 +710,7 @@ where
             // stalled durable write must not prevent teardown or another client
             // from acquiring the attach lock.
             drop(_attach);
-            set_attached(true);
+            set_attached(generation, true);
         }
         _ => {
             shared.transport.disconnect(conn);
@@ -711,18 +744,21 @@ where
         }
         drop(slot);
     }
-    let departing = {
+    let (departing, generation) = {
         let mut slot = shared.client();
         if slot.as_ref().map(|client| client.conn) == Some(conn) {
             let departing = slot.take();
-            // Holding the slot so a replacement cannot publish attached=true
-            // before this disconnect publishes attached=false.
-            set_attached(false);
-            departing
+            let generation = shared.next_attached_generation();
+            (departing, Some(generation))
         } else {
-            None
+            (None, None)
         }
     };
+    if let Some(generation) = generation {
+        // Store I/O is serialized by generation rather than by the client slot.
+        // A stalled advisory write therefore cannot block ownership transfer.
+        set_attached(generation, false);
+    }
     if let Some(departing) = departing {
         // The peer is gone or misbehaving, so nothing still queued for it is
         // worth waiting on.
@@ -1766,6 +1802,7 @@ mod tests {
             session_id: SessionId::from_u32(1).unwrap(),
             client: Mutex::new(None),
             attach: Mutex::new(()),
+            attached_generation: Arc::new(AtomicU64::default()),
             preamble: Mutex::new(Some(Vec::new())),
             first_attach: Mutex::new(FirstAttach::default()),
             first_attach_changed: Condvar::new(),
@@ -1787,11 +1824,13 @@ mod tests {
     }
 
     /// Records every attached-flag publication in order.
-    fn attach_recorder() -> (Arc<Mutex<Vec<bool>>>, impl Fn(bool)) {
+    fn attach_recorder() -> (Arc<Mutex<Vec<bool>>>, impl Fn(u64, bool)) {
         let flags = Arc::new(Mutex::new(Vec::new()));
         let recorder = {
             let flags = Arc::clone(&flags);
-            move |attached: bool| flags.lock().expect("flag lock").push(attached)
+            move |_generation: u64, attached: bool| {
+                flags.lock().expect("flag lock").push(attached);
+            }
         };
         (flags, recorder)
     }
@@ -1831,7 +1870,7 @@ mod tests {
             let relay = thread::spawn({
                 let shared = Arc::clone(&shared);
                 move || {
-                    client_loop(&shared, supervisor, &|attached| {
+                    client_loop(&shared, supervisor, &|_generation, attached| {
                         attached_tx.send(attached).unwrap();
                     });
                 }
@@ -1855,6 +1894,101 @@ mod tests {
             phases.set("waiting for the client relay to stop");
             relay.join().unwrap();
             assert!(!attached_rx.recv().unwrap());
+        });
+    }
+
+    #[test]
+    fn a_stalled_detach_update_does_not_block_or_overwrite_a_steal() {
+        with_watchdog_phases("setting up the client relays", |phases| {
+            let transport = MemoryTransport::new();
+            let pty_host = MemoryPseudoconsole::new();
+            let shared = Arc::new(shared_session(&transport, &pty_host));
+            let store = MemorySessionStore::new();
+            let owner = ProcessIdentity::for_test(1);
+            let id = store.allocate_id(&owner).unwrap();
+            assert_eq!(id, shared.session_id);
+            store
+                .publish(&SessionRecord {
+                    id: id.get(),
+                    supervisor_pid: owner.pid,
+                    supervisor_creation_time: owner.creation_time,
+                    pipe_name: "pipe".to_string(),
+                    launch_directory: PathBuf::from("/work"),
+                    command: vec!["app.exe".to_string()],
+                    started_at_unix_ms: 1,
+                    attached: false,
+                })
+                .unwrap();
+            let record_live = Arc::new(Mutex::new(true));
+            let set_attached = store_attached_flag(
+                &store,
+                id,
+                record_live,
+                Arc::clone(&shared.attached_generation),
+            );
+            let (updated_tx, updated_rx) = mpsc::channel();
+            let observe_update = move |generation, attached| {
+                set_attached(generation, attached);
+                updated_tx.send(attached).unwrap();
+            };
+
+            let (first_supervisor, first_client) = connected_pair(&transport, "first");
+            let first_relay = thread::spawn({
+                let shared = Arc::clone(&shared);
+                let observe_update = observe_update.clone();
+                move || client_loop(&shared, first_supervisor, &observe_update)
+            });
+            transport
+                .send(first_client, &Message::Attach { cols: 80, rows: 24 })
+                .unwrap();
+            phases.set("waiting for the first attach acknowledgement");
+            assert!(matches!(
+                transport.recv(first_client).unwrap(),
+                Message::Attached { .. }
+            ));
+            phases.set("waiting for the first attached-flag update");
+            assert!(updated_rx.recv().unwrap());
+
+            store.stall_publishes();
+            transport.disconnect(first_client);
+            phases.set("waiting for the detached-flag update to stall");
+            store.wait_for_stalled_publish();
+
+            let (second_supervisor, second_client) = connected_pair(&transport, "second");
+            let second_relay = thread::spawn({
+                let shared = Arc::clone(&shared);
+                move || client_loop(&shared, second_supervisor, &observe_update)
+            });
+            transport
+                .send(
+                    second_client,
+                    &Message::Attach {
+                        cols: 100,
+                        rows: 30,
+                    },
+                )
+                .unwrap();
+            // The first relay is blocked in store I/O. Receiving this proves it
+            // released the client slot before publishing the advisory flag.
+            phases.set("waiting for the stealing attach acknowledgement");
+            assert!(matches!(
+                transport.recv(second_client).unwrap(),
+                Message::Attached { .. }
+            ));
+
+            store.resume_publishes();
+            phases.set("waiting for the stalled detach and newer attach updates");
+            let completed = [updated_rx.recv().unwrap(), updated_rx.recv().unwrap()];
+            assert!(completed.contains(&false));
+            assert!(completed.contains(&true));
+            first_relay.join().unwrap();
+            assert!(store.read(id).unwrap().unwrap().attached);
+
+            transport.disconnect(second_client);
+            phases.set("waiting for the final detach update");
+            assert!(!updated_rx.recv().unwrap());
+            second_relay.join().unwrap();
+            assert!(!store.read(id).unwrap().unwrap().attached);
         });
     }
 
@@ -1957,7 +2091,7 @@ mod tests {
             let shared = Arc::clone(&shared);
             let successor_outbox = Arc::clone(&successor_outbox);
             let displaced = Arc::clone(&displaced);
-            move |attached: bool| {
+            move |_generation: u64, attached: bool| {
                 if attached {
                     let previous = shared.client().replace(Client {
                         conn: successor,
@@ -2084,7 +2218,7 @@ mod tests {
     }
 
     #[test]
-    fn attached_flag_publishes_only_while_the_record_lives() {
+    fn attached_flag_publishes_only_the_current_generation_while_the_record_lives() {
         let store = MemorySessionStore::new();
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store
@@ -2101,12 +2235,22 @@ mod tests {
             .unwrap();
 
         let record_live = Arc::new(Mutex::new(true));
-        let set_attached = store_attached_flag(&store, id, Arc::clone(&record_live));
-        set_attached(true);
+        let current_generation = Arc::new(AtomicU64::new(2));
+        let set_attached = store_attached_flag(
+            &store,
+            id,
+            Arc::clone(&record_live),
+            Arc::clone(&current_generation),
+        );
+        set_attached(1, true);
+        assert!(!store.read(id).unwrap().unwrap().attached);
+
+        set_attached(2, true);
         assert!(store.read(id).unwrap().unwrap().attached);
 
         *record_live.lock().expect("record_live lock") = false;
-        set_attached(false);
+        current_generation.store(3, Ordering::SeqCst);
+        set_attached(3, false);
         assert!(store.read(id).unwrap().unwrap().attached);
     }
 }
