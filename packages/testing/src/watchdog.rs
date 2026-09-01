@@ -2,6 +2,24 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+/// Reports the operation a watchdog-protected test is about to block on.
+///
+/// [`with_watchdog_phases()`] includes the most recently reported phase in its
+/// timeout panic, so a synchronization failure identifies the operation that did
+/// not complete.
+#[derive(Clone, Debug)]
+pub struct WatchdogPhases {
+    phase_tx: mpsc::Sender<&'static str>,
+}
+
+impl WatchdogPhases {
+    /// Replaces the phase shown if the test times out.
+    pub fn set(&self, phase: &'static str) {
+        // The receiver only disappears after the watchdog has already ended the test.
+        _ = self.phase_tx.send(phase);
+    }
+}
+
 /// Runs a test with a timeout to prevent infinite hangs.
 ///
 /// This function wraps a test closure with a timeout mechanism. The closure runs
@@ -39,6 +57,44 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    run_with_watchdog(test_fn, |timeout| {
+        format!("Test exceeded {}-second timeout", timeout.as_secs())
+    })
+}
+
+/// Runs a test with a timeout that reports the last active phase.
+///
+/// Call [`WatchdogPhases::set()`] immediately before each potentially blocking
+/// operation. If the closure exceeds the timeout, the panic identifies the last
+/// phase it entered.
+///
+/// # Panics
+///
+/// Panics on the calling thread if the wrapped closure does not complete within
+/// the timeout. Mutation testing disables the timeout.
+pub fn with_watchdog_phases<F, R>(initial_phase: &'static str, test_fn: F) -> R
+where
+    F: FnOnce(WatchdogPhases) -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let (phase_tx, phase_rx) = mpsc::channel();
+    run_with_watchdog(
+        move || test_fn(WatchdogPhases { phase_tx }),
+        move |timeout| {
+            let phase = phase_rx.try_iter().last().unwrap_or(initial_phase);
+            format!(
+                "Test exceeded {}-second timeout during phase: {phase}",
+                timeout.as_secs()
+            )
+        },
+    )
+}
+
+fn run_with_watchdog<F, R>(test_fn: F, timeout_message: impl FnOnce(Duration) -> String) -> R
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
     // Check if we are running under mutation testing.
     if std::env::var("MUTATION_TESTING").as_deref() == Ok("1") {
         // Under mutation testing, disable the watchdog to allow hanging mutations.
@@ -71,7 +127,7 @@ where
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             // Test timed out - this indicates the test is hanging
-            panic!("Test exceeded {}-second timeout", timeout.as_secs());
+            panic!("{}", timeout_message(timeout));
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             // Thread panicked, join it to get the panic
@@ -86,7 +142,13 @@ where
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(WatchdogPhases: RefUnwindSafe, UnwindSafe);
 
     #[test]
     fn watchdog_allows_fast_tests() {
@@ -100,6 +162,15 @@ mod tests {
     #[test]
     fn watchdog_returns_correct_value() {
         let result = with_watchdog(|| "hello world");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn phased_watchdog_returns_correct_value() {
+        let result = with_watchdog_phases("starting", |phases| {
+            phases.set("finishing");
+            "hello world"
+        });
         assert_eq!(result, "hello world");
     }
 }

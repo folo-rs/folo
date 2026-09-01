@@ -90,8 +90,10 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
 
 * **Session store** — create, read, list, and delete session records; allocate
   ids; provide the store root. The real implementation uses the per-user
-  LocalAppData known folder, subdirectory `dure`. The root is supplied by the
-  PAL so tests never touch the user's real store.
+  LocalAppData known folder, subdirectory `dure`. Coordination-focused unit
+  tests use shared in-memory records, while the session-store tests use an
+  isolated root to exercise filesystem durability without touching the user's
+  real store.
 * **Processes** — spawn a console-detached supervisor with job breakaway;
   identify it by pid and process creation time; report whether a job object would
   end this process along with its launcher; create a job with a chosen
@@ -336,6 +338,11 @@ ownership and applies each message under the client-slot lock, so a client
 displaced while its receive was in flight cannot reach the pseudoconsole
 afterwards. Pseudoconsole input lands in the console host's buffer, which the
 host drains independently of the app, so that hold is bounded.
+
+Installing the client slot releases the first-attach lifetime gate before the
+advisory attached flag is written to the session store. The store update happens
+after the attach lock is released, so durable filesystem I/O cannot hold up
+another attach or prevent an app that already exited from delivering its status.
 
 Session teardown closes the pseudoconsole and joins the output pump before
 queueing the app's exit status, which is what orders the app's final output
