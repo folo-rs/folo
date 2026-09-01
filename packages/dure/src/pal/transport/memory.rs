@@ -123,6 +123,10 @@ impl MemoryTransport {
     /// Block until a send has reached the deterministic send gate.
     pub(crate) fn wait_for_stalled_send(&self) {
         let mut stall = self.inner.send_stall.lock().expect("send-stall lock");
+        assert!(
+            stall.enabled,
+            "the send stall must be enabled before waiting"
+        );
         while stall.waiting == 0 {
             stall = self
                 .inner

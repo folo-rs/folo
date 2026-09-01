@@ -830,6 +830,10 @@ mod tests {
 
         fn wait_for_stalled_publish(&self) {
             let mut stall = self.inner.publish_stall.lock().unwrap();
+            assert!(
+                stall.enabled,
+                "the publish stall must be enabled before waiting"
+            );
             while stall.waiting == 0 {
                 stall = self.inner.publish_stall_changed.wait(stall).unwrap();
             }
