@@ -4,6 +4,7 @@
 //! user settings.
 
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -145,28 +146,60 @@ const HERMETIC_CONFIG: &[&str] = &[
     "core.autocrlf=false",
 ];
 
-/// Empty global configuration source understood by the platform's Git executable.
-#[cfg(windows)]
-const EMPTY_GIT_CONFIG: &str = "NUL";
-/// Empty global configuration source understood by the platform's Git executable.
-#[cfg(not(windows))]
-const EMPTY_GIT_CONFIG: &str = "/dev/null";
+/// A Git command that keeps its empty global configuration file alive.
+///
+/// Git for Windows on ARM64 rejects the `NUL` device as a configuration path, so
+/// every command receives a real empty file instead of a platform-specific null
+/// device. The owning temporary directory removes the file after the command is
+/// dropped.
+pub(crate) struct HermeticGit {
+    command: Command,
+    _global_config_dir: TempDir,
+}
+
+impl HermeticGit {
+    fn new() -> Self {
+        let global_config_dir = TempDir::new().unwrap();
+        let global_config = global_config_dir.path().join("config");
+        fs::write(&global_config, "").unwrap();
+
+        let mut command = Command::new("git");
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", global_config)
+            .env_remove("GIT_CONFIG")
+            .env_remove("GIT_CONFIG_COUNT")
+            .env_remove("GIT_CONFIG_PARAMETERS");
+        command.args(HERMETIC_CONFIG);
+
+        Self {
+            command,
+            _global_config_dir: global_config_dir,
+        }
+    }
+}
+
+impl Deref for HermeticGit {
+    type Target = Command;
+
+    fn deref(&self) -> &Self::Target {
+        &self.command
+    }
+}
+
+impl DerefMut for HermeticGit {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.command
+    }
+}
 
 /// A `git` command carrying the pinned configuration and no working directory.
 ///
 /// `Fixture::git` runs inside an existing fixture; a test that creates a
 /// repository somewhere else, such as a clone, needs the same settings without
 /// one.
-pub(crate) fn hermetic_git() -> Command {
-    let mut command = Command::new("git");
-    command
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", EMPTY_GIT_CONFIG)
-        .env_remove("GIT_CONFIG")
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("GIT_CONFIG_PARAMETERS");
-    command.args(HERMETIC_CONFIG);
-    command
+pub(crate) fn hermetic_git() -> HermeticGit {
+    HermeticGit::new()
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
