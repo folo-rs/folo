@@ -58,6 +58,18 @@ Describe 'Get-SemverCheckPackage' {
         Get-SemverCheckPackage -ReportPath $path | Should -BeNullOrEmpty
     }
 
+    It 'joins an empty selected set to the empty string written as released=' {
+        $path = Join-Path $TestDrive 'all-released.json'
+        @{
+            packages = @(
+                @{ name = 'events'; status = 'released'; changed = @() }
+            )
+        } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding utf8
+        $released = @(Get-SemverCheckPackage -ReportPath $path)
+        $released.Count | Should -Be 0
+        ($released -join ' ') | Should -BeExactly ''
+    }
+
     It 'throws when the report file does not exist' {
         { Get-SemverCheckPackage -ReportPath (Join-Path $TestDrive 'missing.json') } |
             Should -Throw '*release-plan report not found*'

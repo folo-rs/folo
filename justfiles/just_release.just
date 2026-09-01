@@ -151,6 +151,7 @@ validate-versions:
         New-Item -ItemType Directory -Path $outDir | Out-Null
         cargo @(Get-ReleasePlanArgument -Command @('report', '--out-dir', $outDir))
         $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
+        # Empty join is `released=` (present, empty). semver-checks treats that as a skip.
         Set-GitHubOutput -Name released -Value ($released -join ' ')
     }
 
