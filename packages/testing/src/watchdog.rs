@@ -80,13 +80,19 @@ where
     let (phase_tx, phase_rx) = mpsc::channel();
     run_with_watchdog(
         move || test_fn(WatchdogPhases { phase_tx }),
-        move |timeout| {
-            let phase = phase_rx.try_iter().last().unwrap_or(initial_phase);
-            format!(
-                "Test exceeded {}-second timeout during phase: {phase}",
-                timeout.as_secs()
-            )
-        },
+        move |timeout| phased_timeout_message(initial_phase, &phase_rx, timeout),
+    )
+}
+
+fn phased_timeout_message(
+    initial_phase: &'static str,
+    phase_rx: &mpsc::Receiver<&'static str>,
+    timeout: Duration,
+) -> String {
+    let phase = phase_rx.try_iter().last().unwrap_or(initial_phase);
+    format!(
+        "Test exceeded {}-second timeout during phase: {phase}",
+        timeout.as_secs()
     )
 }
 
@@ -172,5 +178,25 @@ mod tests {
             "hello world"
         });
         assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn phased_timeout_reports_the_initial_phase_before_any_update() {
+        let (_phase_tx, phase_rx) = mpsc::channel();
+        let message = phased_timeout_message("initial phase", &phase_rx, Duration::ZERO);
+        assert!(message.contains("initial phase"));
+    }
+
+    #[test]
+    fn phased_timeout_reports_the_latest_phase() {
+        let (phase_tx, phase_rx) = mpsc::channel();
+        phase_tx.send("earlier phase").unwrap();
+        phase_tx.send("latest phase").unwrap();
+
+        let message = phased_timeout_message("initial phase", &phase_rx, Duration::ZERO);
+
+        assert!(message.contains("latest phase"));
+        assert!(!message.contains("earlier phase"));
+        assert!(!message.contains("initial phase"));
     }
 }
