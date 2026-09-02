@@ -3,6 +3,7 @@
 The high-level design of this repository's CI/CD workflows: the patterns they share,
 the tenets behind them, and how the pieces relate. Per-job mechanics live in inline
 YAML comments and in the `just` recipes the steps call; this document stays high-level.
+Ownership of the release-validation pipeline is in [implementation.md](implementation.md).
 
 ## Job granularity and gating
 
@@ -24,9 +25,9 @@ rebuild the workspace. The complement of this pattern is the rule that a job who
 are **not** Cargo packages — the workflow files themselves, or the standalone PowerShell
 under `scripts/` — must run unconditionally. Delta analysis reports "nothing affected" for
 such a change, so gating those jobs on it would leave the change validated by nothing.
-Version classification (`validate-versions`) is in that class: its inputs are git history
-and manifests, and gating it on the changed-package set would miss packages the pull
-request did not touch.
+Version classification (`validate-versions`) is in that class: it compares every
+publishable package's released content to that package's version-anchor. Gating it on
+delta's changed-package set would skip a package that already needed an increment.
 
 ## Platform strategy
 
@@ -129,23 +130,33 @@ Bash holdout because it bootstraps PowerShell itself.
 
 ## Required checks fan-in
 
-`main` is protected by a single required status check named `required-checks`. GitHub's
-required-checks field is a string match on the check name: it cannot express "this matrix
+Validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
+required-checks field is a string match on that name: it cannot express "this matrix
 job, but only the legs that actually ran", and it cannot see a check that was skipped
 rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
 false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay on
 Expected — Waiting for status to be reported forever if they are listed as required.
 
-The ruleset therefore requires only `required-checks`. That job is a fan-in: `if: always()`,
-`needs:` every merge-blocking job in Validation (including `validate-versions` and
-`semver-checks`), succeeds when every dependency succeeded or was skipped, and fails on
-failure, cancelled, or any other result. Advisory jobs stay off that list. `alert` stays
-off it — it files issues on a failed push to `main`, it is not a merge gate.
+A ruleset that requires merge-blocking Validation therefore lists only this fan-in. The
+job is `if: always()`, `needs:` every merge-blocking job in Validation (including
+`validate-versions` and `semver-checks`), succeeds when every dependency succeeded or was
+skipped where skipping is allowed, and fails on failure, cancelled, or any other result.
+Unconditional gates may not skip. Advisory jobs stay off that list. `alert` stays off it
+— it files issues on a failed push to `main`, it is not a merge gate.
 
-The job's GitHub check name is the literal `required-checks`, so the ruleset string is
-stable. When a new merge-blocking job is added to Validation it is added to this `needs:`
-list; it is never added to the GitHub ruleset. Matrix jobs that can skip via a job-level
-`if:` can only be made required through this fan-in.
+When a new merge-blocking job is added to Validation it is added to this `needs:` list; it
+is never added to the GitHub ruleset. Unconditional gates are also named in the fan-in's
+must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
+required through this fan-in.
+
+## Version and SemVer checks
+
+`validate-versions` classifies every publishable package against the release baseline.
+The `released` output is the consumer-visible subset of that classification: public shells
+and ungrouped public packages whose status is `needs-increment` or `pending-release`,
+including a shell whose grouped `_impl` member has released-content changes. An empty
+`released` list is a successful skip for `semver-checks`, not a workspace-wide run.
+Comparisons use `--all-features`.
 
 ## Published user guides
 
@@ -215,6 +226,9 @@ Two managed identities exist, each registered with exactly the subjects its even
 | pull request | `…:pull_request` | prod | `pr-bench-history.yml` |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
+
+`merge_group` is not a trusted subject. Queue runs skip `test-azure` and `test-azure-gh`
+rather than attempting an exchange that cannot succeed.
 
 The **prod** identity backs history collection and the PR benchmark workflow; the **test**
 identity backs the Azure-backend test jobs against a throwaway account. Both trust `main` and

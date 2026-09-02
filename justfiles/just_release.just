@@ -114,13 +114,13 @@ check-never-published:
     Write-Verbose "Checking crates.io for never-before-published crates" -Verbose
     Test-NeverPublishedCrate -Verbose
 
-# Fails when any publishable package has unreleased changes past its version anchor, or any
-# version group declares inconsistent versions. Thin wrapper over `cargo release-plan check
-# --format github`. `RELEASE_PLAN_BASE` supplies `--base` when set (CI passes the pull-request
-# base SHA or `merge_group.base_sha`); an empty value falls through to the tool default of
-# `origin/main`. When `GITHUB_OUTPUT` is set, a report is written first so the `released`
-# step output reaches `semver-checks` even if the check then fails. Classification stays in
-# the Rust tool; the output list is a filter over `report.json`.
+# Fails when any publishable package has unreleased changes past its version-anchor without
+# an increment, or any version group declares inconsistent versions. Thin wrapper over
+# `Invoke-ValidateVersions` (`cargo release-plan check --format github`). `RELEASE_PLAN_BASE`
+# supplies the release baseline when set (CI passes the pull-request base SHA or
+# `merge_group.base_sha`); an empty value falls through to the tool default. When
+# `GITHUB_OUTPUT` is set, a report is written first so the `released` step output reaches
+# `semver-checks` even if the check then fails. Classification stays in the Rust tool.
 [group('release')]
 [script]
 validate-versions:
@@ -128,40 +128,14 @@ validate-versions:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    function Get-ReleasePlanArgument {
-        param([Parameter(Mandatory)][string[]] $Command)
-        $argument = @('run', '-p', 'cargo-release-plan', '--locked', '--') + $Command
-        if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PLAN_BASE)) {
-            $argument += @('--base', $env:RELEASE_PLAN_BASE)
-        }
-        $argument
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PLAN_BASE)) {
-        Write-Verbose "Using RELEASE_PLAN_BASE=$($env:RELEASE_PLAN_BASE) as the version-anchor base (explicit; not the tool default of origin/main)" -Verbose
-    } else {
-        Write-Verbose "Using the tool default base origin/main because RELEASE_PLAN_BASE is unset" -Verbose
-    }
-
-    if ($env:GITHUB_OUTPUT) {
-        Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-        Import-Module "{{ justfile_directory() }}/scripts/release/ReleaseAutomation.psm1" -Force
-
-        $outDir = Join-Path ([System.IO.Path]::GetTempPath()) "release-plan-$(New-Guid)"
-        New-Item -ItemType Directory -Path $outDir | Out-Null
-        cargo @(Get-ReleasePlanArgument -Command @('report', '--out-dir', $outDir))
-        $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
-        # Empty join is `released=` (present, empty). semver-checks treats that as a skip.
-        Set-GitHubOutput -Name released -Value ($released -join ' ')
-    }
-
-    cargo @(Get-ReleasePlanArgument -Command @('check', '--format', 'github'))
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Invoke-ValidateVersions
 
 # Writes `report.json` (and per-package diffs) under DIR, then runs workspace-wide
 # `cargo semver-checks --all-features`, capturing its output under DIR/semver-checks.log.
 # The skill collect step uses both artifacts. `RELEASE_PLAN_BASE` is forwarded as `--base`
-# when set, matching `validate-versions`. cargo-semver-checks findings (a non-zero exit
-# that names an increment floor) are captured rather than failing the recipe; a canary
+# when set, matching `validate-versions`. cargo-semver-checks findings (exit 100) are
+# captured as an increment floor; other nonzero exits fail the recipe. A canary
 # (`just verify-semver-checks`) already proved the tool can run.
 [group('release')]
 [script]
@@ -170,19 +144,16 @@ release-report DIR:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+
     $dir = "{{ DIR }}"
     if ([string]::IsNullOrWhiteSpace($dir)) {
         throw "release-report requires an output directory."
     }
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-    $reportArgs = @('run', '-p', 'cargo-release-plan', '--locked', '--', 'report', '--out-dir', $dir)
-    if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PLAN_BASE)) {
-        $reportArgs += @('--base', $env:RELEASE_PLAN_BASE)
-        Write-Verbose "Using RELEASE_PLAN_BASE=$($env:RELEASE_PLAN_BASE) as the version-anchor base (explicit; not the tool default of origin/main)" -Verbose
-    } else {
-        Write-Verbose "Using the tool default base origin/main because RELEASE_PLAN_BASE is unset" -Verbose
-    }
+    Write-ReleasePlanBaseVerbose
+    $reportArgs = Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $dir)
     cargo @reportArgs
 
     $log = Join-Path $dir 'semver-checks.log'
@@ -191,7 +162,7 @@ release-report DIR:
     cargo semver-checks --workspace --all-features 2>&1 | Tee-Object -FilePath $log
     $semverExit = $LASTEXITCODE
     $PSNativeCommandUseErrorActionPreference = $true
-    Write-Host "cargo semver-checks exited $semverExit; log written to $log"
+    Complete-SemverChecksCollect -ExitCode $semverExit -LogPath $log
 
 # Scoped `cargo semver-checks --all-features` for the packages this pull request releases.
 # Empty `package` means nothing to check (no consumer-visible releasing set) and is a

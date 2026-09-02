@@ -148,10 +148,9 @@ jobs:
       - name: Validate workflows
         run: just validate-workflows
 
-  # Fails when a publishable package has unreleased changes past its version anchor.
-  # Inputs are git history and manifests, not Cargo packages, so this runs unconditionally
-  # (not gated on delta / skip_all) — the point is to catch packages the pull request did
-  # not touch. Failure text names the increment-versions skill. Expected to stay red until
+  # Workspace-wide version classification: every publishable package's released content
+  # versus its version-anchor. Delta cannot narrow that set, so this job is not gated on
+  # skip_all. Failure text names the increment-versions skill. Expected to stay red until
   # include allow-lists and reconciliation increments land; do not continue-on-error.
   validate-versions:
     runs-on: ubuntu-latest
@@ -173,12 +172,14 @@ jobs:
         run: just validate-versions
         shell: pwsh
 
-  # cargo-semver-checks scoped to packages this pull request releases, minus `_impl`
-  # crates (no consumer-visible surface) and group members with no change of their own.
-  # `--all-features` because gated API is still public API. Parallel with the rest of
-  # validation; does not gate other jobs. `if: always()` so a failing version check still
-  # surfaces an insufficient increment in the same round trip. The canary runs first so a
-  # broken cargo-semver-checks cannot be read as "no breaking changes".
+  # cargo-semver-checks scoped to consumer-visible packages this change releases: public
+  # shells (and ungrouped public packages) with `needs-increment` or `pending-release`
+  # status, including a shell whose grouped `_impl` member has released-content changes.
+  # `--all-features` because gated API is still public API. An empty `released` output is
+  # a successful skip. Parallel with the rest of validation; does not gate other jobs.
+  # `if: always()` so a failing version check still surfaces an insufficient increment in
+  # the same round trip. The canary runs first so a broken cargo-semver-checks cannot be
+  # read as "no breaking changes".
   semver-checks:
     needs: [validate-versions]
     if: always()
@@ -840,10 +841,12 @@ jobs:
   # fresh blob container and deletes it when it finishes (even on panic); the final
   # `if: always()` sweep is a backstop for a container a crashed run might leave.
   #
-  # Gated two ways so it only runs when it can succeed:
+  # Gated so it only runs when federation can succeed:
   #   * package-gated to cargo-bench-history (same gate as test-azurite);
   #   * same-repo only - a fork PR cannot mint an OIDC token for our tenant, so it
-  #     would fail federation; the condition lets fork PRs skip cleanly instead.
+  #     would fail federation; the condition lets fork PRs skip cleanly instead;
+  #   * not merge_group - the test identity's federated subjects are pull_request and
+  #     the main branch ref, so a queue OIDC token cannot exchange.
   # The Azure identifiers it needs are committed (non-secret) in constants.env, the
   # same source `just test-azure` reads locally, so local and CI target the same
   # account. The `just test-azure` recipe sets ENABLE_AZURE=1, which is what actually
@@ -864,6 +867,7 @@ jobs:
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+      && github.event_name != 'merge_group'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed
@@ -933,13 +937,16 @@ jobs:
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+      && github.event_name != 'merge_group'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # `id-token: write` injects the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN values that the
     # tool itself reads to mint OIDC assertions on demand (the prod-critical path), and
     # the test identity's `pull_request` federated credential lets same-repo PR runs
     # federate in. Fork PRs cannot get an OIDC token for our tenant, hence the same-repo
-    # gate above. `contents: read` is the minimum the checkout needs.
+    # gate above. merge_group is skipped for the same reason as test-azure: the
+    # federated subjects do not cover queue refs. `contents: read` is the minimum the
+    # checkout needs.
     permissions:
       id-token: write
       contents: read
@@ -1035,12 +1042,12 @@ jobs:
           run_command: send-notifications
           fail_ci_if_error: true
 
-  # Fan-in whose GitHub check name is the literal `required-checks`. The ruleset requires
-  # only this name: GitHub cannot express "this matrix job, but only the legs that ran", and
-  # a job-level `if:` that is false never posts the matrix check names. Succeeds when every
-  # merge-blocking dependency succeeded or was skipped; fails on failure, cancelled, or any
-  # other result. Advisory jobs (`coverage-notify`) and `alert` stay off this list. When
-  # adding a merge-blocking job, add it here — never to the GitHub ruleset.
+  # Fan-in for merge-blocking Validation jobs. GitHub's required-checks field is a string
+  # match on this job's name, so matrix legs that never ran cannot be listed there.
+  # Succeeds when every dependency succeeded, or skipped if that job is allowed to skip;
+  # fails on failure, cancelled, or any other result. Advisory jobs (`coverage-notify`)
+  # and `alert` stay off this list. When adding a merge-blocking job, add it here - never
+  # to the GitHub ruleset. Unconditional gates also go on MUST_SUCCEED_JOBS below.
   required-checks:
     name: required-checks
     if: always()
@@ -1087,13 +1094,16 @@ jobs:
         shell: pwsh
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          MUST_SUCCEED_JOBS: delta test-scripts validate-workflows validate-versions semver-checks
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
 
           Import-Module ./scripts/build/RequiredChecks.psm1 -Force
-          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON
+          $mustSucceed = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $mustSucceed
+
 
   # File a GitHub issue whenever any job above fails on a push to `main`, so a push-to-main
   # failure is tracked rather than lost. PR runs surface a failure as the red check and need

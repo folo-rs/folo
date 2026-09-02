@@ -5,16 +5,24 @@ description: Propose and apply crate version increments for a pull request that 
 
 # Scope
 
-A package is released by incrementing its version. A pull request that changes a package's
-released content must also increment that package's version. This skill proposes one
-increment *level* per version group and per ungrouped package. The author may raise a
-level above the `cargo-semver-checks` floor; they may not lower one.
+An **increment** raises a package's declared version so **unreleased changes**
+become **pending release**. Publishing those versions is the separate release
+process. This skill only chooses and applies increment *levels*.
 
-Judgement lives here. Mechanics live in `just` recipes. The only question this skill asks
-is the increment *level*. Group expansion, `=`-pin rewrites, the lockfile refresh, and
-`just verify-lockfile` have no skip answer: skipping a group member diverges the group,
-skipping a pin leaves a stale `=` requirement, and skipping the lockfile fails `--locked`
-builds.
+This skill is the recovery procedure named by the `validate-versions` check. It
+proposes one increment *level* per **version group** and per ungrouped package.
+The author may raise a level above the `cargo-semver-checks` floor; they may not
+lower one.
+
+`docs/git-workflow.md` still forbids committing crate version bumps on feature
+branches. Do not run Stage 5 unless the caller explicitly asked to increment
+versions on this branch.
+
+Judgement lives here. Mechanics live in `just` recipes. The only question this
+skill asks is the increment *level*. Group expansion, `=`-pin rewrites, the
+lockfile refresh, and `just verify-lockfile` have no skip answer: skipping a
+group member diverges the group, skipping a pin leaves a stale `=` requirement,
+and skipping the lockfile fails `--locked` builds.
 
 Do not commit the plan file. The version check verifies manifest state, not intent.
 
@@ -48,7 +56,8 @@ the recipe cannot confirm status, stop and ask the caller to verify rather than 
 
 # Stage 2: Collect
 
-Gather the classification report and the `cargo-semver-checks` floor.
+Gather the classification report and the `cargo-semver-checks` floor. That evidence
+describes the released-content snapshot it analyzed.
 
 > just release-report "{{OUT_DIR}}"
 
@@ -59,12 +68,12 @@ Placeholders to replace:
 | `OUT_DIR` | A working-tree directory that is **not** committed (for example a path under the runner temp directory, or `.release-plan/` which must stay untracked). Receives `report.json`, `diffs/<package>.patch`, and `semver-checks.log`. |
 
 If `just release-report` fails before writing `report.json`, stop and report the error.
-`cargo-semver-checks` findings are captured in `semver-checks.log` even when that tool
-exits non-zero; that non-zero exit is the floor, not a broken tool (the canary already
-ran). Continue to propose.
+`cargo-semver-checks` uses exit 0 for a clean comparison and 100 when it found an
+increment floor; that non-zero exit is the floor, not a broken tool (the canary already
+ran). Any other exit is a tool failure: stop. Continue to propose only after a 0 or 100.
 
-Optional: set `RELEASE_PLAN_BASE` to the pull request base SHA when not comparing against
-`origin/main`. Leave it unset for a normal local run.
+Optional: set `RELEASE_PLAN_BASE` to the pull request's release baseline SHA when not
+comparing against the tool default. Leave it unset for a normal local run.
 
 Read `{{OUT_DIR}}/report.json` for per-package status, diffs, groups, dependencies, and
 dependents. Cite diffs by path (`{{OUT_DIR}}/diffs/<package>.patch`); do not paste them.
@@ -75,10 +84,11 @@ If a never-published crate from Stage 1 would enter the increment set, **stop**.
 fold it into `apply`.
 
 Walk the workspace dependency graph in topological order (dependents after dependencies).
-Per package that is `unreleased-changes` or that a decided increment will drag in:
+Per package whose status is `needs-increment`, or that a decided increment will drag in:
 
 1. Take the `cargo-semver-checks` floor from `semver-checks.log`. If the log does not name
-   a required bump for that package, the floor is none (a patch is still allowed).
+   a required bump for that package, the floor is none (a patch is still allowed). For a
+   public shell, the floor includes changes re-exported from a grouped `_impl` member.
 2. Read the package's diff and decide a level. Raise above the floor when the change is an
    undetectable behavioural break, a meaningful feature addition, or needed to keep a
    version group aligned. Never lower below the floor.
@@ -89,6 +99,9 @@ Per package that is `unreleased-changes` or that a decided increment will drag i
 5. Propagate `=` pins: incrementing an `=`-pinned dependency is itself a released-content
    change in the dependent and requires its own increment. Re-check that expansion did not
    create new work.
+
+A `pending-release` package is already past its version-anchor. Raise it further only when
+the `cargo-semver-checks` floor exceeds the already-applied increment.
 
 The plan schema (uncommitted) is:
 
@@ -118,7 +131,8 @@ Ask the caller to approve or adjust levels. Do not apply until approved.
 
 # Stage 5: Apply
 
-On approval, write the plan JSON to a working-tree path that will not be committed, then:
+On approval, and only when the caller explicitly asked to increment versions on this
+branch, write the plan JSON to a working-tree path that will not be committed, then:
 
 > just apply-release-plan "{{PLAN}}"
 
@@ -147,8 +161,8 @@ Placeholders to replace: none.
 If `just validate-versions` reports any errors, the plan missed a package; return to Stage 3.
 If it completes successfully, continue.
 
-Then re-run `cargo-semver-checks` scoped to the packages whose versions just moved (the
-same set `validate-versions` emits as `released` in CI):
+Then re-run `cargo-semver-checks` scoped to the consumer-visible packages whose versions
+just moved (the same set `validate-versions` emits as `released` in CI):
 
 > just package="{{PACKAGES}}" semver-checks
 
@@ -156,22 +170,25 @@ Placeholders to replace:
 
 | Placeholder | Description |
 |-------------|-------------|
-| `PACKAGES` | Space-separated package names that the plan incremented and that have a consumer-visible API (omit `*_impl` crates). Empty means skip. |
+| `PACKAGES` | Space-separated package names that the plan incremented and that have a consumer-visible API (omit `*_impl` crates; include the public shell when a grouped `_impl` member changed). Empty means skip. |
 
 If the command reports any errors, stop and report them. If it completes successfully,
 continue.
 
-Further changes may follow the increment without invalidating it.
+If later edits change published content, return to Stage 2 and re-decide before treating
+the increment as final. Edits outside published artifacts do not invalidate the snapshot.
 
 Do not commit the plan file. Do commit the manifest, pin, and `Cargo.lock` edits.
 
 Write a short summary of the decided levels (and where they exceeded the floor) into the
 pull request description. Prefix any GitHub comment or description edit with
-`[Copilot speaking]`.
+`[Copilot speaking]`. Keep candidate lists, floors, and stop diagnostics in the collect
+directory or a snapshot-labelled comment, not in the pull request description.
 
 # Diagnostics
 
-Include in the summary: which packages or groups were considered, the
+Retain with the snapshot: which packages or groups were considered, the
 `cargo-semver-checks` floor versus the chosen level for each row, any group expansion or
-`=`-pin propagation, and whether propose stopped on a never-published crate. If the
-summary is posted as a GitHub comment, put those diagnostics in a collapsible section.
+`=`-pin propagation, and whether propose stopped on a never-published crate. If that
+evidence is posted as a GitHub comment, put it in a collapsible section labelled as
+belonging to that collect run.

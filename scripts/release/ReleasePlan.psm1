@@ -1,21 +1,57 @@
 #requires -Version 7
 
-# Helpers for the `just validate-versions` / `just semver-checks` recipes.
+# Helpers for the `just validate-versions` / `just release-report` / `just semver-checks`
+# recipes.
 #
-# Package classification is `cargo release-plan`'s job; this module only reads `report.json`
-# and selects the subset `cargo-semver-checks` should run on in CI. That subset is the
-# packages this pull request releases (status `releasing` or `unreleased-changes`), minus
-# `doc(hidden)` `_impl` crates, which have no consumer-visible surface, and minus packages
-# with no own released-content change (group members dragged along with nothing of their
-# own). Pure so the filter is Pester-tested without spawning the Rust tool.
+# Package classification is `cargo release-plan`'s job; this module orchestrates the CI
+# wrappers and reads `report.json` to select the subset `cargo-semver-checks` should run
+# on. That subset is the consumer-visible packages this change releases: public shells
+# (and ungrouped public packages) whose status is `needs-increment` or `pending-release`,
+# including a shell whose grouped `_impl` member has released-content changes.
+# `doc(hidden)` `_impl` crates are not themselves comparison targets. Pure filter logic
+# is Pester-tested without spawning the Rust tool. See
+# `.github/workflows/implementation.md`.
 
 Set-StrictMode -Version Latest
 
+function Get-ReleasePlanCargoArgument {
+    # Argument vector for `cargo run -p cargo-release-plan --locked -- ...`. Forwards
+    # `$Base` (CI's `RELEASE_PLAN_BASE`) as `--base` when set; otherwise the tool
+    # chooses the release baseline.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)][string[]] $Command,
+        [string] $Base = $env:RELEASE_PLAN_BASE
+    )
+
+    $argument = @('run', '-p', 'cargo-release-plan', '--locked', '--') + $Command
+    if (-not [string]::IsNullOrWhiteSpace($Base)) {
+        $argument += @('--base', $Base)
+    }
+    return $argument
+}
+
+function Write-ReleasePlanBaseVerbose {
+    # Explanatory note for the release baseline this invocation uses.
+    [CmdletBinding()]
+    param(
+        [string] $Base = $env:RELEASE_PLAN_BASE
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Base)) {
+        Write-Verbose "Using RELEASE_PLAN_BASE=$Base as the release baseline (explicit; not the tool default)" -Verbose
+    } else {
+        Write-Verbose 'Using the tool default release baseline because RELEASE_PLAN_BASE is unset' -Verbose
+    }
+}
+
 function Get-SemverCheckPackage {
     # Returns package names from a `cargo release-plan report` JSON file that the CI
-    # `semver-checks` job should pass to `cargo semver-checks --all-features`. Order follows
-    # the report. Unknown or empty reports yield an empty list rather than throwing, so a
-    # pull request that releases nothing is a skip, not a broken job.
+    # `semver-checks` job should pass to `cargo semver-checks --all-features`. Order
+    # follows first selection. A well-formed report with an empty selected set is a
+    # skip, not an error. A missing schema or packages array is malformed and fails
+    # closed so a schema drift cannot be read as "nothing to check".
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
@@ -27,41 +63,165 @@ function Get-SemverCheckPackage {
     }
 
     $json = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
-    if ($null -eq $json) { return @() }
-    if (-not ($json.PSObject.Properties.Name -contains 'packages')) { return @() }
-    if ($null -eq $json.packages) { return @() }
+    if ($null -eq $json) {
+        throw "release-plan report at '$ReportPath' is empty or not JSON."
+    }
 
-    $selected = foreach ($package in @($json.packages)) {
-        if ($null -eq $package) { continue }
+    $field = @($json.PSObject.Properties.Name)
+    if ($field -notcontains 'schema_version' -or $null -eq $json.schema_version) {
+        throw "release-plan report at '$ReportPath' is missing schema_version."
+    }
+    if ($field -notcontains 'packages' -or $null -eq $json.packages) {
+        throw "release-plan report at '$ReportPath' is missing packages."
+    }
+
+    $byName = [ordered]@{}
+    foreach ($entry in @($json.packages)) {
+        if ($null -eq $entry) { continue }
+        $name = ''
+        if ($entry.PSObject.Properties.Name -contains 'name' -and $null -ne $entry.name) {
+            $name = [string] $entry.name
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $byName[$name] = $entry
+    }
+
+    $groupMember = @{}
+    if ($field -contains 'groups' -and $null -ne $json.groups) {
+        foreach ($group in $json.groups.PSObject.Properties) {
+            $member = @()
+            if ($null -ne $group.Value -and
+                ($group.Value.PSObject.Properties.Name -contains 'members') -and
+                $null -ne $group.Value.members) {
+                $member = @($group.Value.members | ForEach-Object { [string] $_ })
+            }
+            $groupMember[$group.Name] = $member
+        }
+    }
+
+    $selected = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+
+    foreach ($entry in @($json.packages)) {
+        if ($null -eq $entry) { continue }
 
         $name = ''
-        if ($package.PSObject.Properties.Name -contains 'name' -and $null -ne $package.name) {
-            $name = [string] $package.name
+        if ($entry.PSObject.Properties.Name -contains 'name' -and $null -ne $entry.name) {
+            $name = [string] $entry.name
         }
         if ([string]::IsNullOrWhiteSpace($name)) { continue }
 
         $status = ''
-        if ($package.PSObject.Properties.Name -contains 'status' -and $null -ne $package.status) {
-            $status = [string] $package.status
+        if ($entry.PSObject.Properties.Name -contains 'status' -and $null -ne $entry.status) {
+            $status = [string] $entry.status
         }
-        if ($status -ne 'unreleased-changes' -and $status -ne 'releasing') { continue }
+        $releasing = $status -eq 'needs-increment' -or $status -eq 'pending-release'
+        if (-not $releasing) { continue }
 
-        # `_impl` crates are `doc(hidden)` and have no consumer-visible surface, so rustdoc
-        # for cargo-semver-checks would not inform the increment floor.
-        if ($name.EndsWith('_impl', [System.StringComparison]::Ordinal)) { continue }
-
-        # Group members dragged along with no change of their own have an empty `changed`
-        # list (their status stays `released` until a version bump, and after a bump a
-        # brand-new package also has none). Either way there is no API surface to compare.
         $changedCount = 0
-        if ($package.PSObject.Properties.Name -contains 'changed' -and $null -ne $package.changed) {
-            $changedCount = @($package.changed).Count
+        if ($entry.PSObject.Properties.Name -contains 'changed' -and $null -ne $entry.changed) {
+            $changedCount = @($entry.changed).Count
         }
-        if ($changedCount -eq 0) { continue }
+        $hasChange = $changedCount -gt 0
+        $isImpl = $name.EndsWith('_impl', [System.StringComparison]::Ordinal)
 
-        $name
+        if (-not $isImpl -and $hasChange) {
+            if ($seen.Add($name)) { $selected.Add($name) }
+            continue
+        }
+
+        if (-not ($isImpl -and $hasChange)) { continue }
+
+        $shell = [System.Collections.Generic.List[string]]::new()
+        $groupName = ''
+        if ($entry.PSObject.Properties.Name -contains 'group' -and $null -ne $entry.group) {
+            $groupName = [string] $entry.group
+        }
+        if (-not [string]::IsNullOrWhiteSpace($groupName) -and $groupMember.ContainsKey($groupName)) {
+            foreach ($memberName in @($groupMember[$groupName])) {
+                if (-not $memberName.EndsWith('_impl', [System.StringComparison]::Ordinal)) {
+                    $shell.Add($memberName)
+                }
+            }
+        }
+        if ($shell.Count -eq 0) {
+            $stripped = $name.Substring(0, $name.Length - '_impl'.Length)
+            if (-not [string]::IsNullOrWhiteSpace($stripped)) {
+                $shell.Add($stripped)
+            }
+        }
+
+        foreach ($shellName in $shell) {
+            if ($byName.Contains($shellName) -and $seen.Add($shellName)) {
+                $selected.Add($shellName)
+            }
+        }
     }
+
     return @($selected)
 }
 
-Export-ModuleMember -Function Get-SemverCheckPackage
+function Complete-SemverChecksCollect {
+    # `just release-report` captures `cargo semver-checks` output as an increment floor.
+    # Exit 0 is a clean comparison; 100 is the documented finding-exit (a floor, not a
+    # broken tool). Any other code is a tool failure and must not be read as "no floor".
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int] $ExitCode,
+        [Parameter(Mandatory)][string] $LogPath
+    )
+
+    if ($ExitCode -eq 0 -or $ExitCode -eq 100) {
+        Write-Host "cargo-semver-checks exited $ExitCode; log written to $LogPath"
+        return
+    }
+
+    throw "cargo-semver-checks failed with exit $ExitCode (log: $LogPath)."
+}
+
+function Invoke-ValidateVersions {
+    # CI orchestration for `just validate-versions`. When a GitHub output file is
+    # present, writes a report from the same inputs the subsequent check uses, emits
+    # the `released` list for `semver-checks`, then runs `check --format github`.
+    # `report` and `check` each classify; they share one implementation in
+    # cargo-release-plan. Combining them would be a CLI change on that tool.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
+        Justification = 'The function is the just validate-versions recipe body; the job id is plural.')]
+    [CmdletBinding()]
+    param(
+        [string] $GitHubOutputPath = $env:GITHUB_OUTPUT,
+        [string] $Base = $env:RELEASE_PLAN_BASE,
+        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
+    )
+
+    Write-ReleasePlanBaseVerbose -Base $Base
+
+    if (-not [string]::IsNullOrWhiteSpace($GitHubOutputPath)) {
+        Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
+
+        $outDir = Join-Path ([System.IO.Path]::GetTempPath()) "release-plan-$(New-Guid)"
+        New-Item -ItemType Directory -Path $outDir | Out-Null
+        $reportArgument = Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $outDir) -Base $Base
+        & $Cargo $reportArgument
+
+        $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
+        # Empty join is `released=` (present, empty). semver-checks treats that as a skip.
+        $previousOutput = $env:GITHUB_OUTPUT
+        $env:GITHUB_OUTPUT = $GitHubOutputPath
+        try {
+            Set-GitHubOutput -Name released -Value ($released -join ' ')
+        } finally {
+            $env:GITHUB_OUTPUT = $previousOutput
+        }
+    }
+
+    $checkArgument = Get-ReleasePlanCargoArgument -Command @('check', '--format', 'github') -Base $Base
+    & $Cargo $checkArgument
+}
+
+Export-ModuleMember -Function `
+    Get-ReleasePlanCargoArgument, `
+    Write-ReleasePlanBaseVerbose, `
+    Get-SemverCheckPackage, `
+    Complete-SemverChecksCollect, `
+    Invoke-ValidateVersions
