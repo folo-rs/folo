@@ -39,9 +39,9 @@ so a client never reports a startup failure while leaving a live session behind.
 The startup channel stays open past that acknowledgement, as the supervisor's
 signal that `dure run` still intends to attach. An app that exits immediately
 would otherwise be torn down before the client finishes attaching, losing its
-output and exit status to the race. So once the app has exited, the supervisor
-holds the session open — listener included — until either a client has attached
-or the initiator has dropped the channel.
+output and exit status to the race. The supervisor's **first-attach lifetime
+gate** therefore keeps the exited app's session and listener available until
+either a client has attached or the initiator has dropped the channel.
 
 ## Platform gate
 
@@ -339,14 +339,14 @@ displaced while its receive was in flight cannot reach the pseudoconsole
 afterwards. Pseudoconsole input lands in the console host's buffer, which the
 host drains independently of the app, so that hold is bounded.
 
-Installing the client slot releases the first-attach lifetime gate before the
-advisory attached flag is written to the session store. The store update happens
-after both ownership locks are released, so durable filesystem I/O cannot hold
-up another attach or prevent an app that already exited from delivering its
-status. Each client-slot change assigns a generation to its advisory update.
-Store writes are serialized and discard generations older than the latest
-ownership state, so an update delayed by filesystem I/O cannot overwrite a newer
-attach or detach.
+Installing the client slot and signaling the first-attach lifetime gate let the
+supervisor finish delivering an already-exited app's output and status before
+the advisory attached flag is written to the session store. The store update
+happens after both ownership locks are released, so durable filesystem I/O
+cannot block that supervisor progress or another attach. Each client-slot change
+assigns a generation to its advisory update. Store writes are serialized and
+discard generations older than the latest ownership state, so an update delayed
+by filesystem I/O cannot overwrite a newer attach or detach.
 
 Session teardown closes the pseudoconsole and joins the output pump before
 queueing the app's exit status, which is what orders the app's final output

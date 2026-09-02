@@ -267,7 +267,9 @@ struct Shared<T: Transport, C> {
     /// client. Taken under the client slot, which is what orders it ahead of
     /// the output that follows the attach.
     preamble: Mutex<Option<Vec<u8>>>,
-    /// Gate that holds the session open until somebody has come for it.
+    /// The supervisor's first-attach lifetime gate.
+    ///
+    /// Holds an exited app's session open until somebody has come for it.
     first_attach: Mutex<FirstAttach>,
     first_attach_changed: Condvar,
     stopping: AtomicBool,
@@ -288,7 +290,7 @@ impl<T: Transport> Clone for Client<T> {
     }
 }
 
-/// Whether the session has been claimed, and whether anyone is still coming.
+/// State of the supervisor's first-attach lifetime gate.
 ///
 /// An app that exits immediately would otherwise be torn down before `dure run`
 /// finishes attaching, losing both its output and its exit status. The
@@ -677,9 +679,10 @@ where
                 let generation = shared.next_attached_generation();
                 (previous, generation)
             };
-            // The client owns the slot now, so an app that already exited can
-            // finish serving it. The advisory store update below may perform
-            // durable I/O and must not delay that lifetime signal.
+            // The client owns the slot now. Signaling the supervisor's
+            // first-attach lifetime gate lets it finish delivering an
+            // already-exited app's output and status before the advisory store
+            // update below can encounter durable I/O.
             shared.note_attached();
             if let Some(old) = previous {
                 // Queued rather than written here, so a client that stopped
@@ -806,7 +809,7 @@ mod tests {
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
 
-    use testing::{WatchdogPhases, with_watchdog_phases};
+    use testing::{WatchdogPhaseReporter, with_watchdog_phases};
 
     use super::*;
     use crate::durability::Durability;
@@ -820,6 +823,9 @@ mod tests {
     /// Arbitrary nonzero status the mock app exits with, so a test can tell a
     /// forwarded status from a defaulted one.
     const SAMPLE_APP_EXIT: i32 = 7;
+
+    /// Ordinary valid geometry for tests where resize behavior is out of scope.
+    const ORDINARY_ATTACH: Message = Message::Attach { cols: 80, rows: 24 };
 
     /// Shared stateful session store for supervisor unit tests.
     ///
@@ -898,18 +904,19 @@ mod tests {
 
     impl SessionStore for MemorySessionStore {
         fn root(&self) -> PathBuf {
-            PathBuf::new()
+            // Supervisor tests receive prepared paths and never query store path support.
+            panic!("supervisor tests do not query the session store root")
         }
 
         fn allocate_id(&self, owner: &ProcessIdentity) -> Result<SessionId, PalError> {
             let mut records = self.inner.records.lock().unwrap();
             let mut id = SessionId::MIN;
             while records.contains_key(&id) {
-                let raw = id
+                id = id
                     .get()
                     .checked_add(1)
+                    .and_then(SessionId::from_u32)
                     .ok_or_else(|| PalError::new(PalErrorKind::Other))?;
-                id = SessionId::from_u32(raw).ok_or_else(|| PalError::new(PalErrorKind::Other))?;
             }
             records.insert(id, StoredSession::Reserved { owner: *owner });
             Ok(id)
@@ -970,12 +977,14 @@ mod tests {
             Ok(())
         }
 
-        fn canonicalize(&self, path: &Path) -> Result<PathBuf, PalError> {
-            Ok(path.to_path_buf())
+        fn canonicalize(&self, _path: &Path) -> Result<PathBuf, PalError> {
+            // Supervisor tests receive prepared paths and never query store path support.
+            panic!("supervisor tests do not canonicalize paths through the session store")
         }
 
         fn current_dir(&self) -> Result<PathBuf, PalError> {
-            Ok(PathBuf::new())
+            // Supervisor tests receive prepared paths and never query store path support.
+            panic!("supervisor tests do not query the current directory")
         }
     }
 
@@ -983,11 +992,11 @@ mod tests {
     fn commit_startup(
         transport: &MemoryTransport,
         listener: ListenerId,
-        phases: &WatchdogPhases,
+        phase_reporter: &WatchdogPhaseReporter,
     ) -> (ConnId, SessionId, Durability) {
-        phases.set("waiting for the supervisor startup connection");
+        phase_reporter.report("waiting for the supervisor startup connection");
         let conn = transport.accept(listener).unwrap();
-        phases.set("waiting for the supervisor startup response");
+        phase_reporter.report("waiting for the supervisor startup response");
         let Message::StartupOk {
             session_id,
             durability,
@@ -1060,7 +1069,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn steal_displaces_first_client() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1085,36 +1094,26 @@ mod tests {
             });
 
             let (startup_conn, session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
             transport.disconnect(startup_conn);
 
             let pipe = transport.pipe_name("nonce");
             let first = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
-            transport
-                .send(first, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            phases.set("waiting for the first attach acknowledgement");
+            transport.send(first, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the first attach acknowledgement");
             assert!(matches!(
                 transport.recv(first).unwrap(),
                 Message::Attached { session_id: id } if id == session_id
             ));
 
             let second = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
-            transport
-                .send(
-                    second,
-                    &Message::Attach {
-                        cols: 100,
-                        rows: 30,
-                    },
-                )
-                .unwrap();
-            phases.set("waiting for the second attach acknowledgement");
+            transport.send(second, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the second attach acknowledgement");
             assert!(matches!(
                 transport.recv(second).unwrap(),
                 Message::Attached { .. }
             ));
-            phases.set("waiting for the displacement notice");
+            phase_reporter.report("waiting for the displacement notice");
             assert!(matches!(transport.recv(first).unwrap(), Message::Displaced));
 
             {
@@ -1122,7 +1121,7 @@ mod tests {
                 *lock.lock().expect("exit lock") = true;
                 cvar.notify_all();
             }
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             assert!(store.list().unwrap().is_empty());
         });
@@ -1132,7 +1131,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn final_output_arrives_before_the_exit_status() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1157,16 +1156,14 @@ mod tests {
             });
 
             let (startup_conn, _session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
             transport.disconnect(startup_conn);
 
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            phases.set("waiting for the attach acknowledgement");
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
@@ -1187,19 +1184,19 @@ mod tests {
                 cvar.notify_all();
             }
 
-            phases.set("waiting for final app output");
+            phase_reporter.report("waiting for final app output");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::Output(b"bye".to_vec())
             );
-            phases.set("waiting for the app exit status");
+            phase_reporter.report("waiting for the app exit status");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::AppExited {
                     status: SAMPLE_APP_EXIT
                 }
             );
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
         });
     }
@@ -1208,7 +1205,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn an_app_that_exits_before_anyone_attaches_still_reports_its_status() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1233,29 +1230,27 @@ mod tests {
             });
 
             let (startup_conn, _session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
 
             // The startup connection stays open, which is what holds the
             // session up for the attach that `dure run` is about to make.
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            phases.set("waiting for the attach acknowledgement");
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
             ));
-            phases.set("waiting for the app exit status");
+            phase_reporter.report("waiting for the app exit status");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::AppExited {
                     status: SAMPLE_APP_EXIT
                 }
             );
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             transport.disconnect(startup_conn);
         });
@@ -1265,7 +1260,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_stalled_attached_flag_does_not_delay_the_exit_status() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1275,6 +1270,9 @@ mod tests {
             let processes =
                 mock_processes_with_close_job(exit, Durability::Durable, AppWait::Reports, {
                     let store = store.clone();
+                    // Hold teardown after the first-attach lifetime gate opens
+                    // but before it claims the client slot and invalidates the
+                    // record, so the advisory write reaches its injected stall.
                     move |_| store.wait_for_stalled_publish()
                 });
 
@@ -1296,27 +1294,25 @@ mod tests {
             });
 
             let (startup_conn, _session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
             store.stall_publishes();
 
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            phases.set("waiting for the attach acknowledgement");
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
             ));
 
-            phases.set("waiting for the attached-flag publication to stall");
+            phase_reporter.report("waiting for the attached-flag publication to stall");
             store.wait_for_stalled_publish();
             // Reaching the exit status proves both that the first-attach signal
             // preceded the advisory write and that teardown acquired the attach
             // lock while the write remained stalled.
-            phases.set("waiting for the app exit status");
+            phase_reporter.report("waiting for the app exit status");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::AppExited {
@@ -1326,7 +1322,7 @@ mod tests {
 
             store.resume_publishes();
             transport.disconnect(client);
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             transport.disconnect(startup_conn);
             assert!(store.list().unwrap().is_empty());
@@ -1337,7 +1333,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_session_nobody_comes_for_ends_when_its_initiator_gives_up() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1362,10 +1358,10 @@ mod tests {
             });
 
             let (startup_conn, _session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
             // Nobody will ever attach, so the gate must open on this instead.
             transport.disconnect(startup_conn);
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             assert!(store.list().unwrap().is_empty());
         });
@@ -1379,7 +1375,7 @@ mod tests {
     }
 
     fn assert_rejected_startup_rolls_back(rejection: RejectedStartup) {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1403,9 +1399,9 @@ mod tests {
                 }
             });
 
-            phases.set("waiting for the supervisor startup connection");
+            phase_reporter.report("waiting for the supervisor startup connection");
             let startup_conn = transport.accept(startup).unwrap();
-            phases.set("waiting for the supervisor startup response");
+            phase_reporter.report("waiting for the supervisor startup response");
             assert!(matches!(
                 transport.recv(startup_conn).unwrap(),
                 Message::StartupOk { .. }
@@ -1423,7 +1419,7 @@ mod tests {
                 RejectedStartup::Timeout => transport.timeout_next_recv(),
             }
 
-            phases.set("waiting for startup rollback");
+            phase_reporter.report("waiting for startup rollback");
             let error = supervisor.join().unwrap().unwrap_err();
             assert!(error.find_source::<StartupFailedError>().is_some());
             assert!(store.list().unwrap().is_empty());
@@ -1458,7 +1454,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn failure_to_send_startup_ok_rolls_back() {
-        with_watchdog_phases("running the rejected startup", |_phases| {
+        with_watchdog_phases("running the rejected startup", |_phase_reporter| {
             let transport = MemoryTransport::new();
             transport.fail_next_send();
             let pty = MemoryPseudoconsole::new();
@@ -1485,7 +1481,7 @@ mod tests {
 
     #[test]
     fn init_failure_sends_startup_err_and_closes_job() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1518,11 +1514,11 @@ mod tests {
                 }
             });
 
-            phases.set("waiting for the supervisor startup connection");
+            phase_reporter.report("waiting for the supervisor startup connection");
             let startup_conn = transport.accept(startup).unwrap();
-            phases.set("waiting for the startup error");
+            phase_reporter.report("waiting for the startup error");
             assert_eq!(transport.recv(startup_conn).unwrap(), Message::StartupErr);
-            phases.set("waiting for startup rollback");
+            phase_reporter.report("waiting for startup rollback");
             supervisor.join().unwrap().unwrap_err();
             assert!(store.list().unwrap().is_empty());
         });
@@ -1532,7 +1528,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_cannot_outlive_its_launcher_says_so_on_the_startup_pipe() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
@@ -1561,7 +1557,7 @@ mod tests {
 
             // Only the client has a console to report this on.
             let (startup_conn, _session_id, durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
             assert_eq!(durability, Durability::TiedToLauncher);
             transport.disconnect(startup_conn);
             {
@@ -1569,7 +1565,7 @@ mod tests {
                 *lock.lock().expect("exit lock") = true;
                 cvar.notify_all();
             }
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             supervisor.join().unwrap().unwrap();
         });
     }
@@ -1578,7 +1574,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_wait_that_fails_still_takes_the_session_off_the_host() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
@@ -1604,7 +1600,7 @@ mod tests {
             });
 
             let (startup_conn, _session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
             assert_eq!(store.list().unwrap().len(), 1, "the session was published");
             transport.disconnect(startup_conn);
             {
@@ -1613,7 +1609,7 @@ mod tests {
                 cvar.notify_all();
             }
 
-            phases.set("waiting for failed-wait cleanup");
+            phase_reporter.report("waiting for failed-wait cleanup");
             supervisor.join().unwrap().unwrap_err();
             // The wait is the only thing that failed, so everything the session
             // put on the host is still the session's to take back.
@@ -1636,7 +1632,7 @@ mod tests {
     // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn output_produced_before_the_first_attach_reaches_that_client() {
-        with_watchdog_phases("setting up the supervisor", |phases| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
             let store = MemorySessionStore::new();
@@ -1661,7 +1657,7 @@ mod tests {
             });
 
             let (startup_conn, _session_id, _durability) =
-                commit_startup(&transport, startup, &phases);
+                commit_startup(&transport, startup, &phase_reporter);
 
             // The app speaks before anyone has attached, which is the window
             // `dure run` spends spawning the supervisor and connecting to it.
@@ -1673,10 +1669,8 @@ mod tests {
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            phases.set("waiting for the attach acknowledgement");
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
@@ -1694,7 +1688,7 @@ mod tests {
             // the failure is an assertion rather than a wait with no end.
             let mut received = Vec::new();
             loop {
-                phases.set("waiting for held output or the app exit status");
+                phase_reporter.report("waiting for held output or the app exit status");
                 match transport.recv(client).unwrap() {
                     Message::Output(bytes) => received.extend(bytes),
                     Message::AppExited { status } => {
@@ -1706,7 +1700,7 @@ mod tests {
             }
             assert_eq!(received, b"hello");
 
-            phases.set("waiting for supervisor shutdown");
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
         });
     }
@@ -1842,9 +1836,7 @@ mod tests {
         let shared = shared_session(&transport, &pty_host);
         let (supervisor, client) = connected_pair(&transport, "pipe");
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
         transport.disconnect(client);
 
         let (flags, recorder) = attach_recorder();
@@ -1856,17 +1848,15 @@ mod tests {
 
     #[test]
     fn a_stalled_attach_acknowledgement_does_not_signal_attachment() {
-        with_watchdog_phases("setting up the client relay", |phases| {
+        with_watchdog_phases("setting up the client relay", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty_host = MemoryPseudoconsole::new();
             let shared = Arc::new(shared_session(&transport, &pty_host));
             let (supervisor, client) = connected_pair(&transport, "pipe");
 
             let (attached_tx, attached_rx) = mpsc::channel();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            transport.stall_sends();
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            transport.stall(supervisor);
             let relay = thread::spawn({
                 let shared = Arc::clone(&shared);
                 move || {
@@ -1876,22 +1866,22 @@ mod tests {
                 }
             });
 
-            phases.set("waiting for the attach acknowledgement to stall");
-            transport.wait_for_stalled_send();
+            phase_reporter.report("waiting for the attach acknowledgement to stall");
+            transport.wait_for_stalled_send(supervisor);
             assert!(!shared.first_attach().attached);
 
-            transport.resume_sends();
-            phases.set("waiting for the attach acknowledgement");
+            transport.resume(supervisor);
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
             ));
-            phases.set("waiting for the attached-flag update");
+            phase_reporter.report("waiting for the attached-flag update");
             assert!(attached_rx.recv().unwrap());
             assert!(shared.first_attach().attached);
 
             transport.send(client, &Message::StartupErr).unwrap();
-            phases.set("waiting for the client relay to stop");
+            phase_reporter.report("waiting for the client relay to stop");
             relay.join().unwrap();
             assert!(!attached_rx.recv().unwrap());
         });
@@ -1899,7 +1889,7 @@ mod tests {
 
     #[test]
     fn a_stalled_detach_update_does_not_block_or_overwrite_a_steal() {
-        with_watchdog_phases("setting up the client relays", |phases| {
+        with_watchdog_phases("setting up the client relays", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty_host = MemoryPseudoconsole::new();
             let shared = Arc::new(shared_session(&transport, &pty_host));
@@ -1938,20 +1928,18 @@ mod tests {
                 let observe_update = observe_update.clone();
                 move || client_loop(&shared, first_supervisor, &observe_update)
             });
-            transport
-                .send(first_client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
-            phases.set("waiting for the first attach acknowledgement");
+            transport.send(first_client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the first attach acknowledgement");
             assert!(matches!(
                 transport.recv(first_client).unwrap(),
                 Message::Attached { .. }
             ));
-            phases.set("waiting for the first attached-flag update");
+            phase_reporter.report("waiting for the first attached-flag update");
             assert!(updated_rx.recv().unwrap());
 
             store.stall_publishes();
             transport.disconnect(first_client);
-            phases.set("waiting for the detached-flag update to stall");
+            phase_reporter.report("waiting for the detached-flag update to stall");
             store.wait_for_stalled_publish();
 
             let (second_supervisor, second_client) = connected_pair(&transport, "second");
@@ -1959,25 +1947,17 @@ mod tests {
                 let shared = Arc::clone(&shared);
                 move || client_loop(&shared, second_supervisor, &observe_update)
             });
-            transport
-                .send(
-                    second_client,
-                    &Message::Attach {
-                        cols: 100,
-                        rows: 30,
-                    },
-                )
-                .unwrap();
+            transport.send(second_client, &ORDINARY_ATTACH).unwrap();
             // The first relay is blocked in store I/O. Receiving this proves it
             // released the client slot before publishing the advisory flag.
-            phases.set("waiting for the stealing attach acknowledgement");
+            phase_reporter.report("waiting for the stealing attach acknowledgement");
             assert!(matches!(
                 transport.recv(second_client).unwrap(),
                 Message::Attached { .. }
             ));
 
             store.resume_publishes();
-            phases.set("waiting for the stalled detach and newer attach updates");
+            phase_reporter.report("waiting for the stalled detach and newer attach updates");
             let completed = [updated_rx.recv().unwrap(), updated_rx.recv().unwrap()];
             assert!(completed.contains(&false));
             assert!(completed.contains(&true));
@@ -1985,7 +1965,7 @@ mod tests {
             assert!(store.read(id).unwrap().unwrap().attached);
 
             transport.disconnect(second_client);
-            phases.set("waiting for the final detach update");
+            phase_reporter.report("waiting for the final detach update");
             assert!(!updated_rx.recv().unwrap());
             second_relay.join().unwrap();
             assert!(!store.read(id).unwrap().unwrap().attached);
@@ -2002,9 +1982,7 @@ mod tests {
         // slot, so there is nothing left for a new client to be given.
         shared.stopping.store(true, Ordering::SeqCst);
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
 
         let (flags, recorder) = attach_recorder();
         client_loop(&shared, supervisor, &recorder);
@@ -2043,9 +2021,7 @@ mod tests {
         let shared = shared_session(&transport, &pty_host);
         let (supervisor, client) = connected_pair(&transport, "pipe");
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
         transport
             .send(
                 client,
@@ -2106,9 +2082,7 @@ mod tests {
             }
         };
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
         transport
             .send(client, &Message::Input(b"x".to_vec()))
             .unwrap();

@@ -8,13 +8,15 @@ use std::time::Duration;
 /// timeout panic, so a synchronization failure identifies the operation that did
 /// not complete.
 #[derive(Clone, Debug)]
-pub struct WatchdogPhases {
+pub struct WatchdogPhaseReporter {
     phase_tx: mpsc::Sender<&'static str>,
 }
 
-impl WatchdogPhases {
-    /// Replaces the phase shown if the test times out.
-    pub fn set(&self, phase: &'static str) {
+impl WatchdogPhaseReporter {
+    /// Reports the next operation that may block.
+    ///
+    /// The latest reported phase replaces the timeout label.
+    pub fn report(&self, phase: &'static str) {
         // The receiver only disappears after the watchdog has already ended the test.
         _ = self.phase_tx.send(phase);
     }
@@ -39,8 +41,9 @@ impl WatchdogPhases {
 /// # Panics
 ///
 /// Panics on the calling thread if the wrapped closure does not complete within
-/// the timeout. When mutation testing is enabled (`MUTATION_TESTING=1`) the
-/// watchdog is disabled and the closure runs directly, so no timeout panic occurs.
+/// the timeout. A panic raised by the wrapped closure is propagated to the calling
+/// thread. When mutation testing is enabled (`MUTATION_TESTING=1`) the watchdog is
+/// disabled and the closure runs directly, so no timeout panic occurs.
 ///
 /// # Example
 ///
@@ -64,22 +67,24 @@ where
 
 /// Runs a test with a timeout that reports the last active phase.
 ///
-/// Call [`WatchdogPhases::set()`] immediately before each potentially blocking
-/// operation. If the closure exceeds the timeout, the panic identifies the last
-/// phase it entered.
+/// `initial_phase` is the timeout label until the closure reports another
+/// potentially blocking operation through [`WatchdogPhaseReporter::report()`].
+/// Each report replaces the label, so a timeout identifies the latest operation
+/// the test entered.
 ///
 /// # Panics
 ///
 /// Panics on the calling thread if the wrapped closure does not complete within
-/// the timeout. Mutation testing disables the timeout.
+/// the timeout. A panic raised by the wrapped closure is propagated to the calling
+/// thread. Mutation testing disables the timeout.
 pub fn with_watchdog_phases<F, R>(initial_phase: &'static str, test_fn: F) -> R
 where
-    F: FnOnce(WatchdogPhases) -> R + Send + 'static,
+    F: FnOnce(WatchdogPhaseReporter) -> R + Send + 'static,
     R: Send + 'static,
 {
     let (phase_tx, phase_rx) = mpsc::channel();
     run_with_watchdog(
-        move || test_fn(WatchdogPhases { phase_tx }),
+        move || test_fn(WatchdogPhaseReporter { phase_tx }),
         move |timeout| phased_timeout_message(initial_phase, &phase_rx, timeout),
     )
 }
@@ -154,7 +159,7 @@ mod tests {
 
     use super::*;
 
-    assert_impl_all!(WatchdogPhases: RefUnwindSafe, UnwindSafe);
+    assert_impl_all!(WatchdogPhaseReporter: RefUnwindSafe, UnwindSafe);
 
     #[test]
     fn watchdog_allows_fast_tests() {
@@ -173,8 +178,8 @@ mod tests {
 
     #[test]
     fn phased_watchdog_returns_correct_value() {
-        let result = with_watchdog_phases("starting", |phases| {
-            phases.set("finishing");
+        let result = with_watchdog_phases("starting", |phase_reporter| {
+            phase_reporter.report("finishing");
             "hello world"
         });
         assert_eq!(result, "hello world");

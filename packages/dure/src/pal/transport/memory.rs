@@ -19,8 +19,14 @@ struct ConnState {
     peer: ConnId,
     closed: bool,
     /// Sends on this connection block, standing in for a peer that has stopped
-    /// draining its pipe. Only `disconnect` releases them, as `CancelIoEx` does.
+    /// draining its pipe. Tests release them with `resume`; `disconnect` also
+    /// releases them, as `CancelIoEx` does.
     stalled: bool,
+    /// Senders parked on this connection's stalled predicate.
+    ///
+    /// Tests observe this under the connection map lock to prove that a
+    /// particular send reached the intended blocking boundary.
+    stalled_senders: usize,
 }
 
 struct ListenerState {
@@ -40,22 +46,12 @@ struct Inner {
     timeout_next_accept: AtomicBool,
     /// Makes the next timed receive report a timeout once its connection is idle.
     timeout_next_recv: AtomicBool,
-    /// Deterministic gate for tests that inspect behavior during a blocked send.
-    send_stall: Mutex<SendStall>,
-    send_stall_changed: Condvar,
     /// Guards the pending-connection predicate under `listener_state`. A
     /// `Condvar` may only ever be paired with one mutex, so the connection side
     /// has its own below.
     listener_cond: Condvar,
     /// Guards the queued-message and stalled predicates under `conns`.
     conn_cond: Condvar,
-}
-
-/// State of the deterministic send gate.
-#[derive(Debug, Default)]
-struct SendStall {
-    enabled: bool,
-    waiting: usize,
 }
 
 /// Thread-safe in-memory named-pipe stand-in.
@@ -82,8 +78,6 @@ impl MemoryTransport {
                 fail_next_send: AtomicBool::new(false),
                 timeout_next_accept: AtomicBool::new(false),
                 timeout_next_recv: AtomicBool::new(false),
-                send_stall: Mutex::new(SendStall::default()),
-                send_stall_changed: Condvar::new(),
                 listener_cond: Condvar::new(),
                 conn_cond: Condvar::new(),
             }),
@@ -97,51 +91,57 @@ impl MemoryTransport {
     /// Make sends on `conn` block until it is disconnected or resumed.
     pub(crate) fn stall(&self, conn: ConnId) {
         let mut conns = self.inner.conns.lock().expect("conn map lock");
-        if let Some(state) = conns.get_mut(&conn) {
-            state.stalled = true;
-        }
+        let state = conns
+            .get_mut(&conn)
+            .expect("tests only stall a live connection");
+        assert!(!state.stalled, "a connection cannot be stalled twice");
+        assert_eq!(
+            state.stalled_senders, 0,
+            "a connection cannot be rearmed before prior senders resume"
+        );
+        state.stalled = true;
         self.inner.conn_cond.notify_all();
     }
 
-    /// Let sends on `conn` proceed again, releasing whoever is blocked on it.
+    /// Let sends on `conn` proceed and wait until its old stall has drained.
+    ///
+    /// Draining the parked-sender count before returning makes the connection
+    /// safe to stall again without observing a sender from the previous stall.
     pub(crate) fn resume(&self, conn: ConnId) {
         let mut conns = self.inner.conns.lock().expect("conn map lock");
-        if let Some(state) = conns.get_mut(&conn) {
-            state.stalled = false;
-        }
+        let state = conns
+            .get_mut(&conn)
+            .expect("tests only resume a live connection");
+        assert!(state.stalled, "only a stalled connection can be resumed");
+        state.stalled = false;
         self.inner.conn_cond.notify_all();
-    }
-
-    /// Make sends block at the transport boundary until resumed.
-    pub(crate) fn stall_sends(&self) {
-        let mut stall = self.inner.send_stall.lock().expect("send-stall lock");
-        assert!(!stall.enabled);
-        stall.enabled = true;
-        self.inner.send_stall_changed.notify_all();
-    }
-
-    /// Block until a send has reached the deterministic send gate.
-    pub(crate) fn wait_for_stalled_send(&self) {
-        let mut stall = self.inner.send_stall.lock().expect("send-stall lock");
-        assert!(
-            stall.enabled,
-            "the send stall must be enabled before waiting"
-        );
-        while stall.waiting == 0 {
-            stall = self
-                .inner
-                .send_stall_changed
-                .wait(stall)
-                .expect("send-stall condvar");
+        loop {
+            let state = conns
+                .get(&conn)
+                .expect("connections remain addressable after disconnection");
+            if state.stalled_senders == 0 {
+                return;
+            }
+            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
         }
     }
 
-    /// Release sends waiting at the deterministic send gate.
-    pub(crate) fn resume_sends(&self) {
-        let mut stall = self.inner.send_stall.lock().expect("send-stall lock");
-        assert!(stall.enabled);
-        stall.enabled = false;
-        self.inner.send_stall_changed.notify_all();
+    /// Block until a send has parked on `conn`'s injected stall.
+    pub(crate) fn wait_for_stalled_send(&self, conn: ConnId) {
+        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        loop {
+            let state = conns
+                .get(&conn)
+                .expect("tests only observe a live connection");
+            assert!(
+                state.stalled,
+                "the connection must be stalled before waiting"
+            );
+            if state.stalled_senders != 0 {
+                return;
+            }
+            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+        }
     }
 
     pub(crate) fn startup_commit_count(&self) -> usize {
@@ -236,23 +236,6 @@ impl MemoryTransport {
             };
         }
     }
-
-    fn await_send_permission(&self) {
-        let mut stall = self.inner.send_stall.lock().expect("send-stall lock");
-        if !stall.enabled {
-            return;
-        }
-        stall.waiting = stall.waiting.checked_add(1).unwrap();
-        self.inner.send_stall_changed.notify_all();
-        while stall.enabled {
-            stall = self
-                .inner
-                .send_stall_changed
-                .wait(stall)
-                .expect("send-stall condvar");
-        }
-        stall.waiting = stall.waiting.checked_sub(1).unwrap();
-    }
 }
 
 impl Default for MemoryTransport {
@@ -308,6 +291,7 @@ impl Transport for MemoryTransport {
                     peer: client,
                     closed: false,
                     stalled: false,
+                    stalled_senders: 0,
                 },
             );
             conns.insert(
@@ -317,6 +301,7 @@ impl Transport for MemoryTransport {
                     peer: server,
                     closed: false,
                     stalled: false,
+                    stalled_senders: 0,
                 },
             );
         }
@@ -340,17 +325,30 @@ impl Transport for MemoryTransport {
         if self.inner.fail_next_send.swap(false, Ordering::SeqCst) {
             return Err(PalError::new(PalErrorKind::Other));
         }
-        self.await_send_permission();
         let mut conns = self.inner.conns.lock().expect("conn map lock");
+        let mut waiting = false;
         let peer = loop {
-            let Some(state) = conns.get(&conn) else {
+            let Some(state) = conns.get_mut(&conn) else {
                 return Err(PalError::new(PalErrorKind::NotFound));
             };
             if state.closed {
+                if waiting {
+                    state.stalled_senders = state.stalled_senders.checked_sub(1).unwrap();
+                    self.inner.conn_cond.notify_all();
+                }
                 return Err(PalError::new(PalErrorKind::NotFound));
             }
             if !state.stalled {
+                if waiting {
+                    state.stalled_senders = state.stalled_senders.checked_sub(1).unwrap();
+                    self.inner.conn_cond.notify_all();
+                }
                 break state.peer;
+            }
+            if !waiting {
+                state.stalled_senders = state.stalled_senders.checked_add(1).unwrap();
+                waiting = true;
+                self.inner.conn_cond.notify_all();
             }
             conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
         };
@@ -448,23 +446,26 @@ mod tests {
     }
 
     #[test]
-    fn send_stall_reports_when_a_sender_is_parked() {
+    fn connection_send_stall_reports_each_rearmed_sender() {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
             let listener = transport.listen("session").unwrap();
             let client = transport.connect("session", Duration::ZERO).unwrap();
             let server = transport.accept(listener).unwrap();
-            transport.stall_sends();
 
-            let sender = thread::spawn({
-                let transport = transport.clone();
-                move || transport.send(client, &Message::StartupErr)
-            });
+            for message in [Message::StartupErr, Message::StartupCommit] {
+                transport.stall(client);
+                let sender = thread::spawn({
+                    let transport = transport.clone();
+                    let message = message.clone();
+                    move || transport.send(client, &message)
+                });
 
-            transport.wait_for_stalled_send();
-            transport.resume_sends();
-            sender.join().unwrap().unwrap();
-            assert_eq!(transport.recv(server).unwrap(), Message::StartupErr);
+                transport.wait_for_stalled_send(client);
+                transport.resume(client);
+                sender.join().unwrap().unwrap();
+                assert_eq!(transport.recv(server).unwrap(), message);
+            }
         });
     }
 }

@@ -60,6 +60,12 @@ When there is a danger that a test may hang (e.g. it contains a `.wait()`,
 wrap the test body with a timeout. Do not implement custom watchdog timers —
 always use the existing watchdog from the `testing` package.
 
+Use `testing::with_watchdog_phases()` when a test has several identifiable
+blocking stages. Its initial label describes the work before the first report;
+call `WatchdogPhaseReporter::report()` immediately before each later operation
+that may block so a timeout identifies the latest stage. Keep
+`testing::with_watchdog()` for tests where one timeout label is sufficient.
+
 Watchdogs are automatically disabled during mutation testing (`MUTATION_TESTING=1`
 environment variable). A mutation that causes a test to hang should be fixed by
 either redesigning the test to catch the mutation without blocking (e.g. adding
