@@ -297,13 +297,15 @@ tempted to edit a `Cargo.toml` version field on a feature branch.
 
 ### [docs/release-versioning.md](docs/release-versioning.md)
 
-Agreed design for pull-request-time versioning. **Not the process in force** —
-until it is implemented, version bumps follow [`git-workflow.md`](docs/git-workflow.md)
-and [`RELEASING.md`](RELEASING.md). The publish half is unchanged and lives in
-[`release-automation.md`](docs/release-automation.md).
+How crate version numbers are decided and enforced: the version increment happens
+in the pull request that changes a package, anchored to the base branch's version
+history, gated by a required check and a merge queue. Contributor procedure lives
+in [`git-workflow.md`](docs/git-workflow.md) and [`RELEASING.md`](RELEASING.md);
+the publish half lives in [`release-automation.md`](docs/release-automation.md).
 
 **Open this when**: implementing that design; a pull request is about the
-versioning process itself.
+versioning process itself. It is not contributor instructions: until the design
+is implemented, version bumps follow [`git-workflow.md`](docs/git-workflow.md).
 
 ### [docs/release-automation.md](docs/release-automation.md)
 

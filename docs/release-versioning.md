@@ -1,17 +1,17 @@
 # Release versioning
 
-This chapter is the agreed design for how crate version numbers will be decided and enforced.
-It is **not the process in force**. Until implementation lands, version bumps follow
-[`git-workflow.md`](git-workflow.md) and [`RELEASING.md`](../RELEASING.md). The publish half
-([`release-automation.md`](release-automation.md)) is unchanged by this design.
+This chapter owns how crate version numbers are decided and enforced: a package's version
+increment happens in the pull request that changes it, and merging that pull request publishes
+it. Publication itself belongs to [`release-automation.md`](release-automation.md).
 
 ## Meta
 
 * **Open this when**: implementing this design; a pull request is about the versioning process
   itself.
+* **In force**: contributors follow [`git-workflow.md`](git-workflow.md) and
+  [`RELEASING.md`](../RELEASING.md) until the work described here lands.
 * **Cross-links**: [`release-automation.md`](release-automation.md) (the publish half),
-  [`git-workflow.md`](git-workflow.md) (current contributor rules, including no version bumps
-  on feature branches),
+  [`git-workflow.md`](git-workflow.md) (contributor rules for pull requests),
   [`impl-crate-split.md`](impl-crate-split.md) (why version groups exist),
   [`build-and-tooling.md`](build-and-tooling.md) (`just` recipes and script conventions).
 
@@ -24,7 +24,7 @@ A pull request that changes a package's released content must also increment tha
 version. The version decision moves from an occasional, batched, after-the-fact activity into
 the pull request that causes it, while the author still remembers what changed and why.
 
-Two consequences follow directly:
+The consequences are:
 
 * There is no "prepare a release" step. `release.yml` already publishes any version it finds on
   `main` that crates.io does not have, so a merge *is* a release.
@@ -48,36 +48,46 @@ The version increment *is* the release event, so the git repository holds everyt
 evaluate the invariant.
 
 A package's **anchor** is the most recent commit on the **base branch's first-parent line** in
-which its declared version changed. Walking first-parent means each merged pull request counts
-as a single step regardless of how it was merged, and reading the anchor off the base branch
-rather than off the working branch means a branch's own commits never become anchors.
+which its declared version changed. Each merged pull request contributes exactly one commit to
+that line, because `main` accepts only merge-queue merges and squashes; rebase merging is not
+used, and must not be, since it replays a branch's own commits onto the base line and would
+turn a branch's version bump into an anchor with the branch's later commits sitting past it.
+Reading the anchor off the base branch rather than off the working branch means a branch's own
+commits never become anchors.
 
 The rule is then one predicate:
 
 > A package fails if its released content differs between its anchor and the work tree, while
 > its declared version has not increased since the anchor.
 
-It has two readings, and both are needed:
+The rule is read in both directions, and both are needed:
 
 * **The version increased on this branch.** The package is being released, and everything on the
   branch ships under the new version. Where in the branch the increment sits is irrelevant, and
   so is how much changes after it — which is what keeps the check stable across review
   iterations.
-* **The version did not increase.** The package is not being released, so nothing
-  released-relevant may sit past its anchor. This catches the branch's own unaccompanied changes
+* **The version did not increase.** The package is not being released, so no released content
+  may sit past its anchor. This catches the branch's own unaccompanied changes
   *and* content already sitting unreleased on the base branch, which is what makes the check
   cover every publishable package rather than only the ones the pull request touched.
 
-Two implementation details matter. The comparison is on the **parsed `version` field**, not on a
+The comparison is on the **parsed `version` field**, not on a
 textual diff of the manifest, so reformatting, key reordering and line moves do not register as
-increments. And a package's creation commit counts as a version change (absent → present), so a
-package added and released in one pull request needs no special handling.
+increments. A package absent from the base tree is classified **new** rather than anchored:
+there is no anchor to walk, the whole package is released by the version it declares, and it
+passes as `releasing`. Anchor resolution therefore runs only for packages that exist on the base
+branch, which is what keeps the fail-closed rule below from rejecting a package added by this
+pull request.
 
-The base revision defaults to `origin/main`. CI passes an explicit SHA: the pull request's
-base on a `pull_request` run, the commit the queue rebased onto (`merge_group.base_sha`) on a
-merge-queue run. Using the original pull-request base inside the queue would let two branches
-that both incremented `0.6.1 → 0.6.2` both look valid. A stale base is otherwise safe rather
-than unsound: it can only move the anchor further back, which reports more, never less. The
+The base revision is supplied by the caller and must be the tip of the base branch the merge
+lands on. CI passes the event's own value: the pull request's base on a `pull_request` run, the
+commit the queue rebased onto (`merge_group.base_sha`) on a merge-queue run. Using the original
+pull-request base inside the queue would let two branches that both incremented `0.6.1 → 0.6.2`
+both look valid. A stale base is unsound rather than merely noisy: if the base branch moved
+`1.1 → 1.2` after the branch was cut, the branch inherits `1.2` while its anchor still reads
+`1.1`, and the branch's own unaccompanied changes are then read as that inherited increment's
+release. `origin/main` is a local convenience default for a developer machine, where a stale
+result costs a re-run; the merge-blocking verdict always comes from the event-supplied base. The
 check needs full history (`fetch-depth: 0`) and that base SHA, and nothing else — no tags, no
 merge ref, no network. Tags are not consulted, because tagging is atomic with neither the
 merge nor the publish, so an absent tag proves nothing.
@@ -97,25 +107,58 @@ Requiring branches to be up to date *without* a queue would give the same guaran
 serialise the author: every competing merge is a manual rebase and a second skill run. The
 queue performs the rebase. "Require branches to be up to date" is not used.
 
-The queue can also batch two pull requests that both increment the same package to the same
-version into one merge. That lands as one combined release of that version; the invariant
-holds. Sequential queue entries still force the second pull request to the next version.
+The queue can also batch pull requests: a merge group is validated as one candidate against one
+base, so two pull requests that both increment the same package to the same version can be
+checked together against the pre-merge base and merged together. That is accepted: the batch
+lands as a single combined release of that version, containing both changes, and the invariant
+holds because the merged content ships under the version that was incremented. Maximum merge
+group size is therefore not constrained. Queue entries that are *not* batched are validated
+sequentially, and the second is forced to the next version by the rule above.
 
 Merging is blocked by a single required status check named `required-checks` (below).
 `validate-versions` feeds that fan-in; it is not itself an entry in the GitHub ruleset.
 
-The residual window is a second pull request merging while the first one's publish is still in
-flight. Nothing is lost even then: because the rule covers every publishable package, the next
-pull request to run reports it and it goes out one merge later. The cost is that a later pull
-request is asked to resolve drift it did not cause. That is inherent to a check that reports what
-must be released rather than who caused it, and the skill makes resolving it cheap.
+The residual window is a second pull request merging while the first one's publish run is still
+in flight. Recovering that publish is the release workflow's job, not the version check's: runs
+are serialised by a concurrency group on `main` and never cancelled mid-flight, and
+`release-plz release` re-checks the registry and publishes every version on `main` that
+crates.io does not have, so a failed, throttled or superseded run is finished by the next run
+or by re-running it. The version check cannot substitute for that: once an increment merges it
+becomes the anchor, and the tool never queries the registry, so an unpublished version is
+invisible to it. What the check does cover is unreleased *content* that accumulates on `main`
+in that window — the next pull request to run reports it, and it is published by the next
+merge. The cost is that a later pull request is asked to resolve drift it did not cause. That is
+inherent to a check that reports what must be released rather than who caused it, and the skill
+makes resolving it cheap.
 
 ## Released content
 
-A package's released content is the set of files under its directory that **Cargo would put in
-the `.crate`**: git-tracked files, filtered by the manifest's `include`/`exclude`. Cargo uses the
-git file list when packaging inside a git repository, so reproducing that rule with `git ls-files`
-plus gitignore-style matching (the `ignore` crate) matches what it actually does.
+### Release relevance
+
+One rule decides whether something is released content: it is release-relevant when a registry
+consumer can build against it or read it. That covers the sources a consumer compiles, the
+manifest fields Cargo resolves for them, the `README.md` crates.io renders, and package-local
+files that `src/` embeds at compile time or that the package's published documentation needs.
+Repository-only material — `tests/`, `benches/`, `examples/`, `book/`, `AGENTS.md` — is not,
+because a consumer of the published crate never receives it. The same test decides inherited
+manifest values and dependency kinds below.
+
+Deliberate exceptions are stated where they arise: a package's `Cargo.toml` is compared as a
+whole file, so any edit to it is release-relevant; and `Cargo.lock` is never release-relevant,
+even though an archive carries one.
+
+A package's released content is then the set of git-tracked files under its directory that
+**Cargo would put in the `.crate`**: filtered by the manifest's `include`/`exclude`, reproduced
+with `git ls-files` plus gitignore-style matching (the `ignore` crate).
+
+Cargo's own packaging walk is not identical: without `include` it starts from the git file list
+but also emits matching untracked, non-ignored files, and with `include` it walks the filesystem
+directly. The tool deliberately scopes the invariant to tracked content, because an untracked
+file cannot merge and therefore cannot be part of what a merge releases. Untracked files that a
+package would otherwise package are reported as an advisory so the author commits them before
+the version decision, rather than discovering the difference at publish time. The
+`--verify-packaging` cross-check runs on a clean tree, where the tool's file list and
+`cargo package --list` must agree exactly.
 
 The change set is a `git diff` from the anchor to the work tree, not a listing of the current
 tree, because a listing cannot reveal a file that was deleted. The package's directory is
@@ -125,8 +168,7 @@ name, because filtering both ends by the *current* path would report a package t
 `include`/`exclude`, so a file that either end would package counts.
 
 Diffing against the work tree rather than a commit means uncommitted edits are visible, which is
-the state the skill actually runs in. Untracked files are reported as an advisory and never
-counted as changes, since Cargo would not package them either.
+the state the skill actually runs in.
 
 `Cargo.lock` is not released content, even though every published crate carries one — pure
 libraries included. What ships is not the workspace lockfile but a per-package lockfile that Cargo
@@ -143,11 +185,13 @@ alternative, comparing parsed manifests, is more machinery than the problem dese
 
 ### What ships
 
-The published crate is the consumer build: `src/`, `README.md` (crates.io renders it), and
-package-local `doc/` / `docs/` (compile-time diagrams and similar files `src/` actually
-embeds). Everything else — `tests/`, `benches/`, `examples/`, `book/`, `AGENTS.md` — stays
-in git. Each publishable package declares that with `include` in `Cargo.toml`. Nothing is
-special-cased in the tool, and a reader of `Cargo.toml` can see exactly what is released.
+Applying the relevance rule, the published crate is the consumer build: `src/`, `README.md`
+(crates.io renders it), and package-local `doc/` / `docs/` that `src/` embeds at compile time or
+that the published documentation needs. A package may add further package-local resources on the
+same test — a file a consumer's build or documentation actually requires — and states why in the
+`include` entry's comment. Repository-only material stays in git. Each publishable package
+declares its selection with `include` in `Cargo.toml`. Nothing is special-cased in the tool, and
+a reader of `Cargo.toml` can see exactly what is released.
 
 `include` is the allow-list, not `exclude`. A denylist grows every time a new non-source
 directory appears; an allow-list does not.
@@ -170,15 +214,17 @@ changed between the anchor and the work tree:
 * **`[workspace.package]`** — `rust-version`, `edition`, `license`, `repository` and the rest.
   A raised `rust-version` is a consumer-visible change to every inheriting crate.
 * **`[workspace.dependencies]`** — a changed requirement alters what an inheriting package
-  builds against.
+  builds against, when the package inherits it as a normal or build dependency. A requirement
+  inherited only as a dev-dependency is not attributed: a consumer never builds dev-dependencies,
+  which is the same downstream-effect test that excludes lints below.
 
 Attribution is per package: the tool reads which keys each package inherits (`.workspace = true`
 in its manifest, resolved values from `cargo metadata --no-deps`) and marks only those packages.
 A root-manifest edit therefore does not blanket-mark the workspace. It *does* mark every
-package that inherits the changed value, and that is the desired outcome: a global change
-should republish the world. Group closure and `=`-pin rewrites then follow as usual. The
-rate-limit budget already sizes a full-workspace publish; that path is not an accident to
-narrow away.
+package that inherits the changed value, and that is the desired outcome: a change to an
+inherited value is a change to every inheriting package, and each of them is republished. Group
+closure and `=`-pin rewrites then follow as usual. The rate-limit budget already sizes a
+full-workspace publish; that path is not an accident to narrow away.
 
 Everything else in the root manifest is out of scope, including **`[workspace.lints]`**. This is
 the answer to "how are lints excluded": they are not part of the inherited-value set, so they are
@@ -195,7 +241,7 @@ Some packages are one logical unit split across crates for cargo-technical reaso
 `linked*` family, `many_cpus`/`many_cpus_impl`, `nm`/`nm_impl`, `nm_otel`/`nm_otel_impl`, and the
 `cargo-bench-history` family with its `cbh_*` crates and faker.
 
-Three rules govern them.
+The rules governing them are the following.
 
 **Every member declares the same version, checked on the versions declared in the manifests.**
 This is a statement about the work tree only. It deliberately says nothing about what has been
@@ -214,9 +260,9 @@ grouping.
 member requires.** Members are consistent by the first rule, so this is normally unambiguous;
 taking the maximum is what recovers the group if a member ever lags.
 
-Members that have never been published are exempt from the consistency rule. A new crate cannot
-be published before it merges, so requiring it to already match would make adding a member to a
-group unresolvable.
+Consistency is a statement about declared versions in the work tree, so a member added by this
+pull request simply declares the group's version like any other member. No publication-state
+exemption exists, and none could be evaluated by an offline check in any case.
 
 Group membership moves from `release-plz.toml` to `[workspace.metadata.release-plan]` in the root
 `Cargo.toml`. release-plz applies `version_group` only in its `update` and `release-pr` commands,
@@ -225,41 +271,64 @@ which is how two sources of truth start to diverge. They are deleted.
 
 ## Package status
 
-| Status               | Condition                                                | Verdict  |
-| -------------------- | -------------------------------------------------------- | -------- |
-| `releasing`          | version increased since anchor                           | pass     |
-| `unreleased-changes` | version unchanged, released content changed since anchor | **fail** |
-| `released`           | version unchanged, nothing released-relevant changed     | pass     |
+| Status               | Condition                                                    | Verdict  |
+| -------------------- | ------------------------------------------------------------ | -------- |
+| `releasing`          | version increased since anchor, or package is new            | pass     |
+| `unreleased-changes` | version not increased, released content changed since anchor | **fail** |
+| `unchanged`          | version not increased, no released content changed           | pass     |
+
+A version that *decreases* is not a separate status: the decrease is itself a `Cargo.toml` edit,
+so the package has released content past its anchor without an increase and fails as
+`unreleased-changes`.
 
 `releasing` is the state of a package the pull request is publishing. It stays passing however
-much the branch changes afterwards, because all of it ships under the new version.
+much the branch changes afterwards, because all of it ships under the new version. `unchanged`
+describes the package's relationship to its anchor only; whether the declared version exists on
+crates.io is a separate question, answered below.
 
 Group consistency is a separate, group-level verdict rather than a package status: a package can
 have unreleased changes *and* belong to an inconsistent group, and both are reported.
 
 Packages with `publish = false` are excluded entirely.
 
-Whether a crate has ever reached crates.io is a different question, answered by the existing
-`check-never-published` recipe. crates.io Trusted Publishing cannot perform a crate's first
-publish, so a new crate needs one manual `cargo publish` as documented in
-[`RELEASING.md`](../RELEASING.md). The skill's preflight runs that recipe and **stops** if any
-crate in the increment set has never been published — first-publish is not folded into
-`apply`, because the OIDC publisher cannot perform it. The version check itself does not
-change: a never-published crate with a version increment is `releasing`.
+Whether a crate has ever reached crates.io is answered by the existing `check-never-published`
+recipe, not by any package status. crates.io Trusted Publishing cannot create a crate — a trusted
+publisher can only be configured on a crate that already exists — so a new crate's first version
+is published by an authenticated manual `cargo publish` as documented in
+[`RELEASING.md`](../RELEASING.md), and every later version uses the workflow's short-lived OIDC
+credentials. That bootstrap is a crates.io platform limitation and the one gap in this design's
+short-lived-credential model, recorded as such rather than as an intended credential workflow; if
+crates.io gains OAuth or another federated path for crate creation, the bootstrap moves to it.
+The skill's preflight runs the recipe and **stops** if any crate in the increment set has never
+been published — first publish is not folded into `apply`, because the OIDC publisher cannot
+perform it. The version check itself does not change: a never-published crate with a version
+increment is `releasing`.
 
-The check fails closed on a shallow or truncated history: if the anchor walk reaches the end of
-available history without finding a version change, that is an error, not a pass. Otherwise a
-change in checkout behaviour would silently disable enforcement.
+The check fails closed on a shallow or truncated history: if the anchor walk for a package that
+exists on the base branch reaches the end of available history without finding a version change,
+that is an error, not a pass. Otherwise a change in checkout behaviour would silently disable
+enforcement.
 
 ## The tool: `cargo-release-plan`
 
-A new Cargo subcommand in `packages/cargo-release-plan`, following the shape of
-`cargo-detect-package` and `cargo-freeze-deps`: `src/main.rs` strips the injected `release-plan`
-argv element and delegates to a library whose `run()` integration tests call directly, `clap`
-derive parsing in `src/cli.rs`, an `ohno` error boundary in `src/errors.rs`, `mimalloc` global
-allocator, and a `[package.metadata.binstall]` block.
+A new Cargo subcommand in `packages/cargo-release-plan`.
 
-Git is reached by shelling out to `git`, as `cbh_git` already does; there is no `git2` or `gix`
+### The command contract
+
+`report`, `check` and `apply` are the interface other consumers — the skill, CI recipes, other
+workspaces — depend on: their arguments, exit semantics, artifact paths, the fields of
+`report.json` and of a plan file, the variants a change record may take, and the meaning of
+`schema_version`. `schema_version` is incremented when a field's meaning changes or a field is
+removed; adding an optional field does not increment it. Everything below the contract — crate
+layout, the git adapter, the TOML editor, the fixture harness — is implementation detail and may
+change without a schema change. That boundary is what makes the tool safely reusable while its
+internals stay free to move.
+
+Implementation follows the shape of `cargo-detect-package` and `cargo-freeze-deps`: `src/main.rs`
+strips the injected `release-plan` argv element and delegates to a library whose `run()`
+integration tests call directly, `clap` derive parsing in `src/cli.rs`, an `ohno` error boundary
+in `src/errors.rs`, `mimalloc` global allocator, and a `[package.metadata.binstall]` block. Git
+is reached by shelling out to `git`, as `cbh_git` already does; there is no `git2` or `gix`
 anywhere in this workspace and this design does not introduce one.
 
 ### Offline and deterministic
@@ -313,6 +382,10 @@ package that is not yet released".
 }
 ```
 
+A change record is tagged by `source` and carries only that variant's fields: a `package` record
+has `path` and `change`, an `inherited` record has `field`. No record carries both, and a
+consumer selects on `source` rather than probing for present keys.
+
 `dependencies` and `dependents` are present because version decisions **cascade**. A package's own
 diff identifies only the roots; the increment set grows from there. `many_cpus` pins
 `many_cpus_impl = "=2.4.14"`, so incrementing the impl crate forces a manifest edit in the shell
@@ -328,8 +401,8 @@ cargo release-plan check [--base <rev>] [--manifest-path <p>] [--format text|git
 ```
 
 Exits non-zero on any package with unreleased changes or any inconsistent group, printing one
-actionable line per offence: what changed, what the anchor was, which group members are dragged
-along, and how to run the skill. `--format github` adds workflow annotations.
+actionable line per offence: what changed, what the anchor was, which group members are included
+by group expansion, and how to run the skill. `--format github` adds workflow annotations.
 
 ### `apply`
 
@@ -338,12 +411,19 @@ cargo release-plan apply --plan <plan.json> [--dry-run]
 ```
 
 Applies an approved plan: sets each package's `version`, rewrites every intra-workspace dependency
-requirement that must follow — in particular the `=` pins — and expands group members. Manifests
-are edited structurally with `toml_edit`, preserving comments and layout, exactly as
-`cargo-freeze-deps` does; the whole edit set is computed before anything is written, so a failure
-never leaves manifests half-updated. The workspace lockfile is refreshed afterwards, because
-`--locked` builds and the `check-frozen` job would otherwise fail on stale path-dependency
-versions. The lockfile is not released content, so refreshing it cannot re-trigger the check.
+requirement that must follow — in particular the `=` pins — and expands group members.
+
+A parsed plan is not yet an applicable plan. `apply` accepts one only after every named package
+resolves to a workspace member, every version move is an increase from that member's declared
+version, group closure and `=`-pin rewrites are complete, and the full edit set has been computed.
+A plan failing any of those is rejected before a byte is written, so an invalid or partial plan
+cannot reach the filesystem. Manifests are then edited structurally with `toml_edit`, preserving
+comments and layout, exactly as `cargo-freeze-deps` does. A filesystem failure part-way through
+the writes is reported with the files already written; re-running `apply` with the same plan is
+safe, because a plan states absolute target versions rather than relative increments. The
+workspace lockfile is refreshed afterwards, because `--locked` builds and the `check-frozen` job
+would otherwise fail on stale path-dependency versions. The lockfile is not released content, so
+refreshing it cannot re-trigger the check.
 
 Owning this step rather than delegating to `cargo set-version` or `release-plz set-version` is
 deliberate: the `=`-pin and version-group rules are workspace-specific, this is where the bugs
@@ -354,12 +434,10 @@ that motivated the redesign live, and the plan file becomes a reviewable, testab
 Unit tests cover anchor resolution, group verdicts, packaging-rule matching, inherited-value
 attribution and plan expansion. Integration tests build fixture repositories in
 `tempfile::tempdir()` and drive `run()` directly, using the hermetic `run_git` helper pattern from
-`cargo-bench-history`'s test harness (pinned identity, no signing, no autogc). Fixtures cover an
-increment placed early in a branch with further changes after it, unreleased content already
-present on the base branch, group closure with an unpublished member, `=`-pin propagation, a
-deleted packaged file, a path dropped from `include`, a moved package directory, a
-workspace-inherited field change, a manifest reformatted without a version change, a merge commit
-on the base branch's first-parent line, and a shallow history.
+`cargo-bench-history`'s test harness (pinned identity, no signing, no autogc). Fixtures exercise
+representative branch histories, packaging and package-layout variations, group and dependency
+propagation, inherited-metadata attribution, and incomplete history — that is, one fixture per
+behaviour the sections above define, rather than a catalogue fixed by this document.
 
 ## The `increment-versions` skill
 
@@ -376,8 +454,8 @@ the lockfile fails `--locked` builds.
 
 1. **Preflight.** Run the `cargo-semver-checks` canary and `just check-never-published`. A
    `cargo-semver-checks` that fails to *run* — classically one too old for the toolchain's rustdoc
-   JSON format — must never be read as "no breaking changes". This is the trap the current
-   `verify-semver-checks` recipe guards against, and the guard survives the removal of
+   JSON format — must never be read as "no breaking changes". This is the failure mode the
+   current `verify-semver-checks` recipe guards against, and the guard survives the removal of
    `release-plz update`. A never-published crate in the increment set is a stop, not a bump.
 2. **Collect.** `just release-report <dir>` runs `cargo release-plan report` and then
    `cargo semver-checks --workspace --all-features`, capturing both.
@@ -405,9 +483,13 @@ the lockfile fails `--locked` builds.
    package's unreleased changes can run to thousands of lines.
 5. **Apply, on approval.** `cargo release-plan apply`, then `just verify-lockfile`, then re-run
    `check` and the scoped `cargo semver-checks` to confirm the result, and write the summary into
-   the pull request description. Further changes may follow the increment without invalidating
-   it. The plan is not committed: the check verifies manifest state, not intent, so a plan file
-   in the repository would be inert churn.
+   the pull request description. The summary persists the decision evidence, not just the
+   outcome: the approved per-group and per-package levels, the `cargo-semver-checks` floor for
+   each and the stated reason wherever judgement raised it, the group expansion and `=`-pin
+   rewrites that followed, and the result of each post-apply verification command. That is what
+   lets a reviewer reconstruct the version decision after the interactive run has ended. Further
+   changes may follow the increment without invalidating it. The plan is not committed: the check
+   verifies manifest state, not intent, so a plan file in the repository would be inert churn.
 
 ## The GitHub check
 
@@ -432,7 +514,7 @@ touch.
 validate-versions:
   runs-on: ubuntu-latest
   outputs:
-    released: ${{ steps.check.outputs.released }}
+    releasing: ${{ steps.check.outputs.releasing }}
   steps:
     - uses: actions/checkout@v7
       with:
@@ -446,14 +528,24 @@ validate-versions:
 ```
 
 The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
-also emits the set of packages this pull request releases, for the next job. An empty
-`RELEASE_PLAN_BASE` (a push to `main`) falls through to the tool default of `origin/main`. No
-PowerShell module is introduced: the classification logic is the Rust tool's job and is tested
-there. The job joins `alert`'s `needs:` list and the `required-checks` fan-in.
+also emits the set of packages this pull request releases, for the next job. On a push to `main`
+`RELEASE_PLAN_BASE` is empty and the tool falls through to `origin/main`, which is the branch
+under test: the checkout is the base branch itself, so the default is the fresh base the anchor
+walk requires. No PowerShell module is introduced: the classification logic is the Rust tool's job
+and is tested there. The job joins `alert`'s `needs:` list and the `required-checks` fan-in.
 
 A failing check prints one actionable line per offence and names the skill. That is the entire
 recovery path — the author does not have to reconstruct a plan from this chapter. Copilot is
-assumed available; there is no non-skill command that writes a plan.
+assumed available, and no non-skill command writes a plan.
+
+That dependency is deliberate. The judgement the skill performs — choosing an increment level
+above a mechanical floor and justifying it — is the one part of this process a tool cannot decide,
+so a second interface for it would either duplicate that judgement or degrade into an unjustified
+rubber stamp on the tool's floor, which is exactly the failure mode this design removes. The
+mechanical half stays reachable regardless: `report`, `check` and `apply` are ordinary commands
+with a documented plan format, so an interrupted session resumes without losing state. An agent
+outage therefore delays merging pull requests that release a package; it does not strand work,
+and the accepted response is to wait rather than to maintain a parallel decision path.
 
 ### `required-checks`
 
@@ -485,10 +577,13 @@ carry the maintenance rule.
 `cargo-semver-checks` is too expensive to run workspace-wide on every pull request — a full run
 means rustdoc for both baseline and current across forty-four packages, and the `cbh_*` family is
 slow to build. In CI it is therefore scoped to the packages this pull request releases, minus
-group members dragged along with no API change of their own (the `_impl` crates are `doc(hidden)`
-and have no consumer-visible surface). It runs with `--all-features`, for the same reason the
-skill does. Group closure means this set is not always small, so the job runs in parallel with the
-rest of validation rather than gating it.
+crates that declare no supported public surface. That omission is metadata-driven, not a
+judgement call at scoping time: a crate is skipped only where the workspace records that it has no
+consumer-visible API, which today is the `doc(hidden)` `_impl` crates. Shell crates stay in scope
+even when only their re-exported dependency changed, because their public API is exactly what the
+dependency exposes. It runs with `--all-features`, for the same reason the skill does. Group
+closure means this set is not always small, so the job runs in parallel with the rest of
+validation rather than gating it.
 
 It runs with `if: always()` on `needs: [validate-versions]`, so a failing version check still
 surfaces insufficient-increment findings in the same round trip rather than hiding them behind a
@@ -498,6 +593,17 @@ second push.
 *big enough* — it compares against the latest crates.io release and fails when the declared version
 is an inadequate increment. Neither substitutes for the other. The canary preflight guards this
 job as well.
+
+What this evidence establishes has bounds, and they are what makes it a *floor* rather than a
+proof of compatibility. The baseline is the latest release on crates.io, so API introduced by a
+merge whose publish is still in flight is not in the baseline, and an all-features run proves
+nothing about feature topology — a newly added gate or a removed feature-to-feature edge is
+invisible to it even though a consumer's existing feature selection can stop compiling. Both are
+cases where judgement raises the level above the floor, which is the reviewable step this design
+is built around. Widening the mechanical evidence to a full matrix of every crate against both
+the registry and the queued base, with feature-topology analysis, is not proposed: the cost is
+several rustdoc runs per crate per pull request, and the residual cases are rare and visible to
+the author who wrote them.
 
 ```mermaid
 flowchart TD
@@ -519,45 +625,40 @@ nothing in CI calls it. With it go `prepare-release` itself, the `version_group`
 `release-plz.toml`, and the framing of `verify-semver-checks` as a release preflight (the recipe
 survives, repurposed as the skill's and the semver job's canary).
 
-`release-plz release` is **kept, unchanged**. It is the publish half, it is idempotent, and
+`release-plz release` remains the publish half and keeps its behaviour: it is idempotent, and
 nothing downstream of it reads release-plz state — `plan-binaries` reconciles against
 `cargo metadata` and `gh release view`. Its `git_tag_name = "{{ package }}-v{{ version }}"` remains
 pinned because the `cargo binstall` asset URLs derive from it, but tags carry no meaning for
-versioning.
+versioning. The one publish-side change this design makes is to the retry budget around it, sized
+for the publish volume described below.
 
-## Migration
+## Adoption
 
-The check cannot be switched on until every publishable package is clean against its anchor.
+The check can only be switched on once every publishable package is clean against its anchor.
 Batched versioning leaves packages with released content sitting past their last increment;
-restricting the crate to `src/`, `README.md` and `doc/`/`docs/` removes those whose only
-drift is tests, benches, examples or other git-only files.
+restricting each crate to its release-relevant content removes those whose only drift is
+repository-only files, and the remainder is cleared by catch-up increments that `release.yml`
+publishes.
 
-Cutover assumes an **exclusive lock** on the repository: no other pull requests merge while
-the process is being switched. That lets the tool, the catch-up increments, the fan-in job,
-the ruleset and the merge queue land as one window without other branches being asked to
-satisfy a rule that `main` itself does not yet meet. `just prepare-release` and the no-bumps-on-
-feature-branches rule stay in force until that window finishes.
+Adoption takes an **exclusive lock** on the repository: no other pull requests merge while the
+process is switched over. That lets the packaging changes, the catch-up increments, the tool, the
+fan-in job, the ruleset and the merge queue land in one window, so no other branch is asked to
+satisfy a rule that `main` itself does not yet meet. Ordering inside that window is fixed by two
+constraints: an `include` edit is itself a manifest change, so allow-lists and their increments
+land together; and the merge queue plus the `required-checks` ruleset land last, once
+`cargo release-plan check` is clean on `main`. The repository's merge methods are restricted to
+squashes and merge commits in the same window, because the anchor definition depends on each
+merged pull request contributing one commit to `main`'s first-parent line. Contributor
+documentation ([`git-workflow.md`](git-workflow.md), [`RELEASING.md`](../RELEASING.md)) is
+inverted as the lock is released.
 
-The `cargo-release-plan` package is first-published by hand before the merge that introduces
-it with `publish = true`. Trusted Publishing cannot create a crate; once that first version
-exists, OIDC publishing takes over. There is no `publish = false` staging crate.
-
-1. Stop `src/` from embedding `tests/` (and other git-only paths). Shared parser fixtures
-   live in the crate that owns the parser; dependents call that crate instead of carrying
-   a second copy.
-2. Land the `include` allow-lists and the reconciliation increments together, and let
-   `release.yml` publish. They must land together because an `include` edit is itself a
-   manifest change.
-3. Confirm `cargo release-plan check` is clean on `main`.
-4. Land Validation's `merge_group` trigger and the `required-checks` fan-in (every
-   merge-blocking job, including `validate-versions`). Put `main` behind a merge queue
-   whose only required status check is `required-checks`. Invert
-   [`git-workflow.md`](git-workflow.md) / [`RELEASING.md`](../RELEASING.md). Then release
-   the lock.
+`cargo-release-plan` itself is first published by hand before the merge that introduces it with
+`publish = true`, for the crate-creation reason above. There is no `publish = false` staging
+crate.
 
 ## Publish volume and rate limits
 
-Every merge that touches a published package now publishes it, and group closure multiplies that:
+Every merge that touches a published package publishes it, and group closure multiplies that:
 a one-line change in any `cbh_*` crate publishes all sixteen members of the `cargo-bench-history`
 group. A change to an inherited workspace value publishes every inheriting package. Long
 publish runs — including a full-workspace republish — are therefore expected by design, not
@@ -566,16 +667,21 @@ an anomaly to be engineered away.
 crates.io throttles publishing with a per-user token bucket, and the applicable limit is the one
 for **new versions of existing crates**: a burst of 30 with one token refilled per minute. (The
 much tighter new-crate limit — burst 5, one per ten minutes — does not apply here, because
-Trusted Publishing cannot perform a crate's first publish, so bootstrapping a new crate is a
-manual step outside this flow.) A full-workspace reconciliation of 44 crates against a fully
-drained bucket therefore costs at most about 44 minutes of waiting, and any single group release
-fits inside the burst.
+Trusted Publishing cannot create a crate, so bootstrapping a new crate is a manual step outside
+this flow.) These are server-side values that crates.io controls: they are the `PublishExisting`
+and `PublishNew` defaults in
+[`src/config/rate_limits.rs`](https://github.com/rust-lang/crates.io/blob/main/src/config/rate_limits.rs)
+of `rust-lang/crates.io`, overridable there by deployment configuration, and a live rejection
+reports the applicable limit in its error response. Both are checkable without privileged access,
+and the budget below must be recomputed from them if either changes. A full-workspace
+reconciliation of 44 crates against a fully drained bucket costs at most about 44 minutes of
+waiting, and any single group release fits inside the burst.
 
 `release-plz release` is idempotent — it re-checks the registry and skips already-published
 versions — so a throttled run resumes rather than restarting. The retry around it is widened from
 three attempts to **ten**, keeping the fifteen-minute spacing: each wait refills roughly fifteen
-tokens, so ten attempts buy far more headroom than even a full-workspace release consumes, and
-the extra attempts cost nothing when nothing is throttled.
+tokens, so ten attempts provide more retry capacity than even a full-workspace release consumes,
+and the extra attempts cost nothing when nothing is throttled.
 
 The job timeout is raised accordingly, but it cannot simply be set to the arithmetic worst case:
 GitHub-hosted jobs are hard-capped at six hours, so `timeout-minutes` is set just below that
@@ -594,6 +700,7 @@ publisher, no folo-specific behaviour compiled in. Group definitions come from c
 and packaging from each crate's `include`, so another workspace adopts it by writing
 `[workspace.metadata.release-plan]` and pointing a check at `cargo release-plan check`.
 
-The skill and the `just` recipes stay local for now. The skill is the part most entangled with
-local conventions, and skills are new to this repository; extracting it is worth doing only once
-the shape has survived contact with real pull requests.
+The skill and the `just` recipes stay local. The skill is the part most entangled with local
+conventions, and skills are new to this repository; it is extracted once its judgement steps and
+plan format have been validated on a representative body of real pull requests, including
+multi-package and group-closure cases, without further changes to its interface.
