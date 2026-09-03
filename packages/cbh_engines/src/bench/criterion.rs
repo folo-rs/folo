@@ -12,16 +12,20 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
+use ohno::OhnoCore;
 use serde::Deserialize;
 
 /// An error encountered while parsing a Criterion result case.
 ///
 /// The error retains the concrete document failure in its source chain and
 /// displays that failure without adding aggregate-level wording.
-#[ohno::error]
+#[derive(ohno::Error)]
 #[no_constructors]
 #[from(BenchmarkParseError, EstimatesParseError)]
-pub struct CriterionParseError;
+pub struct CriterionParseError {
+    #[error]
+    core: OhnoCore,
+}
 
 /// Criterion's `benchmark.json` was malformed.
 ///
@@ -39,10 +43,10 @@ struct BenchmarkParseError;
 #[from(serde_json::Error)]
 struct EstimatesParseError;
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
+// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
+// immutable after construction — no &self method mutates internal state — so observing them
+// through a shared reference during unwind is harmless.
 impl UnwindSafe for CriterionParseError {}
 impl RefUnwindSafe for CriterionParseError {}
 impl UnwindSafe for BenchmarkParseError {}

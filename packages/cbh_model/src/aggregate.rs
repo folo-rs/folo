@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
+use ohno::OhnoCore;
+
 use crate::{BenchmarkId, BenchmarkResult, MetricKind, MetricList};
 
 /// The best-of-N reduction: combined results plus per-metric provenance.
@@ -49,16 +51,17 @@ pub struct Selection {
 /// that each metric has exactly one sample per run to minimize over. A missing or
 /// extra case or metric in any run is a hard error rather than something to paper
 /// over, because it means the runs did not exercise the same work.
-#[ohno::error]
-#[derive(Clone)]
+#[derive(Clone, ohno::Error)]
 #[no_constructors]
 #[from(MissingCaseError, MissingMetricError)]
-pub struct AggregateError;
+pub struct AggregateError {
+    #[error]
+    core: OhnoCore,
+}
 
-// `#[ohno::error]` injects `OhnoCore`, which blocks automatic unwind-safety trait
-// inference. All ohno error types in this module expose no mutation, so unwinding
-// cannot reveal a partially mutated value. Introducing mutation or interior mutability
-// requires re-evaluating every manual impl below.
+// `OhnoCore` blocks automatic unwind-safety trait inference. All ohno error types in this
+// module expose no mutation, so unwinding cannot reveal a partially mutated value.
+// Introducing mutation or interior mutability requires re-evaluating every manual impl below.
 impl UnwindSafe for AggregateError {}
 impl RefUnwindSafe for AggregateError {}
 

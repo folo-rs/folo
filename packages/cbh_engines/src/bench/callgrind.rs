@@ -11,6 +11,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
+use ohno::OhnoCore;
 use serde::Deserialize;
 
 /// The Gungraun summary schema version this parser understands.
@@ -20,10 +21,13 @@ const SUPPORTED_VERSION: &str = "6";
 ///
 /// The error retains the concrete parsing failure in its source chain and
 /// displays that failure without adding aggregate-level wording.
-#[ohno::error]
+#[derive(ohno::Error)]
 #[no_constructors]
 #[from(CallgrindJsonError, UnsupportedCallgrindVersionError)]
-pub struct CallgrindParseError;
+pub struct CallgrindParseError {
+    #[error]
+    core: OhnoCore,
+}
 
 /// A Callgrind `summary.json` document was malformed.
 ///
@@ -47,10 +51,10 @@ struct UnsupportedCallgrindVersionError {
     supported_version: String,
 }
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
+// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
+// immutable after construction — no &self method mutates internal state — so observing them
+// through a shared reference during unwind is harmless.
 impl UnwindSafe for CallgrindParseError {}
 impl RefUnwindSafe for CallgrindParseError {}
 impl UnwindSafe for CallgrindJsonError {}

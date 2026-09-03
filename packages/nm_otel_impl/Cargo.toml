@@ -2,7 +2,7 @@
 name = "nm_otel_impl"
 description = "Implementation crate for nm_otel; do not depend on it directly"
 publish = true
-version = "0.4.17"
+version = "0.4.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -17,10 +17,7 @@ all-features = true
 # external type must be reviewed and added explicitly.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = [
-    "opentelemetry::metrics::meter::MeterProvider",
-    "tick::clock::Clock",
-]
+allowed_external_types = ["opentelemetry::metrics::meter::MeterProvider", "tick::clock::Clock"]
 
 # These dev-dependencies are consumed only by test and benchmark targets that require
 # `private-test-util`. When udeps runs without `--all-features`, the targets are skipped, so the

@@ -4,6 +4,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_config::ConfigError;
 use cbh_storage::StorageError;
+use ohno::OhnoCore;
 
 /// An error from an `analyze`-family command (`analyze`, `list`, `prune`,
 /// `examine`, `bless`, `unbless`).
@@ -11,7 +12,7 @@ use cbh_storage::StorageError;
 /// It is transparent: it renders exactly the message of the failure it carries
 /// and adds nothing of its own, so converting one into the binary's
 /// [`AppError`](ohno::AppError) leaves the message a user sees unchanged.
-#[ohno::error]
+#[derive(ohno::Error)]
 #[no_constructors]
 #[from(ConfigError, StorageError, NoOutputSelectedError)]
 #[from(
@@ -37,14 +38,16 @@ use cbh_storage::StorageError;
 )]
 #[from(WorkingTreeProbeFailedError, CommitterTimeFailedError)]
 #[from(DefaultBranchProbeFailedError, ToolchainProbeFailedError)]
-pub struct AnalyzeError;
+pub struct AnalyzeError {
+    #[error]
+    core: OhnoCore,
+}
 
-// Every error type in this file holds an OhnoCore field containing
-// Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc requires
-// T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
-// immutable after construction — no &self method mutates internal state — so observing
-// them through a shared reference during unwind is harmless. That is the reasoning the
-// manual impls following each type below rest on.
+// Every error type in this file holds an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are
+// !RefUnwindSafe. However, ohno error types are immutable after construction — no &self method
+// mutates internal state — so observing them through a shared reference during unwind is
+// harmless. That is the reasoning the manual impls following each type below rest on.
 impl UnwindSafe for AnalyzeError {}
 impl RefUnwindSafe for AnalyzeError {}
 
