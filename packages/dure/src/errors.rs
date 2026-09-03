@@ -118,7 +118,7 @@ pub(crate) struct StoreError;
 
 /// Resume without an id needs a terminal stdin to prompt for one.
 #[ohno::error]
-#[display("Cannot prompt for a session id without a terminal stdin; pass the id as an argument")]
+#[display("Cannot prompt for a session id without a terminal stdin; run `dure resume <id>`")]
 pub(crate) struct PromptFailedError;
 
 /// This client was displaced by a newer attach.
