@@ -20,7 +20,7 @@ pub use drop_waker::{DropOnWakerRelease, drop_waker};
 pub use float::f64_diff_abs;
 pub use reentrant_waker::ReentrantWakerData;
 pub use wake_action_waker::wake_action_waker;
-pub use watchdog::with_watchdog;
+pub use watchdog::{WatchdogPhaseReporter, with_watchdog, with_watchdog_phases};
 
 #[cfg(windows)]
 mod windows;

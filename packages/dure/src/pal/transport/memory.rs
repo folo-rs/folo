@@ -19,8 +19,14 @@ struct ConnState {
     peer: ConnId,
     closed: bool,
     /// Sends on this connection block, standing in for a peer that has stopped
-    /// draining its pipe. Only `disconnect` releases them, as `CancelIoEx` does.
+    /// draining its pipe. Tests release them with `resume`; `disconnect` also
+    /// releases them, as `CancelIoEx` does.
     stalled: bool,
+    /// Senders parked on this connection's stalled predicate.
+    ///
+    /// Tests observe this under the connection map lock to prove that a
+    /// particular send reached the intended blocking boundary.
+    stalled_senders: usize,
 }
 
 struct ListenerState {
@@ -85,19 +91,57 @@ impl MemoryTransport {
     /// Make sends on `conn` block until it is disconnected or resumed.
     pub(crate) fn stall(&self, conn: ConnId) {
         let mut conns = self.inner.conns.lock().expect("conn map lock");
-        if let Some(state) = conns.get_mut(&conn) {
-            state.stalled = true;
-        }
+        let state = conns
+            .get_mut(&conn)
+            .expect("tests only stall a live connection");
+        assert!(!state.stalled, "a connection cannot be stalled twice");
+        assert_eq!(
+            state.stalled_senders, 0,
+            "a connection cannot be rearmed before prior senders resume"
+        );
+        state.stalled = true;
         self.inner.conn_cond.notify_all();
     }
 
-    /// Let sends on `conn` proceed again, releasing whoever is blocked on it.
+    /// Let sends on `conn` proceed and wait until its old stall has drained.
+    ///
+    /// Draining the parked-sender count before returning makes the connection
+    /// safe to stall again without observing a sender from the previous stall.
     pub(crate) fn resume(&self, conn: ConnId) {
         let mut conns = self.inner.conns.lock().expect("conn map lock");
-        if let Some(state) = conns.get_mut(&conn) {
-            state.stalled = false;
-        }
+        let state = conns
+            .get_mut(&conn)
+            .expect("tests only resume a live connection");
+        assert!(state.stalled, "only a stalled connection can be resumed");
+        state.stalled = false;
         self.inner.conn_cond.notify_all();
+        loop {
+            let state = conns
+                .get(&conn)
+                .expect("connections remain addressable after disconnection");
+            if state.stalled_senders == 0 {
+                return;
+            }
+            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+        }
+    }
+
+    /// Block until a send has parked on `conn`'s injected stall.
+    pub(crate) fn wait_for_stalled_send(&self, conn: ConnId) {
+        let mut conns = self.inner.conns.lock().expect("conn map lock");
+        loop {
+            let state = conns
+                .get(&conn)
+                .expect("tests only observe a live connection");
+            assert!(
+                state.stalled,
+                "the connection must be stalled before waiting"
+            );
+            if state.stalled_senders != 0 {
+                return;
+            }
+            conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
+        }
     }
 
     pub(crate) fn startup_commit_count(&self) -> usize {
@@ -247,6 +291,7 @@ impl Transport for MemoryTransport {
                     peer: client,
                     closed: false,
                     stalled: false,
+                    stalled_senders: 0,
                 },
             );
             conns.insert(
@@ -256,6 +301,7 @@ impl Transport for MemoryTransport {
                     peer: server,
                     closed: false,
                     stalled: false,
+                    stalled_senders: 0,
                 },
             );
         }
@@ -280,15 +326,29 @@ impl Transport for MemoryTransport {
             return Err(PalError::new(PalErrorKind::Other));
         }
         let mut conns = self.inner.conns.lock().expect("conn map lock");
+        let mut waiting = false;
         let peer = loop {
-            let Some(state) = conns.get(&conn) else {
+            let Some(state) = conns.get_mut(&conn) else {
                 return Err(PalError::new(PalErrorKind::NotFound));
             };
             if state.closed {
+                if waiting {
+                    state.stalled_senders = state.stalled_senders.checked_sub(1).unwrap();
+                    self.inner.conn_cond.notify_all();
+                }
                 return Err(PalError::new(PalErrorKind::NotFound));
             }
             if !state.stalled {
+                if waiting {
+                    state.stalled_senders = state.stalled_senders.checked_sub(1).unwrap();
+                    self.inner.conn_cond.notify_all();
+                }
                 break state.peer;
+            }
+            if !waiting {
+                state.stalled_senders = state.stalled_senders.checked_add(1).unwrap();
+                waiting = true;
+                self.inner.conn_cond.notify_all();
             }
             conns = self.inner.conn_cond.wait(conns).expect("conn condvar");
         };
@@ -355,6 +415,10 @@ impl Transport for MemoryTransport {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::thread;
+
+    use testing::with_watchdog;
+
     use super::*;
 
     #[test]
@@ -379,5 +443,29 @@ mod tests {
         let error = transport.recv_timeout(client, Duration::ZERO).unwrap_err();
 
         assert_eq!(error.kind(), PalErrorKind::Timeout);
+    }
+
+    #[test]
+    fn connection_send_stall_reports_each_rearmed_sender() {
+        with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let listener = transport.listen("session").unwrap();
+            let client = transport.connect("session", Duration::ZERO).unwrap();
+            let server = transport.accept(listener).unwrap();
+
+            for message in [Message::StartupErr, Message::StartupCommit] {
+                transport.stall(client);
+                let sender = thread::spawn({
+                    let transport = transport.clone();
+                    let message = message.clone();
+                    move || transport.send(client, &message)
+                });
+
+                transport.wait_for_stalled_send(client);
+                transport.resume(client);
+                sender.join().unwrap().unwrap();
+                assert_eq!(transport.recv(server).unwrap(), message);
+            }
+        });
     }
 }

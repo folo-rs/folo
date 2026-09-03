@@ -39,9 +39,9 @@ so a client never reports a startup failure while leaving a live session behind.
 The startup channel stays open past that acknowledgement, as the supervisor's
 signal that `dure run` still intends to attach. An app that exits immediately
 would otherwise be torn down before the client finishes attaching, losing its
-output and exit status to the race. So once the app has exited, the supervisor
-holds the session open — listener included — until either a client has attached
-or the initiator has dropped the channel.
+output and exit status to the race. The supervisor's **first-attach lifetime
+gate** therefore keeps the exited app's session and listener available until
+either a client has attached or the initiator has dropped the channel.
 
 ## Platform gate
 
@@ -90,8 +90,10 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
 
 * **Session store** — create, read, list, and delete session records; allocate
   ids; provide the store root. The real implementation uses the per-user
-  LocalAppData known folder, subdirectory `dure`. The root is supplied by the
-  PAL so tests never touch the user's real store.
+  LocalAppData known folder, subdirectory `dure`. Coordination-focused unit
+  tests use shared in-memory records, while the session-store tests use an
+  isolated root to exercise filesystem durability without touching the user's
+  real store.
 * **Processes** — spawn a console-detached supervisor with job breakaway;
   identify it by pid and process creation time; report whether a job object would
   end this process along with its launcher; create a job with a chosen
@@ -336,6 +338,16 @@ ownership and applies each message under the client-slot lock, so a client
 displaced while its receive was in flight cannot reach the pseudoconsole
 afterwards. Pseudoconsole input lands in the console host's buffer, which the
 host drains independently of the app, so that hold is bounded.
+
+Installing the client slot and signaling the first-attach lifetime gate let the
+supervisor finish delivering an already-exited app's output and status before
+the advisory attached flag is written to the session store. The store update
+happens after both ownership locks are released, so durable filesystem I/O
+cannot block that supervisor progress or another attach. Each client-slot change
+assigns a generation to its advisory update. Store writes are serialized and
+skip updates that are already stale when they reach that serialization boundary.
+If a write becomes stale inside filesystem I/O, the newer update follows it
+through the same boundary and establishes the final attached state.
 
 Session teardown closes the pseudoconsole and joins the output pump before
 queueing the app's exit status, which is what orders the app's final output

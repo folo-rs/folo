@@ -1,7 +1,7 @@
 //! Supervisor role: own the app, accept clients, last-connect-wins steal.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
@@ -257,11 +257,19 @@ struct Shared<T: Transport, C> {
     /// acknowledge in one order and install in another, letting an older
     /// attach displace a newer one.
     attach: Mutex<()>,
+    /// Monotonic identity of the latest client-slot ownership state.
+    ///
+    /// Advisory store updates carry the generation assigned under the client
+    /// slot, so an older update that waited for store I/O cannot overwrite a
+    /// newer attach or detach.
+    attached_generation: Arc<AtomicU64>,
     /// Output the app produced before anyone attached, kept for the first
     /// client. Taken under the client slot, which is what orders it ahead of
     /// the output that follows the attach.
     preamble: Mutex<Option<Vec<u8>>>,
-    /// Gate that holds the session open until somebody has come for it.
+    /// The supervisor's first-attach lifetime gate.
+    ///
+    /// Holds an exited app's session open until somebody has come for it.
     first_attach: Mutex<FirstAttach>,
     first_attach_changed: Condvar,
     stopping: AtomicBool,
@@ -282,7 +290,7 @@ impl<T: Transport> Clone for Client<T> {
     }
 }
 
-/// Whether the session has been claimed, and whether anyone is still coming.
+/// State of the supervisor's first-attach lifetime gate.
 ///
 /// An app that exits immediately would otherwise be torn down before `dure run`
 /// finishes attaching, losing both its output and its exit status. The
@@ -335,6 +343,23 @@ impl<T: Transport, C> Shared<T, C> {
         self.client
             .lock()
             .expect("client slot is only copied or replaced, never held across a panic")
+    }
+
+    /// Advances the identity of the client-slot ownership state.
+    // A constant-return mutation makes later ownership updates indistinguishable.
+    // The deterministic stall test then waits for an update that is correctly
+    // discarded, and mutation watchdogs are disabled.
+    #[cfg_attr(test, mutants::skip)]
+    fn next_attached_generation(&self) -> u64 {
+        let previous = self
+            .attached_generation
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("the process cannot perform enough ownership changes to exhaust u64");
+        previous
+            .checked_add(1)
+            .expect("fetch_update only succeeds when the next generation exists")
     }
 
     /// Holds output produced before the first client attached.
@@ -416,6 +441,7 @@ where
     } = *initialized;
 
     let record_live = Arc::new(Mutex::new(true));
+    let attached_generation = Arc::new(AtomicU64::default());
     let shared = Arc::new(Shared {
         transport: transport.clone(),
         pty_host: pty_host.clone(),
@@ -423,6 +449,7 @@ where
         session_id,
         client: Mutex::new(None),
         attach: Mutex::new(()),
+        attached_generation: Arc::clone(&attached_generation),
         preamble: Mutex::new(Some(Vec::new())),
         first_attach: Mutex::new(FirstAttach::default()),
         first_attach_changed: Condvar::new(),
@@ -441,7 +468,12 @@ where
         }
     });
 
-    let store_flag = store_attached_flag(store, session_id, Arc::clone(&record_live));
+    let store_flag = store_attached_flag(
+        store,
+        session_id,
+        Arc::clone(&record_live),
+        attached_generation,
+    );
     thread::spawn({
         let shared = Arc::clone(&shared);
         let transport = transport.clone();
@@ -529,17 +561,22 @@ where
     Ok(status)
 }
 
+// A mutation that skips a live record's update leaves the deterministic
+// store-stall test waiting for an operation that can never arrive, and
+// watchdogs are disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
 fn store_attached_flag<S: SessionStore + Clone>(
     store: &S,
     id: SessionId,
     record_live: Arc<Mutex<bool>>,
-) -> impl Fn(bool) + Clone + Send + 'static {
+    current_generation: Arc<AtomicU64>,
+) -> impl Fn(u64, bool) + Clone + Send + 'static {
     let store = store.clone();
-    move |attached: bool| {
+    move |generation: u64, attached: bool| {
         let live = record_live
             .lock()
             .expect("record_live is only set false at delete, never held across a panic");
-        if !*live {
+        if !*live || current_generation.load(Ordering::SeqCst) != generation {
             return;
         }
         if let Ok(Some(mut record)) = store.read(id) {
@@ -558,7 +595,7 @@ fn accept_loop<T, C>(
     shared: &Arc<Shared<T, C>>,
     transport: &T,
     listener: ListenerId,
-    set_attached: impl Fn(bool) + Clone + Send + 'static,
+    set_attached: impl Fn(u64, bool) + Clone + Send + 'static,
 ) where
     T: Transport + Clone,
     C: Pseudoconsole,
@@ -581,7 +618,7 @@ fn accept_loop<T, C>(
 // Blocking recv. A mutation that drops the disconnect path hangs unit tests
 // because watchdogs are disabled under cargo-mutants.
 #[cfg_attr(test, mutants::skip)]
-fn client_loop<T, C>(shared: &Shared<T, C>, conn: ConnId, set_attached: &impl Fn(bool))
+fn client_loop<T, C>(shared: &Shared<T, C>, conn: ConnId, set_attached: &impl Fn(u64, bool))
 where
     T: Transport + Clone,
     C: Pseudoconsole,
@@ -607,7 +644,7 @@ where
                 return;
             }
             let outbox = Outbox::start(shared.transport.clone(), conn);
-            let previous = {
+            let (previous, generation) = {
                 let mut slot = shared.client();
                 // Acknowledging under the client slot keeps `Attached` ahead of
                 // any `Output` on this connection, and installing in the same
@@ -635,11 +672,18 @@ where
                         outbox.send(message);
                     }
                 }
-                slot.replace(Client {
+                let previous = slot.replace(Client {
                     conn,
                     outbox: Arc::clone(&outbox),
-                })
+                });
+                let generation = shared.next_attached_generation();
+                (previous, generation)
             };
+            // The client owns the slot now. Signaling the supervisor's
+            // first-attach lifetime gate lets it finish delivering an
+            // already-exited app's output and status before the advisory store
+            // update below can encounter durable I/O.
+            shared.note_attached();
             if let Some(old) = previous {
                 // Queued rather than written here, so a client that stopped
                 // reading cannot hold up the steal that is replacing it. The
@@ -665,8 +709,11 @@ where
             _ = shared
                 .pty_host
                 .resize(shared.pty, WindowSize { cols, rows });
-            set_attached(true);
-            shared.note_attached();
+            // Store I/O is not part of the serialized ownership transfer. A
+            // stalled durable write must not prevent teardown or another client
+            // from acquiring the attach lock.
+            drop(_attach);
+            set_attached(generation, true);
         }
         _ => {
             shared.transport.disconnect(conn);
@@ -700,18 +747,21 @@ where
         }
         drop(slot);
     }
-    let departing = {
+    let (departing, generation) = {
         let mut slot = shared.client();
         if slot.as_ref().map(|client| client.conn) == Some(conn) {
             let departing = slot.take();
-            // Holding the slot so a replacement cannot publish attached=true
-            // before this disconnect publishes attached=false.
-            set_attached(false);
-            departing
+            let generation = shared.next_attached_generation();
+            (departing, Some(generation))
         } else {
-            None
+            (None, None)
         }
     };
+    if let Some(generation) = generation {
+        // Store I/O is serialized by generation rather than by the client slot.
+        // A stalled advisory write therefore cannot block ownership transfer.
+        set_attached(generation, false);
+    }
     if let Some(departing) = departing {
         // The peer is gone or misbehaving, so nothing still queued for it is
         // worth waiting on.
@@ -755,17 +805,17 @@ where
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
 
-    use testing::with_watchdog;
+    use memory_session_store::MemorySessionStore;
+    use testing::{WatchdogPhaseReporter, with_watchdog_phases};
 
     use super::*;
     use crate::durability::Durability;
     use crate::pal::ids::{AppId, ConnId, JobId, ListenerId};
     use crate::pal::processes::MockProcesses;
     use crate::pal::pseudoconsole::MemoryPseudoconsole;
-    use crate::pal::session_store::FsSessionStore;
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::{Message, encode, payload_len_ok};
     use crate::session_record::ProcessIdentity;
@@ -774,12 +824,18 @@ mod tests {
     /// forwarded status from a defaulted one.
     const SAMPLE_APP_EXIT: i32 = 7;
 
+    /// Ordinary valid geometry for tests where resize behavior is out of scope.
+    const ORDINARY_ATTACH: Message = Message::Attach { cols: 80, rows: 24 };
+
     /// Completes the client side of the startup commit handshake.
     fn commit_startup(
         transport: &MemoryTransport,
         listener: ListenerId,
+        phase_reporter: &WatchdogPhaseReporter,
     ) -> (ConnId, SessionId, Durability) {
+        phase_reporter.report("waiting for the supervisor startup connection");
         let conn = transport.accept(listener).unwrap();
+        phase_reporter.report("waiting for the supervisor startup response");
         let Message::StartupOk {
             session_id,
             durability,
@@ -809,6 +865,15 @@ mod tests {
         durability: Durability,
         wait: AppWait,
     ) -> MockProcesses {
+        mock_processes_with_close_job(exit, durability, wait, |_| {})
+    }
+
+    fn mock_processes_with_close_job(
+        exit: Arc<(Mutex<bool>, Condvar)>,
+        durability: Durability,
+        wait: AppWait,
+        close_job: impl Fn(JobId) + Send + Sync + 'static,
+    ) -> MockProcesses {
         let mut processes = MockProcesses::new();
         processes.expect_durability().returning(move || durability);
         processes
@@ -824,7 +889,7 @@ mod tests {
         processes
             .expect_random_nonce()
             .returning(|| "nonce".to_string());
-        processes.expect_close_job().returning(|_| ());
+        processes.expect_close_job().returning(close_job);
         processes.expect_wait_app().returning(move |_| {
             let (lock, cvar) = &*exit;
             let mut done = lock.lock().expect("exit lock");
@@ -840,20 +905,20 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn steal_displaces_first_client() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let processes = mock_processes(Arc::clone(&exit));
 
             let startup = transport.listen("startup").unwrap();
             let supervisor = thread::spawn({
                 let transport = transport.clone();
+                let store = store.clone();
                 move || {
                     run_supervisor(
                         &processes,
@@ -867,33 +932,27 @@ mod tests {
                 }
             });
 
-            let (startup_conn, session_id, _durability) = commit_startup(&transport, startup);
+            let (startup_conn, session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
             transport.disconnect(startup_conn);
 
             let pipe = transport.pipe_name("nonce");
             let first = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
-            transport
-                .send(first, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
+            transport.send(first, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the first attach acknowledgement");
             assert!(matches!(
                 transport.recv(first).unwrap(),
                 Message::Attached { session_id: id } if id == session_id
             ));
 
             let second = transport.connect(&pipe, CONNECT_TIMEOUT).unwrap();
-            transport
-                .send(
-                    second,
-                    &Message::Attach {
-                        cols: 100,
-                        rows: 30,
-                    },
-                )
-                .unwrap();
+            transport.send(second, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the second attach acknowledgement");
             assert!(matches!(
                 transport.recv(second).unwrap(),
                 Message::Attached { .. }
             ));
+            phase_reporter.report("waiting for the displacement notice");
             assert!(matches!(transport.recv(first).unwrap(), Message::Displaced));
 
             {
@@ -901,21 +960,20 @@ mod tests {
                 *lock.lock().expect("exit lock") = true;
                 cvar.notify_all();
             }
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
-            let leftover = FsSessionStore::new(dir.path().to_path_buf());
-            assert!(leftover.list().unwrap().is_empty());
+            assert!(store.list().unwrap().is_empty());
         });
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn final_output_arrives_before_the_exit_status() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let processes = mock_processes(Arc::clone(&exit));
 
@@ -936,15 +994,15 @@ mod tests {
                 }
             });
 
-            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
+            let (startup_conn, _session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
             transport.disconnect(startup_conn);
 
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
@@ -965,29 +1023,31 @@ mod tests {
                 cvar.notify_all();
             }
 
+            phase_reporter.report("waiting for final app output");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::Output(b"bye".to_vec())
             );
+            phase_reporter.report("waiting for the app exit status");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::AppExited {
                     status: SAMPLE_APP_EXIT
                 }
             );
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
         });
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn an_app_that_exits_before_anyone_attaches_still_reports_its_status() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             // The app is already gone by the time the supervisor waits on it.
             let exit = Arc::new((Mutex::new(true), Condvar::new()));
             let processes = mock_processes(Arc::clone(&exit));
@@ -1008,46 +1068,57 @@ mod tests {
                 }
             });
 
-            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
+            let (startup_conn, _session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
 
             // The startup connection stays open, which is what holds the
             // session up for the attach that `dure run` is about to make.
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
             ));
+            phase_reporter.report("waiting for the app exit status");
             assert_eq!(
                 transport.recv(client).unwrap(),
                 Message::AppExited {
                     status: SAMPLE_APP_EXIT
                 }
             );
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
             transport.disconnect(startup_conn);
         });
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
-    fn a_session_nobody_comes_for_ends_when_its_initiator_gives_up() {
-        with_watchdog(|| {
+    fn a_stalled_attached_flag_does_not_delay_the_exit_status() {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
+            // The app is already gone, so attaching must immediately release
+            // the supervisor to report its status.
             let exit = Arc::new((Mutex::new(true), Condvar::new()));
-            let processes = mock_processes(Arc::clone(&exit));
+            let processes =
+                mock_processes_with_close_job(exit, Durability::Durable, AppWait::Reports, {
+                    let store = store.clone();
+                    // Hold teardown after the first-attach lifetime gate opens
+                    // but before it claims the client slot and invalidates the
+                    // record, so the advisory write reaches its injected stall.
+                    move |_| store.wait_for_stalled_publish()
+                });
 
             let startup = transport.listen("startup").unwrap();
             let supervisor = thread::spawn({
                 let transport = transport.clone();
+                let store = store.clone();
                 move || {
                     run_supervisor(
                         &processes,
@@ -1061,13 +1132,77 @@ mod tests {
                 }
             });
 
-            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
+            let (startup_conn, _session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
+            store.stall_publishes();
+
+            let client = transport
+                .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
+                .unwrap();
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
+            assert!(matches!(
+                transport.recv(client).unwrap(),
+                Message::Attached { .. }
+            ));
+
+            phase_reporter.report("waiting for the attached-flag publication to stall");
+            store.wait_for_stalled_publish();
+            // Reaching the exit status proves both that the first-attach signal
+            // preceded the advisory write and that teardown acquired the attach
+            // lock while the write remained stalled.
+            phase_reporter.report("waiting for the app exit status");
+            assert_eq!(
+                transport.recv(client).unwrap(),
+                Message::AppExited {
+                    status: SAMPLE_APP_EXIT
+                }
+            );
+
+            store.resume_publishes();
+            transport.disconnect(client);
+            phase_reporter.report("waiting for supervisor shutdown");
+            assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
+            transport.disconnect(startup_conn);
+            assert!(store.list().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    // Building the session record reads the real system clock.
+    #[cfg_attr(miri, ignore)]
+    fn a_session_nobody_comes_for_ends_when_its_initiator_gives_up() {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
+            let transport = MemoryTransport::new();
+            let pty = MemoryPseudoconsole::new();
+            let store = MemorySessionStore::new();
+            let exit = Arc::new((Mutex::new(true), Condvar::new()));
+            let processes = mock_processes(Arc::clone(&exit));
+
+            let startup = transport.listen("startup").unwrap();
+            let supervisor = thread::spawn({
+                let transport = transport.clone();
+                let store = store.clone();
+                move || {
+                    run_supervisor(
+                        &processes,
+                        &store,
+                        &transport,
+                        &pty,
+                        "startup",
+                        PathBuf::from("/work"),
+                        vec!["app.exe".to_string()],
+                    )
+                }
+            });
+
+            let (startup_conn, _session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
             // Nobody will ever attach, so the gate must open on this instead.
             transport.disconnect(startup_conn);
-
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
-            let leftover = FsSessionStore::new(dir.path().to_path_buf());
-            assert!(leftover.list().unwrap().is_empty());
+            assert!(store.list().unwrap().is_empty());
         });
     }
 
@@ -1079,11 +1214,10 @@ mod tests {
     }
 
     fn assert_rejected_startup_rolls_back(rejection: RejectedStartup) {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let exit = Arc::new((Mutex::new(true), Condvar::new()));
             let processes = mock_processes(exit);
 
@@ -1104,7 +1238,9 @@ mod tests {
                 }
             });
 
+            phase_reporter.report("waiting for the supervisor startup connection");
             let startup_conn = transport.accept(startup).unwrap();
+            phase_reporter.report("waiting for the supervisor startup response");
             assert!(matches!(
                 transport.recv(startup_conn).unwrap(),
                 Message::StartupOk { .. }
@@ -1122,6 +1258,7 @@ mod tests {
                 RejectedStartup::Timeout => transport.timeout_next_recv(),
             }
 
+            phase_reporter.report("waiting for startup rollback");
             let error = supervisor.join().unwrap().unwrap_err();
             assert!(error.find_source::<StartupFailedError>().is_some());
             assert!(store.list().unwrap().is_empty());
@@ -1132,36 +1269,35 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_session_without_startup_commit_is_rolled_back() {
         assert_rejected_startup_rolls_back(RejectedStartup::Disconnect);
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_session_with_an_invalid_startup_commit_is_rolled_back() {
         assert_rejected_startup_rolls_back(RejectedStartup::Message(Message::StartupErr));
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_startup_commit_timeout_is_rolled_back() {
         assert_rejected_startup_rolls_back(RejectedStartup::Timeout);
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn failure_to_send_startup_ok_rolls_back() {
-        with_watchdog(|| {
+        with_watchdog_phases("running the rejected startup", |_phase_reporter| {
             let transport = MemoryTransport::new();
             transport.fail_next_send();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let exit = Arc::new((Mutex::new(true), Condvar::new()));
             let processes = mock_processes(exit);
 
@@ -1183,14 +1319,11 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn init_failure_sends_startup_err_and_closes_job() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let mut processes = MockProcesses::new();
             processes
                 .expect_durability()
@@ -1198,6 +1331,8 @@ mod tests {
             processes
                 .expect_create_lifetime_job()
                 .returning(|| Ok(JobId(1)));
+            // Spawn fails before initialization constructs the session record,
+            // so this path never reads the system clock.
             processes
                 .expect_spawn_app()
                 .returning(|_| Err(PalError::new(PalErrorKind::Other)));
@@ -1220,23 +1355,25 @@ mod tests {
                 }
             });
 
+            phase_reporter.report("waiting for the supervisor startup connection");
             let startup_conn = transport.accept(startup).unwrap();
+            phase_reporter.report("waiting for the startup error");
             assert_eq!(transport.recv(startup_conn).unwrap(), Message::StartupErr);
+            phase_reporter.report("waiting for startup rollback");
             supervisor.join().unwrap().unwrap_err();
             assert!(store.list().unwrap().is_empty());
         });
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_cannot_outlive_its_launcher_says_so_on_the_startup_pipe() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let processes = mock_processes_with(
                 Arc::clone(&exit),
                 Durability::TiedToLauncher,
@@ -1260,7 +1397,8 @@ mod tests {
             });
 
             // Only the client has a console to report this on.
-            let (startup_conn, _session_id, durability) = commit_startup(&transport, startup);
+            let (startup_conn, _session_id, durability) =
+                commit_startup(&transport, startup, &phase_reporter);
             assert_eq!(durability, Durability::TiedToLauncher);
             transport.disconnect(startup_conn);
             {
@@ -1268,20 +1406,20 @@ mod tests {
                 *lock.lock().expect("exit lock") = true;
                 cvar.notify_all();
             }
+            phase_reporter.report("waiting for supervisor shutdown");
             supervisor.join().unwrap().unwrap();
         });
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_wait_that_fails_still_takes_the_session_off_the_host() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let processes =
                 mock_processes_with(Arc::clone(&exit), Durability::Durable, AppWait::Fails);
 
@@ -1302,7 +1440,8 @@ mod tests {
                 }
             });
 
-            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
+            let (startup_conn, _session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
             assert_eq!(store.list().unwrap().len(), 1, "the session was published");
             transport.disconnect(startup_conn);
             {
@@ -1311,6 +1450,7 @@ mod tests {
                 cvar.notify_all();
             }
 
+            phase_reporter.report("waiting for failed-wait cleanup");
             supervisor.join().unwrap().unwrap_err();
             // The wait is the only thing that failed, so everything the session
             // put on the host is still the session's to take back.
@@ -1330,14 +1470,13 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn output_produced_before_the_first_attach_reaches_that_client() {
-        with_watchdog(|| {
+        with_watchdog_phases("setting up the supervisor", |phase_reporter| {
             let transport = MemoryTransport::new();
             let pty = MemoryPseudoconsole::new();
-            let dir = tempfile::TempDir::new().unwrap();
-            let store = FsSessionStore::new(dir.path().to_path_buf());
+            let store = MemorySessionStore::new();
             let exit = Arc::new((Mutex::new(false), Condvar::new()));
             let processes = mock_processes(Arc::clone(&exit));
 
@@ -1358,7 +1497,8 @@ mod tests {
                 }
             });
 
-            let (startup_conn, _session_id, _durability) = commit_startup(&transport, startup);
+            let (startup_conn, _session_id, _durability) =
+                commit_startup(&transport, startup, &phase_reporter);
 
             // The app speaks before anyone has attached, which is the window
             // `dure run` spends spawning the supervisor and connecting to it.
@@ -1370,9 +1510,8 @@ mod tests {
             let client = transport
                 .connect(&transport.pipe_name("nonce"), CONNECT_TIMEOUT)
                 .unwrap();
-            transport
-                .send(client, &Message::Attach { cols: 80, rows: 24 })
-                .unwrap();
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the attach acknowledgement");
             assert!(matches!(
                 transport.recv(client).unwrap(),
                 Message::Attached { .. }
@@ -1390,6 +1529,7 @@ mod tests {
             // the failure is an assertion rather than a wait with no end.
             let mut received = Vec::new();
             loop {
+                phase_reporter.report("waiting for held output or the app exit status");
                 match transport.recv(client).unwrap() {
                     Message::Output(bytes) => received.extend(bytes),
                     Message::AppExited { status } => {
@@ -1401,6 +1541,7 @@ mod tests {
             }
             assert_eq!(received, b"hello");
 
+            phase_reporter.report("waiting for supervisor shutdown");
             assert_eq!(supervisor.join().unwrap().unwrap(), SAMPLE_APP_EXIT);
         });
     }
@@ -1496,6 +1637,7 @@ mod tests {
             session_id: SessionId::from_u32(1).unwrap(),
             client: Mutex::new(None),
             attach: Mutex::new(()),
+            attached_generation: Arc::new(AtomicU64::default()),
             preamble: Mutex::new(Some(Vec::new())),
             first_attach: Mutex::new(FirstAttach::default()),
             first_attach_changed: Condvar::new(),
@@ -1517,11 +1659,13 @@ mod tests {
     }
 
     /// Records every attached-flag publication in order.
-    fn attach_recorder() -> (Arc<Mutex<Vec<bool>>>, impl Fn(bool)) {
+    fn attach_recorder() -> (Arc<Mutex<Vec<bool>>>, impl Fn(u64, bool)) {
         let flags = Arc::new(Mutex::new(Vec::new()));
         let recorder = {
             let flags = Arc::clone(&flags);
-            move |attached: bool| flags.lock().expect("flag lock").push(attached)
+            move |_generation: u64, attached: bool| {
+                flags.lock().expect("flag lock").push(attached);
+            }
         };
         (flags, recorder)
     }
@@ -1533,9 +1677,7 @@ mod tests {
         let shared = shared_session(&transport, &pty_host);
         let (supervisor, client) = connected_pair(&transport, "pipe");
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
         transport.disconnect(client);
 
         let (flags, recorder) = attach_recorder();
@@ -1543,6 +1685,132 @@ mod tests {
 
         assert!(client_conn(&shared).is_none());
         assert!(flags.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_stalled_attach_acknowledgement_does_not_signal_attachment() {
+        with_watchdog_phases("setting up the client relay", |phase_reporter| {
+            let transport = MemoryTransport::new();
+            let pty_host = MemoryPseudoconsole::new();
+            let shared = Arc::new(shared_session(&transport, &pty_host));
+            let (supervisor, client) = connected_pair(&transport, "pipe");
+
+            let (attached_tx, attached_rx) = mpsc::channel();
+            transport.send(client, &ORDINARY_ATTACH).unwrap();
+            transport.stall(supervisor);
+            let relay = thread::spawn({
+                let shared = Arc::clone(&shared);
+                move || {
+                    client_loop(&shared, supervisor, &|_generation, attached| {
+                        attached_tx.send(attached).unwrap();
+                    });
+                }
+            });
+
+            phase_reporter.report("waiting for the attach acknowledgement to stall");
+            transport.wait_for_stalled_send(supervisor);
+            assert!(!shared.first_attach().attached);
+
+            transport.resume(supervisor);
+            phase_reporter.report("waiting for the attach acknowledgement");
+            assert!(matches!(
+                transport.recv(client).unwrap(),
+                Message::Attached { .. }
+            ));
+            phase_reporter.report("waiting for the attached-flag update");
+            assert!(attached_rx.recv().unwrap());
+            assert!(shared.first_attach().attached);
+
+            transport.send(client, &Message::StartupErr).unwrap();
+            phase_reporter.report("waiting for the client relay to stop");
+            relay.join().unwrap();
+            assert!(!attached_rx.recv().unwrap());
+        });
+    }
+
+    #[test]
+    fn a_stalled_detach_update_does_not_block_or_overwrite_a_steal() {
+        with_watchdog_phases("setting up the client relays", |phase_reporter| {
+            let transport = MemoryTransport::new();
+            let pty_host = MemoryPseudoconsole::new();
+            let shared = Arc::new(shared_session(&transport, &pty_host));
+            let store = MemorySessionStore::new();
+            let owner = ProcessIdentity::for_test(1);
+            let id = store.allocate_id(&owner).unwrap();
+            assert_eq!(id, shared.session_id);
+            store
+                .publish(&SessionRecord {
+                    id: id.get(),
+                    supervisor_pid: owner.pid,
+                    supervisor_creation_time: owner.creation_time,
+                    pipe_name: "pipe".to_string(),
+                    launch_directory: PathBuf::from("/work"),
+                    command: vec!["app.exe".to_string()],
+                    started_at_unix_ms: 1,
+                    attached: false,
+                })
+                .unwrap();
+            let record_live = Arc::new(Mutex::new(true));
+            let set_attached = store_attached_flag(
+                &store,
+                id,
+                record_live,
+                Arc::clone(&shared.attached_generation),
+            );
+            let (updated_tx, updated_rx) = mpsc::channel();
+            let observe_update = move |generation, attached| {
+                set_attached(generation, attached);
+                updated_tx.send(attached).unwrap();
+            };
+
+            let (first_supervisor, first_client) = connected_pair(&transport, "first");
+            let first_relay = thread::spawn({
+                let shared = Arc::clone(&shared);
+                let observe_update = observe_update.clone();
+                move || client_loop(&shared, first_supervisor, &observe_update)
+            });
+            transport.send(first_client, &ORDINARY_ATTACH).unwrap();
+            phase_reporter.report("waiting for the first attach acknowledgement");
+            assert!(matches!(
+                transport.recv(first_client).unwrap(),
+                Message::Attached { .. }
+            ));
+            phase_reporter.report("waiting for the first attached-flag update");
+            assert!(updated_rx.recv().unwrap());
+
+            store.stall_publishes();
+            transport.disconnect(first_client);
+            phase_reporter.report("waiting for the detached-flag update to stall");
+            store.wait_for_stalled_publish();
+
+            let (second_supervisor, second_client) = connected_pair(&transport, "second");
+            let second_relay = thread::spawn({
+                let shared = Arc::clone(&shared);
+                move || client_loop(&shared, second_supervisor, &observe_update)
+            });
+            transport.send(second_client, &ORDINARY_ATTACH).unwrap();
+            // The first relay is blocked in store I/O. Receiving this proves it
+            // released the client slot before publishing the advisory flag.
+            phase_reporter.report("waiting for the stealing attach acknowledgement");
+            assert!(matches!(
+                transport.recv(second_client).unwrap(),
+                Message::Attached { .. }
+            ));
+
+            store.resume_publishes();
+            phase_reporter.report("waiting for the stalled detach and newer attach updates");
+            let completed = [updated_rx.recv().unwrap(), updated_rx.recv().unwrap()];
+            assert!(completed.contains(&false));
+            assert!(completed.contains(&true));
+            first_relay.join().unwrap();
+            assert!(store.read(id).unwrap().unwrap().attached);
+
+            transport.disconnect(second_client);
+            phase_reporter.report("waiting for the final detach update");
+            assert!(!updated_rx.recv().unwrap());
+            second_relay.join().unwrap();
+            assert!(!store.read(id).unwrap().unwrap().attached);
+        });
     }
 
     #[test]
@@ -1555,9 +1823,7 @@ mod tests {
         // slot, so there is nothing left for a new client to be given.
         shared.stopping.store(true, Ordering::SeqCst);
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
 
         let (flags, recorder) = attach_recorder();
         client_loop(&shared, supervisor, &recorder);
@@ -1596,9 +1862,7 @@ mod tests {
         let shared = shared_session(&transport, &pty_host);
         let (supervisor, client) = connected_pair(&transport, "pipe");
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
         transport
             .send(
                 client,
@@ -1644,7 +1908,7 @@ mod tests {
             let shared = Arc::clone(&shared);
             let successor_outbox = Arc::clone(&successor_outbox);
             let displaced = Arc::clone(&displaced);
-            move |attached: bool| {
+            move |_generation: u64, attached: bool| {
                 if attached {
                     let previous = shared.client().replace(Client {
                         conn: successor,
@@ -1659,9 +1923,7 @@ mod tests {
             }
         };
 
-        transport
-            .send(client, &Message::Attach { cols: 80, rows: 24 })
-            .unwrap();
+        transport.send(client, &ORDINARY_ATTACH).unwrap();
         transport
             .send(client, &Message::Input(b"x".to_vec()))
             .unwrap();
@@ -1731,28 +1993,15 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
+    // Building the session record reads the real system clock.
     #[cfg_attr(miri, ignore)]
     fn a_failure_after_id_allocation_releases_the_id() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
+        store.fail_next_publish();
         let transport = MemoryTransport::new();
         let pty = MemoryPseudoconsole::new();
-        let mut processes = MockProcesses::new();
-        processes
-            .expect_durability()
-            .returning(|| Durability::Durable);
-        processes
-            .expect_create_lifetime_job()
-            .returning(|| Ok(JobId(1)));
-        processes.expect_spawn_app().returning(|_| Ok(AppId(1)));
-        processes
-            .expect_random_nonce()
-            .returning(|| "nonce".to_string());
-        processes
-            .expect_current_identity()
-            .returning(|| Err(PalError::new(PalErrorKind::Other)));
-        processes.expect_close_job().returning(|_| ());
+        let exit = Arc::new((Mutex::new(true), Condvar::new()));
+        let processes = mock_processes(exit);
 
         {
             let mut guard = InitGuard {
@@ -1776,19 +2025,16 @@ mod tests {
                 vec!["app.exe".to_string()],
             )
             .err()
-            .expect("identity lookup fails");
-            assert!(error.find_source::<StartupFailedError>().is_some());
+            .expect("record publication fails");
+            assert!(error.find_source::<StoreError>().is_some());
         }
 
-        assert!(!dir.path().join("1.json").exists());
+        assert!(store.list_reservations().unwrap().is_empty());
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
-    fn attached_flag_publishes_only_while_the_record_lives() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+    fn attached_flag_publishes_only_the_current_generation_while_the_record_lives() {
+        let store = MemorySessionStore::new();
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store
             .publish(&SessionRecord {
@@ -1804,12 +2050,24 @@ mod tests {
             .unwrap();
 
         let record_live = Arc::new(Mutex::new(true));
-        let set_attached = store_attached_flag(&store, id, Arc::clone(&record_live));
-        set_attached(true);
+        let current_generation = Arc::new(AtomicU64::new(2));
+        let set_attached = store_attached_flag(
+            &store,
+            id,
+            Arc::clone(&record_live),
+            Arc::clone(&current_generation),
+        );
+        set_attached(1, true);
+        assert!(!store.read(id).unwrap().unwrap().attached);
+
+        set_attached(2, true);
         assert!(store.read(id).unwrap().unwrap().attached);
 
         *record_live.lock().expect("record_live lock") = false;
-        set_attached(false);
+        current_generation.store(3, Ordering::SeqCst);
+        set_attached(3, false);
         assert!(store.read(id).unwrap().unwrap().attached);
     }
+
+    mod memory_session_store;
 }
