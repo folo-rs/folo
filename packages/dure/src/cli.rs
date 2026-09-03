@@ -51,16 +51,12 @@ enum CliCommand {
     Resume {
         /// Session id to attach to, skipping auto-detect.
         id: Option<NonZero<u32>>,
-        /// Hidden compatibility spelling for the session id.
-        #[arg(long = "id", value_name = "ID", hide = true, conflicts_with = "id")]
-        legacy_id: Option<NonZero<u32>>,
     },
     /// Print live sessions.
     List,
     /// Abruptly terminate the supervisor for a session.
     Kill {
         /// Session id to kill. Required; kill does not auto-detect.
-        #[arg(long)]
         id: NonZero<u32>,
     },
     /// Hidden supervisor process started by `dure run`.
@@ -127,8 +123,8 @@ impl Cli {
     pub fn into_input(self) -> RunInput {
         let command = match self.command {
             CliCommand::Run { command } => Command::Run { command },
-            CliCommand::Resume { id, legacy_id } => Command::Resume {
-                id: id.or(legacy_id).map(SessionId::new),
+            CliCommand::Resume { id } => Command::Resume {
+                id: id.map(SessionId::new),
             },
             CliCommand::List => Command::List,
             CliCommand::Kill { id } => Command::Kill {
@@ -190,19 +186,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_resume_with_legacy_id_option() {
-        let input = parse(&["resume", "--id", "3"]);
-        assert_eq!(
-            input.command,
-            Command::Resume {
-                id: SessionId::from_u32(3),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_resume_rejects_duplicate_id() {
-        Cli::from_args(&["dure"], &["resume", "3", "--id", "4"]).unwrap_err();
+    fn parse_resume_rejects_id_option() {
+        Cli::from_args(&["dure"], &["resume", "--id", "3"]).unwrap_err();
     }
 
     #[test]
@@ -221,13 +206,26 @@ mod tests {
     #[test]
     fn parse_kill_requires_id() {
         Cli::from_args(&["dure"], &["kill"]).unwrap_err();
-        let input = parse(&["kill", "--id", "2"]);
+        let input = parse(&["kill", "2"]);
         assert_eq!(
             input.command,
             Command::Kill {
                 id: SessionId::from_u32(2).unwrap(),
             }
         );
+    }
+
+    #[test]
+    fn parse_kill_rejects_id_option() {
+        Cli::from_args(&["dure"], &["kill", "--id", "2"]).unwrap_err();
+    }
+
+    #[test]
+    fn kill_help_shows_positional_id() {
+        let err = Cli::from_args(&["dure"], &["kill", "--help"]).unwrap_err();
+        assert!(err.status.is_ok());
+        assert!(err.output.contains("<ID>"));
+        assert!(!err.output.contains("--id"));
     }
 
     #[test]

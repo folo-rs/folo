@@ -1,4 +1,4 @@
-//! `dure kill --id`.
+//! `dure kill`.
 
 use ohno::AppError;
 

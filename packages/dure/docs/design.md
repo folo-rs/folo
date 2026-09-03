@@ -77,8 +77,7 @@ an attach failure identifies the session and notes that it may still be running,
 so `list`, `resume`, and `kill` remain available.
 
 `dure resume` attaches using auto-detect. `dure resume <id>` attaches to that
-live session and skips auto-detect. The hidden `--id <id>` spelling is accepted
-as a compatibility alias.
+live session and skips auto-detect.
 
 `dure list` prints live sessions: id, whether a client is currently attached,
 supervisor pid, how long the session has been running, launch directory, and
@@ -87,9 +86,9 @@ reuse of its numeric process id by another process does not keep the record live
 Attached means the supervisor still has a client connection; a hung client may
 still appear attached. Resume steals anyway.
 
-`dure kill --id <id>` abruptly terminates the supervisor process for that
-session. The app and its ordinary descendants die with it. `--id` is required;
-kill does not auto-detect. Kill targets the recorded supervisor process directly
+`dure kill <id>` abruptly terminates the supervisor process for that session.
+The app and its ordinary descendants die with it. An id is required; kill does
+not auto-detect. Kill targets the recorded supervisor process directly
 instead of using the session connection, so it still works when that connection
 is wedged. An attached client, if any, sees the relay end. Killing a missing or
 already-dead id is a failure after stale-record cleanup.
@@ -144,7 +143,7 @@ last is the one left holding the session.
 A session is live while the same supervisor process is still running. A record
 is dropped only when that process is gone. If the supervisor is running but
 does not accept a connection within a bounded wait, resume fails and the
-session stays listed; `dure kill --id` still reaches it.
+session stays listed; `dure kill <id>` still reaches it.
 
 While detached, the app's console stays open. Input is not closed (end of stdin
 would terminate many apps). Output is drained and discarded so the app cannot

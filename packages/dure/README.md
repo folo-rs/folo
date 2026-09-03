@@ -21,7 +21,7 @@ cargo binstall dure
 dure run -- <command> [args...]
 dure resume [<id>]
 dure list
-dure kill --id <id>
+dure kill <id>
 ```
 
 `run` always starts a new session in the current directory and attaches immediately.
