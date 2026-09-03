@@ -364,6 +364,22 @@ Describe 'Get-ReleasePlanAnalysisBatch' {
             Should -Be @('app', 'core', 'independent', 'middle')
     }
 
+    It 'keeps acyclic packages with overlapping names in separate batches' {
+        $path = Join-Path $TestDrive 'overlapping-names.json'
+        Write-TestReport -Path $path -Package @(
+            Get-TestPackage -Name 'linked' -Dependencies @(@{ name = 'linked_macros' })
+            Get-TestPackage -Name 'linked_macros' `
+                -Dependencies @(@{ name = 'linked_macros_impl' })
+            Get-TestPackage -Name 'linked_macros_impl'
+        )
+
+        $batch = @(Get-ReleasePlanAnalysisBatch -ReportPath $path)
+
+        $batch.Count | Should -Be 3
+        @($batch.packages) | Should -Be @('linked_macros_impl', 'linked_macros', 'linked')
+        @($batch.cyclic) | Should -Not -Contain $true
+    }
+
     It 'emits the documented JSON field names for the skill working file' {
         $path = Join-Path $TestDrive 'contract.json'
         Write-TestReport -Path $path -Package @(

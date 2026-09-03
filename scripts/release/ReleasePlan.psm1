@@ -375,7 +375,7 @@ function Get-ReachablePackageName {
             $pending.Push($dependencyName)
         }
     }
-    return $reachable
+    return ,$reachable
 }
 
 function Get-ReleasePlanAnalysisBatch {
