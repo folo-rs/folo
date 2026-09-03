@@ -64,8 +64,9 @@ pub(crate) struct Classification {
 ///
 /// The status, anchor, and change evidence are not independent: a package that
 /// does not exist on the base line has no anchor and no evidence, while an
-/// anchored package always has one and carries a patch only when it failed. The
-/// classifier produces only those combinations, so they are held in one closed
+/// anchored package always has one and carries a patch whenever its released
+/// files differ, whatever its status. The classifier produces only those
+/// combinations, so they are held in one closed
 /// [`Verdict`] rather than as separately writable fields. `check` gates the
 /// process exit on the status while `report` emits the anchor and evidence
 /// beside it, and the two must never disagree.
@@ -113,11 +114,16 @@ impl PackageClass {
         }
     }
 
-    /// The rendered patch, empty unless the package needs an increment.
+    /// The rendered patch, empty when the package has no released file difference.
+    ///
+    /// A pending-release package carries one too: deciding whether its existing
+    /// increment still covers the accumulated changes needs the same evidence as
+    /// deciding an increment from scratch. Inherited workspace values and locked
+    /// dependency identities are not file differences and never appear here.
     pub(crate) fn patch(&self) -> &str {
         match &self.verdict {
-            Verdict::NeedsIncrement { patch, .. } => patch,
-            Verdict::New | Verdict::PendingRelease { .. } | Verdict::Unchanged { .. } => "",
+            Verdict::PendingRelease { patch, .. } | Verdict::NeedsIncrement { patch, .. } => patch,
+            Verdict::New | Verdict::Unchanged { .. } => "",
         }
     }
 }
@@ -156,6 +162,7 @@ impl PackageClass {
             Verdict::PendingRelease {
                 anchor,
                 changed: Vec::new(),
+                patch: String::new(),
             },
             manifest_path,
         )
@@ -221,6 +228,7 @@ enum Verdict {
     PendingRelease {
         anchor: Anchor,
         changed: Vec<ChangedItem>,
+        patch: String,
     },
     /// The declared version did not increase, and neither did the content.
     Unchanged { anchor: Anchor },
@@ -564,7 +572,11 @@ fn classify_one(
 
     let version_increased = package.manifest.version > anchor.version;
     let verdict = if version_increased {
-        Verdict::PendingRelease { anchor, changed }
+        Verdict::PendingRelease {
+            anchor,
+            changed,
+            patch,
+        }
     } else if changed.is_empty() {
         Verdict::Unchanged { anchor }
     } else {

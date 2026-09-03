@@ -156,8 +156,9 @@ semver-checks:
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
     Invoke-SemverCheck -Package "{{ package }}"
 
-# Prints dependency-first analysis batches from a release-plan report. Mutually dependent
-# packages share a batch and are analyzed to a fixed point.
+# Prints the dependency-first analysis batches from a release-plan report as a JSON array.
+# Mutually dependent packages share a batch and are analyzed to a fixed point. The
+# increment-versions skill redirects this to a working file and documents the field names.
 [group('release')]
 [script]
 release-analysis-order REPORT:
@@ -166,7 +167,7 @@ release-analysis-order REPORT:
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Get-ReleasePlanAnalysisBatch -ReportPath "{{ REPORT }}" | Format-Table -AutoSize
+    Get-ReleasePlanAnalysisBatch -ReportPath "{{ REPORT }}" | ConvertTo-Json -Depth 3 -AsArray
 
 # Fails unless every package reached by the approved semantic changes is already published.
 [group('release')]

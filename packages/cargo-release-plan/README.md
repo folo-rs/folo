@@ -30,15 +30,17 @@ remote advertises, falling back to `origin/main`. `--manifest-path` defaults to
 
 ### `report`
 
-Writes `<dir>/report.json` plus a `<dir>/diffs/<package>.patch` for each package
-that needs an increment on account of a file difference. The JSON names each
-package's status, anchor, changed paths, inherited workspace fields,
-intra-workspace dependencies, and version groups, and is the complete verdict.
+Writes `<dir>/report.json` plus a `<dir>/diffs/<package>.patch` for every package
+whose released files differ from its anchor, whether or not its version has
+already moved. The JSON names each package's status, anchor, changed paths,
+inherited workspace fields, intra-workspace dependencies, and version groups,
+and is the complete verdict.
 
 Each `.patch` is a zero-context unified diff in the shape `diff -U0` produces,
-so it can be piped into standard tooling. Inherited workspace value changes are
-not diffs and appear only as `changed` entries with `source: "inherited"`, so a
-package that fails on an inherited value alone has no patch. Enumerate `status`
+so it can be piped into standard tooling. Only `source: "package"` changes are
+file differences: inherited workspace values and locked dependency identities
+are not, so a package whose `changed` entries are all `inherited` or `lockfile`
+has no patch. Enumerate `status`
 in `report.json` rather than the `diffs/` directory to find every package that
 needs an increment.
 

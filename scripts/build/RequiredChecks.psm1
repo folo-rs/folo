@@ -15,9 +15,11 @@ function Get-RequiredCheckFailure {
     # Returns one `job=result` string per merge-blocking dependency that is not an allowed
     # result. Jobs named in `$MustSucceedJob` may only be `success`; every other dependency
     # may be `success` or `skipped`. A missing `result` property is treated as a failure so a
-    # malformed `needs` payload cannot pass the fan-in. An empty needs object is a
-    # classification failure, not a vacuously green fan-in. Pure, so the policy is
-    # test-covered without GitHub Actions.
+    # malformed `needs` payload cannot pass the fan-in. A job named in `$MustSucceedJob` but
+    # absent from `needs` is reported as `absent`: this job only observes what `needs` lists,
+    # so a name that drifted out of the workflow's `needs:` list would otherwise never be
+    # examined and would green the fan-in. An empty needs object is a classification failure,
+    # not a vacuously green fan-in. Pure, so the policy is test-covered without GitHub Actions.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
@@ -64,6 +66,15 @@ function Get-RequiredCheckFailure {
             $failure.Add("$($job.Name)=$result")
         }
     }
+
+    $present = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]] @($needs.PSObject.Properties.Name),
+        [System.StringComparer]::Ordinal)
+    foreach ($name in @($mustSucceed | Sort-Object)) {
+        if (-not $present.Contains($name)) {
+            $failure.Add("$name=absent")
+        }
+    }
     return @($failure)
 }
 
@@ -87,7 +98,7 @@ function Assert-RequiredCheck {
     }
 
     $listed = $failure -join ', '
-    throw "required-checks failed; these merge-blocking jobs were neither successful nor skipped: $listed"
+    throw "required-checks failed; these merge-blocking jobs did not produce an allowed result: $listed"
 }
 
 Export-ModuleMember -Function Assert-RequiredCheck

@@ -71,6 +71,23 @@ Describe 'Get-RequiredCheckFailure' {
                 Should -Throw '*has no jobs*'
         }
     }
+
+    It 'reports a must-succeed job that is absent from the needs payload' {
+        InModuleScope RequiredChecks {
+            $json = '{"test-scripts":{"result":"success"}}'
+            Get-RequiredCheckFailure -NeedsJson $json -MustSucceedJob @('delta', 'test-scripts') |
+                Should -Be @('delta=absent')
+        }
+    }
+
+    It 'reports every absent must-succeed job in a deterministic order' {
+        InModuleScope RequiredChecks {
+            $json = '{"delta":{"result":"success"}}'
+            $job = @('semver-checks', 'delta', 'validate-versions')
+            Get-RequiredCheckFailure -NeedsJson $json -MustSucceedJob $job |
+                Should -Be @('semver-checks=absent', 'validate-versions=absent')
+        }
+    }
 }
 
 Describe 'Assert-RequiredCheck' {
@@ -82,7 +99,13 @@ Describe 'Assert-RequiredCheck' {
     It 'throws naming the failing jobs without a count prefix' {
         $json = '{"validate-versions":{"result":"failure"}}'
         { Assert-RequiredCheck -NeedsJson $json -MustSucceedJob @('validate-versions') } |
-            Should -Throw '*these merge-blocking jobs were neither successful nor skipped: validate-versions=failure*'
+            Should -Throw '*did not produce an allowed result: validate-versions=failure*'
+    }
+
+    It 'throws when a must-succeed job drifted out of the needs list' {
+        $json = '{"delta":{"result":"success"}}'
+        { Assert-RequiredCheck -NeedsJson $json -MustSucceedJob @('delta', 'validate-versions') } |
+            Should -Throw '*validate-versions=absent*'
     }
 
     It 'throws when the must-succeed list is empty' {

@@ -14,16 +14,18 @@ appear in the report's `changed` array with `source: "inherited"` and may have n
 diff.
 
 Evaluate every `source: "inherited"` entry for every package. A workspace-level edit affects
-each package that inherits the edited field; do not limit the decision to a package selected
-by the original file diff. For example, increasing `[workspace.package] rust-version`
-establishes a `patch` change for every publishable package that inherits `rust-version`.
-Every package in this workspace inherits that field, so an MSRV increase requires a `patch`
-decision for every previously published package in the report. A new package has no version
-anchor to increment and follows the first-publication path instead.
+each package that inherits the edited field, so a package can require an increment on an
+inherited value alone, without appearing in any original file diff. Read the package's own
+`Cargo.toml` to establish which fields it inherits rather than assuming a workspace-wide
+convention.
 
-`cargo-semver-checks` detects part of the Rust API surface. A finding establishes a
-`breaking` minimum. No finding means the tool could not determine a required version
-increment; it does not establish that the package is compatible.
+A package that is already `pending-release` is judged by these same criteria. Its existing
+version movement is retained, but it does not replace analysis of the accumulated changes: an
+increment that no longer covers them is raised.
+
+`cargo-semver-checks` detects part of the Rust API surface. Its per-package summary establishes
+the floor described in the skill's decision stage. No summary means the tool could not
+determine a required version increment; it does not establish that the package is compatible.
 
 ## Breaking
 
@@ -49,11 +51,10 @@ Choose `patch` for compatible corrections, performance improvements, documentati
 included in the published package, or internal changes that alter released content without
 adding a meaningful consumer-facing capability.
 
-A direct `[package]` metadata change or the corresponding inherited
-`[workspace.package]` change establishes at least `patch` for every affected package. This
-rule applies to every package metadata field, including `rust-version` (the minimum supported
-Rust version). Combine this minimum with the package's other evidence and choose the highest
-applicable change level.
+A direct `[package]` metadata change or an inherited `[workspace.package]` change establishes
+at least `patch` for every affected package. This rule applies to every package metadata field,
+including `rust-version` (the minimum supported Rust version). Combine this minimum with the
+package's other evidence and choose the highest applicable change level.
 
 Treat dependency and feature-table changes separately: analyze the consumer impact of the
 resulting dependency or feature behavior rather than assuming every `Cargo.toml` edit is
@@ -65,5 +66,7 @@ Choose no increment only when the package's released-content diff, its changed i
 workspace fields, and the decisions for its dependencies require no change. Signal this by
 omitting the package from the semantic change-decision file.
 
-Analyze packages that are already `pending-release` with the same criteria. Existing version
-movement is retained, but it does not replace analysis of the accumulated changes.
+A package that the report gives no anchor has never been released, so it has no version to
+increment. It follows the first-publication path in
+[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) instead of taking a change
+level.

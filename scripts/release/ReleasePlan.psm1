@@ -331,18 +331,22 @@ function Invoke-ValidateVersions {
 
         $outDir = Join-Path ([System.IO.Path]::GetTempPath()) "release-plan-$(New-Guid)"
         New-Item -ItemType Directory -Path $outDir | Out-Null
-        $reportArgument =
-            Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $outDir) -Base $Base
-        & $Cargo $reportArgument
-
-        $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
-        $previousOutput = $env:GITHUB_OUTPUT
-        $env:GITHUB_OUTPUT = $GitHubOutputPath
         try {
-            # The required zero-target representation is a present `released=` output.
-            Set-GitHubOutput -Name released -Value ($released -join ' ')
+            $reportArgument =
+                Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $outDir) -Base $Base
+            & $Cargo $reportArgument
+
+            $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
+            $previousOutput = $env:GITHUB_OUTPUT
+            $env:GITHUB_OUTPUT = $GitHubOutputPath
+            try {
+                # The required zero-target representation is a present `released=` output.
+                Set-GitHubOutput -Name released -Value ($released -join ' ')
+            } finally {
+                $env:GITHUB_OUTPUT = $previousOutput
+            }
         } finally {
-            $env:GITHUB_OUTPUT = $previousOutput
+            Remove-Item -LiteralPath $outDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -376,7 +380,8 @@ function Get-ReachablePackageName {
 
 function Get-ReleasePlanAnalysisBatch {
     # Returns dependency-first analysis batches. Mutually dependent packages share one batch and
-    # must be reconsidered together until their decisions stop changing.
+    # must be reconsidered together until their decisions stop changing. Property names are the
+    # JSON contract the increment-versions skill documents, so they are lower-case.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $ReportPath
@@ -462,10 +467,10 @@ function Get-ReleasePlanAnalysisBatch {
         foreach ($componentId in $next) {
             $order++
             $members = @($component[$componentId].Members)
-            [pscustomobject]@{
-                Order    = $order
-                Packages = $members -join ', '
-                Cyclic   = $members.Count -gt 1
+            [pscustomobject][ordered]@{
+                order    = $order
+                packages = $members
+                cyclic   = $members.Count -gt 1
             }
             [void] $remaining.Remove($componentId)
             foreach ($otherId in $remaining) {

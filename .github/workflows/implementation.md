@@ -38,5 +38,9 @@ every merge-blocking Validation job. `scripts/build/RequiredChecks.psm1` rejects
 cancelled, missing, and unknown dependency results. It permits `skipped` only for jobs whose
 event, platform, or package scope legitimately excludes them.
 
+The classifier only observes what `needs` supplies, so it also rejects an unconditional gate
+that its must-succeed list names but the payload omits. A name that drifts out of the `needs:`
+list therefore fails the fan-in instead of silently disappearing from it.
+
 Azure OIDC test jobs are among the legitimate queue skips because their federated identity
 trusts pull-request and `main` subjects, not merge-group subjects.

@@ -150,7 +150,7 @@ pub(crate) fn write_report(
 }
 
 fn diff_file_name(package: &PackageClass) -> Option<String> {
-    // Patches are emitted only for `needs-increment`; classify clears others.
+    // Patches accompany a file difference; inherited-only and unchanged packages have none.
     if package.patch().is_empty() {
         return None;
     }

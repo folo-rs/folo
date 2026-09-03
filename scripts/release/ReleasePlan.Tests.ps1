@@ -318,6 +318,29 @@ Describe 'Invoke-ValidateVersions' {
         $script:calls.Count | Should -Be 2
         $script:calls[1] | Should -Contain 'check'
     }
+
+    It 'removes its temporary report directory even when check fails' {
+        $output = Join-Path $TestDrive 'failing-github-output'
+        New-Item -ItemType File -Path $output | Out-Null
+        $script:outDir = $null
+        $cargo = {
+            param([string[]] $Argument)
+            if ($Argument -contains 'report') {
+                $index = [array]::IndexOf($Argument, '--out-dir')
+                $script:outDir = $Argument[$index + 1]
+                Write-TestReport -Path (Join-Path $script:outDir 'report.json') -Package @(
+                    Get-TestPackage -Name 'events'
+                )
+                return
+            }
+            throw 'cargo-release-plan check found packages needing an increment.'
+        }
+
+        { Invoke-ValidateVersions -GitHubOutputPath $output -Base 'abc' -Cargo $cargo } |
+            Should -Throw '*needing an increment*'
+        $script:outDir | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $script:outDir | Should -BeFalse
+    }
 }
 
 Describe 'Get-ReleasePlanAnalysisBatch' {
@@ -332,9 +355,30 @@ Describe 'Get-ReleasePlanAnalysisBatch' {
 
         $batch = @(Get-ReleasePlanAnalysisBatch -ReportPath $path)
 
-        ($batch | Where-Object Packages -EQ 'core, middle').Cyclic | Should -BeTrue
-        ($batch | Where-Object Packages -EQ 'core, middle').Order |
-            Should -BeLessThan ($batch | Where-Object Packages -EQ 'app').Order
+        $cycle = $batch | Where-Object { ($_.packages -join ', ') -eq 'core, middle' }
+        $app = $batch | Where-Object { ($_.packages -join ', ') -eq 'app' }
+        $cycle.cyclic | Should -BeTrue
+        $app.cyclic | Should -BeFalse
+        $cycle.order | Should -BeLessThan $app.order
+        @($batch.packages) | Sort-Object |
+            Should -Be @('app', 'core', 'independent', 'middle')
+    }
+
+    It 'emits the documented JSON field names for the skill working file' {
+        $path = Join-Path $TestDrive 'contract.json'
+        Write-TestReport -Path $path -Package @(
+            Get-TestPackage -Name 'events'
+        )
+
+        $json = Get-ReleasePlanAnalysisBatch -ReportPath $path |
+            ConvertTo-Json -Depth 3 -AsArray |
+            ConvertFrom-Json
+
+        @($json).Count | Should -Be 1
+        @($json[0].PSObject.Properties.Name) | Should -Be @('order', 'packages', 'cyclic')
+        $json[0].order | Should -Be 1
+        @($json[0].packages) | Should -Be @('events')
+        $json[0].cyclic | Should -BeFalse
     }
 }
 
@@ -450,7 +494,7 @@ Describe 'New-ReleasePlanFile' {
         $plan.increments[0].level | Should -Be 'patch'
     }
 
-    It 'rejects unsupported decision levels and exact-version fields' {
+    It 'rejects a decision entry that carries an exact version' {
         $reportPath = Join-Path $TestDrive 'invalid-report.json'
         $decisionPath = Join-Path $TestDrive 'invalid-decision.json'
         Write-TestReport -Path $reportPath -Package @(
@@ -463,5 +507,36 @@ Describe 'New-ReleasePlanFile' {
             New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
                 -PlanPath (Join-Path $TestDrive 'invalid-plan.json')
         } | Should -Throw '*only name and level*'
+    }
+
+    It 'rejects a Cargo increment level in place of a semantic change level' {
+        $reportPath = Join-Path $TestDrive 'cargo-level-report.json'
+        $decisionPath = Join-Path $TestDrive 'cargo-level-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events'
+        )
+        # `minor` is a Cargo increment level; the decision file speaks semantic change levels.
+        '{"schema_version":1,"changes":[{"name":"events","level":"minor"}]}' |
+            Set-Content -LiteralPath $decisionPath -Encoding utf8
+
+        {
+            New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+                -PlanPath (Join-Path $TestDrive 'cargo-level-plan.json')
+        } | Should -Throw "*unsupported level 'minor'*"
+    }
+
+    It 'rejects a semantic change level that differs only by case' {
+        $reportPath = Join-Path $TestDrive 'case-report.json'
+        $decisionPath = Join-Path $TestDrive 'case-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events'
+        )
+        '{"schema_version":1,"changes":[{"name":"events","level":"Breaking"}]}' |
+            Set-Content -LiteralPath $decisionPath -Encoding utf8
+
+        {
+            New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+                -PlanPath (Join-Path $TestDrive 'case-plan.json')
+        } | Should -Throw "*unsupported level 'Breaking'*"
     }
 }
