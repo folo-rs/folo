@@ -44,14 +44,13 @@ fn list_empty_store() {
 // Talks to the real operating system: runs the built binary as a child process.
 #[cfg_attr(miri, ignore)]
 #[test]
-fn kill_missing_id_fails() {
+fn kill_missing_session_fails() {
     let dir = TempDir::new().unwrap();
     let output = dure()
         .args([
             "--store-root",
             dir.path().to_str().expect("temp path is unicode"),
             "kill",
-            "--id",
             "1",
         ])
         .output()

@@ -50,7 +50,6 @@ enum CliCommand {
     /// Attach to a live session.
     Resume {
         /// Session id to attach to, skipping auto-detect.
-        #[arg(long)]
         id: Option<NonZero<u32>>,
     },
     /// Print live sessions.
@@ -58,7 +57,6 @@ enum CliCommand {
     /// Abruptly terminate the supervisor for a session.
     Kill {
         /// Session id to kill. Required; kill does not auto-detect.
-        #[arg(long)]
         id: NonZero<u32>,
     },
     /// Hidden supervisor process started by `dure run`.
@@ -177,14 +175,27 @@ mod tests {
     }
 
     #[test]
-    fn parse_resume_with_id() {
-        let input = parse(&["resume", "--id", "3"]);
+    fn parse_resume_with_positional_id() {
+        let input = parse(&["resume", "3"]);
         assert_eq!(
             input.command,
             Command::Resume {
                 id: SessionId::from_u32(3),
             }
         );
+    }
+
+    #[test]
+    fn parse_resume_rejects_id_option() {
+        Cli::from_args(&["dure"], &["resume", "--id", "3"]).unwrap_err();
+    }
+
+    #[test]
+    fn resume_help_shows_positional_id() {
+        let err = Cli::from_args(&["dure"], &["resume", "--help"]).unwrap_err();
+        assert!(err.status.is_ok());
+        assert!(err.output.contains("[ID]"));
+        assert!(!err.output.contains("--id"));
     }
 
     #[test]
@@ -195,13 +206,26 @@ mod tests {
     #[test]
     fn parse_kill_requires_id() {
         Cli::from_args(&["dure"], &["kill"]).unwrap_err();
-        let input = parse(&["kill", "--id", "2"]);
+        let input = parse(&["kill", "2"]);
         assert_eq!(
             input.command,
             Command::Kill {
                 id: SessionId::from_u32(2).unwrap(),
             }
         );
+    }
+
+    #[test]
+    fn parse_kill_rejects_id_option() {
+        Cli::from_args(&["dure"], &["kill", "--id", "2"]).unwrap_err();
+    }
+
+    #[test]
+    fn kill_help_shows_positional_id() {
+        let err = Cli::from_args(&["dure"], &["kill", "--help"]).unwrap_err();
+        assert!(err.status.is_ok());
+        assert!(err.output.contains("<ID>"));
+        assert!(!err.output.contains("--id"));
     }
 
     #[test]

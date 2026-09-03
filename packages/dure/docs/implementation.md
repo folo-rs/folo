@@ -307,7 +307,7 @@ and inside a permissive job nested in one that forbids it.
 The supervisor listens for a new client even while it is busy reading and
 writing the current one. Steal does not depend on the old connection still being
 healthy. Connect attempts time out. A supervisor whose recorded process identity
-is still alive but never accepts stays listed; resume fails and `kill --id`
+is still alive but never accepts stays listed; resume fails and `kill <id>`
 still targets it.
 
 ```mermaid
@@ -324,7 +324,7 @@ stateDiagram-v2
   end note
 ```
 
-`dure kill --id` opens the recorded pid, verifies the process creation time and
+`dure kill <id>` opens the recorded pid, verifies the process creation time and
 running state, and terminates that process handle, then waits for the process to
 signal before reporting success. It never needs the session connection.
 
