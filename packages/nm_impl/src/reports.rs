@@ -478,17 +478,11 @@ impl Histogram {
     ) -> Self {
         assert_eq!(bucket_counts.len(), bucket_upper_bounds.len());
 
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "Windows guarantee that both indexed elements are in bounds."
-        )]
-        {
-            assert!(
-                bucket_upper_bounds
-                    .windows(2)
-                    .all(|window| window[0] < window[1])
-            );
-        }
+        assert!(
+            bucket_upper_bounds
+                .array_windows::<2>()
+                .all(|[lower, upper]| lower < upper)
+        );
 
         assert!(!bucket_upper_bounds.contains(&Magnitude::MAX));
 

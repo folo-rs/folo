@@ -56,7 +56,7 @@ fn atomic_wake_by_ref_fn(data: *const ()) {
     // contract on `waker()`). Aliasing — the type only exposes `&self` methods backed
     // by atomics, so unbounded `&AtomicWakeTracker` references may coexist; no
     // `&mut AtomicWakeTracker` is ever constructed by this type's API.
-    let this = unsafe { &*(data as *const AtomicWakeTracker) };
+    let this = unsafe { (data as *const AtomicWakeTracker).as_ref_unchecked() };
     this.woken.store(true, Ordering::Relaxed);
 }
 

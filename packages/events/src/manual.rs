@@ -165,7 +165,7 @@ impl EventInner {
         // poll/drop path, which is single-threaded (one future is polled by one task at a
         // time) and has not constructed `&mut Awaiter` here. Other threads access the
         // awaiter only via `AwaiterSet`, which uses `&Awaiter`.
-        let awaiter_ref = unsafe { &*awaiter };
+        let awaiter_ref = unsafe { awaiter.as_ref_unchecked() };
         if awaiter_ref.take_notification() {
             return Poll::Ready(());
         }
@@ -215,7 +215,7 @@ impl EventInner {
         // `Awaiter` reference via `AwaiterSet`); the awaiter is owned by a single future
         // polled by a single task (so no other poll/drop path runs concurrently); and
         // our prior `awaiter_ref` borrows are no longer in use past this point.
-        let awaiter_mut = unsafe { &mut *awaiter };
+        let awaiter_mut = unsafe { awaiter.as_mut_unchecked() };
         // SAFETY: The awaiter is pinned inside the owning future.
         let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
         // SAFETY: We hold the mutex.
@@ -233,7 +233,7 @@ impl EventInner {
         // poll/drop path, which is single-threaded (one future is polled by one task at a
         // time) and has not constructed `&mut Awaiter` here. Other threads access the
         // awaiter only via `AwaiterSet`, which uses `&Awaiter`.
-        let awaiter_ref = unsafe { &*awaiter };
+        let awaiter_ref = unsafe { awaiter.as_ref_unchecked() };
         if !awaiter_ref.is_registered() {
             return;
         }
@@ -245,7 +245,7 @@ impl EventInner {
         // `Awaiter` reference via `AwaiterSet`); the awaiter is owned by a single future
         // polled by a single task (so no other poll/drop path runs concurrently); and
         // our prior `awaiter_ref` borrow is no longer in use past this point.
-        let awaiter_mut = unsafe { &mut *awaiter };
+        let awaiter_mut = unsafe { awaiter.as_mut_unchecked() };
         // SAFETY: The awaiter is pinned inside the owning future.
         let awaiter_mut = unsafe { Pin::new_unchecked(awaiter_mut) };
         // SAFETY: We hold the mutex.

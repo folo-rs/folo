@@ -57,8 +57,8 @@ use crate::pal::{Platform, PlatformFacade, TimeSource, TimeSourceFacade};
 /// }
 ///
 /// // All durations should be monotonically increasing
-/// for window in durations.windows(2) {
-///     assert!(window[1] >= window[0]);
+/// for [earlier, later] in durations.array_windows::<2>() {
+///     assert!(later >= earlier);
 /// }
 /// ```
 ///

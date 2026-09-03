@@ -1,26 +1,9 @@
 use std::cell::Cell;
+use std::hint::cold_path;
 use std::iter;
 use std::sync::atomic::{self, AtomicI64, AtomicU64};
 
 use crate::Magnitude;
-
-/// Hints to the compiler that the calling branch is unlikely to be taken.
-///
-/// LLVM propagates the `#[cold]` attribute from the called function to the call
-/// site, biasing branch prediction and code layout so that the hot fall-through
-/// path is laid out in straight-line fashion. The cold branch target is moved
-/// to a far section to reduce icache pressure on the hot path.
-///
-/// Marked `#[inline(never)]` so the call is preserved at the call site even
-/// though the body is empty. If LLVM inlined the empty body away, the cold
-/// marker would vanish along with it and the surrounding branch would lose
-/// its cold biasing.
-///
-/// This is a temporary workaround until `std::hint::cold_path()` is
-/// stabilized. See `TODO.md` at the workspace root for the migration note.
-#[cold]
-#[inline(never)]
-fn cold_path() {}
 
 /// Computes the running-total and running-sum increments for a batch observation.
 ///

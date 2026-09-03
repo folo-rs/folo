@@ -49,7 +49,7 @@ fn placed<T: 'static>() -> (
 fn placed_event<T: 'static>(place: &EmbeddedLocalEvent<T>) -> &LocalEvent<T> {
     // SAFETY: The container is only ever accessed through shared references, matching the
     // access that the endpoints make, and the pointer of an `UnsafeCell` is never null.
-    let event = unsafe { &*place.inner.get() };
+    let event = unsafe { place.inner.get().as_ref_unchecked() };
 
     // SAFETY: The caller obtained this container from `placed()`, which initialized an event
     // into it. Releasing an event does not deinitialize the storage.

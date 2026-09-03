@@ -295,7 +295,7 @@ where
 
         // SAFETY: The same caller guarantee excludes an exclusive reference while this shared
         // reference exists, and the event outlives this function call.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         NonNull::from(&event.backtrace)
     }
@@ -319,7 +319,7 @@ where
         // SAFETY: The cell's pointer is always valid and points to an initialized event because
         // the caller is still an endpoint of it. We only ever create shared references to the
         // event through this cell, so no exclusive reference can alias this one.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         let mut backtrace = event.backtrace.lock().expect(NEVER_POISONED);
 
@@ -862,7 +862,7 @@ where
     pub(crate) fn take_result(event_cell: &UnsafeCell<Self>) -> Result<T, Disconnected> {
         // SAFETY: The event reference contract guarantees shared access through this outer
         // UnsafeCell for as long as the receiver still owns its endpoint reference.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         #[cfg(debug_assertions)]
         event

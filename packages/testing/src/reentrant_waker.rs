@@ -80,7 +80,7 @@ fn wake_by_ref_fn(data: *const ()) {
     // `waker()` requires the caller hold no `&mut ReentrantWakerData` while
     // any waker (or clone) created from it may be invoked, so this `&` borrow
     // does not alias with any `&mut` elsewhere.
-    let this = unsafe { &*(data.cast::<ReentrantWakerData>()) };
+    let this = unsafe { data.cast::<ReentrantWakerData>().as_ref_unchecked() };
     this.was_woken.set(true);
     (this.action)();
 }

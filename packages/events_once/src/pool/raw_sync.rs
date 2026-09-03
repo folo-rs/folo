@@ -128,7 +128,7 @@ impl<T: Send + 'static> RawEventPool<T> {
         // references. Endpoints retain an event pointer and, in debug builds, a pointer to the
         // registry rather than the core. Mutation of the state and registry is synchronized by
         // their own mutexes.
-        unsafe { &*core_cell.get() }
+        unsafe { core_cell.get().as_ref_unchecked() }
     }
 
     /// Rents an event from the pool, returning its endpoints.

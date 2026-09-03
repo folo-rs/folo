@@ -74,7 +74,7 @@ pub(crate) fn get_or_init_thread_counters() -> &'static PerThreadCounters {
     TLS_COUNTER_PTR.with(|cell| {
         if let Some(ptr) = cell.get() {
             // SAFETY: pointer originates from Arc stored in REGISTRY which retains ownership for program lifetime.
-            return unsafe { &**ptr };
+            return unsafe { (*ptr).as_ref_unchecked() };
         }
 
         TLS_INIT_GUARD.set(true);
@@ -88,7 +88,7 @@ pub(crate) fn get_or_init_thread_counters() -> &'static PerThreadCounters {
         TLS_INIT_GUARD.set(false);
 
         // SAFETY: pointer obtained from Arc::as_ptr for Arc stored in REGISTRY; lifetime extends for program duration.
-        unsafe { &*ptr }
+        unsafe { ptr.as_ref_unchecked() }
     })
 }
 
