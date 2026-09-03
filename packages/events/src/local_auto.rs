@@ -118,7 +118,7 @@ impl Inner {
             // excludes other threads, and the borrow is scoped to this block, ending
             // before the captured waker is invoked; a reentrant `set()` therefore
             // cannot observe an aliasing `&mut`.
-            let state = unsafe { &mut *state_ptr };
+            let state = unsafe { state_ptr.as_mut_unchecked() };
 
             match state {
                 InnerState::Set => None,
@@ -144,7 +144,7 @@ impl Inner {
         // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads, and
         // this function runs no user code while the borrow is live, so no nested or
         // reentrant access can construct an aliasing reference.
-        let state = unsafe { &mut *self.state.get() };
+        let state = unsafe { self.state.get().as_mut_unchecked() };
         if matches!(state, InnerState::Set) {
             *state = InnerState::Unset(AwaiterSet::new());
             true
@@ -166,7 +166,7 @@ impl Inner {
         // borrow is held only while invoking internal `&mut AwaiterSet` methods (no
         // user code runs), so no nested or reentrant access can construct an aliasing
         // reference.
-        let state = unsafe { &mut *self.state.get() };
+        let state = unsafe { self.state.get().as_mut_unchecked() };
 
         match state {
             InnerState::Set => {
@@ -211,7 +211,7 @@ impl Inner {
             // and the borrow is scoped to the `let waker = match state { ... }` chain,
             // ending before `wake()` is invoked; a reentrant call therefore cannot
             // observe an aliasing `&mut`.
-            let state = unsafe { &mut *self.state.get() };
+            let state = unsafe { self.state.get().as_mut_unchecked() };
             let waker = match state {
                 InnerState::Unset(waiters) => match waiters.notify_one() {
                     Some(w) => Some(w),
@@ -233,7 +233,7 @@ impl Inner {
             // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads,
             // and the borrow is held only while invoking `AwaiterSet::unregister`,
             // which runs no user code.
-            let state = unsafe { &mut *self.state.get() };
+            let state = unsafe { self.state.get().as_mut_unchecked() };
             match state {
                 InnerState::Unset(waiters) => {
                     // SAFETY: Single-threaded, awaiter is registered in

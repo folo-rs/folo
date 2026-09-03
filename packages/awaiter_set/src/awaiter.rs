@@ -188,7 +188,7 @@ impl Awaiter {
         // for as long as `self` does. Aliasing — the caller of this `unsafe` function
         // guarantees that access is serialized and that no other reference to this
         // awaiter's `Inner` is live for the duration of the returned borrow.
-        unsafe { &mut *self.inner.get() }
+        unsafe { self.inner.get().as_mut_unchecked() }
     }
 
     /// Returns a shared reference to the internal state.
@@ -204,7 +204,7 @@ impl Awaiter {
         // for as long as `self` does. Aliasing — the caller of this `unsafe` function
         // guarantees that access is serialized and that no `&mut Inner` to this
         // awaiter's interior is live for the duration of the returned borrow.
-        unsafe { &*self.inner.get() }
+        unsafe { self.inner.get().as_ref_unchecked() }
     }
 }
 

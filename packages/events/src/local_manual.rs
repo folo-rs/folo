@@ -126,7 +126,7 @@ impl Inner {
             // that outlives this borrow. Aliasing — `Inner: !Send` excludes other
             // threads, and the borrow is held only while invoking
             // `AwaiterSet::advance_generation`, which runs no user code.
-            let waiters = unsafe { &mut *self.waiters.get() };
+            let waiters = unsafe { self.waiters.get().as_mut_unchecked() };
             waiters.advance_generation();
         }
 
@@ -144,7 +144,7 @@ impl Inner {
                 // threads, and the borrow is scoped to this block, ending before
                 // `wake()` is invoked; a reentrant call therefore cannot observe an
                 // aliasing `&mut`.
-                let waiters = unsafe { &mut *self.waiters.get() };
+                let waiters = unsafe { self.waiters.get().as_mut_unchecked() };
                 waiters.notify_one_prior_generation()
             };
 
@@ -182,7 +182,7 @@ impl Inner {
         // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads, and
         // the borrow is held only while invoking `AwaiterSet::register`, which runs no
         // user code.
-        let waiters = unsafe { &mut *self.waiters.get() };
+        let waiters = unsafe { self.waiters.get().as_mut_unchecked() };
         // SAFETY: Single-threaded.
         unsafe {
             waiters.register(awaiter.as_mut(), waker);
@@ -200,7 +200,7 @@ impl Inner {
             // outlives this borrow. Aliasing — `Inner: !Send` excludes other threads,
             // and the borrow is held only while invoking `AwaiterSet::unregister`,
             // which runs no user code.
-            let waiters = unsafe { &mut *self.waiters.get() };
+            let waiters = unsafe { self.waiters.get().as_mut_unchecked() };
             // SAFETY: Single-threaded.
             unsafe {
                 waiters.unregister(awaiter.as_mut());

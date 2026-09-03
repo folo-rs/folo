@@ -226,16 +226,19 @@ fn changed_regions<'a>(
                 new_index = new_index.saturating_add(1);
             }
             Edit::Delete | Edit::Insert => {
-                if !open {
-                    regions.push(ChangedRegion {
+                let region = if open {
+                    regions
+                        .last_mut()
+                        .expect("an open region was created by a previous edit")
+                } else {
+                    open = true;
+                    regions.push_mut(ChangedRegion {
                         old_start: old_index,
                         old_end: old_index,
                         new_start: new_index,
                         new_end: new_index,
-                    });
-                    open = true;
-                }
-                let region = regions.last_mut().expect("a region was just opened");
+                    })
+                };
                 if matches!(edit, Edit::Delete) {
                     old_index = old_index.saturating_add(1);
                     region.old_end = old_index;

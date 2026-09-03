@@ -494,8 +494,8 @@ mod tests {
         let series: Vec<f64> = (0..s.commits)
             .map(|i| s.main_clean_value(5, 0, i))
             .collect();
-        for pair in series.windows(2) {
-            assert!(pair[1] > pair[0], "expected rising drift, got {series:?}");
+        for [previous, current] in series.array_windows::<2>() {
+            assert!(current > previous, "expected rising drift, got {series:?}");
         }
         let base = s.base_value(5, 0);
         assert!(close(series[0], base));
@@ -610,9 +610,9 @@ mod tests {
         assert_eq!(FEATURE_COMMIT_SPACING_SECONDS, 3_600);
 
         // main is oldest-first, ends at the anchor, starts a year before it.
-        for pair in main.windows(2) {
+        for [previous, current] in main.array_windows::<2>() {
             assert!(
-                pair[1] > pair[0],
+                current > previous,
                 "main commits must be strictly increasing"
             );
         }
@@ -620,9 +620,9 @@ mod tests {
         assert_eq!(main[main.len() - 1].as_second(), anchor.as_second());
 
         // feature commits all follow the anchor, evenly spaced and increasing.
-        for pair in feature.windows(2) {
+        for [previous, current] in feature.array_windows::<2>() {
             assert!(
-                pair[1] > pair[0],
+                current > previous,
                 "feature commits must be strictly increasing"
             );
         }

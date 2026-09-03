@@ -266,7 +266,7 @@ impl<T: 'static> LocalEvent<T> {
 
         // SAFETY: The same caller guarantee excludes an exclusive reference while this shared
         // reference exists, and the event outlives this function call.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         NonNull::from(&event.backtrace)
     }
@@ -290,7 +290,7 @@ impl<T: 'static> LocalEvent<T> {
         // SAFETY: The cell's pointer is always valid and points to an initialized event because
         // the caller is still an endpoint of it. We only ever create shared references to the
         // event through this cell, so no exclusive reference can alias this one.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         let mut backtrace = event.backtrace.borrow_mut();
 
@@ -316,7 +316,7 @@ impl<T: 'static> LocalEvent<T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         let value_cell = event.value.get();
 
@@ -608,7 +608,7 @@ impl<T: 'static> LocalEvent<T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         let previous_state = event.state.get();
 
@@ -680,7 +680,7 @@ impl<T: 'static> LocalEvent<T> {
     pub(crate) fn take_result(event_cell: &UnsafeCell<Self>) -> Result<T, Disconnected> {
         // SAFETY: The event reference contract guarantees shared access through this outer
         // UnsafeCell for as long as the receiver still owns its endpoint reference.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         let previous_state = event.state.replace(EVENT_DISCONNECTED);
 
@@ -719,7 +719,7 @@ impl<T: 'static> LocalEvent<T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
-        let event = unsafe { &*event_cell.get() };
+        let event = unsafe { event_cell.get().as_ref_unchecked() };
 
         // If we are still awaiting, the receiver owns the stored waker. Move it out before
         // disconnecting, but defer its destruction to the receiver core so no user code runs until

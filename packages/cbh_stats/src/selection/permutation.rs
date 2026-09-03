@@ -480,11 +480,10 @@ fn scatter_key(index: usize) -> u64 {
 }
 
 fn next_permutation(values: &mut [usize]) -> bool {
-    let Some(pivot) = values.windows(2).rposition(|pair| {
-        pair.first()
-            .zip(pair.last())
-            .is_some_and(|(left, right)| left < right)
-    }) else {
+    let Some(pivot) = values
+        .array_windows::<2>()
+        .rposition(|[left, right]| left < right)
+    else {
         values.reverse();
         return false;
     };

@@ -113,13 +113,11 @@ where
     /// that exceed the user-defined buckets.
     #[must_use]
     pub fn histogram(self, buckets: &'static [Magnitude]) -> Self {
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "Each window guarantees both indexed elements are in bounds."
-        )]
-        {
-            assert!(buckets.windows(2).all(|w| w[0] < w[1]));
-        }
+        assert!(
+            buckets
+                .array_windows::<2>()
+                .all(|[lower, upper]| lower < upper)
+        );
         assert!(!buckets.contains(&Magnitude::MAX));
 
         Self {

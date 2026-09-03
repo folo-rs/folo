@@ -220,7 +220,7 @@ impl AwaiterSet {
             // scope; and the tail awaiter is a distinct object from `awaiter` (which
             // is being newly inserted), so the existing `&mut Awaiter` borrow does
             // not alias.
-            let tail = unsafe { &*self.tail };
+            let tail = unsafe { self.tail.as_ref_unchecked() };
             // SAFETY: Access is serialized by the caller's lock; no other reference
             // to `tail`'s `Inner` is live (we hold only `&Awaiter` to it here).
             unsafe { tail.inner_mut() }.next = ptr;
@@ -347,7 +347,7 @@ impl AwaiterSet {
         // `&self`-only; access to its `Inner` is gated by this `&mut self` lock
         // scope; the owning future is asleep (it is a registered waiter), so no
         // `&mut Awaiter` to it is live elsewhere.
-        let head = unsafe { &*self.head };
+        let head = unsafe { self.head.as_ref_unchecked() };
         // SAFETY: Access is serialized by this `&mut self` lock scope; we hold
         // only `&Awaiter` and no `&mut Inner` is live.
         let head_generation = unsafe { head.inner_ref() }.generation;
@@ -371,7 +371,7 @@ impl AwaiterSet {
         // valid `Awaiter` currently in the set. Aliasing — `Awaiter`'s public API
         // is `&self`-only; access to its `Inner` is gated by this `&mut self` lock
         // scope; the owning future is asleep, so no `&mut Awaiter` to it is live.
-        let awaiter = unsafe { &*ptr };
+        let awaiter = unsafe { ptr.as_ref_unchecked() };
         // SAFETY: Access is serialized by this `&mut self` lock scope; we hold only
         // `&Awaiter` and no `&mut Inner` is live.
         let inner = unsafe { awaiter.inner_ref() };
@@ -450,7 +450,7 @@ impl AwaiterSet {
             // access to its `Inner` is gated by this `&mut self` lock scope; and
             // `prev` is a distinct awaiter from the one being unlinked, so no
             // `&mut Awaiter` borrow held elsewhere in this call aliases.
-            let prev = unsafe { &*prev };
+            let prev = unsafe { prev.as_ref_unchecked() };
             // SAFETY: Access is serialized by the caller's lock; no other reference
             // to `prev`'s `Inner` is live (we hold only `&Awaiter` to it here).
             unsafe { prev.inner_mut() }.next = next;
@@ -465,7 +465,7 @@ impl AwaiterSet {
             // access to its `Inner` is gated by this `&mut self` lock scope; and
             // `next` is a distinct awaiter from the one being unlinked, so no
             // `&mut Awaiter` borrow held elsewhere in this call aliases.
-            let next = unsafe { &*next };
+            let next = unsafe { next.as_ref_unchecked() };
             // SAFETY: Access is serialized by the caller's lock; no other reference
             // to `next`'s `Inner` is live (we hold only `&Awaiter` to it here).
             unsafe { next.inner_mut() }.prev = prev;

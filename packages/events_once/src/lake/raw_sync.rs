@@ -114,7 +114,7 @@ impl RawEventLake {
         // SAFETY: The cell holds a live, initialized `Core` per the above. We only ever create
         // shared references to its contents, never `&mut Core`, so no conflicting exclusive
         // reference can exist concurrently.
-        unsafe { &*core_cell.get() }
+        unsafe { core_cell.get().as_ref_unchecked() }
     }
 
     /// Rents an event from the lake, returning its endpoints.

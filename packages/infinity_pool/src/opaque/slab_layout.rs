@@ -52,13 +52,8 @@ impl SlabLayout {
             .extend(object_layout)
             .expect("layout extension cannot fail for valid layouts with reasonable sizes");
 
-        // Calculate the layout for the entire slab (array of slot layouts).
-        //
-        // We cannot use Layout::array() because that requires us to name a type.
-        // Therefore, we just perform the necessary calculations manually.
-        //
-        // Layout::pad_to_align() ensures the size is a multiple of alignment,
-        // which is exactly what we need for proper array element spacing.
+        // Padding the slot first makes its stored size equal the array stride reported by
+        // `Layout::repeat()`.
         let slot_layout = slot_layout.pad_to_align();
 
         let capacity = determine_capacity(
@@ -66,13 +61,9 @@ impl SlabLayout {
                 .expect("slot layout size is non-zero because object layout size is non-zero"),
         );
 
-        let total_size = slot_layout
-            .size()
-            .checked_mul(capacity.get())
+        let (slot_array_layout, _) = slot_layout
+            .repeat(capacity.get())
             .expect("the resulting slab size would be greater than virtual memory - can only be the result of invalid math");
-
-        let slot_array_layout = Layout::from_size_align(total_size, slot_layout.align())
-            .expect("slab layout calculation cannot fail for valid slot layouts");
 
         Self {
             capacity,

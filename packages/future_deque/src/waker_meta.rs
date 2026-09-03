@@ -88,7 +88,7 @@ pub(crate) fn create_waker_meta(shared_parent: &Arc<Mutex<Waker>>) -> MetaPtr {
 /// Creates a [`Waker`] from a metadata pointer, incrementing the refcount.
 pub(crate) fn make_waker(meta: MetaPtr) -> Waker {
     // SAFETY: The metadata is valid (refcount > 0 guarantees it has not been removed).
-    let meta_ref = unsafe { &*meta.0 };
+    let meta_ref = unsafe { meta.0.as_ref_unchecked() };
     meta_ref.ref_count.fetch_add(1, Ordering::Relaxed);
 
     // SAFETY: The vtable functions correctly match the data pointer layout.
@@ -104,7 +104,7 @@ pub(crate) fn make_waker(meta: MetaPtr) -> Waker {
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn check_activated(meta: MetaPtr) -> bool {
     // SAFETY: The metadata is valid (refcount > 0 guarantees it has not been removed).
-    let meta_ref = unsafe { &*meta.0 };
+    let meta_ref = unsafe { meta.0.as_ref_unchecked() };
     meta_ref.activated.swap(0, Ordering::AcqRel) != 0
 }
 
@@ -119,7 +119,9 @@ pub(crate) fn check_activated(meta: MetaPtr) -> bool {
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn release_ref(meta: MetaPtr) {
     // SAFETY: The metadata is valid (refcount > 0 guarantees it has not been removed).
-    let previous = unsafe { &*meta.0 }.ref_count.fetch_sub(1, Ordering::AcqRel);
+    let previous = unsafe { meta.0.as_ref_unchecked() }
+        .ref_count
+        .fetch_sub(1, Ordering::AcqRel);
 
     if previous == 1 {
         let ptr = NonNull::new(meta.0.cast_mut())
@@ -138,7 +140,7 @@ pub(crate) fn release_ref(meta: MetaPtr) {
 unsafe fn clone_raw_waker(data: *const ()) -> RawWaker {
     // SAFETY: The data pointer is a valid WakerMeta pointer (guaranteed by
     // construction in make_waker and create_waker_meta).
-    let meta = unsafe { &*(data as *const WakerMeta) };
+    let meta = unsafe { (data as *const WakerMeta).as_ref_unchecked() };
     meta.ref_count.fetch_add(1, Ordering::Relaxed);
     RawWaker::new(data, &WAKER_VTABLE)
 }
@@ -158,7 +160,7 @@ unsafe fn wake_raw_waker(data: *const ()) {
 
 unsafe fn wake_by_ref_raw_waker(data: *const ()) {
     // SAFETY: The data pointer is a valid WakerMeta pointer.
-    let meta = unsafe { &*(data as *const WakerMeta) };
+    let meta = unsafe { (data as *const WakerMeta).as_ref_unchecked() };
 
     // Only wake the parent if we are the first to set the activation flag.
     // If it was already set, the parent was already woken by a prior activation.

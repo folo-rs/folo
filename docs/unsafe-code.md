@@ -17,8 +17,8 @@ claims, they must specifically explain how we satisfy the safety requirements of
 the function we are calling (e.g. by referencing an assertion, a type invariant,
 earlier logic or other mechanism).
 
-When creating a reference from a raw pointer (`unsafe { &*ptr }`,
-`unsafe { &mut *ptr }`, `NonNull::as_ref`, `NonNull::as_mut`, etc.), the safety
+When creating a reference from a raw pointer (`as_ref_unchecked`,
+`as_mut_unchecked`, `NonNull::as_ref`, `NonNull::as_mut`, etc.), the safety
 comment must address BOTH:
 
 1. **Validity** — the pointer is non-null, properly aligned, points to an
@@ -35,6 +35,11 @@ strict and equally easy to violate, especially when constructing references from
 raw pointers stored across function calls or threads. Justify aliasing by
 referencing locks held, single-threaded ownership, `!Send`/`!Sync` markers,
 scope-bounded borrows, atomic-only access, or other concrete mechanisms.
+
+Prefer the named `as_ref_unchecked` and `as_mut_unchecked` methods over the
+equivalent `&*ptr` and `&mut *ptr` expressions. The named methods make the
+raw-pointer-to-reference conversion explicit without changing its safety
+requirements.
 
 Safety comments are also required in examples and doctests that use `unsafe`
 blocks.

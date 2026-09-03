@@ -353,13 +353,13 @@ impl<T: Transport, C> Shared<T, C> {
     fn next_attached_generation(&self) -> u64 {
         let previous = self
             .attached_generation
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
                 generation.checked_add(1)
             })
             .expect("the process cannot perform enough ownership changes to exhaust u64");
         previous
             .checked_add(1)
-            .expect("fetch_update only succeeds when the next generation exists")
+            .expect("try_update only succeeds when the next generation exists")
     }
 
     /// Holds output produced before the first client attached.

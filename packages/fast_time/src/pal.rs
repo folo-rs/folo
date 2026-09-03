@@ -4,15 +4,19 @@ mod facade;
 pub(crate) use abstractions::*;
 pub(crate) use facade::*;
 
-#[cfg(all(target_os = "linux", not(miri)))]
-mod linux;
-#[cfg(all(target_os = "linux", not(miri)))]
-pub(crate) use linux::*;
-
-#[cfg(all(windows, not(miri)))]
-mod windows;
-#[cfg(all(windows, not(miri)))]
-pub(crate) use windows::*;
+std::cfg_select! {
+    all(target_os = "linux", not(miri)) => {
+        mod linux;
+        pub(crate) use linux::*;
+    }
+    all(windows, not(miri)) => {
+        mod windows;
+        pub(crate) use windows::*;
+    }
+    _ => {
+        pub(crate) use rust::*;
+    }
+}
 
 #[cfg(test)]
 mod mock;
@@ -21,5 +25,3 @@ pub(crate) use mock::*;
 
 // We do not cfg(miri) this simply because that disables IDE editor support, which is annoying.
 mod rust;
-#[cfg(any(miri, not(any(target_os = "linux", windows))))]
-pub(crate) use rust::*;

@@ -294,6 +294,10 @@
 //!
 //! [1]: https://crates.io/crates/oneshot
 
+#[allow(
+    clippy::unnecessary_safety_comment,
+    reason = "the safety comment belongs to the preceding doctest's unsafe block"
+)]
 #[cfg(debug_assertions)]
 mod backtrace;
 mod constants;

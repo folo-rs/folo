@@ -127,7 +127,7 @@ impl<T: 'static> RawLocalEventPool<T> {
         // references. Endpoints retain an event pointer and, in debug builds, a pointer to the
         // registry rather than the core. `LocalPoolState` allocates through shared references,
         // while the registry mediates its mutation through its own `RefCell`.
-        unsafe { &*core_cell.get() }
+        unsafe { core_cell.get().as_ref_unchecked() }
     }
 
     /// Rents an event from the pool, returning its endpoints.

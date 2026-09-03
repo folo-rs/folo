@@ -215,7 +215,7 @@ fn current_user_sid_string() -> Result<String, PalError> {
     {
         // SAFETY: `buf` holds a TOKEN_USER written by GetTokenInformation. No
         // other exclusive borrow of `buf` exists. `User.Sid` points into `buf`.
-        let user = unsafe { &*buf.as_ptr().cast::<TOKEN_USER>() };
+        let user = unsafe { buf.as_ptr().cast::<TOKEN_USER>().as_ref_unchecked() };
         // SAFETY: `user.User.Sid` is a valid SID inside `buf`. On success
         // `sid_str` is a LocalAlloc string we own.
         unsafe { ConvertSidToStringSidW(user.User.Sid, &raw mut sid_str) }

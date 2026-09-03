@@ -1045,11 +1045,7 @@ mod tests {
             .collect();
 
         assert!(
-            positions.windows(2).all(|pair| {
-                pair.first()
-                    .zip(pair.get(1))
-                    .is_none_or(|(from, to)| from <= to)
-            }),
+            positions.array_windows::<2>().all(|[from, to]| from <= to),
             "{positions:?}"
         );
     }

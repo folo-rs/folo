@@ -401,11 +401,8 @@ impl Plot {
             .map(|observation| (coord::of(observation.position), observation.value))
             .collect();
 
-        live.windows(2)
-            .filter_map(|window| {
-                let (Some(&from), Some(&to)) = (window.first(), window.get(1)) else {
-                    return None;
-                };
+        live.array_windows::<2>()
+            .filter_map(|&[from, to]| {
                 // Consecutive commits only. A commit that carries no observation must read
                 // as a hole, and a line drawn straight across one would assert a
                 // trajectory through commits nothing was ever measured at — the exact

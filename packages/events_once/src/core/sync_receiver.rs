@@ -57,7 +57,7 @@ where
         // access it, which includes the returned reference. Aliasing: the same contract limits
         // all access to shared references, and the event synchronizes its interior fields
         // itself, so no exclusive reference to the event can exist.
-        unsafe { &*event_ref.get() }
+        unsafe { event_ref.get().as_ref_unchecked() }
     }
 
     /// Checks whether the event has completed, in which case reception can finish immediately.

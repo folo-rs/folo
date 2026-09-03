@@ -66,7 +66,7 @@ pub(crate) fn initialize_event<T: Send + 'static>(
 
     // SAFETY: `MaybeUninit` and `UnsafeCell` are transparent wrappers, so both nestings describe
     // the same storage. No reference to the uninitialized slot remains from the owner above.
-    let place = unsafe { &mut *place };
+    let place = unsafe { place.as_mut_unchecked() };
 
     Event::new_in_inner(place);
 

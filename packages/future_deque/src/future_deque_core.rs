@@ -1459,7 +1459,7 @@ mod tests {
             // clone
             |data| {
                 // SAFETY: data is a valid *const Arc<AtomicBool> from Box::into_raw.
-                let flag = unsafe { &*(data as *const Arc<AtomicBool>) };
+                let flag = unsafe { (data as *const Arc<AtomicBool>).as_ref_unchecked() };
                 let cloned = Box::new(Arc::clone(flag));
                 RawWaker::new(Box::into_raw(cloned) as *const (), &VTABLE)
             },
@@ -1472,7 +1472,7 @@ mod tests {
             // wake_by_ref
             |data| {
                 // SAFETY: data is a valid *const Arc<AtomicBool> from Box::into_raw.
-                let flag = unsafe { &*(data as *const Arc<AtomicBool>) };
+                let flag = unsafe { (data as *const Arc<AtomicBool>).as_ref_unchecked() };
                 flag.store(true, Ordering::Release);
             },
             // drop
@@ -1529,7 +1529,7 @@ mod tests {
             // clone
             |data| {
                 // SAFETY: data is a valid *const Arc<AtomicUsize> from Box::into_raw.
-                let counter = unsafe { &*(data as *const Arc<AtomicUsize>) };
+                let counter = unsafe { (data as *const Arc<AtomicUsize>).as_ref_unchecked() };
                 let cloned = Box::new(Arc::clone(counter));
                 RawWaker::new(Box::into_raw(cloned) as *const (), &VTABLE)
             },
@@ -1542,7 +1542,7 @@ mod tests {
             // wake_by_ref
             |data| {
                 // SAFETY: data is a valid *const Arc<AtomicUsize> from Box::into_raw.
-                let counter = unsafe { &*(data as *const Arc<AtomicUsize>) };
+                let counter = unsafe { (data as *const Arc<AtomicUsize>).as_ref_unchecked() };
                 counter.fetch_add(1, Ordering::Relaxed);
             },
             // drop
