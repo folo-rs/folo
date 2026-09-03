@@ -345,8 +345,9 @@ the advisory attached flag is written to the session store. The store update
 happens after both ownership locks are released, so durable filesystem I/O
 cannot block that supervisor progress or another attach. Each client-slot change
 assigns a generation to its advisory update. Store writes are serialized and
-discard generations older than the latest ownership state, so an update delayed
-by filesystem I/O cannot overwrite a newer attach or detach.
+skip updates that are already stale when they reach that serialization boundary.
+If a write becomes stale inside filesystem I/O, the newer update follows it
+through the same boundary and establishes the final attached state.
 
 Session teardown closes the pseudoconsole and joins the output pump before
 queueing the app's exit status, which is what orders the app's final output
