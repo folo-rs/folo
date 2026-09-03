@@ -116,9 +116,9 @@ pub(crate) struct CanonicalizeError {
 #[display("Session store error")]
 pub(crate) struct StoreError;
 
-/// Resume without `--id` needs a terminal stdin to prompt for a session id.
+/// Resume without an id needs a terminal stdin to prompt for one.
 #[ohno::error]
-#[display("Cannot prompt for a session id without a terminal stdin; use --id")]
+#[display("Cannot prompt for a session id without a terminal stdin; pass the id as an argument")]
 pub(crate) struct PromptFailedError;
 
 /// This client was displaced by a newer attach.

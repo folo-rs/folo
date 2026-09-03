@@ -50,8 +50,10 @@ enum CliCommand {
     /// Attach to a live session.
     Resume {
         /// Session id to attach to, skipping auto-detect.
-        #[arg(long)]
         id: Option<NonZero<u32>>,
+        /// Hidden compatibility spelling for the session id.
+        #[arg(long = "id", value_name = "ID", hide = true, conflicts_with = "id")]
+        legacy_id: Option<NonZero<u32>>,
     },
     /// Print live sessions.
     List,
@@ -125,8 +127,8 @@ impl Cli {
     pub fn into_input(self) -> RunInput {
         let command = match self.command {
             CliCommand::Run { command } => Command::Run { command },
-            CliCommand::Resume { id } => Command::Resume {
-                id: id.map(SessionId::new),
+            CliCommand::Resume { id, legacy_id } => Command::Resume {
+                id: id.or(legacy_id).map(SessionId::new),
             },
             CliCommand::List => Command::List,
             CliCommand::Kill { id } => Command::Kill {
@@ -177,7 +179,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_resume_with_id() {
+    fn parse_resume_with_positional_id() {
+        let input = parse(&["resume", "3"]);
+        assert_eq!(
+            input.command,
+            Command::Resume {
+                id: SessionId::from_u32(3),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_resume_with_legacy_id_option() {
         let input = parse(&["resume", "--id", "3"]);
         assert_eq!(
             input.command,
@@ -185,6 +198,19 @@ mod tests {
                 id: SessionId::from_u32(3),
             }
         );
+    }
+
+    #[test]
+    fn parse_resume_rejects_duplicate_id() {
+        Cli::from_args(&["dure"], &["resume", "3", "--id", "4"]).unwrap_err();
+    }
+
+    #[test]
+    fn resume_help_shows_positional_id() {
+        let err = Cli::from_args(&["dure"], &["resume", "--help"]).unwrap_err();
+        assert!(err.status.is_ok());
+        assert!(err.output.contains("[ID]"));
+        assert!(!err.output.contains("--id"));
     }
 
     #[test]

@@ -76,8 +76,9 @@ leaves no live session behind. Once the supervisor and client confirm startup,
 an attach failure identifies the session and notes that it may still be running,
 so `list`, `resume`, and `kill` remain available.
 
-`dure resume` attaches using auto-detect. `dure resume --id <id>` attaches to
-that live session and skips auto-detect.
+`dure resume` attaches using auto-detect. `dure resume <id>` attaches to that
+live session and skips auto-detect. The hidden `--id <id>` spelling is accepted
+as a compatibility alias.
 
 `dure list` prints live sessions: id, whether a client is currently attached,
 supervisor pid, how long the session has been running, launch directory, and
@@ -99,14 +100,14 @@ Each session records the canonical absolute path of the directory from which
 `dure run` was invoked (the launch directory). The app later changing its own
 working directory does not change that record.
 
-`dure resume` with no `--id`:
+`dure resume` with no id:
 
 * If there is no live session, it fails.
 * If exactly one live session has a launch directory equal to the current
   directory, it attaches to that session.
 * Otherwise it prints the live session list and reads a session id from the
   terminal. Unreadable stdin, empty input, or a non-terminal stdin is a failure;
-  the caller uses `--id` instead.
+  the caller passes the session id as an argument instead.
 
 If several live sessions share the current directory, that is not a unique
 match; the command lists and asks. It does not pick arbitrarily.
@@ -183,14 +184,14 @@ unavailable.
 
 `dure` writes diagnostics to stderr only while it is not attached. Before
 attach, `run` and `resume` print the session id so the user can `kill` or
-`resume --id` later. After attach, the funnel is exclusive. A displaced client
+`resume <id>` later. After attach, the funnel is exclusive. A displaced client
 writes one diagnostic once its relay has ended and exits with a failure status.
 When the app exits, an attached client receives the app's remaining output
 before the exit status, then exits with that status.
 
 Attaching (`run`, `resume`) requires a console. `list` and `kill` do not. The
 resume id prompt additionally requires a terminal stdin; without one, `resume`
-without `--id` fails.
+without an id fails.
 
 A console is the Windows console-host API: handles, modes, and window size. A
 terminal is the visible emulator (Windows Terminal, an SSH client) that renders
