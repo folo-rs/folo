@@ -5,6 +5,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::str::FromStr;
 
 use nonempty::NonEmpty;
+use ohno::OhnoCore;
 use serde::{Deserialize, Serialize};
 
 /// Stable identity of a benchmark series.
@@ -127,16 +128,17 @@ impl From<BenchmarkIdPrefix> for String {
 }
 
 /// Error returned when a [`BenchmarkIdPrefix`] is constructed from an empty value.
-#[ohno::error]
-#[derive(Clone)]
+#[derive(Clone, ohno::Error)]
 #[no_constructors]
 #[from(EmptyBenchmarkIdPrefixValueError)]
-pub struct EmptyBenchmarkIdPrefix;
+pub struct EmptyBenchmarkIdPrefix {
+    #[error]
+    core: OhnoCore,
+}
 
-// `#[ohno::error]` injects `OhnoCore`, which blocks automatic unwind-safety trait
-// inference. All ohno error types in this module expose no mutation, so unwinding
-// cannot reveal a partially mutated value. Introducing mutation or interior mutability
-// requires re-evaluating every manual impl below.
+// `OhnoCore` blocks automatic unwind-safety trait inference. All ohno error types in this
+// module expose no mutation, so unwinding cannot reveal a partially mutated value.
+// Introducing mutation or interior mutability requires re-evaluating every manual impl below.
 impl UnwindSafe for EmptyBenchmarkIdPrefix {}
 impl RefUnwindSafe for EmptyBenchmarkIdPrefix {}
 

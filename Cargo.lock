@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "alloc_tracker",
  "cpu-time",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "all_the_time",
  "criterion",
@@ -119,9 +119,9 @@ dependencies = [
 
 [[package]]
 name = "anyspawn"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "394d31a3ddd26884b4080469dbda9b7b8df45641764f1f23206ddeb177b18a09"
+checksum = "3e77076dc007ba89c131f16caa365e39d98a528f9095d33e8d5dca776cd8e0dd"
 dependencies = [
  "futures-channel",
  "thread_aware",
@@ -139,9 +139,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.43"
+version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3976abdc8fe7d1133d43d304afd42abdf5bc3e1319d263d223bde07b5efc4be8"
+checksum = "515a1f282e33d55983c499d7e9e87082e81cbc32974825bf9032f928392d5844"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -207,7 +207,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awaiter_set"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "criterion",
  "futures",
@@ -219,9 +219,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.18.0"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2b2dcc879c3bae0d371e77c99f2238400ef24ec001394befa67b6e543add9e"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -229,9 +229,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.44.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09fae7be8bb3174e05c6afdb34199e6dc0c7c04ba9fa237b1967adfbde27483"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "cc",
  "cmake",
@@ -418,9 +418,9 @@ dependencies = [
 
 [[package]]
 name = "bstr"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f7dc094d718f2e1c1559ad110e27eeaae14a5465d3d56dd6dbd793079fbd530"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
 dependencies = [
  "memchr",
  "serde_core",
@@ -446,7 +446,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-faker"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "folo_utils",
  "mimalloc",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.28"
+version = "1.0.29"
 dependencies = [
  "clap",
  "mimalloc",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-freeze-deps"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "clap",
  "mimalloc",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "criterion",
@@ -584,7 +584,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -609,7 +609,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -673,14 +673,14 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "mutants",
 ]
 
 [[package]]
 name = "cbh_engines"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cbh_model",
  "futures",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "criterion",
  "jiff",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "criterion",
  "mutants",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_storage"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -928,9 +928,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.38"
+version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2548391e9c1929c21bf6aa2680af86fe4c1b33e6cea9ac1cfeec0bd11218cf"
+checksum = "2fe67f2944eef52fc7b106b8c9450d243a88701a0c065f7f57235e76abaed7df"
 dependencies = [
  "compression-core",
  "flate2",
@@ -939,9 +939,9 @@ dependencies = [
 
 [[package]]
 name = "compression-core"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
+checksum = "6e8ccc4ea9f6acc32d102c0f6d471d11d913ad15f20c04de743374861fa1d414"
 
 [[package]]
 name = "const-random"
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "1.1.7"
+version = "1.1.8"
 dependencies = [
  "itertools 0.15.0",
  "new_zealand",
@@ -1204,7 +1204,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dure"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "dure-test-helper",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.7.13"
+version = "0.7.14"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -1308,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.34"
+version = "0.5.35"
 dependencies = [
  "criterion",
  "futures",
@@ -1333,6 +1333,16 @@ dependencies = [
 [[package]]
 name = "fast_time"
 version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37f47559135cddc2c472ba58e45bc466afd016ccc1602a90ccb364c92d765ee7"
+dependencies = [
+ "libc",
+ "windows",
+]
+
+[[package]]
+name = "fast_time"
+version = "0.1.28"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1374,7 +1384,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "folo_ffi"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1382,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "folo_utils"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "mutants",
  "serde",
@@ -1440,7 +1450,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "future_deque"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -1605,9 +1615,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "globset"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
 dependencies = [
  "aho-corasick",
  "bstr",
@@ -1716,9 +1726,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "http"
@@ -1939,9 +1949,9 @@ dependencies = [
 
 [[package]]
 name = "ignore"
-version = "0.4.31"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f8a7b8211e695a1d0cd91cace480d4d0bd57667ab10277cc412c5f7f4884f83"
+checksum = "00b69833ed729dc5aa7d19541d96d6cf8e9137194207a04916d658e43168402f"
 dependencies = [
  "crossbeam-deque",
  "globset",
@@ -1965,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.24"
+version = "0.8.25"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2144,7 +2154,7 @@ dependencies = [
 
 [[package]]
 name = "linked"
-version = "1.0.19"
+version = "1.0.20"
 dependencies = [
  "criterion",
  "gungraun",
@@ -2162,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.19"
+version = "1.0.20"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -2170,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.19"
+version = "1.0.20"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2225,7 +2235,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.16"
+version = "2.4.17"
 dependencies = [
  "many_cpus_impl",
  "new_zealand",
@@ -2235,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2251,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_impl"
-version = "2.4.16"
+version = "2.4.17"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2323,9 +2333,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d65c71f1ce40ab09135ce117d742b9f8a19ff91a41a8b57ed50bc2de59c427"
+checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
 dependencies = [
  "libc",
  "wasi",
@@ -2366,27 +2376,46 @@ checksum = "add0ac067452ff1aca8c5002111bd6b1c895baee6e45fcbc44e0193aea17be56"
 
 [[package]]
 name = "new_zealand"
-version = "1.0.7"
+version = "1.0.8"
 
 [[package]]
 name = "nm"
 version = "0.1.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "537b02df290014878652b07696856ced9cbdc517b2ca4d57752d1a39c7a39515"
 dependencies = [
- "nm_impl",
+ "nm_impl 0.1.45",
+]
+
+[[package]]
+name = "nm"
+version = "0.1.46"
+dependencies = [
+ "nm_impl 0.1.46",
  "static_assertions",
 ]
 
 [[package]]
 name = "nm_impl"
 version = "0.1.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b27a3189e39c8052db6fb1d3b61d75ce036442a15170c81520cf334e1523886e"
+dependencies = [
+ "fast_time 0.1.27",
+ "num-traits",
+]
+
+[[package]]
+name = "nm_impl"
+version = "0.1.46"
 dependencies = [
  "criterion",
- "fast_time",
+ "fast_time 0.1.28",
  "gungraun",
  "many_cpus",
  "mutants",
  "new_zealand",
- "nm",
+ "nm 0.1.46",
  "num-traits",
  "par_bench",
  "static_assertions",
@@ -2395,9 +2424,9 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.17"
+version = "0.4.18"
 dependencies = [
- "nm",
+ "nm 0.1.46",
  "nm_otel_impl",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
@@ -2408,7 +2437,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.17"
+version = "0.4.18"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2418,8 +2447,8 @@ dependencies = [
  "many_cpus",
  "mutants",
  "new_zealand",
- "nm",
- "nm_impl",
+ "nm 0.1.46",
+ "nm_impl 0.1.46",
  "nm_otel",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -2484,9 +2513,9 @@ dependencies = [
 
 [[package]]
 name = "ohno"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4665329d9a246af05b488837c3736801fedbec2ef3a1b1484fde1bc47550cf63"
+checksum = "c6f03365c20a62c82c5da4cd93abf43cec7115c7d9f84a55ea827e2b56d704a5"
 dependencies = [
  "ohno_macros",
  "typeid",
@@ -2494,9 +2523,18 @@ dependencies = [
 
 [[package]]
 name = "ohno_macros"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "565bae93429e274bfbb568535b43dd6458538908014e44faec44dddfafcb5fd3"
+checksum = "2a4ce72614cf218523160501f1c275d718c80083697d62d54186e41512429ba9"
+dependencies = [
+ "ohno_macros_impl",
+]
+
+[[package]]
+name = "ohno_macros_impl"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a2711e52bb0de91b2d6a3c60636bac1827fb109003e235ed827dc9021287d0d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2586,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.52"
+version = "0.2.53"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -2778,9 +2816,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-error-attr3"
-version = "3.1.0"
+version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0084e6206a967a2dad822180626b2f6b07a3b379325e8f1ec0438e33a469ba7"
+checksum = "9e564d14133360e1ae169ffde5da25881b5fa47261665b8e5713c212c27799da"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2788,9 +2826,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-error3"
-version = "3.1.0"
+version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf066225f2373bc711684792b69bdeac0356019b007e721090c24d92d5d5a50"
+checksum = "8f0d4471b3436c22106b21913b1dda531558918ae9b7ec55d58aa84b43552233"
 dependencies = [
  "proc-macro-error-attr3",
  "proc-macro2",
@@ -3045,7 +3083,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.31"
+version = "1.0.32"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3067,7 +3105,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.31"
+version = "1.0.32"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3274,9 +3312,9 @@ dependencies = [
 
 [[package]]
 name = "scc"
-version = "3.8.7"
+version = "3.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b61e66d981128945ef7253d1dcaff636423acfebdee22cd2d8dfd4eb89e4d134"
+checksum = "5d5f8ca67c4f6208caf824037a6a9df0211b4e0937fccc4f543441f294d04511"
 dependencies = [
  "saa",
  "sdd",
@@ -3493,9 +3531,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 dependencies = [
  "serde",
 ]
@@ -3642,32 +3680,33 @@ dependencies = [
 
 [[package]]
 name = "thread_aware"
-version = "0.9.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e1d62dcaf3eec4b3d50494a244af37d0e169c37075ccfe02144ad98e86c6901"
+checksum = "1a51b2adee4e72d04bbdb051253a511e04e70fbffd00721bbd9e57bc45c2b29a"
 dependencies = [
+ "nm 0.1.45",
  "thread_aware_macros",
 ]
 
 [[package]]
 name = "thread_aware_macros"
-version = "0.7.5"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fbb45e1618e4517c4150b20f530af858985eb57f93ed9f22e4df661008b8c52"
+checksum = "2953cbdb8e54f9dc7d08613dedd330e3845330bfb1a0e55714e44b49a044eb80"
 dependencies = [
- "syn 2.0.119",
+ "syn 3.0.4",
  "thread_aware_macros_impl",
 ]
 
 [[package]]
 name = "thread_aware_macros_impl"
-version = "0.7.4"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe31f85f6362328b8db3ed92ae1d65ca828ed1edb9690d9715c5b0c104c4642d"
+checksum = "4271b41bf3fab1350360754e90a11bb7f661bce00aae8038b83be25030de9642"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3690,9 +3729,9 @@ dependencies = [
 
 [[package]]
 name = "tick"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cac1a2e273c0e12c23b85ed62b9e7ae46342ed73a4082f95ed28cdbd807b1fce"
+checksum = "cf8b890df44ed42f77de97f2aa630091bf96fac578ca2a93953e8aee926ebcba"
 dependencies = [
  "futures-core",
  "pin-project-lite",
@@ -3826,9 +3865,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.4+spec-1.1.0"
+version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+checksum = "12c0ba9680044b4ce98d391a62094047eada0d64860b80166c39f4a6b5640785"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -4153,19 +4192,19 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vicinal"
-version = "0.1.36"
+version = "0.1.37"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
  "criterion",
  "event-listener",
  "events_once",
- "fast_time",
+ "fast_time 0.1.28",
  "futures",
  "many_cpus",
  "mutants",
  "new_zealand",
- "nm",
+ "nm 0.1.46",
  "pin-project",
  "plurality",
  "static_assertions",

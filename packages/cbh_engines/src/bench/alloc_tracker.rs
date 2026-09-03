@@ -23,15 +23,19 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
+use ohno::OhnoCore;
 use serde::Deserialize;
 
 /// Parsing an `alloc_tracker` operation file failed.
 ///
 /// The underlying failure is retained in the source chain.
-#[ohno::error]
+#[derive(ohno::Error)]
 #[no_constructors]
 #[from(AllocTrackerJsonError)]
-pub struct AllocTrackerParseError;
+pub struct AllocTrackerParseError {
+    #[error]
+    core: OhnoCore,
+}
 
 /// An `alloc_tracker` operation file was malformed.
 #[ohno::error]
@@ -39,10 +43,10 @@ pub struct AllocTrackerParseError;
 #[from(serde_json::Error)]
 struct AllocTrackerJsonError;
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
+// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
+// immutable after construction — no &self method mutates internal state — so observing them
+// through a shared reference during unwind is harmless.
 impl UnwindSafe for AllocTrackerParseError {}
 impl RefUnwindSafe for AllocTrackerParseError {}
 impl UnwindSafe for AllocTrackerJsonError {}

@@ -16,15 +16,19 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
+use ohno::OhnoCore;
 use serde::Deserialize;
 
 /// Parsing an `all_the_time` operation file failed.
 ///
 /// The underlying failure is retained in the source chain.
-#[ohno::error]
+#[derive(ohno::Error)]
 #[no_constructors]
 #[from(AllTheTimeJsonError)]
-pub struct AllTheTimeParseError;
+pub struct AllTheTimeParseError {
+    #[error]
+    core: OhnoCore,
+}
 
 /// An `all_the_time` operation file was malformed.
 #[ohno::error]
@@ -32,10 +36,10 @@ pub struct AllTheTimeParseError;
 #[from(serde_json::Error)]
 struct AllTheTimeJsonError;
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
+// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
+// immutable after construction — no &self method mutates internal state — so observing them
+// through a shared reference during unwind is harmless.
 impl UnwindSafe for AllTheTimeParseError {}
 impl RefUnwindSafe for AllTheTimeParseError {}
 impl UnwindSafe for AllTheTimeJsonError {}

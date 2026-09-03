@@ -3,19 +3,24 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 
+use ohno::OhnoCore;
+
 /// Loading configuration or resolving a configured option failed.
 ///
 /// The error preserves the concrete failure and any underlying I/O or TOML
 /// error in its source chain.
-#[ohno::error]
+#[derive(ohno::Error)]
 #[no_constructors]
 #[from(ReadConfigError, ParseConfigError, SelectionEnvironmentRequiredError)]
-pub struct ConfigError;
+pub struct ConfigError {
+    #[error]
+    core: OhnoCore,
+}
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
+// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
+// immutable after construction — no &self method mutates internal state — so observing them
+// through a shared reference during unwind is harmless.
 impl UnwindSafe for ConfigError {}
 impl RefUnwindSafe for ConfigError {}
 
