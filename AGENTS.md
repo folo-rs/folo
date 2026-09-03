@@ -295,6 +295,18 @@ threads, and the no-version-bumps-on-feature-branches rule.
 **Open this when**: creating a pull request; addressing review comments;
 tempted to edit a `Cargo.toml` version field on a feature branch.
 
+### [docs/release-versioning.md](docs/release-versioning.md)
+
+How crate version numbers are decided and enforced: the version increment happens
+in the pull request that changes a package, anchored to the base branch's version
+history, gated by a required check and a merge queue. Contributor procedure lives
+in [`git-workflow.md`](docs/git-workflow.md) and [`RELEASING.md`](RELEASING.md);
+the publish half lives in [`release-automation.md`](docs/release-automation.md).
+
+**Open this when**: implementing that design; a pull request is about the
+versioning process itself. It is not contributor instructions: until the design
+is implemented, version bumps follow [`git-workflow.md`](docs/git-workflow.md).
+
 ### [docs/release-automation.md](docs/release-automation.md)
 
 How crates.io publishing and `cargo-binstall` prebuilt binaries are automated from
