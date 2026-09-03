@@ -142,6 +142,12 @@ trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.37", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
 
+[patch.crates-io]
+# `thread_aware` depends on a compatible published version of this package. Resolve that transitive
+# requirement to the workspace package so Cargo package selectors remain unambiguous.
+# Registry and path packages remain distinct identities even when their names and versions match.
+nm = { path = "packages/nm" }
+
 # Cargo packages that form one logical unit belong to one version group, and the
 # members of a version group must share a version. cargo-release-plan expands an
 # increment across every member of a version group and rewrites intra-workspace

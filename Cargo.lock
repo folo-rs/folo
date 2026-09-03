@@ -1332,16 +1332,6 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37f47559135cddc2c472ba58e45bc466afd016ccc1602a90ccb364c92d765ee7"
-dependencies = [
- "libc",
- "windows",
-]
-
-[[package]]
-name = "fast_time"
 version = "0.1.28"
 dependencies = [
  "criterion",
@@ -2380,29 +2370,10 @@ version = "1.0.8"
 
 [[package]]
 name = "nm"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "537b02df290014878652b07696856ced9cbdc517b2ca4d57752d1a39c7a39515"
-dependencies = [
- "nm_impl 0.1.45",
-]
-
-[[package]]
-name = "nm"
 version = "0.1.46"
 dependencies = [
- "nm_impl 0.1.46",
+ "nm_impl",
  "static_assertions",
-]
-
-[[package]]
-name = "nm_impl"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b27a3189e39c8052db6fb1d3b61d75ce036442a15170c81520cf334e1523886e"
-dependencies = [
- "fast_time 0.1.27",
- "num-traits",
 ]
 
 [[package]]
@@ -2410,12 +2381,12 @@ name = "nm_impl"
 version = "0.1.46"
 dependencies = [
  "criterion",
- "fast_time 0.1.28",
+ "fast_time",
  "gungraun",
  "many_cpus",
  "mutants",
  "new_zealand",
- "nm 0.1.46",
+ "nm",
  "num-traits",
  "par_bench",
  "static_assertions",
@@ -2426,7 +2397,7 @@ dependencies = [
 name = "nm_otel"
 version = "0.4.18"
 dependencies = [
- "nm 0.1.46",
+ "nm",
  "nm_otel_impl",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
@@ -2447,8 +2418,8 @@ dependencies = [
  "many_cpus",
  "mutants",
  "new_zealand",
- "nm 0.1.46",
- "nm_impl 0.1.46",
+ "nm",
+ "nm_impl",
  "nm_otel",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -3684,7 +3655,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a51b2adee4e72d04bbdb051253a511e04e70fbffd00721bbd9e57bc45c2b29a"
 dependencies = [
- "nm 0.1.45",
+ "nm",
  "thread_aware_macros",
 ]
 
@@ -4199,12 +4170,12 @@ dependencies = [
  "criterion",
  "event-listener",
  "events_once",
- "fast_time 0.1.28",
+ "fast_time",
  "futures",
  "many_cpus",
  "mutants",
  "new_zealand",
- "nm 0.1.46",
+ "nm",
  "pin-project",
  "plurality",
  "static_assertions",
