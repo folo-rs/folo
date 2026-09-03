@@ -87,9 +87,11 @@ repeat that batch until no decision changes.
 # Stage 5: Decide change levels
 
 Analyze every package in the report, including `pending-release` and `unchanged` packages.
-For each package, inspect its own released-content evidence and changes to dependencies
-already analyzed. A dependency decision can make a dependent require an increment even when
-the dependent had no original file change.
+For each package, inspect its own released-content evidence, its `Cargo.toml`, fields it
+inherits from the workspace `Cargo.toml`, and changes to dependencies already analyzed.
+Inherited fields appear as `source: "inherited"` entries in `report.json` and may have no
+package diff. A dependency decision can make a dependent require an increment even when the
+dependent had no original file change.
 
 Use [determining-level.md](determining-level.md) to choose `breaking`, `nonbreaking`, `patch`,
 or no increment. Treat a cargo-semver-checks finding as a `breaking` floor. When
