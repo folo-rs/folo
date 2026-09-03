@@ -34,11 +34,14 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 - A job whose inputs are not Cargo packages (the workflow files, or anything under
   `scripts/`) must run unconditionally - do not gate it on the `delta` job or `skip_all`, or
   a change touching only those files would be validated by nothing. Package-scoped jobs gate
-  on `delta`. `validate-versions` is in this class: it classifies every publishable
+  on `delta`. `validate-versions` is in this class: it generates release state for every publishable
   package's released content against its version-anchor, so delta's changed-package set
   cannot skip a package that already needed an increment.
 - Azure OIDC jobs (`test-azure`, `test-azure-gh`) must not run on `merge_group`. The test
   identity's federated subjects are `pull_request` and the `main` branch ref only.
+- `scripts/release/ReleasePlan.psm1` explicitly lists the packages whose library surface is a
+  supported consumer contract. Update that list when a published package gains or loses such a
+  contract; do not infer the decision from its name.
 
 ## Required-checks fan-in
 

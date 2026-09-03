@@ -25,7 +25,7 @@ rebuild the workspace. The complement of this pattern is the rule that a job who
 are **not** Cargo packages — the workflow files themselves, or the standalone PowerShell
 under `scripts/` — must run unconditionally. Delta analysis reports "nothing affected" for
 such a change, so gating those jobs on it would leave the change validated by nothing.
-Version classification (`validate-versions`) is in that class: it compares every
+Release-plan generation (`validate-versions`) is in that class: it compares every
 publishable package's released content to that package's version-anchor. Gating it on
 delta's changed-package set would skip a package that already needed an increment.
 
@@ -149,14 +149,21 @@ is never added to the GitHub ruleset. Unconditional gates are also named in the 
 must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
 required through this fan-in.
 
-## Version and SemVer checks
+## Pull-request version readiness
 
-`validate-versions` classifies every publishable package against the release baseline.
-The `released` output is the consumer-visible subset of that classification: public shells
-and ungrouped public packages whose status is `needs-increment` or `pending-release`,
-including a shell whose grouped `_impl` member has released-content changes. An empty
-`released` list is a successful skip for `semver-checks`, not a workspace-wide run.
-Comparisons use `--all-features`.
+Published content changes require an explicit semantic change-level decision before release.
+This applies to the workspace as a whole rather than only packages selected by delta analysis:
+an earlier change can remain pending even when the current pull request does not touch that
+package.
+
+Automated API comparison supplies evidence for those decisions but does not replace semantic
+review. It is fail-closed when its input format or execution is unsupported. Comparisons cover
+only packages whose surface is a supported consumer contract. Published implementation and
+test-support packages have no independent SemVer contract; changes in a grouped implementation
+package are assessed through the owning public package instead.
+
+The checks support a valid empty consumer-contract set without turning that case into a
+workspace-wide comparison.
 
 ## Published user guides
 

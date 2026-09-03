@@ -1,48 +1,42 @@
 # GitHub workflows implementation
 
-Ownership boundaries for the Validation release-check pipeline. User-visible
-behavior is in [design.md](design.md). Command-line flags and step scripts stay
-beside the jobs and recipes that run them.
+This guide maps the workflow design to the repository tools that implement it. User-visible
+CI behavior and design tenets are in [design.md](design.md); command flags and step details stay
+with the commands and workflow jobs.
 
-## Data flow
+## Validation structure
 
-```text
-event SHA  -->  RELEASE_PLAN_BASE / DELTA_BASELINE
-                |                    |
-                v                    v
-     cargo-release-plan          cargo-delta
-     classify (Rust)             affected packages
-                |
-                +--> check --format github  -->  validate-versions verdict
-                |
-                +--> report.json
-                        |
-                        v
-                 ReleasePlan.psm1
-                 (public-shell filter)
-                        |
-                        v
-                 released=   -->  just semver-checks
-                                          |
-                                          v
-                 needs results  -->  RequiredChecks.psm1  -->  fan-in
-```
+`validation.yml` gives independently useful checks separate jobs so GitHub reports their
+outcomes in parallel. Cargo-package jobs consume the affected-package set from the `delta`
+job. Repository-wide checks run without that gate.
 
-## Ownership
+Pull requests and merge-queue entries use the pruned validation set. Pushes to `main` use the
+full set. Queue delta analysis takes the event's base commit so its comparison cannot drift
+from the queued merge candidate.
 
-* **Release baseline.** `validation.yml` selects `github.event.pull_request.base.sha`
-  or `github.event.merge_group.base_sha` as `RELEASE_PLAN_BASE`. An empty value on
-  push to `main` leaves the tool default. The same SHA is `DELTA_BASELINE` on a
-  queue run so delta and the version check cannot drift.
-* **Classification.** `cargo-release-plan` owns workspace classification, report
-  schema, and the check verdict. Recipes do not reimplement it. The report schema
-  is documented in `packages/cargo-release-plan/README.md`.
-* **Public-package selection.** `scripts/release/ReleasePlan.psm1` reads
-  `report.json` and selects consumer-visible comparison targets. Locked by
-  `scripts/release/ReleasePlan.Tests.ps1`.
-* **Valid-empty skip.** An empty `released` output is a present empty string. The
-  `semver-checks` recipe treats that as a successful skip, not a workspace-wide
-  run.
-* **Required-result classification.** `scripts/build/RequiredChecks.psm1` reads
-  `toJSON(needs)` and the must-succeed job list from the fan-in step. Locked by
-  `scripts/build/RequiredChecks.Tests.ps1`.
+## Release validation
+
+`cargo-release-plan` compares released content with version anchors and owns the report schema
+and version-readiness verdict. The workflow passes the pull-request or merge-group base commit
+as its release baseline.
+
+`scripts/release/ReleasePlan.psm1` is the PowerShell boundary between that report and hosted
+validation. It accepts only the report schema revision it understands and owns the explicit
+set of packages whose library surface is a supported consumer contract. The same target
+selection drives both the CI SemVer job and evidence collection by the increment-versions
+skill. Package-name patterns do not determine whether a crate has a consumer contract.
+
+The module also owns the skill's deterministic mechanics: dependency-order presentation,
+publication eligibility, semantic change-decision validation, and conversion to
+`cargo-release-plan apply` input. The just recipes remain thin command-line entry points.
+Pester tests in `scripts/release/ReleasePlan.Tests.ps1` lock these boundaries.
+
+## Merge-blocking result
+
+The `required-checks` job is the intended single ruleset target. Its `needs` graph contains
+every merge-blocking Validation job. `scripts/build/RequiredChecks.psm1` rejects failed,
+cancelled, missing, and unknown dependency results. It permits `skipped` only for jobs whose
+event, platform, or package scope legitimately excludes them.
+
+Azure OIDC test jobs are among the legitimate queue skips because their federated identity
+trusts pull-request and `main` subjects, not merge-group subjects.

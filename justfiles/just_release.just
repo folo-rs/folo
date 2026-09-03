@@ -120,7 +120,7 @@ check-never-published:
 # supplies the release baseline when set (CI passes the pull-request base SHA or
 # `merge_group.base_sha`); an empty value falls through to the tool default. When
 # `GITHUB_OUTPUT` is set, a report is written first so the `released` step output reaches
-# `semver-checks` even if the check then fails. Classification stays in the Rust tool.
+# `semver-checks` even if the check then fails. Released-content comparison stays in the Rust tool.
 [group('release')]
 [script]
 validate-versions:
@@ -131,12 +131,9 @@ validate-versions:
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
     Invoke-ValidateVersions
 
-# Writes `report.json` (and per-package diffs) under DIR, then runs workspace-wide
-# `cargo semver-checks --all-features`, capturing its output under DIR/semver-checks.log.
-# The skill collect step uses both artifacts. `RELEASE_PLAN_BASE` is forwarded as `--base`
-# when set, matching `validate-versions`. cargo-semver-checks findings (exit 100) are
-# captured as an increment floor; other nonzero exits fail the recipe. A canary
-# (`just verify-semver-checks`) already proved the tool can run.
+# Writes release-plan evidence under DIR and runs cargo-semver-checks for the same explicit
+# consumer-contract targets selected for CI. The module owns validation, target selection, and
+# exit handling; this recipe is only its command-line entry point.
 [group('release')]
 [script]
 release-report DIR:
@@ -145,29 +142,10 @@ release-report DIR:
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Invoke-ReleaseReport -OutDir "{{ DIR }}"
 
-    $dir = "{{ DIR }}"
-    if ([string]::IsNullOrWhiteSpace($dir)) {
-        throw "release-report requires an output directory."
-    }
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
-
-    Write-ReleasePlanBaseVerbose
-    $reportArgs = Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $dir)
-    cargo @reportArgs
-
-    $log = Join-Path $dir 'semver-checks.log'
-    Write-Verbose "Running cargo semver-checks --workspace --all-features; output captured at $log" -Verbose
-    $PSNativeCommandUseErrorActionPreference = $false
-    cargo semver-checks --workspace --all-features 2>&1 | Tee-Object -FilePath $log
-    $semverExit = $LASTEXITCODE
-    $PSNativeCommandUseErrorActionPreference = $true
-    Complete-SemverChecksCollect -ExitCode $semverExit -LogPath $log
-
-# Scoped `cargo semver-checks --all-features` for the packages this pull request releases.
-# Empty `package` means nothing to check (no consumer-visible releasing set) and is a
-# successful skip, not a workspace-wide run. The CI job runs `just verify-semver-checks`
-# first so a broken cargo-semver-checks cannot be read as "no breaking changes".
+# Runs cargo-semver-checks for the package list supplied by CI. The module owns the valid-empty
+# skip and repeated `-p` argument construction.
 [group('release')]
 [script]
 semver-checks:
@@ -175,13 +153,42 @@ semver-checks:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    if ([string]::IsNullOrWhiteSpace("{{ package }}")) {
-        Write-Host "No packages this pull request releases with a consumer-visible API; skipping cargo-semver-checks."
-        exit 0
-    }
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Invoke-SemverCheck -Package "{{ package }}"
 
-    Write-Verbose "Running cargo semver-checks --all-features for: {{ package }}" -Verbose
-    cargo semver-checks --all-features {{ target_package }}
+# Prints dependency-first analysis batches from a release-plan report. Mutually dependent
+# packages share a batch and are analyzed to a fixed point.
+[group('release')]
+[script]
+release-analysis-order REPORT:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Get-ReleasePlanAnalysisBatch -ReportPath "{{ REPORT }}" | Format-Table -AutoSize
+
+# Fails unless every package reached by the approved semantic changes is already published.
+[group('release')]
+[script]
+check-increment-published REPORT DECISIONS:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Assert-IncrementPackagePublished -ReportPath "{{ REPORT }}" -DecisionPath "{{ DECISIONS }}"
+
+# Converts approved semantic change levels into cargo-release-plan's mechanical plan format.
+[group('release')]
+[script]
+create-release-plan REPORT DECISIONS PLAN:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    New-ReleasePlanFile -ReportPath "{{ REPORT }}" -DecisionPath "{{ DECISIONS }}" -PlanPath "{{ PLAN }}"
 
 # Applies an approved increment plan: package versions, version-group expansion, `=`-pin
 # rewrites, and a workspace lockfile refresh. The plan file is an uncommitted working-tree
@@ -193,13 +200,5 @@ apply-release-plan PLAN:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $plan = "{{ PLAN }}"
-    if ([string]::IsNullOrWhiteSpace($plan)) {
-        throw "apply-release-plan requires a plan JSON path."
-    }
-    if (-not (Test-Path -LiteralPath $plan)) {
-        throw "apply-release-plan plan file not found: $plan"
-    }
-
-    Write-Verbose "Applying increment plan from $plan via cargo-release-plan apply" -Verbose
-    cargo run -p cargo-release-plan --locked -- apply --plan $plan
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Invoke-ApplyReleasePlan -PlanPath "{{ PLAN }}"

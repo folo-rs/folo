@@ -1,138 +1,171 @@
 ---
 name: increment-versions
-description: Propose and apply crate version increments for a pull request that changed released content. Use when the validate-versions check fails, when a pull request is ready to merge, or when the user asks to bump crate versions.
+description: Propose and apply crate version increments for a pull request that changed released content. Use when the validate-versions check fails, when a pull request is ready to merge, or when the user asks to increment crate versions.
 ---
 
 # Scope
 
-An **increment** raises a package's declared version so **unreleased changes**
-become **pending release**. Publishing those versions is the separate release
-process. This skill only chooses and applies increment *levels*.
+An **increment** raises a package's version in `Cargo.toml` so unreleased changes become
+pending release. Publishing is a separate process described in
+[`RELEASING.md`](../../../RELEASING.md).
 
-This skill is the recovery procedure named by the `validate-versions` check. It
-proposes one increment *level* per **version group** and per ungrouped package.
-The author may raise a level above the `cargo-semver-checks` floor; they may not
-lower one.
+A **change level** describes the substance of a package's released changes:
+`breaking`, `nonbreaking`, or `patch`. This skill decides change levels; it does not choose
+version numbers. `cargo-release-plan apply` mechanically maps the approved levels to version
+numbers, expands
+[version groups](../../../packages/cargo-release-plan/README.md#plan-and-report-schema),
+rewrites dependency requirements, and refreshes `Cargo.lock`.
 
-`docs/git-workflow.md` still forbids committing crate version bumps on feature
-branches. Do not run Stage 5 unless the caller explicitly asked to increment
-versions on this branch.
+The repository's normal
+[git workflow](../../../docs/git-workflow.md) keeps version increments off
+feature branches. On a feature branch, proposal approval does not override that policy:
+stop before Stage 7 unless the caller explicitly requested applying the increments on that
+branch. On `main`, or when the caller explicitly directs a feature-branch exception, complete
+the apply stages.
 
-Judgement lives here. Mechanics live in `just` recipes. The only question this
-skill asks is the increment *level*. Group expansion, `=`-pin rewrites, the
-lockfile refresh, and `just verify-lockfile` have no skip answer: skipping a
-group member diverges the group, skipping a pin leaves a stale `=` requirement,
-and skipping the lockfile fails `--locked` builds.
+Do not commit the collected evidence, semantic change-decision file, or generated
+cargo-release-plan input file.
 
-Do not commit the plan file. The version check verifies manifest state, not intent.
+# Stage 1: Verify the SemVer checker
 
-# Stage 1: Preflight
-
-Prove that `cargo-semver-checks` can run, and collect the never-published crate list that
-Stage 3 treats as a stop. A `cargo-semver-checks` that fails to *run* (classically one too
-old for the toolchain's rustdoc JSON format) must never be read as "no breaking changes".
-A never-published crate cannot be first-published by crates.io Trusted Publishing, so it is
-not folded into `apply`.
-
-Run the canary:
+Prove that `cargo-semver-checks` can execute before using its output as evidence:
 
 > just verify-semver-checks
 
-Placeholders to replace: none.
+If the command reports an error, stop and report it. A checker that cannot execute must not be
+interpreted as an absence of a required increment.
 
-If the command reports any errors, stop and report the error to the caller. Do not continue
-to collect. If it completes successfully, continue.
+# Stage 2: Check first-publication status
 
-Then list never-published crates:
+List publishable packages that do not yet exist on crates.io:
 
 > just check-never-published
 
-Placeholders to replace: none.
+If publication status cannot be confirmed, stop and report the affected package. Record any
+never-published package for context; Stage 6 deterministically checks whether the approved
+changes would reach it. First publication is the manual process in
+[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate).
 
-The recipe warns (it is not a gate). Keep the list of never-published crates and apply it
-in Stage 3: a never-published crate in the increment set is a **stop**, not a bump.
-First-publish is a manual `cargo publish` after merge, documented in `RELEASING.md`. If
-the recipe cannot confirm status, stop and ask the caller to verify rather than guessing.
+# Stage 3: Collect evidence
 
-# Stage 2: Collect
+Resolve the pull request's base commit and collect the release-plan report, package diffs, and
+SemVer evidence:
 
-Gather the classification report and the `cargo-semver-checks` floor. That evidence
-describes the released-content snapshot it analyzed.
-
+> $env:RELEASE_PLAN_BASE = gh pr view --json baseRefOid --jq .baseRefOid
+>
 > just release-report "{{OUT_DIR}}"
 
 Placeholders to replace:
 
 | Placeholder | Description |
 |-------------|-------------|
-| `OUT_DIR` | A working-tree directory that is **not** committed (for example a path under the runner temp directory, or `.release-plan/` which must stay untracked). Receives `report.json`, `diffs/<package>.patch`, and `semver-checks.log`. |
+| `OUT_DIR` | An untracked working directory for `report.json`, `diffs/`, and `semver-checks.log`. |
 
-If `just release-report` fails before writing `report.json`, stop and report the error.
-`cargo-semver-checks` uses exit 0 for a clean comparison and 100 when it found an
-increment floor; that non-zero exit is the floor, not a broken tool (the canary already
-ran). Any other exit is a tool failure: stop. Continue to propose only after a 0 or 100.
+If either command reports an error, stop and report it. The collection recipe accepts the
+documented cargo-semver-checks finding exit, but rejects operational failures.
 
-Optional: set `RELEASE_PLAN_BASE` to the pull request's release baseline SHA when not
-comparing against the tool default. Leave it unset for a normal local run.
+Use the collected files only for the current work-tree content. If published content changes,
+repeat this stage before presenting or applying decisions.
 
-Read `{{OUT_DIR}}/report.json` for per-package status, diffs, groups, dependencies, and
-dependents. Cite diffs by path (`{{OUT_DIR}}/diffs/<package>.patch`); do not paste them.
+# Stage 4: Determine analysis order
 
-# Stage 3: Propose
+Read package dependencies from the collected report and print the deterministic analysis
+order:
 
-If a never-published crate from Stage 1 would enter the increment set, **stop**. Do not
-fold it into `apply`.
+> just release-analysis-order "{{REPORT}}"
 
-Walk the workspace dependency graph in topological order (dependents after dependencies).
-Per package whose status is `needs-increment`, or that a decided increment will drag in:
+Placeholders to replace:
 
-1. Take the `cargo-semver-checks` floor from `semver-checks.log`. If the log does not name
-   a required bump for that package, the floor is none (a patch is still allowed). For a
-   public shell, the floor includes changes re-exported from a grouped `_impl` member.
-2. Read the package's diff and decide a level. Raise above the floor when the change is an
-   undetectable behavioural break, a meaningful feature addition, or needed to keep a
-   version group aligned. Never lower below the floor.
-3. Every crate here is `0.x` or `1.x`. Under Cargo's semantics a breaking change to a `0.x`
-   crate is a **minor** increment, not major.
-4. Expand version groups: if any member needs an increment, all members take the highest
-   level any member requires, applied to the highest version any member declares.
-5. Propagate `=` pins: incrementing an `=`-pinned dependency is itself a released-content
-   change in the dependent and requires its own increment. Re-check that expansion did not
-   create new work.
+| Placeholder | Description |
+|-------------|-------------|
+| `REPORT` | `{{OUT_DIR}}/report.json` from Stage 3. |
 
-A `pending-release` package is already past its version-anchor. Raise it further only when
-the `cargo-semver-checks` floor exceeds the already-applied increment.
+If the command reports an error, stop and report it. Analyze batches in the printed order.
+Packages in one cyclic batch depend on each other; analyze them in the printed order and
+repeat that batch until no decision changes.
 
-The plan schema (uncommitted) is:
+# Stage 5: Decide change levels
+
+Analyze every package in the report, including `pending-release` and `unchanged` packages.
+For each package, inspect its own released-content evidence and changes to dependencies
+already analyzed. A dependency decision can make a dependent require an increment even when
+the dependent had no original file change.
+
+Use [determining-level.md](determining-level.md) to choose `breaking`, `nonbreaking`, `patch`,
+or no increment. Treat a cargo-semver-checks finding as a `breaking` floor. When
+cargo-semver-checks could not determine a required version increment, it supplied no floor;
+its result is not evidence that no increment is required. Analyze `pending-release` packages
+fully and raise their existing increment when the newly decided change level requires it.
+Never lower an increment already present in `Cargo.toml`.
+
+Present only packages that need an increment:
+
+| Package | Change level |
+|---------|--------------|
+| `{{PACKAGE}}` | `{{CHANGE_LEVEL}}` |
+
+Follow each proposed package with its supporting explanation. The explanation may span
+multiple paragraphs and must cite the relevant report entry or diff path. State that omitted
+packages were analyzed and need no increment. Explain that version-group members will receive
+the maximum increment required by any member when the plan is applied.
+
+Ask the caller to approve or adjust the change levels. Do not continue until the caller
+approves them.
+
+# Stage 6: Check approved changes
+
+Write the approved decisions to an untracked JSON file:
 
 ```json
 {
   "schema_version": 1,
-  "increments": [
-    { "name": "nm", "level": "patch" },
-    { "name": "events", "version": "0.7.14" }
+  "changes": [
+    { "name": "nm", "level": "breaking" },
+    { "name": "events", "level": "patch" }
   ]
 }
 ```
 
-`name` is a package name or a version-group name. Each increment supplies exactly one of
-`level` (`major`, `minor`, `patch`) or `version`.
+Omit packages that need no increment. Only `breaking`, `nonbreaking`, and `patch` are valid
+change levels.
 
-# Stage 4: Present
+Confirm that every package reached directly or through a version group has already been
+published:
 
-Show **one row per version group and per ungrouped package**, not one row per crate. A
-version group is one decision.
+> just check-increment-published "{{REPORT}}" "{{DECISIONS}}"
 
-Each row: current version, proposed version, level, the `cargo-semver-checks` floor, the
-members the level will apply to, and a one-line justification citing the actual change.
-Where the proposal exceeds the floor, state the reason explicitly.
+Placeholders to replace:
 
-Ask the caller to approve or adjust levels. Do not apply until approved.
+| Placeholder | Description |
+|-------------|-------------|
+| `REPORT` | `{{OUT_DIR}}/report.json` from Stage 3. |
+| `DECISIONS` | The approved semantic change-decision JSON file. |
 
-# Stage 5: Apply
+If the command reports a never-published package or cannot confirm publication, stop and
+report the package. Do not generate or apply a plan.
 
-On approval, and only when the caller explicitly asked to increment versions on this
-branch, write the plan JSON to a working-tree path that will not be committed, then:
+# Stage 7: Apply approved changes
+
+If the current branch is proposal-only under the Scope rules, stop after reporting the
+approved change levels.
+
+Generate the mechanical cargo-release-plan input:
+
+> just create-release-plan "{{REPORT}}" "{{DECISIONS}}" "{{PLAN}}"
+
+Placeholders to replace:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `REPORT` | `{{OUT_DIR}}/report.json` from Stage 3. |
+| `DECISIONS` | The approved semantic change-decision JSON file from Stage 6. |
+| `PLAN` | An untracked path that will receive cargo-release-plan's input file. |
+
+The command retains sufficient existing pending-release increments, raises insufficient ones,
+and lets apply combine version-group decisions mechanically. If it reports an error, stop and
+report it.
+
+Apply the generated plan:
 
 > just apply-release-plan "{{PLAN}}"
 
@@ -140,55 +173,31 @@ Placeholders to replace:
 
 | Placeholder | Description |
 |-------------|-------------|
-| `PLAN` | Path to the approved plan JSON from Stage 3. |
+| `PLAN` | The generated cargo-release-plan input file. |
 
-If apply reports any errors, stop and report them. If it completes, refresh-check the
-lockfile:
+If apply reports an error, stop and report it.
+
+# Stage 8: Verify the result
+
+Verify the lockfile and version state:
 
 > just verify-lockfile
-
-Placeholders to replace: none.
-
-If `verify-lockfile` fails, stop; apply already refreshed the lockfile, so a failure here
-means the tree is inconsistent and must not be pushed.
-
-Then confirm the manifests:
-
+>
 > just validate-versions
 
-Placeholders to replace: none.
+If either command reports an error, stop and return to Stage 5 with the new evidence.
 
-If `just validate-versions` reports any errors, the plan missed a package; return to Stage 3.
-If it completes successfully, continue.
+Collect fresh SemVer evidence for the resulting tree:
 
-Then re-run `cargo-semver-checks` scoped to the consumer-visible packages whose versions
-just moved (the same set `validate-versions` emits as `released` in CI):
-
-> just package="{{PACKAGES}}" semver-checks
+> just release-report "{{VERIFY_DIR}}"
 
 Placeholders to replace:
 
 | Placeholder | Description |
 |-------------|-------------|
-| `PACKAGES` | Space-separated package names that the plan incremented and that have a consumer-visible API (omit `*_impl` crates; include the public shell when a grouped `_impl` member changed). Empty means skip. |
+| `VERIFY_DIR` | A new untracked working directory for verification evidence. |
 
-If the command reports any errors, stop and report them. If it completes successfully,
-continue.
-
-If later edits change published content, return to Stage 2 and re-decide before treating
-the increment as final. Edits outside published artifacts do not invalidate the snapshot.
-
-Do not commit the plan file. Do commit the manifest, pin, and `Cargo.lock` edits.
-
-Write a short summary of the decided levels (and where they exceeded the floor) into the
-pull request description. Prefix any GitHub comment or description edit with
-`[Copilot speaking]`. Keep candidate lists, floors, and stop diagnostics in the collect
-directory or a snapshot-labelled comment, not in the pull request description.
-
-# Diagnostics
-
-Retain with the snapshot: which packages or groups were considered, the
-`cargo-semver-checks` floor versus the chosen level for each row, any group expansion or
-`=`-pin propagation, and whether propose stopped on a never-published crate. If that
-evidence is posted as a GitHub comment, put it in a collapsible section labelled as
-belonging to that collect run.
+If the command reports an error, stop and report it. Do not commit the evidence,
+change-decision, or plan files. Commit the resulting `Cargo.toml`, dependency requirement, and
+`Cargo.lock` edits. Summarize the approved package change levels in the pull request
+description.

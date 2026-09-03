@@ -148,7 +148,7 @@ jobs:
       - name: Validate workflows
         run: just validate-workflows
 
-  # Workspace-wide version classification: every publishable package's released content
+  # Workspace-wide release-plan generation: every publishable package's released content
   # versus its version-anchor. Delta cannot narrow that set, so this job is not gated on
   # skip_all. Failure text names the increment-versions skill. Expected to stay red until
   # include allow-lists and reconciliation increments land; do not continue-on-error.
@@ -172,11 +172,11 @@ jobs:
         run: just validate-versions
         shell: pwsh
 
-  # cargo-semver-checks scoped to consumer-visible packages this change releases: public
-  # shells (and ungrouped public packages) with `needs-increment` or `pending-release`
-  # status, including a shell whose grouped `_impl` member has released-content changes.
-  # `--all-features` because gated API is still public API. An empty `released` output is
-  # a successful skip. Parallel with the rest of validation; does not gate other jobs.
+  # cargo-semver-checks scoped to the explicit consumer-contract package set. A released
+  # change in any version-group member selects the supported consumer-contract members of
+  # that group; implementation and test-support packages are not comparison targets.
+  # `--all-features` because gated API is still public API. An empty `released` output is a
+  # successful skip. Parallel with the rest of validation; does not gate other jobs.
   # `if: always()` so a failing version check still surfaces an insufficient increment in
   # the same round trip. The canary runs first so a broken cargo-semver-checks cannot be
   # read as "no breaking changes".
