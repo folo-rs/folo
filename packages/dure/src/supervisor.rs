@@ -1331,6 +1331,8 @@ mod tests {
             processes
                 .expect_create_lifetime_job()
                 .returning(|| Ok(JobId(1)));
+            // Spawn fails before initialization constructs the session record,
+            // so this path never reads the system clock.
             processes
                 .expect_spawn_app()
                 .returning(|_| Err(PalError::new(PalErrorKind::Other)));

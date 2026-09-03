@@ -48,6 +48,10 @@ impl MemorySessionStore {
     pub(crate) fn stall_publishes(&self) {
         let mut stall = self.inner.publish_stall.lock().unwrap();
         assert!(!stall.enabled);
+        assert_eq!(
+            stall.waiting, 0,
+            "the publish stall cannot be rearmed before prior publishers resume"
+        );
         stall.enabled = true;
     }
 
@@ -71,6 +75,9 @@ impl MemorySessionStore {
         assert!(stall.enabled);
         stall.enabled = false;
         self.inner.publish_stall_changed.notify_all();
+        while stall.waiting != 0 {
+            stall = self.inner.publish_stall_changed.wait(stall).unwrap();
+        }
     }
 
     fn await_publish_permission(&self) {
@@ -84,6 +91,7 @@ impl MemorySessionStore {
             stall = self.inner.publish_stall_changed.wait(stall).unwrap();
         }
         stall.waiting = stall.waiting.checked_sub(1).unwrap();
+        self.inner.publish_stall_changed.notify_all();
     }
 }
 
@@ -170,5 +178,54 @@ impl SessionStore for MemorySessionStore {
     fn current_dir(&self) -> Result<PathBuf, PalError> {
         // Supervisor tests receive prepared paths and never query store path support.
         panic!("supervisor tests do not query the current directory")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use testing::with_watchdog_phases;
+
+    use super::*;
+
+    #[test]
+    fn publish_stall_reports_each_rearmed_publisher() {
+        with_watchdog_phases("setting up the store", |phase_reporter| {
+            let store = MemorySessionStore::new();
+            let owner = ProcessIdentity::for_test(1);
+            let id = store.allocate_id(&owner).unwrap();
+            let mut publishers = Vec::new();
+
+            for attached in [true, false] {
+                store.stall_publishes();
+                let publisher = thread::spawn({
+                    let store = store.clone();
+                    move || {
+                        store.publish(&SessionRecord {
+                            id: id.get(),
+                            supervisor_pid: owner.pid,
+                            supervisor_creation_time: owner.creation_time,
+                            pipe_name: "pipe".to_string(),
+                            launch_directory: PathBuf::from("/work"),
+                            command: vec!["app.exe".to_string()],
+                            started_at_unix_ms: 1,
+                            attached,
+                        })
+                    }
+                });
+
+                phase_reporter.report("waiting for the publisher to stall");
+                store.wait_for_stalled_publish();
+                store.resume_publishes();
+                // Joining after both cycles makes rearming depend on
+                // `resume_publishes()` draining the previous waiter.
+                publishers.push(publisher);
+            }
+
+            for publisher in publishers {
+                publisher.join().unwrap().unwrap();
+            }
+        });
     }
 }
