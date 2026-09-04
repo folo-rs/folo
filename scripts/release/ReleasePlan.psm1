@@ -375,7 +375,11 @@ function Get-ReachablePackageName {
             $pending.Push($dependencyName)
         }
     }
-    return $reachable
+
+    # The comma keeps the set intact. PowerShell enumerates a returned collection, so a
+    # single-element set would arrive at the caller as a bare string whose `Contains` tests for a
+    # substring rather than for membership, silently merging packages whose names share a prefix.
+    return , $reachable
 }
 
 function Get-ReleasePlanAnalysisBatch {

@@ -370,6 +370,22 @@ Describe 'Get-ReleasePlanAnalysisBatch' {
             Should -Be @('app', 'core', 'independent', 'middle')
     }
 
+    It 'keeps a prefix-named dependency out of its dependent''s batch' {
+        $path = Join-Path $TestDrive 'prefix.json'
+        Write-TestReport -Path $path -Package @(
+            Get-TestPackage -Name 'nm' -Dependencies @(@{ name = 'nm_impl' })
+            Get-TestPackage -Name 'nm_impl'
+        )
+
+        $batch = @(Get-ReleasePlanAnalysisBatch -ReportPath $path)
+
+        $batch.Count | Should -Be 2
+        @($batch | Where-Object { $_.cyclic }).Count | Should -Be 0
+        $leaf = $batch | Where-Object { ($_.packages -join ', ') -eq 'nm_impl' }
+        $dependent = $batch | Where-Object { ($_.packages -join ', ') -eq 'nm' }
+        $leaf.order | Should -BeLessThan $dependent.order
+    }
+
     It 'emits the documented JSON field names for the skill working file' {
         $path = Join-Path $TestDrive 'contract.json'
         Write-TestReport -Path $path -Package @(
