@@ -71,6 +71,13 @@ Treat dependency and feature-table changes separately: analyze the consumer impa
 resulting dependency or feature behavior rather than assuming every `Cargo.toml` edit is
 metadata-only.
 
+A package also takes at least `patch` when applying the plan will rewrite an intra-workspace
+requirement inside its own published manifest, which happens when it pins a workspace dependency
+that another decision moves. Such a package has no released-content change of its own yet, so the
+report shows nothing for it; the rewrite arrives with the increment that moves the dependency.
+Deciding it in the same pass keeps that package from being left behind at an already-published
+version with a changed manifest.
+
 ## No increment
 
 Choose no increment only when the complete evidence set supports it: every entry in the package's

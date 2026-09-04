@@ -801,6 +801,14 @@ mod tests {
         UnwindSafe,
         RefUnwindSafe
     );
+    assert_impl_all!(
+        CreateOutputDirectoryError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     assert_impl_all!(
         VersionRegressionError: Send,
