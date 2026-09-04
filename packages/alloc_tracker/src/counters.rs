@@ -356,14 +356,21 @@ mod tests {
     static_assertions::assert_impl_all!(PerThreadCounters: Send, Sync);
     static_assertions::assert_not_impl_any!(ThreadCounters: Send, Sync);
 
-    /// Counters that no other thread can reach, for exercising the writer directly.
-    fn detached_counters() -> ThreadCounters {
-        ThreadCounters::new(Box::leak(Box::new(PerThreadCounters::new())))
+    /// Creates counters that no other thread can reach, for exercising the writer directly.
+    ///
+    /// A macro rather than a function because each expansion needs its own static: a static
+    /// inside a function body would be shared by every test that calls it.
+    macro_rules! detached_counters {
+        () => {{
+            static COUNTERS: PerThreadCounters = PerThreadCounters::new();
+
+            ThreadCounters::new(&COUNTERS)
+        }};
     }
 
     #[test]
     fn outstanding_follows_allocations_and_deallocations() {
-        let counters = detached_counters();
+        let counters = detached_counters!();
 
         assert_eq!(counters.outstanding(), 0);
 
@@ -381,7 +388,7 @@ mod tests {
 
     #[test]
     fn outstanding_goes_negative_when_freeing_untracked_memory() {
-        let counters = detached_counters();
+        let counters = detached_counters!();
 
         // A thread can free a block that another thread allocated, or one allocated before
         // its counters existed.
@@ -393,7 +400,7 @@ mod tests {
 
     #[test]
     fn watermark_holds_the_high_water_mark() {
-        let counters = detached_counters();
+        let counters = detached_counters!();
 
         counters.register_allocation(100);
         counters.register_allocation(50);
@@ -412,7 +419,7 @@ mod tests {
         const GROWN: u64 = 300;
         const SHRUNK: u64 = 80;
 
-        let counters = detached_counters();
+        let counters = detached_counters!();
 
         counters.register_allocation(INITIAL);
         counters.register_reallocation(INITIAL, GROWN);
@@ -432,7 +439,7 @@ mod tests {
 
     #[test]
     fn set_watermark_overwrites_the_high_water_mark() {
-        let counters = detached_counters();
+        let counters = detached_counters!();
 
         counters.register_allocation(100);
         counters.set_watermark(40);

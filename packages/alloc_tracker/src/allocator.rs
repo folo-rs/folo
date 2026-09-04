@@ -184,7 +184,6 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
     }
 }
 
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -278,7 +277,10 @@ mod tests {
         }
         let after_dealloc = counters.outstanding();
 
-        assert_eq!(after_alloc.wrapping_sub(before), i64::try_from(SIZE).unwrap());
+        assert_eq!(
+            after_alloc.wrapping_sub(before),
+            i64::try_from(SIZE).unwrap()
+        );
         assert_eq!(after_dealloc, before);
     }
 
@@ -303,7 +305,10 @@ mod tests {
             allocator.dealloc(block, layout);
         }
 
-        assert_eq!(after_alloc.wrapping_sub(before), i64::try_from(SIZE).unwrap());
+        assert_eq!(
+            after_alloc.wrapping_sub(before),
+            i64::try_from(SIZE).unwrap()
+        );
     }
 
     #[test]

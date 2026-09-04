@@ -282,7 +282,10 @@ mod tests {
 
         register_fake_deallocation(PRE_EXISTING + SPAN_HELD);
 
-        assert_eq!(operation.peak_outstanding_bytes(), Some(as_reported(SPAN_HELD)));
+        assert_eq!(
+            operation.peak_outstanding_bytes(),
+            Some(as_reported(SPAN_HELD))
+        );
     }
 
     #[test]
@@ -336,8 +339,14 @@ mod tests {
 
         // The inner span sees only what it held itself, while the outer span sees everything
         // that was outstanding at once while the inner span ran.
-        assert_eq!(inner.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
-        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(OUTER_HELD + INNER_HELD)));
+        assert_eq!(
+            inner.peak_outstanding_bytes(),
+            Some(as_reported(INNER_HELD))
+        );
+        assert_eq!(
+            outer.peak_outstanding_bytes(),
+            Some(as_reported(OUTER_HELD + INNER_HELD))
+        );
     }
 
     #[test]
@@ -363,8 +372,14 @@ mod tests {
             }
         }
 
-        assert_eq!(inner.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
-        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(OUTER_HELD)));
+        assert_eq!(
+            inner.peak_outstanding_bytes(),
+            Some(as_reported(INNER_HELD))
+        );
+        assert_eq!(
+            outer.peak_outstanding_bytes(),
+            Some(as_reported(OUTER_HELD))
+        );
     }
 
     #[test]
@@ -390,7 +405,10 @@ mod tests {
         }
 
         assert_eq!(inner.peak_outstanding_bytes(), None);
-        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
+        assert_eq!(
+            outer.peak_outstanding_bytes(),
+            Some(as_reported(INNER_HELD))
+        );
     }
 
     #[test]
@@ -416,7 +434,10 @@ mod tests {
         }
 
         assert_eq!(inner.peak_outstanding_bytes(), None);
-        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
+        assert_eq!(
+            outer.peak_outstanding_bytes(),
+            Some(as_reported(INNER_HELD))
+        );
     }
 
     #[test]
@@ -434,10 +455,7 @@ mod tests {
             register_fake_deallocation(level);
         }
 
-        assert_eq!(
-            operation.peak_outstanding_bytes(),
-            Some(mean_peak(&LEVELS))
-        );
+        assert_eq!(operation.peak_outstanding_bytes(), Some(mean_peak(&LEVELS)));
     }
 
     #[test]
@@ -470,10 +488,7 @@ mod tests {
                 }
             });
 
-            assert_eq!(
-                operation.peak_outstanding_bytes(),
-                Some(mean_peak(&LEVELS))
-            );
+            assert_eq!(operation.peak_outstanding_bytes(), Some(mean_peak(&LEVELS)));
         });
     }
 

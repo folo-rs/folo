@@ -318,7 +318,8 @@ mod tests {
 
     #[test]
     fn peak_is_the_squared_iteration_weighted_mean_of_span_peaks() {
-        // (1²·1000 + 3²·100) / (1² + 3²) = 1900 / 10.
+        // Each span's peak enters the mean with the square of its own iteration count as the
+        // weight, so the longer span dominates by more than its length alone.
         let mut metrics = OperationMetrics::default();
         metrics.add_span(SpanMeasurement {
             iterations: 1,

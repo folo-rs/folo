@@ -1,8 +1,7 @@
 //! Memory allocation tracking reports.
 
 use std::collections::HashMap;
-use std::fmt;
-use std::iter;
+use std::{fmt, iter};
 
 use crate::OperationMetrics;
 
