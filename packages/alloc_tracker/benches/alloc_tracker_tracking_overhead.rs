@@ -1,26 +1,43 @@
-//! Benchmarks to measure the compute overhead of `alloc_tracker` logic itself.
+//! Benchmarks measuring the compute overhead of `alloc_tracker` logic itself.
 //!
-//! Two groups, measuring the two places the tracking machinery costs something:
+//! The `overhead` subgroup benchmarks empty spans — spans that do no work but still pay for
+//! span creation and destruction. The `allocator` subgroup benchmarks the [`GlobalAlloc`]
+//! paths themselves, running each operation through the tracking wrapper and through the
+//! bare system allocator so the difference between the pair is the tracking cost.
 //!
-//! * `overhead` benchmarks empty spans — spans that do no work but still pay for
-//!   span creation and destruction.
-//! * `allocator` benchmarks the [`GlobalAlloc`] paths themselves, running each
-//!   operation through the tracking wrapper and through the bare system allocator
-//!   so the difference between the pair is the tracking cost.
+//! # Scenario contract with the Callgrind benchmarks
+//!
+//! `alloc_tracker_tracking_overhead_cg.rs` measures these same scenarios as instruction
+//! counts. A figure from one file only says anything about the same-named figure in the
+//! other if both describe the same workload, so this file is the authority on what a
+//! scenario means and the Callgrind file follows it:
+//!
+//! * Block sizes are the ones the constants below name. The Callgrind file repeats them
+//!   because the two benchmarks are separate binaries, so a change here must be made there
+//!   as well.
+//! * A `tracked_*` scenario measures the steady state, with this thread's counters already
+//!   created and registered. This file primes them once before the group; the Callgrind
+//!   file isolates every benchmark in its own process and so primes them per scenario.
+//! * A Callgrind body measures only what its name says, because Gungraun evaluates the
+//!   setup expression outside the collected region. Its `realloc_grow` case therefore
+//!   covers the reallocation and the release but not the initial allocation, which the
+//!   timing here necessarily includes. Compare figures within a file, not across the two.
+//! * The Callgrind file may isolate variants that have no counterpart here, which
+//!   `docs/naming.md` permits.
 
 #![allow(
     missing_docs,
     reason = "No need for API documentation in benchmark code"
 )]
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
 use std::hint::black_box;
 
 use alloc_tracker::{Allocator, Session};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 #[global_allocator]
-static ALLOCATOR: Allocator<System> = Allocator::system();
+static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
 /// Representative of an ordinary short-lived object, comfortably inside the size
 /// classes that system allocators serve from a thread-local fast path. This is the
@@ -37,21 +54,20 @@ const LARGE_SIZE: usize = 64 * 1024;
 /// realistic reallocation, which again maximizes the wrapper's relative share.
 const REALLOC_GROWN_SIZE: usize = SMALL_SIZE * 2;
 
-criterion_group!(benches, entrypoint, allocator_paths);
+criterion_group!(benches, span_overhead, allocator_overhead);
 criterion_main!(benches);
 
-fn entrypoint(c: &mut Criterion) {
+fn span_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("alloc_tracker_tracking_overhead/overhead");
 
-    // Baseline measurement - no tracking at all
+    // What an `iter` closure costs before any span is involved, so the span figures below
+    // can be read against it.
     group.bench_function("baseline_empty", |b| {
         b.iter(|| {
-            // Completely empty - just the black_box call
             black_box(());
         });
     });
 
-    // alloc_tracker overhead measurements
     {
         // This bench measures tracking overhead itself, so the session suppresses
         // its own stdout and file output on drop.
@@ -62,7 +78,6 @@ fn entrypoint(c: &mut Criterion) {
         group.bench_function("process_span_empty", |b| {
             b.iter(|| {
                 let _span = process_op.measure_process().iterations(1);
-                // Empty span - measures only the overhead of span creation/destruction
                 black_box(());
             });
         });
@@ -72,7 +87,6 @@ fn entrypoint(c: &mut Criterion) {
         group.bench_function("thread_span_empty", |b| {
             b.iter(|| {
                 let _span = thread_op.measure_thread().iterations(1);
-                // Empty span - measures only the overhead of span creation/destruction
                 black_box(());
             });
         });
@@ -81,7 +95,7 @@ fn entrypoint(c: &mut Criterion) {
     group.finish();
 }
 
-fn allocator_paths(c: &mut Criterion) {
+fn allocator_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("alloc_tracker_tracking_overhead/allocator");
 
     // The first tracked allocation on a thread initializes that thread's counters and
@@ -90,21 +104,23 @@ fn allocator_paths(c: &mut Criterion) {
     alloc_dealloc(&ALLOCATOR, layout(SMALL_SIZE));
 
     group.bench_function("untracked_alloc_dealloc_small", |b| {
-        b.iter(|| alloc_dealloc(&System, layout(SMALL_SIZE)));
+        b.iter(|| alloc_dealloc(&std::alloc::System, layout(SMALL_SIZE)));
     });
     group.bench_function("tracked_alloc_dealloc_small", |b| {
         b.iter(|| alloc_dealloc(&ALLOCATOR, layout(SMALL_SIZE)));
     });
 
     group.bench_function("untracked_alloc_dealloc_large", |b| {
-        b.iter(|| alloc_dealloc(&System, layout(LARGE_SIZE)));
+        b.iter(|| alloc_dealloc(&std::alloc::System, layout(LARGE_SIZE)));
     });
     group.bench_function("tracked_alloc_dealloc_large", |b| {
         b.iter(|| alloc_dealloc(&ALLOCATOR, layout(LARGE_SIZE)));
     });
 
     group.bench_function("untracked_realloc_grow", |b| {
-        b.iter(|| alloc_realloc_dealloc(&System, layout(SMALL_SIZE), REALLOC_GROWN_SIZE));
+        b.iter(|| {
+            alloc_realloc_dealloc(&std::alloc::System, layout(SMALL_SIZE), REALLOC_GROWN_SIZE);
+        });
     });
     group.bench_function("tracked_realloc_grow", |b| {
         b.iter(|| alloc_realloc_dealloc(&ALLOCATOR, layout(SMALL_SIZE), REALLOC_GROWN_SIZE));
@@ -115,14 +131,19 @@ fn allocator_paths(c: &mut Criterion) {
 
 /// Layout of a `size`-byte block at an alignment an ordinary Rust value would ask for.
 fn layout(size: usize) -> Layout {
-    Layout::from_size_align(size, align_of::<u64>()).expect("benchmark layout is valid")
+    Layout::from_size_align(size, align_of::<u64>()).expect(
+        "a type's alignment is a non-zero power of two and the benchmark sizes are orders of \
+         magnitude below the layout size limit",
+    )
 }
 
-/// Allocates one block and immediately frees it.
 fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout) {
     // SAFETY: `layout` has non-zero size, which is what `GlobalAlloc::alloc` requires.
     let ptr = unsafe { allocator.alloc(layout) };
-    assert!(!ptr.is_null(), "benchmark allocation failed");
+
+    if ptr.is_null() {
+        handle_alloc_error(layout);
+    }
 
     black_box(ptr);
 
@@ -132,21 +153,30 @@ fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout) {
     }
 }
 
-/// Allocates one block, grows it to `new_size`, then frees it.
 fn alloc_realloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout, new_size: usize) {
     // SAFETY: `layout` has non-zero size, which is what `GlobalAlloc::alloc` requires.
     let ptr = unsafe { allocator.alloc(layout) };
-    assert!(!ptr.is_null(), "benchmark allocation failed");
+
+    if ptr.is_null() {
+        handle_alloc_error(layout);
+    }
+
+    let grown_layout = Layout::from_size_align(new_size, layout.align()).expect(
+        "the alignment already came from a valid layout and the grown benchmark size is \
+         orders of magnitude below the layout size limit",
+    );
 
     // SAFETY: `ptr` was returned by `alloc` for `layout`, and `new_size` is non-zero and
     // small enough that rounding it up to `layout`'s alignment cannot overflow `isize`.
     let grown = unsafe { allocator.realloc(ptr, layout, new_size) };
-    assert!(!grown.is_null(), "benchmark reallocation failed");
+
+    if grown.is_null() {
+        // The original block is still live, but a benchmark that cannot obtain memory has
+        // nothing left to measure, and `handle_alloc_error` does not return.
+        handle_alloc_error(grown_layout);
+    }
 
     black_box(grown);
-
-    let grown_layout =
-        Layout::from_size_align(new_size, layout.align()).expect("grown layout is valid");
 
     // SAFETY: `grown` was returned by `realloc` for `new_size` at `layout`'s alignment.
     unsafe {

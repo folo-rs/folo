@@ -1,20 +1,25 @@
 //! Callgrind benchmarks for the `alloc_tracker` tracking machinery itself.
 //!
-//! Paired with `alloc_tracker_tracking_overhead.rs`, which measures the same two
-//! subgroups on real hardware.
+//! Paired with `alloc_tracker_tracking_overhead.rs`, which measures the same subgroups on
+//! real hardware and states the scenario contract both files satisfy. Read it before
+//! changing what a scenario here measures.
 //!
 //! # Scope and caveats
 //!
-//! Callgrind models allocation as essentially free, so these numbers are **not** a
-//! measure of what allocation costs. They measure the instruction count of the
-//! tracking wrapper that sits in front of the system allocator, which is precisely
-//! the quantity this package promises to keep small. Read every `tracked_*` figure
-//! against its `untracked_*` sibling: the difference between the pair is the
-//! tracking cost, and the absolute values are meaningless on their own.
+//! Callgrind counts the user-space allocator's instructions but does not model the latency
+//! of an allocation, so these numbers are **not** a measure of what allocation costs. They
+//! measure the instruction count of the tracking wrapper that sits in front of the system
+//! allocator, which is precisely the quantity this package promises to keep small.
 //!
-//! The `allocator` subgroup isolates deallocation and reallocation by allocating in
-//! a setup function, which Gungraun evaluates outside the measured region. The cost
-//! of allocation alone is the `alloc_dealloc` pair minus the matching `dealloc` case.
+//! Only additive event counts may be compared by subtraction: executed instructions,
+//! executed branches and global bus events. Within those, a `tracked_*` figure read against
+//! its `untracked_*` sibling bounds the wrapper's added work, and the cost of allocation
+//! alone is the `alloc_dealloc` pair minus the matching `dealloc` case. Cache misses, the
+//! cache model's estimated cycles and branch mispredictions depend on each scenario's own
+//! address and predictor history, so they do not decompose that way.
+//!
+//! The `allocator` subgroup isolates deallocation and reallocation by allocating in a setup
+//! function, which Gungraun evaluates outside the measured region.
 
 #![allow(
     missing_docs,
@@ -47,10 +52,14 @@ use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig, main};
 #[cfg(target_os = "linux")]
 pub use linux::*;
 
-// `--collect-bus=yes` makes Callgrind emit the global bus event (`Ge`), which counts
-// lock-prefixed instructions. The tracking counters are per-thread and relaxed, so a
-// non-zero `Ge` here would signal an unintended atomic read-modify-write on the hot
-// path.
+// `--collect-bus=yes` makes Callgrind emit the global bus event (`Ge`), which counts every
+// lock-prefixed instruction in the collected call graph. A non-zero `Ge` is not by itself a
+// counter regression: the allocator cases include whatever the system allocator does, and
+// the span cases deliberately perform `Arc` ownership operations and lock the operation's
+// metrics, with process spans additionally locking the counter registry. In the allocator
+// pairs, only the excess over the matching untracked case is a candidate for wrapper work,
+// and where it comes from still has to be attributed. The span cases have no untracked
+// sibling, so their absolute total is read against that intentional baseline.
 #[cfg(target_os = "linux")]
 main!(
     config = LibraryBenchmarkConfig::default().tool(
@@ -63,14 +72,14 @@ main!(
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
     use std::hint::black_box;
     use std::sync::LazyLock;
 
     use alloc_tracker::{Operation, Session};
     use gungraun::prelude::*;
 
-    use super::ALLOCATOR;
+    use crate::ALLOCATOR;
 
     /// Representative of an ordinary short-lived object, comfortably inside the size
     /// classes that system allocators serve from a thread-local fast path.
@@ -84,21 +93,41 @@ mod linux {
 
     /// Layout of a `size`-byte block at an alignment an ordinary Rust value would ask for.
     fn layout(size: usize) -> Layout {
-        Layout::from_size_align(size, align_of::<u64>()).expect("benchmark layout is valid")
+        Layout::from_size_align(size, align_of::<u64>()).expect(
+            "a type's alignment is a non-zero power of two and the benchmark sizes are \
+             orders of magnitude below the layout size limit",
+        )
     }
 
-    /// Allocates one block through `allocator` for a benchmark that frees it.
+    /// Allocates one block through `allocator`, for a benchmark that measures only what
+    /// happens to an already-allocated block.
+    ///
+    /// Called from a Gungraun setup expression, so the allocation stays outside the
+    /// collected region.
     fn allocate<A: GlobalAlloc>(allocator: &A, size: usize) -> (*mut u8, Layout) {
         let layout = layout(size);
 
         // SAFETY: `layout` has non-zero size, which is what `GlobalAlloc::alloc` requires.
         let ptr = unsafe { allocator.alloc(layout) };
-        assert!(!ptr.is_null(), "benchmark allocation failed");
+
+        if ptr.is_null() {
+            handle_alloc_error(layout);
+        }
 
         (ptr, layout)
     }
 
-    /// Allocates one block through `allocator` and immediately frees it.
+    /// Brings this thread's tracked-allocation state to the steady state the `tracked_*`
+    /// scenarios measure, passing `size` through so it can be used as a setup expression.
+    ///
+    /// Gungraun isolates every benchmark in its own process, so without this the first
+    /// tracked allocation inside a measured body would also create and register this
+    /// thread's counters.
+    fn primed(size: usize) -> usize {
+        alloc_dealloc(&ALLOCATOR, SMALL_SIZE);
+        size
+    }
+
     fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, size: usize) {
         let (ptr, layout) = allocate(allocator, size);
 
@@ -110,18 +139,24 @@ mod linux {
         }
     }
 
-    /// Grows `block` to `REALLOC_GROWN_SIZE` through `allocator`, then frees it.
     fn realloc_dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout)) {
         let (ptr, layout) = block;
+
+        let grown_layout = Layout::from_size_align(REALLOC_GROWN_SIZE, layout.align()).expect(
+            "the alignment already came from a valid layout and the grown benchmark size is \
+             orders of magnitude below the layout size limit",
+        );
 
         // SAFETY: `ptr` was returned by `alloc` for `layout`, and `REALLOC_GROWN_SIZE` is
         // non-zero and small enough that rounding it up to `layout`'s alignment cannot
         // overflow `isize`.
         let grown = unsafe { allocator.realloc(ptr, layout, REALLOC_GROWN_SIZE) };
-        assert!(!grown.is_null(), "benchmark reallocation failed");
 
-        let grown_layout = Layout::from_size_align(REALLOC_GROWN_SIZE, layout.align())
-            .expect("grown layout is valid");
+        if grown.is_null() {
+            // The original block is still live, but a benchmark that cannot obtain memory
+            // has nothing left to measure, and `handle_alloc_error` does not return.
+            handle_alloc_error(grown_layout);
+        }
 
         // SAFETY: `grown` was returned by `realloc` for `REALLOC_GROWN_SIZE` at `layout`'s
         // alignment.
@@ -130,7 +165,6 @@ mod linux {
         }
     }
 
-    /// Frees `block` through `allocator`.
     fn dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout)) {
         let (ptr, layout) = block;
 
@@ -144,11 +178,11 @@ mod linux {
     #[library_benchmark]
     #[bench::run(SMALL_SIZE)]
     fn allocator_untracked_alloc_dealloc_small(size: usize) {
-        alloc_dealloc(&System, black_box(size));
+        alloc_dealloc(&std::alloc::System, black_box(size));
     }
 
     #[library_benchmark]
-    #[bench::run(SMALL_SIZE)]
+    #[bench::run(primed(SMALL_SIZE))]
     fn allocator_tracked_alloc_dealloc_small(size: usize) {
         alloc_dealloc(&ALLOCATOR, black_box(size));
     }
@@ -156,19 +190,19 @@ mod linux {
     #[library_benchmark]
     #[bench::run(LARGE_SIZE)]
     fn allocator_untracked_alloc_dealloc_large(size: usize) {
-        alloc_dealloc(&System, black_box(size));
+        alloc_dealloc(&std::alloc::System, black_box(size));
     }
 
     #[library_benchmark]
-    #[bench::run(LARGE_SIZE)]
+    #[bench::run(primed(LARGE_SIZE))]
     fn allocator_tracked_alloc_dealloc_large(size: usize) {
         alloc_dealloc(&ALLOCATOR, black_box(size));
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&System, SMALL_SIZE))]
+    #[bench::run(allocate(&std::alloc::System, SMALL_SIZE))]
     fn allocator_untracked_dealloc_small(block: (*mut u8, Layout)) {
-        dealloc(&System, black_box(block));
+        dealloc(&std::alloc::System, black_box(block));
     }
 
     #[library_benchmark]
@@ -178,9 +212,9 @@ mod linux {
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&System, SMALL_SIZE))]
+    #[bench::run(allocate(&std::alloc::System, SMALL_SIZE))]
     fn allocator_untracked_realloc_grow(block: (*mut u8, Layout)) {
-        realloc_dealloc(&System, black_box(block));
+        realloc_dealloc(&std::alloc::System, black_box(block));
     }
 
     #[library_benchmark]
@@ -203,16 +237,14 @@ mod linux {
         ]
     );
 
-    /// Session and operations for the span-overhead scenarios.
+    /// The operation handles the span-overhead scenarios measure against.
     ///
-    /// The session is deliberately never dropped: it exists only to hand out
-    /// operations, and dropping it would emit a report the benchmark has no use for.
-    /// Its operation names are workload labels rather than Criterion identifiers,
+    /// Each handle owns its metrics outright, so the session that created them is not kept
+    /// alive. The operation names are workload labels rather than Criterion identifiers,
     /// which `docs/naming.md` permits for a session that is itself under measurement.
     struct Fixture {
         thread_op: Operation,
         process_op: Operation,
-        _session: Session,
     }
 
     static FIXTURE: LazyLock<Fixture> = LazyLock::new(|| {
@@ -221,13 +253,12 @@ mod linux {
         Fixture {
             thread_op: session.operation("thread_span_empty"),
             process_op: session.operation("process_span_empty"),
-            _session: session,
         }
     });
 
-    /// Forces the fixture into existence so its one-time construction, and the
-    /// first-touch initialization of this thread's allocation counters, stay outside
-    /// the measured region.
+    /// Forces the fixture into existence so its one-time construction and the first-touch
+    /// initialization of this thread's allocation counters stay outside the measured
+    /// region.
     fn fixture() -> &'static Fixture {
         let fixture = &*FIXTURE;
         drop(fixture.thread_op.measure_thread().iterations(1));
