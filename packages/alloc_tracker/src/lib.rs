@@ -265,6 +265,7 @@ mod operation_metrics;
 mod process_span;
 mod report;
 mod session;
+mod span_measurement;
 mod target_output;
 mod thread_span;
 

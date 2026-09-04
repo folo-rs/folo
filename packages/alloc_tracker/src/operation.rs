@@ -150,6 +150,7 @@ impl Operation {
     /// Returns 0 if no iterations have been recorded.
     #[must_use]
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn mean(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.mean_bytes()
@@ -158,14 +159,16 @@ impl Operation {
     /// Returns the total number of iterations recorded.
     #[must_use]
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn total_iterations(&self) -> u64 {
-        let data = self.metrics.lock().unwrap();
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_iterations()
     }
 
     /// Returns the total bytes allocated across all iterations.
     #[must_use]
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn total_bytes_allocated(&self) -> u64 {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_bytes_allocated()
@@ -174,6 +177,7 @@ impl Operation {
     /// Returns the per-iteration peak bytes held allocated across all recorded spans.
     #[must_use]
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn peak_outstanding_bytes(&self) -> Option<f64> {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.peak_outstanding_bytes()

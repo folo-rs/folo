@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::iter;
 
 use crate::OperationMetrics;
 
@@ -129,13 +130,17 @@ pub struct OperationStatistics {
     /// Per-iteration allocation-count statistics.
     pub allocations: MetricStatistics,
 
-    /// Per-iteration peak-byte statistics, or `None` when no span could observe a peak.
+    /// Per-iteration peak-byte statistics, or `None` when the operation has no peak to
+    /// report.
+    ///
+    /// See [`ReportOperation::peak_outstanding_bytes`] for when that is the case.
     pub peak: Option<MetricStatistics>,
 }
 
 impl Report {
     /// Creates an empty report.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
@@ -315,8 +320,10 @@ impl ReportOperation {
         self.metrics.total_iterations()
     }
 
-    /// Returns the per-iteration peak — the most bytes this operation held allocated at any
-    /// one moment during an iteration.
+    /// Returns the per-iteration peak outstanding bytes for this operation.
+    ///
+    /// This is the most bytes the operation held allocated at any one moment during an
+    /// iteration.
     ///
     /// The figure assumes every iteration in a measured batch reaches the same peak, which
     /// lets spans covering different iteration counts be combined and lets low-iteration
@@ -439,17 +446,22 @@ pub(crate) fn format_count(value: f64) -> String {
     let rounded = (value.max(0.0) * 100.0).round() / 100.0;
     let mut rendered = format!("{rounded:.2}");
     if rendered.contains('.') {
-        rendered = rendered
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string();
+        // Trimming yields a prefix of what is already here, so shortening in place avoids a
+        // second allocation on a path that runs once per cell of the summary table.
+        let trimmed_len = rendered.trim_end_matches('0').trim_end_matches('.').len();
+        rendered.truncate(trimmed_len);
     }
     rendered
 }
 
+// No API contract to test - output format is not guaranteed.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Display for ReportOperation {
+    /// Renders the per-iteration byte and allocation figures.
+    ///
+    /// The peak and the confidence intervals are deliberately left out to keep the one-line
+    /// form readable; [`ReportOperation::statistics`] exposes them all.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The summary shows only the per-iteration slopes, not their intervals.
         match (self.metrics.bytes_slope(), self.metrics.allocations_slope()) {
             (Some(bytes), Some(allocations)) => write!(
                 f,
@@ -481,36 +493,35 @@ impl fmt::Display for Report {
             "Peak bytes/iter",
         ];
 
-        // Pre-render every cell so the column widths and the printed rows are computed from
-        // the exact same strings. The confidence interval is kept out of this summary for
-        // readability; it remains in the JSON output and the `statistics()` API.
-        let rows: Vec<[String; TABLE_COLUMNS]> = self
+        // The confidence interval is kept out of this summary for readability; it remains in
+        // the JSON output and the `statistics()` API.
+        let rows: Vec<TableRow<'_>> = self
             .sorted_operations()
             .into_iter()
             .map(|(name, operation)| {
-                let (bytes, allocations, peak) = match operation.statistics() {
-                    Some(statistics) => (
+                let figures = match operation.statistics() {
+                    Some(statistics) => [
                         format_count(statistics.bytes.slope),
                         format_count(statistics.allocations.slope),
                         statistics.peak.map_or_else(
                             || NOT_AVAILABLE.to_owned(),
                             |peak| format_count(peak.slope),
                         ),
-                    ),
-                    None => (
+                    ],
+                    None => [
                         NOT_AVAILABLE.to_owned(),
                         NOT_AVAILABLE.to_owned(),
                         NOT_AVAILABLE.to_owned(),
-                    ),
+                    ],
                 };
 
-                [name.to_owned(), bytes, allocations, peak]
+                TableRow { name, figures }
             })
             .collect();
 
         let mut widths = headers.map(str::len);
         for row in &rows {
-            for (width, cell) in widths.iter_mut().zip(row) {
+            for (width, cell) in widths.iter_mut().zip(row.cells()) {
                 *width = (*width).max(cell.len());
             }
         }
@@ -519,14 +530,14 @@ impl fmt::Display for Report {
 
         for width in widths {
             let dashes = width
-                .checked_add(2)
-                .expect("column width fits in memory, adding 2 cannot overflow");
+                .checked_add(TABLE_CELL_PADDING)
+                .expect("column width fits in memory, adding the padding cannot overflow");
             write!(f, "|{:-<dashes$}", "")?;
         }
         writeln!(f, "|")?;
 
         for row in &rows {
-            write_table_row(f, row.iter().map(String::as_str), widths)?;
+            write_table_row(f, row.cells(), widths)?;
         }
 
         Ok(())
@@ -536,8 +547,34 @@ impl fmt::Display for Report {
 /// Number of columns in the rendered summary table.
 const TABLE_COLUMNS: usize = 4;
 
+/// Number of columns holding a rendered figure: every column but the operation name.
+const TABLE_FIGURE_COLUMNS: usize = TABLE_COLUMNS - 1;
+
+/// Characters framing each cell's contents: one leading and one trailing space.
+///
+/// The separator row must span the same width as the cells, so it derives its dashes from
+/// the same constant that describes the padding `write_table_row` writes.
+const TABLE_CELL_PADDING: usize = 2;
+
 /// Rendered in place of a figure the operation cannot supply.
 const NOT_AVAILABLE: &str = "n/a";
+
+/// One operation's pre-rendered row of the summary table.
+///
+/// Pre-rendering lets the column widths and the printed rows be computed from the exact
+/// same strings. The name is borrowed from the report rather than copied, because a table
+/// is rendered from a report that outlives it.
+struct TableRow<'a> {
+    name: &'a str,
+    figures: [String; TABLE_FIGURE_COLUMNS],
+}
+
+impl TableRow<'_> {
+    /// The row's cells in column order.
+    fn cells(&self) -> impl Iterator<Item = &str> {
+        iter::once(self.name).chain(self.figures.iter().map(String::as_str))
+    }
+}
 
 /// Writes one row of the summary table.
 ///

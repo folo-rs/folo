@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::counters::{ThreadCounters, get_or_init_thread_counters};
-use crate::operation_metrics::SpanMeasurement;
+use crate::span_measurement::SpanMeasurement;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// A measurement of this thread's allocations over the span's lifetime.

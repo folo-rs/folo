@@ -11,46 +11,93 @@
 
 use folo_utils::SpanAccumulator;
 
-/// One span's contribution to an operation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SpanMeasurement {
-    /// How many iterations of the operation the span covered.
-    pub iterations: u64,
+use crate::span_measurement::SpanMeasurement;
 
-    /// Bytes allocated over the span's lifetime.
-    pub bytes: u64,
+/// What is known about an operation's peak outstanding bytes.
+///
+/// Only some kinds of span can observe a peak, and a single span that cannot leaves the
+/// operation's peak unknowable rather than merely understated
+/// (`docs/design.md`, "Peak outstanding bytes"). Holding the estimator inside the
+/// available variant means an operation cannot be in the contradictory state of having
+/// both an accumulated estimate and a reason the estimate is meaningless.
+#[derive(Clone, Debug)]
+enum PeakEstimate {
+    /// Every span recorded so far reported a peak, folded into the estimator.
+    ///
+    /// The estimator is empty until the first span arrives, which is why an operation with
+    /// no spans at all still reports no peak.
+    Available(SpanAccumulator),
 
-    /// Number of allocations over the span's lifetime.
-    pub count: u64,
+    /// At least one recorded span could not observe a peak.
+    Unavailable,
+}
 
-    /// The most bytes the span held allocated at any one moment, or `None` when the span
-    /// is of a kind that cannot observe it.
-    pub peak_outstanding_bytes: Option<u64>,
+impl PeakEstimate {
+    /// Records what one span observed, which may be nothing.
+    fn record(&mut self, iterations: u64, peak: Option<u64>) {
+        let Self::Available(peaks) = self else {
+            return;
+        };
+
+        let Some(peak) = peak else {
+            *self = Self::Unavailable;
+            return;
+        };
+
+        // A peak is a level rather than a total — it does not grow with the number of
+        // iterations the span covered — so the accumulator weights it as one, giving the
+        // span peaks averaged with the same warmup-robust weighting the other metrics get.
+        // Ref: docs/implementation.md, "Peak aggregation".
+        peaks.add_level(iterations, peak);
+    }
+
+    /// Folds another operation's peak knowledge into this one.
+    fn merge(&mut self, other: &Self) {
+        match (&mut *self, other) {
+            (Self::Available(peaks), Self::Available(other_peaks)) => peaks.merge(other_peaks),
+            (Self::Available(_), Self::Unavailable) => *self = Self::Unavailable,
+            (Self::Unavailable, _) => {}
+        }
+    }
+
+    /// The warmup-robust per-iteration peak, or `None` when there is none to report.
+    fn slope(&self) -> Option<f64> {
+        match self {
+            Self::Available(peaks) => peaks.slope(),
+            Self::Unavailable => None,
+        }
+    }
+
+    /// The confidence interval of the per-iteration peak, or `None` when it cannot be
+    /// estimated.
+    fn interval(&self) -> Option<(f64, f64)> {
+        match self {
+            Self::Available(peaks) => peaks.interval(),
+            Self::Unavailable => None,
+        }
+    }
+}
+
+impl Default for PeakEstimate {
+    fn default() -> Self {
+        Self::Available(SpanAccumulator::default())
+    }
 }
 
 /// Metrics tracked for each operation in the session.
 ///
-/// Holds the pooled totals (bytes, allocation count, iterations) and three shared
-/// [`SpanAccumulator`]s — over per-iteration bytes, per-iteration allocation counts
-/// and the per-iteration peak — folded in as each span is recorded. No per-span data
-/// is retained.
+/// Holds the pooled totals (bytes, allocation count, iterations) and the estimators over
+/// per-iteration bytes, per-iteration allocation counts and the per-iteration peak, folded
+/// in as each span is recorded. No per-span data is retained.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OperationMetrics {
     total_iterations: u64,
     total_bytes: u64,
     total_count: u64,
 
-    /// Whether any recorded span was of a kind that cannot observe a peak.
-    ///
-    /// A process-scoped span has no single thread's watermark to read, which leaves the
-    /// operation's peak unknowable rather than merely understated, so one such span
-    /// suppresses the figure for the whole operation.
-    /// Ref: docs/design.md, "Peak outstanding bytes".
-    peak_unavailable: bool,
-
     bytes: SpanAccumulator,
     allocations: SpanAccumulator,
-    peaks: SpanAccumulator,
+    peak: PeakEstimate,
 }
 
 impl OperationMetrics {
@@ -72,19 +119,8 @@ impl OperationMetrics {
             .checked_add(span.count)
             .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
 
-        self.peak_unavailable |= span.peak_outstanding_bytes.is_none();
-
-        if let Some(peak) = span.peak_outstanding_bytes {
-            // The accumulator estimates a per-iteration rate by regressing whole-span totals
-            // on iteration counts, so a peak is scaled up by the iteration count on the way in
-            // and divided back out by the regression. The result is the span peaks averaged
-            // with weight n², which is the same warmup-robust weighting the other metrics get.
-            // Ref: docs/implementation.md, "Peak aggregation".
-            let scaled = peak.checked_mul(span.iterations).expect(
-                "peak bytes * iterations overflows u64 - this indicates an unrealistic scenario",
-            );
-            self.peaks.add(span.iterations, scaled);
-        }
+        self.peak
+            .record(span.iterations, span.peak_outstanding_bytes);
 
         self.bytes.add(span.iterations, span.bytes);
         self.allocations.add(span.iterations, span.count);
@@ -96,6 +132,7 @@ impl OperationMetrics {
     /// figures are already known; the whole-span totals are reconstituted by
     /// multiplying back out.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn add_iterations(&mut self, bytes_delta: u64, count_delta: u64, iterations: u64) {
         let bytes = bytes_delta
             .checked_mul(iterations)
@@ -107,7 +144,7 @@ impl OperationMetrics {
             iterations,
             bytes,
             count,
-            peak_outstanding_bytes: Some(bytes),
+            peak_outstanding_bytes: Some(bytes_delta),
         });
     }
 
@@ -131,32 +168,25 @@ impl OperationMetrics {
         self.total_count
     }
 
-    /// The warmup-robust per-iteration peak, or `None` when no span reported one.
+    /// The warmup-robust per-iteration peak.
     ///
     /// Returns `None` when no span has been recorded, or when any recorded span was of a
     /// kind that cannot observe a peak.
     pub(crate) fn peak_outstanding_bytes(&self) -> Option<f64> {
-        if self.peak_unavailable {
-            return None;
-        }
-
-        self.peaks.slope()
+        self.peak.slope()
     }
 
     /// The confidence interval of the per-iteration peak, or `None` when it cannot be
     /// estimated.
     pub(crate) fn peak_interval(&self) -> Option<(f64, f64)> {
-        if self.peak_unavailable {
-            return None;
-        }
-
-        self.peaks.interval()
+        self.peak.interval()
     }
 
     /// Mean bytes allocated per iteration, pooled across all spans.
     ///
     /// Returns zero when no iterations were recorded.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn mean_bytes(&self) -> u64 {
         self.total_bytes
             .checked_div(self.total_iterations)
@@ -167,6 +197,7 @@ impl OperationMetrics {
     ///
     /// Returns zero when no iterations were recorded.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
     pub(crate) fn mean_allocations(&self) -> u64 {
         self.total_count
             .checked_div(self.total_iterations)
@@ -216,10 +247,9 @@ impl OperationMetrics {
             .total_count
             .checked_add(other.total_count)
             .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
-        self.peak_unavailable |= other.peak_unavailable;
         self.bytes.merge(&other.bytes);
         self.allocations.merge(&other.allocations);
-        self.peaks.merge(&other.peaks);
+        self.peak.merge(&other.peak);
     }
 }
 
