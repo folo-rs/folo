@@ -17,8 +17,9 @@ from the queued merge candidate.
 ## Release validation
 
 `cargo-release-plan` compares released content with version anchors and owns the report schema
-and version-readiness verdict. The workflow passes the pull-request or merge-group base commit
-as its release baseline.
+and version-readiness verdict. Its release baseline is the tip of the branch releases are made
+from, which is not the branch a pull request targets, so the workflow passes the release branch
+on a pull request and the merge-group base commit on a queue run.
 
 `scripts/release/ReleasePlan.psm1` is the PowerShell boundary between that report and hosted
 validation. It accepts only the report schema revision it understands and owns the explicit

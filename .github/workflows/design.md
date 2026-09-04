@@ -156,6 +156,16 @@ This applies to the workspace as a whole rather than only packages selected by d
 an earlier change can remain pending even when the current pull request does not touch that
 package.
 
+Release state is read from the branch that publishes, not from the branch a pull request
+targets, so a stacked pull request is assessed against the same baseline as any other and a
+parent branch's pending increment is never mistaken for a release. A merge-queue entry is the
+exception: it is assessed against the commit the queue rebased it onto, so its scope matches
+what will actually land.
+
+Version increments follow Cargo's compatibility rule rather than plain semantic versioning:
+the leftmost non-zero component acts as the major component, so a compatible change to a 0.y
+package advances its patch component and a 0.0.z package has no compatible increment at all.
+
 Automated API comparison supplies evidence for those decisions but does not replace semantic
 review. It is fail-closed when its input format or execution is unsupported. Comparisons cover
 only packages whose surface is a supported consumer contract. Published implementation and

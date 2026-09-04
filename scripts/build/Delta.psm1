@@ -130,6 +130,21 @@ function Invoke-CargoDelta {
         }
     }
 
+    # $Baseline reaches here from a workflow event payload, so an unfetched or misspelled
+    # revision is a realistic input. Resolving it before any analysis turns that into a message
+    # naming the revision, instead of several minutes of work followed by a git worktree error
+    # that reads like a repository fault. The lookup is expected to fail for a bad revision, so
+    # its own error is caught rather than left to $PSNativeCommandUseErrorActionPreference.
+    $resolvedBaseline = $null
+    try {
+        $resolvedBaseline = git rev-parse --verify --quiet "$Baseline^{commit}" 2>$null
+    } catch {
+        $resolvedBaseline = $null
+    }
+    if ([string]::IsNullOrWhiteSpace($resolvedBaseline)) {
+        throw "Delta baseline '$Baseline' does not resolve to a commit in this repository."
+    }
+
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "cargo-delta-$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
     try {

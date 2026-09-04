@@ -113,4 +113,18 @@ Describe 'Assert-RequiredCheck' {
         { Assert-RequiredCheck -NeedsJson $json -MustSucceedJob @() } |
             Should -Throw '*MUST_SUCCEED_JOBS is empty*'
     }
+
+    It 'ignores blank and padded must-succeed entries' {
+        # The workflow supplies the list as a literal split on newlines, so a trailing blank
+        # line must not be classified as a job that is absent from the needs payload.
+        $json = '{"delta":{"result":"success"}}'
+        { Assert-RequiredCheck -NeedsJson $json -MustSucceedJob @('  delta  ', '', '   ') } |
+            Should -Not -Throw
+    }
+
+    It 'throws when the must-succeed list names no job at all' {
+        $json = '{"delta":{"result":"success"}}'
+        { Assert-RequiredCheck -NeedsJson $json -MustSucceedJob @('', '  ') } |
+            Should -Throw '*names no jobs*'
+    }
 }

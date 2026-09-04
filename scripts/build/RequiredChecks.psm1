@@ -84,14 +84,25 @@ function Assert-RequiredCheck {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string] $NeedsJson,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $MustSucceedJob
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]] $MustSucceedJob
     )
 
     if ($MustSucceedJob.Count -eq 0) {
         throw 'MUST_SUCCEED_JOBS is empty; unconditional merge-blocking jobs cannot be classified.'
     }
 
-    $failure = @(Get-RequiredCheckFailure -NeedsJson $NeedsJson -MustSucceedJob $MustSucceedJob)
+    # The list arrives as a workflow literal split on newlines, so blank and padded entries are
+    # ordinary. Normalizing here keeps an empty entry from being classified as an absent job.
+    $normalized = @(
+        $MustSucceedJob |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrEmpty($_) }
+    )
+    if ($normalized.Count -eq 0) {
+        throw 'MUST_SUCCEED_JOBS names no jobs; unconditional merge-blocking jobs cannot be classified.'
+    }
+
+    $failure = @(Get-RequiredCheckFailure -NeedsJson $NeedsJson -MustSucceedJob $normalized)
     if ($failure.Count -eq 0) {
         Write-Host 'All merge-blocking jobs succeeded or were skipped where skipping is allowed.'
         return

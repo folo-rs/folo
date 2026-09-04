@@ -35,7 +35,7 @@ afterwards, and read a later stage's inputs from these files rather than from me
 
 | File | Written in | Contents |
 |------|------------|----------|
-| `base.txt` | Stage 2 | The pull request's base commit. |
+| `base.txt` | Stage 2 | The release baseline commit. |
 | `report.json` | Stage 2 | The cargo-release-plan report. |
 | `diffs/{{PACKAGE}}.patch` | Stage 2 | A package's released-content diff against its anchor. |
 | `semver-checks.log` | Stage 2 | The console output of `cargo-semver-checks`. |
@@ -66,10 +66,12 @@ interpreted as an absence of a required increment.
 
 # Stage 2: Collect evidence
 
-Record the pull request's base commit, then write the report, the per-package diffs, and the
-SemVer evidence:
+Record the release baseline, then write the report, the per-package diffs, and the SemVer
+evidence:
 
-> gh pr view --json baseRefOid --jq .baseRefOid > "{{WORK_DIR}}/base.txt"
+> git fetch origin main
+>
+> git rev-parse FETCH_HEAD > "{{WORK_DIR}}/base.txt"
 >
 > $env:RELEASE_PLAN_BASE = Get-Content "{{WORK_DIR}}/base.txt"
 >
@@ -79,9 +81,15 @@ Stop and report if any command exits non-zero. `just release-report` accepts the
 cargo-semver-checks finding exit and fails on every other non-zero exit, so a non-zero exit
 here means the evidence is incomplete.
 
-`base.txt` fixes the comparison base for the rest of the run. Every later `just release-report`
-and `just validate-versions` invocation sets `RELEASE_PLAN_BASE` from it, because the default
-base is the repository's default branch and a stacked pull request is not based on it.
+The baseline is the tip of the branch releases are made from, not the branch this pull request
+targets. A stacked pull request targets an unreleased parent branch, and anchoring on it would
+read that parent's pending increment as a release and hide the parent's unreleased changes. The
+fetch is what makes the baseline current: a local remote-tracking ref can lag behind the release
+branch, which would present an already-released increment as still pending.
+
+`base.txt` fixes that baseline for the rest of the run, so every later `just release-report` and
+`just validate-versions` invocation sets `RELEASE_PLAN_BASE` from it and no stage silently
+compares against a different revision.
 
 [`report.json`](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) lists
 every publishable package with its `status`, `anchor`, `changed` array, `dependencies`, and

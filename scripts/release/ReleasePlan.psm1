@@ -598,6 +598,13 @@ function Assert-IncrementPackagePublished {
 }
 
 function Get-MinimumVersionForChange {
+    # Lowest version that can carry $Level relative to $Anchor.
+    #
+    # Cargo treats the leftmost non-zero component as the major component, so a
+    # 0.y.z release advances y for a breaking change and z for a compatible one,
+    # and a 0.0.z release admits no compatible change at all. Deriving this from
+    # the anchor rather than from the level alone keeps 0.x packages, which are
+    # most of this workspace, from being systematically over-incremented.
     param(
         [Parameter(Mandatory)][semver] $Anchor,
         [Parameter(Mandatory)][string] $Level
@@ -605,12 +612,20 @@ function Get-MinimumVersionForChange {
 
     switch -CaseSensitive ($Level) {
         'breaking' {
+            if ($Anchor.Major -eq 0 -and $Anchor.Minor -eq 0) {
+                return [semver]::new(0, 0, $Anchor.Patch + 1)
+            }
             if ($Anchor.Major -eq 0) {
-                return [semver]::new($Anchor.Major, $Anchor.Minor + 1, 0)
+                return [semver]::new(0, $Anchor.Minor + 1, 0)
             }
             return [semver]::new($Anchor.Major + 1, 0, 0)
         }
-        'nonbreaking' { return [semver]::new($Anchor.Major, $Anchor.Minor + 1, 0) }
+        'nonbreaking' {
+            if ($Anchor.Major -eq 0) {
+                return [semver]::new(0, $Anchor.Minor, $Anchor.Patch + 1)
+            }
+            return [semver]::new($Anchor.Major, $Anchor.Minor + 1, 0)
+        }
         'patch' { return [semver]::new($Anchor.Major, $Anchor.Minor, $Anchor.Patch + 1) }
         default { throw "Unsupported change level '$Level'." }
     }

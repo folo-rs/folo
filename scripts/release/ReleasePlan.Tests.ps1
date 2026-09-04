@@ -128,8 +128,14 @@ Describe 'Get-SemverCheckPackage' {
     }
 
     It 'guards explicit targets against ungrouped documented-package drift' {
-        InModuleScope ReleasePlan {
-            $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+        # Pin the workspace manifest: the test reads real workspace metadata, and the runner's
+        # working directory is not guaranteed to be the workspace root.
+        $manifest = Join-Path $PSScriptRoot '../../Cargo.toml'
+        InModuleScope ReleasePlan -Parameters @{ Manifest = $manifest } {
+            param($Manifest)
+
+            $metadata = cargo metadata --no-deps --format-version 1 --manifest-path $Manifest |
+                ConvertFrom-Json
             $grouped = [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::Ordinal
             )
@@ -447,6 +453,67 @@ Describe 'New-ReleasePlanFile' {
         ($plan.increments | Where-Object name -EQ 'events').level | Should -Be 'minor'
         ($plan.increments | Where-Object name -EQ 'many_cpus').level | Should -Be 'major'
         ($plan.increments | Where-Object name -EQ 'nm').level | Should -Be 'minor'
+    }
+
+    It 'keeps a compatible change to a 0.y package on its patch component' {
+        # Cargo treats 0.7.15 as compatible with 0.7.14, so an addition must not consume the
+        # minor component and strand consumers on the old requirement.
+        $reportPath = Join-Path $TestDrive 'zero-minor-report.json'
+        $decisionPath = Join-Path $TestDrive 'zero-minor-decision.json'
+        $planPath = Join-Path $TestDrive 'zero-minor-plan.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events' -DeclaredVersion '0.7.14' -AnchorVersion '0.7.14'
+        )
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'nonbreaking' }
+        )
+
+        New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+            -PlanPath $planPath
+        $plan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+
+        $plan.increments[0].level | Should -Be 'patch'
+    }
+
+    It 'advances the minor component for a breaking change to a 0.y package' {
+        $reportPath = Join-Path $TestDrive 'zero-break-report.json'
+        $decisionPath = Join-Path $TestDrive 'zero-break-decision.json'
+        $planPath = Join-Path $TestDrive 'zero-break-plan.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events' -DeclaredVersion '0.7.14' -AnchorVersion '0.7.14'
+        )
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'breaking' }
+        )
+
+        New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+            -PlanPath $planPath
+        $plan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+
+        $plan.increments[0].level | Should -Be 'minor'
+    }
+
+    It 'confines every change level to the patch component of a 0.0.z package' {
+        # No 0.0.z release is compatible with another, so there is no component left for a
+        # breaking change to advance beyond the one a patch already advances.
+        $reportPath = Join-Path $TestDrive 'zero-zero-report.json'
+        $decisionPath = Join-Path $TestDrive 'zero-zero-decision.json'
+        $planPath = Join-Path $TestDrive 'zero-zero-plan.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events' -DeclaredVersion '0.0.5' -AnchorVersion '0.0.5'
+            Get-TestPackage -Name 'nm' -DeclaredVersion '0.0.5' -AnchorVersion '0.0.5'
+        )
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'breaking' }
+            @{ name = 'nm'; level = 'nonbreaking' }
+        )
+
+        New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+            -PlanPath $planPath
+        $plan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+
+        ($plan.increments | Where-Object name -EQ 'events').level | Should -Be 'patch'
+        ($plan.increments | Where-Object name -EQ 'nm').level | Should -Be 'patch'
     }
 
     It 'does not lower or repeat an already sufficient pending increment' {

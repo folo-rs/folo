@@ -117,8 +117,8 @@ check-never-published:
 # Fails when any publishable package has unreleased changes past its version-anchor without
 # an increment, or any version group declares inconsistent versions. Thin wrapper over
 # `Invoke-ValidateVersions` (`cargo release-plan check --format github`). `RELEASE_PLAN_BASE`
-# supplies the release baseline when set (CI passes the pull-request base SHA or
-# `merge_group.base_sha`); an empty value falls through to the tool default. When
+# supplies the release baseline when set (CI passes the release branch, or `merge_group.base_sha`
+# on a queue run); an empty value falls through to the tool default. When
 # `GITHUB_OUTPUT` is set, a report is written first so the `released` step output reaches
 # `semver-checks` even if the check then fails. Released-content comparison stays in the Rust tool.
 [group('release')]
