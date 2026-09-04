@@ -219,6 +219,8 @@ function Get-SemverCheckTargetDirectory {
     # cargo-semver-checks nests generated placeholder workspaces below Cargo's target directory.
     # Keep the Windows target root independent of the checkout depth so MSVC tools do not encounter
     # the legacy MAX_PATH boundary. A workspace-specific name avoids collisions between worktrees.
+    # Reassess this override when cargo-semver-checks shortens those generated paths:
+    # https://github.com/obi1kenobi/cargo-semver-checks/issues/1725
     [CmdletBinding()]
     [OutputType([string])]
     param(
