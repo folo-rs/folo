@@ -2,13 +2,22 @@
 name = "fast_time"
 description = "An efficient low-precision timestamp source suitable for high-frequency querying"
 publish = true
-version = "0.1.28"
+version = "0.1.29"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

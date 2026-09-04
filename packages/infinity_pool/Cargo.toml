@@ -2,13 +2,22 @@
 name = "infinity_pool"
 description = "Offers object pooling capabilities both thread-safe and single threaded, both lifetime-managed and manual, both typed and untyped"
 publish = true
-version = "0.8.25"
+version = "0.8.26"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true
