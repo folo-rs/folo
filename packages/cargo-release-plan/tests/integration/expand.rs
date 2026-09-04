@@ -118,8 +118,7 @@ shell_impl = { workspace = true }
 /// expanded plan that breaks group uniformity must not reach manifests.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn expand_rejects_disagreeing_versions_within_one_group() {
-    let fixture = Fixture::new(
+fn expand_rejects_disagreeing_versions_within_one_group() {    let fixture = Fixture::new(
         r#"
 [workspace.metadata.release-plan.groups]
 g = ["shell", "shell_impl"]
@@ -147,4 +146,71 @@ g = ["shell", "shell_impl"]
     })
     .expect_err("members of one group cannot take different versions");
     assert!(error.to_string().contains('g'), "{error}");
+}
+
+/// A change level restores a version group whose members drifted apart.
+///
+/// `check` fails on an inconsistent group even when no released content
+/// changed, so that failure must be recoverable through the same
+/// level-based decision the increment-versions skill records for every other
+/// case. Expansion lifts every member to the highest declared version raised by
+/// the decided level, which is what returns the group to one version.
+/// Ref: docs/design.md, "Version groups".
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_level_realigns_an_inconsistent_group() {
+    let fixture = Fixture::new(
+        r#"
+[workspace.metadata.release-plan.groups]
+g = ["shell", "shell_impl"]
+"#,
+    );
+    // Members declaring different versions are what makes the group inconsistent.
+    write_package(&fixture, "shell", "0.1.0", "");
+    write_package(&fixture, "shell_impl", "0.2.0", "");
+    fixture.commit("drifted group");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "a drifted group must fail the check: {message}");
+
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(
+        &plan_path,
+        r#"{ "schema_version": 1, "increments": [{ "name": "shell", "level": "patch" }] }"#,
+    )
+    .unwrap();
+    let expanded_path = fixture.path().join("expanded.json");
+    run(&RunInput::Expand {
+        plan: plan_path,
+        out: expanded_path.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+
+    let expanded: Value =
+        serde_json::from_str(&fs::read_to_string(&expanded_path).unwrap()).unwrap();
+    let increments = expanded
+        .get("increments")
+        .and_then(Value::as_array)
+        .expect("an expanded plan always carries an increments array");
+    // Both members land on the highest declared version raised by the level.
+    assert!(
+        increments.iter().all(|entry| entry.get("version")
+            == Some(&Value::String("0.2.1".to_string()))),
+        "{increments:?}"
+    );
+
+    run(&RunInput::Apply {
+        plan: expanded_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    fixture.commit("realign group");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(passed, "{message}");
 }

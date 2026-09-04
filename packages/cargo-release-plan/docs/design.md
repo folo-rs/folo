@@ -314,6 +314,12 @@ matching exact version.
 complete set of affected packages before approval, rather than discovering it
 from the manifests `apply` has already written.
 
+An inconsistent group is a check failure in its own right, independent of any
+content change, and a plan entry naming any member resolves it: expansion lifts
+every member to the highest declared version raised by the decided level. A
+caller that only ever records change levels can therefore recover from either
+failure the check reports.
+
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group
 configuration may contain only publishable workspace packages and cannot use a

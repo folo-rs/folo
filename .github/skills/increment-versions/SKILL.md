@@ -100,6 +100,10 @@ every publishable package with its `status`, `anchor`, `changed` array, `depende
 whose `changed` entries are all `inherited` or `lockfile` has none, because neither is a file
 difference.
 
+Its `groups` object names each version group's `members` and whether they currently declare one
+version, in `consistent`. `just validate-versions` fails on an inconsistent group as well as on
+a package needing an increment, so both are conditions this skill resolves.
+
 The files describe the current work-tree content. Repeat this stage if that content changes
 before the decisions are presented or applied.
 
@@ -141,6 +145,12 @@ Decide each package from these inputs:
 * the package's `Cargo.toml` and the workspace `Cargo.toml` fields it inherits;
 * the entries already recorded in `decisions.json` for the packages it depends on; and
 * the package's floor in `semver-checks.log`.
+
+A group that `report.json` marks `"consistent": false` needs a decision even when no member's
+released content changed. Its members declare different versions, which is a check failure in
+its own right, and expansion is what returns them to one version. Decide it from whatever its
+members' accumulated changes justify, and `patch` when they justify nothing, so the alignment
+costs the smallest increment that resolves it.
 
 `semver-checks.log` closes each checked package's block with one `Summary` line. The package is
 the one named in the `Checking` line that opens the block. The table lists line prefixes: a
