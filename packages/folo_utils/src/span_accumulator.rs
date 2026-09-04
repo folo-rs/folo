@@ -98,9 +98,9 @@ impl SpanAccumulator {
     /// A level is a quantity each iteration reaches on its own instead of contributing
     /// to — a high-water mark, for example — so unlike a total it does not grow with the
     /// span's length. Scaling it by the iteration count makes it behave like a total, and
-    /// the slope divides that scaling back out, so the estimate is the spans' levels
-    /// averaged with weight nᵢ²: the same warmup-robust weighting [`add`](Self::add) gives
-    /// totals.
+    /// the slope divides that scaling back out, so the estimate is an average of the spans'
+    /// levels in which each span is weighted by the square of its own iteration count — the
+    /// same warmup-robust weighting [`add`](Self::add) gives totals.
     ///
     /// The scaling happens in `f64`, so an arbitrarily large level and iteration count
     /// combine without overflow.

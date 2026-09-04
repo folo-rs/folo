@@ -1,13 +1,18 @@
 //! Per-operation allocation metrics, folded into streaming statistics.
 //!
-//! Every measured span contributes its whole-span byte and allocation-count
-//! deltas together with the iteration count it covered. The spans are not
-//! retained: each is folded on arrival into running totals (for the pooled means)
-//! and into [`SpanAccumulator`]s (for the warmup-robust per-iteration slope
-//! and its confidence interval). Allocation figures are not deterministic —
-//! first-run allocations and buffer resizing jitter around the mean over a
-//! Criterion-chosen iteration count — so the slope down-weights low-iteration
-//! warmup spans and the interval quantifies the residual noise.
+//! Every measured span hands over a [`SpanMeasurement`]: its whole-span byte and
+//! allocation-count deltas, the iteration count it covered, and the peak it observed
+//! if its scope could observe one. The spans are not retained: each is folded on
+//! arrival into running totals (for the pooled means) and into [`SpanAccumulator`]s
+//! (for the warmup-robust estimates and their confidence intervals). Allocation
+//! figures are not deterministic — first-run allocations and buffer resizing jitter
+//! around the mean over a Criterion-chosen iteration count — so the estimates
+//! down-weight low-iteration warmup spans and the intervals quantify the residual
+//! noise.
+//!
+//! A span that could not observe a peak makes the operation's peak permanently
+//! unavailable, including across the merges that combine per-thread copies of an
+//! operation.
 
 use folo_utils::SpanAccumulator;
 
@@ -60,7 +65,7 @@ impl PeakEstimate {
         }
     }
 
-    /// The warmup-robust per-iteration peak, or `None` when there is none to report.
+    /// The warmup-robust typical span peak, or `None` when there is none to report.
     fn slope(&self) -> Option<f64> {
         match self {
             Self::Available(peaks) => peaks.slope(),
@@ -68,7 +73,7 @@ impl PeakEstimate {
         }
     }
 
-    /// The confidence interval of the per-iteration peak, or `None` when it cannot be
+    /// The confidence interval of the typical span peak, or `None` when it cannot be
     /// estimated.
     fn interval(&self) -> Option<(f64, f64)> {
         match self {
@@ -472,7 +477,7 @@ mod tests {
     #[test]
     fn zero_iteration_span_yields_nan_slopes() {
         // A span that covered zero iterations (e.g. a workload that failed to run)
-        // has no per-iteration rate, so both slopes report NaN rather than a
+        // has no per-iteration rate, so every slope reports NaN rather than a
         // misleading zero.
         let mut metrics = OperationMetrics::default();
         metrics.add_iterations(100, 2, 0);

@@ -102,9 +102,23 @@ impl Operation {
         ThreadSpan::new(self)
     }
 
-    /// Begins measuring allocations made by the entire process (all threads).
+    /// Begins measuring allocations made by every thread in the process.
     ///
-    /// Use this to measure total allocations including multi-threaded work.
+    /// Use this for one caller-owned measurement enclosing work whose threads cannot be
+    /// instrumented. When they can, prefer giving each worker its own
+    /// [`measure_thread`](Self::measure_thread) span naming this same operation: spans
+    /// aggregate per operation regardless of which thread produced them, and thread scope
+    /// avoids everything this scope gives up.
+    ///
+    /// A process span accepts the following in exchange for its reach:
+    ///
+    /// * Allocations made by unrelated threads during the span are attributed to this
+    ///   operation.
+    /// * Capture is more expensive, because it consults every thread in the process.
+    /// * The totals are approximate: they are assembled from per-thread counters read one
+    ///   after another rather than from one instantaneous view of the process.
+    /// * No peak can be observed, and one such span withholds the peak from the whole
+    ///   operation, including from thread spans that did measure one.
     ///
     /// You must call [`iterations(n)`](ProcessSpan::iterations) on the returned span
     /// to define how many iterations the measured work covers. This is mandatory.
@@ -116,6 +130,7 @@ impl Operation {
     ///
     /// ```no_run
     /// use std::hint::black_box;
+    /// use std::thread;
     /// use std::time::Instant;
     ///
     /// use alloc_tracker::{Allocator, Session};
@@ -132,9 +147,13 @@ impl Operation {
     ///             let start = Instant::now();
     ///             let _span = operation.measure_process().iterations(iters);
     ///
-    ///             for _ in 0..iters {
-    ///                 black_box(vec![1, 2, 3, 4, 5]);
-    ///             }
+    ///             // The work happens on threads this benchmark does not instrument,
+    ///             // which is what process scope exists for.
+    ///             thread::scope(|scope| {
+    ///                 for _ in 0..iters {
+    ///                     scope.spawn(|| black_box(vec![1, 2, 3, 4, 5]));
+    ///                 }
+    ///             });
     ///
     ///             start.elapsed()
     ///         });

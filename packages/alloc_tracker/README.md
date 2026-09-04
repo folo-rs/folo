@@ -49,9 +49,11 @@ before the span is dropped. This allows you to measure work whose extent is not
 known at the start.
 
 `measure_thread` observes only the calling thread and is the right choice whenever the
-measured work stays on that thread. Use `measure_process` when the work is performed by
-other threads, accepting that it also picks up allocations from unrelated threads and
-cannot report peak memory.
+measured work stays on that thread. It also covers work spread across threads that you can
+instrument: each worker opens its own span naming the same operation. Use `measure_process`
+when the work is performed by threads you cannot instrument, accepting that it also picks up
+allocations from unrelated threads, that its totals are approximate, and that it withholds
+peak memory from the whole operation.
 
 ## See also
 

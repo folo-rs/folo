@@ -2,10 +2,15 @@
 
 /// One span's contribution to an operation.
 ///
-/// A span measures allocation activity over its lifetime and reports it here exactly once,
-/// as it closes. The byte and allocation figures are whole-span totals rather than
-/// per-iteration rates: dividing is the operation's job, because it weights spans against
-/// each other (`docs/implementation.md`, "Per-iteration estimates").
+/// This is the sole channel from a span to its operation's metrics. Both span scopes
+/// produce it as they close — thread spans with a measured peak, process spans without one
+/// — and `OperationMetrics::add_span` is its only consumer. An absent peak is therefore not
+/// merely a missing figure: it makes the whole operation's peak unavailable, permanently
+/// and across merges (`docs/implementation.md`, "Peak aggregation").
+///
+/// The byte and allocation figures are whole-span totals rather than per-iteration rates:
+/// dividing is the operation's job, because it weights spans against each other
+/// (`docs/implementation.md`, "Per-iteration estimates").
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SpanMeasurement {
     /// How many iterations of the operation the span covered.

@@ -19,8 +19,11 @@ iteration count may be supplied at any point before the span is dropped, which a
 measuring work whose extent is only known once it is finished.
 
 An operation accumulates every span recorded for it. Spans may nest and may be recorded
-from several threads. Overlapping spans on one thread must be dropped in reverse order of
-creation, which holding each in a scoped binding achieves naturally.
+from several threads.
+
+Nesting is inclusive. An enclosing span measures all allocator activity that occurs during
+its lifetime, including the activity an inner span also records. The two operations
+therefore describe overlapping work rather than disjoint costs.
 
 ## Measurement scope
 
@@ -28,12 +31,24 @@ A span measures either thread scope or process scope.
 
 Thread scope observes only the allocator activity of the thread that created the span. It
 is the appropriate choice whenever the measured work stays on the calling thread, which
-covers most benchmarks.
+covers most benchmarks. Work spread across threads is still best measured this way when
+those threads can be instrumented: each worker opens its own thread-scoped span, and spans
+naming the same operation aggregate together no matter which thread produced them.
 
-Process scope observes the allocator activity of every thread in the process. It is
-necessary when the measured work is performed by other threads, and it accepts two costs
-in exchange: it is more expensive to capture, and it attributes to the operation any
-concurrent allocation by unrelated threads.
+Overlapping thread-scoped spans on one thread must be dropped in reverse order of creation.
+Holding each span in a scoped binding naturally produces that order. Process-scoped spans
+are not part of this rule and may overlap freely.
+
+Process scope observes the allocator activity of every thread in the process. It is the
+choice for one caller-owned measurement enclosing work whose threads cannot be
+instrumented, and it accepts several costs in exchange:
+
+* It attributes to the operation any concurrent allocation by unrelated threads.
+* It is more expensive to capture, because it must consult every thread in the process.
+* Its totals are approximate. They are assembled from per-thread counters read one after
+  another rather than from one instantaneous view of the process.
+* It cannot report peak outstanding bytes, and one such span withholds the peak from the
+  whole operation.
 
 ## Metrics
 
@@ -94,11 +109,27 @@ memory live in the process.
 
 ## Reporting
 
-A session emits its results in two forms when dropped: a human-readable table on stdout
-with one row per operation, and one machine-readable JSON file per operation written into
-the Cargo target directory. An operation with no peak figure renders as unavailable in the
-table and omits the field from JSON.
+A session emits its results when dropped: by default a human-readable table on stdout with
+one row per operation, and one machine-readable JSON file per operation written into the
+Cargo target directory. Either output may be switched off when creating the session. An
+operation with no peak figure renders as unavailable in the table and omits the field from
+JSON.
+
+A session that recorded nothing emits nothing, so an unused session leaves no trace. A
+session dropped while the thread is unwinding from a panic likewise emits nothing: the run
+did not complete and its figures would not describe the intended work.
 
 Results can also be taken from a session as a report value, which is independent of the
 session and may be moved between threads, merged with other reports, and inspected
 programmatically.
+
+## Detecting unexpected allocations
+
+Beyond measurement, the package offers an allocation tripwire for the case where the
+question is not how much a piece of code allocates but whether it allocates at all. Arming
+the tripwire makes the next allocation attempted through the installed allocator panic.
+
+The tripwire is process-global and fires once: it disarms itself as it triggers, so the
+panic can unwind through code that allocates on its way out. It is available only when the
+corresponding package feature is enabled, keeping the check out of builds that do not want
+it.

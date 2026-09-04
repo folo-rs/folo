@@ -113,7 +113,7 @@ pub struct MetricStatistics {
     pub interval: Option<(f64, f64)>,
 }
 
-/// Statistics for one operation across both allocation metrics.
+/// Statistics for one operation across the metrics the report exposes.
 ///
 /// Exposed through [`ReportOperation::statistics`] so callers can consume the
 /// same figures that are written to the machine-readable JSON output.

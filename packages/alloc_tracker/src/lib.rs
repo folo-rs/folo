@@ -90,10 +90,15 @@
 //! activity and is the right choice whenever the measured work stays on that
 //! thread, which covers most benchmarks.
 //!
-//! [`Operation::measure_process`] observes every thread in the process. Reach for
-//! it when the measured work is performed by other threads, accepting that it costs
-//! more to capture, that it attributes concurrent allocation by unrelated threads to
-//! the operation, and that it cannot report peak memory.
+//! Work spread across threads is still best measured this way when those threads can
+//! be instrumented: each worker opens its own span naming the same operation, and the
+//! spans aggregate together.
+//!
+//! [`Operation::measure_process`] observes every thread in the process. Reach for it
+//! when the measured work is performed by threads that cannot be instrumented,
+//! accepting that it costs more to capture, that its totals are approximate, that it
+//! attributes concurrent allocation by unrelated threads to the operation, and that it
+//! withholds peak memory from the whole operation.
 //!
 //! # Metrics
 //!

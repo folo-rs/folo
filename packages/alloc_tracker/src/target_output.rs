@@ -176,6 +176,7 @@ mod tests {
     use std::path::Path;
 
     use serde_json::Value;
+    use tempfile::tempdir;
 
     use crate::Session;
     use crate::counters::register_fake_allocation;
@@ -198,7 +199,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn writes_operation_statistics_as_json() {
         let session = session_with_recorded_work("allocate_vec");
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
@@ -251,7 +252,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn writes_peak_bytes_per_iteration() {
         let session = session_with_recorded_work("allocate_vec");
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
@@ -279,7 +280,7 @@ mod tests {
             let _span = operation.measure_process().iterations(4);
             register_fake_allocation(800, 8);
         }
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
@@ -298,7 +299,7 @@ mod tests {
             let _span = operation.measure_thread().iterations(4);
             register_fake_allocation(800, 8);
         }
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
@@ -328,13 +329,13 @@ mod tests {
             let _span = operation.measure_thread().iterations(0);
             register_fake_allocation(800, 8);
         }
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("failed.json"));
-        // A zero-iteration measurement has no per-iteration rate; both slopes are
-        // NaN, which serde_json renders as JSON null.
+        // A zero-iteration measurement has no per-iteration rate, so every slope is NaN,
+        // which serde_json renders as JSON null.
         assert!(
             value
                 .get("slope_bytes_per_iteration")
@@ -359,7 +360,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn sanitizes_operation_name_in_file_name() {
         let session = session_with_recorded_work("group/case name");
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
@@ -377,7 +378,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn empty_session_writes_no_files() {
         let session = Session::new().no_stdout().no_file();
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
         let target = directory.path().join("nested");
 
         session.to_report().write_to_directory(&target);
@@ -399,7 +400,7 @@ mod tests {
         // be skipped rather than written.
         let _unmeasured = session.operation("unmeasured");
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
         session.to_report().write_to_directory(directory.path());
 
         assert!(directory.path().join("measured.json").exists());
@@ -409,7 +410,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn overwrites_existing_files() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
         let file = directory.path().join("allocate_vec.json");
         fs::write(&file, "stale contents").unwrap();
 
@@ -429,7 +430,7 @@ mod tests {
     #[should_panic(expected = "failed to create benchmark output directory")]
     fn panics_when_output_directory_cannot_be_created() {
         let session = session_with_recorded_work("allocate_vec");
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         // A regular file where a directory component is expected makes the
         // recursive directory creation fail.
@@ -446,7 +447,7 @@ mod tests {
     #[should_panic(expected = "failed to write benchmark output file")]
     fn panics_when_output_file_cannot_be_written() {
         let session = session_with_recorded_work("allocate_vec");
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempdir().unwrap();
 
         // A directory occupying the output file's path makes the file write fail.
         fs::create_dir_all(directory.path().join("allocate_vec.json")).unwrap();

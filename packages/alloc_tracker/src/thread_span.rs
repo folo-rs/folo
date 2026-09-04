@@ -20,8 +20,10 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// from a panic when the span drops, it records nothing and does not panic again,
 /// leaving the original panic to propagate.
 ///
-/// Spans may nest, but overlapping spans on one thread must be dropped in reverse order
-/// of creation, which holding each in a scoped binding achieves naturally.
+/// Spans may nest, and nesting is inclusive: an enclosing span also measures the activity
+/// its inner spans record. Overlapping thread spans created on one thread must be dropped in
+/// reverse order of creation. Holding each span in a scoped binding naturally produces that
+/// order.
 ///
 /// # Examples
 ///
@@ -204,10 +206,34 @@ fn thread_deltas(counters: ThreadCounters, start_bytes: u64, start_count: u64) -
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::sync::Barrier;
+    use std::thread;
+
+    use testing::{assert_panics, with_watchdog};
 
     use super::*;
     use crate::Session;
     use crate::counters::{register_fake_allocation, register_fake_deallocation};
+
+    /// Representative allocation size for scenarios where the exact number carries no
+    /// meaning beyond being distinguishable from the others in the same test.
+    const BLOCK: u64 = 100;
+
+    /// A byte count as the report exposes it.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the byte counts these tests use are small integers that f64 represents exactly"
+    )]
+    fn as_reported(bytes: u64) -> f64 {
+        bytes as f64
+    }
+
+    /// The peak an operation reports when equally weighted spans reached each of `levels`.
+    fn mean_peak(levels: &[u64]) -> f64 {
+        let count = u64::try_from(levels.len()).unwrap();
+
+        levels.iter().copied().map(as_reported).sum::<f64>() / as_reported(count)
+    }
 
     // Static assertions for thread safety.
     // The span should NOT be Send or Sync due to PhantomData<*const ()>.
@@ -219,91 +245,134 @@ mod tests {
 
     #[test]
     fn peak_is_the_high_water_mark_not_the_total() {
+        const ROUNDS: u64 = 3;
+
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
         {
             let _span = operation.measure_thread().iterations(1);
 
-            // Three allocations of 100 that never coexist: 300 allocated, 100 held.
-            for _ in 0..3 {
-                register_fake_allocation(100, 1);
-                register_fake_deallocation(100);
+            // Allocations that never coexist: each round frees before the next allocates.
+            for _ in 0..ROUNDS {
+                register_fake_allocation(BLOCK, 1);
+                register_fake_deallocation(BLOCK);
             }
         }
 
-        assert_eq!(operation.total_bytes_allocated(), 300);
-        assert_eq!(operation.peak_outstanding_bytes(), Some(100.0));
+        assert_eq!(operation.total_bytes_allocated(), BLOCK * ROUNDS);
+        assert_eq!(operation.peak_outstanding_bytes(), Some(as_reported(BLOCK)));
     }
 
     #[test]
     fn peak_ignores_memory_outstanding_before_the_span() {
+        const PRE_EXISTING: u64 = 1000;
+        const SPAN_HELD: u64 = 50;
+
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
         // Memory the caller already holds is not the span's doing.
-        register_fake_allocation(1000, 1);
+        register_fake_allocation(PRE_EXISTING, 1);
 
         {
             let _span = operation.measure_thread().iterations(1);
-            register_fake_allocation(50, 1);
+            register_fake_allocation(SPAN_HELD, 1);
         }
 
-        register_fake_deallocation(1050);
+        register_fake_deallocation(PRE_EXISTING + SPAN_HELD);
 
-        assert_eq!(operation.peak_outstanding_bytes(), Some(50.0));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(as_reported(SPAN_HELD)));
     }
 
     #[test]
-    fn peak_under_reports_when_the_span_frees_first() {
-        // A documented limitation of measuring against the entry level: the span holds 500
-        // bytes of its own but never pushes the outstanding total above where it started,
+    fn peak_underreports_when_the_span_frees_first() {
+        // A documented limitation of measuring against the entry level: the span holds
+        // memory of its own but never pushes the outstanding total above where it started,
         // so it reports nothing.
+        const PRE_EXISTING: u64 = 1000;
+        const FREED_FIRST: u64 = 800;
+        // Below what the span freed, so the outstanding total never regains the entry level.
+        const SPAN_HELD: u64 = 500;
+
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
-        register_fake_allocation(1000, 1);
+        register_fake_allocation(PRE_EXISTING, 1);
 
         {
             let _span = operation.measure_thread().iterations(1);
-            register_fake_deallocation(800);
-            register_fake_allocation(500, 1);
+            register_fake_deallocation(FREED_FIRST);
+            register_fake_allocation(SPAN_HELD, 1);
         }
 
-        register_fake_deallocation(700);
+        register_fake_deallocation(PRE_EXISTING - FREED_FIRST + SPAN_HELD);
 
         assert_eq!(operation.peak_outstanding_bytes(), Some(0.0));
     }
 
     #[test]
     fn nested_span_peak_is_visible_to_the_enclosing_span() {
+        // The inner span dominates, so the enclosing span's own level only adds to it.
+        const OUTER_HELD: u64 = 10;
+        const INNER_HELD: u64 = 200;
+
         let session = Session::new().no_stdout().no_file();
         let outer = session.operation("outer");
         let inner = session.operation("inner");
 
         {
             let _outer_span = outer.measure_thread().iterations(1);
-            register_fake_allocation(10, 1);
+            register_fake_allocation(OUTER_HELD, 1);
 
             {
                 let _inner_span = inner.measure_thread().iterations(1);
-                register_fake_allocation(200, 1);
-                register_fake_deallocation(200);
+                register_fake_allocation(INNER_HELD, 1);
+                register_fake_deallocation(INNER_HELD);
             }
 
-            register_fake_deallocation(10);
+            register_fake_deallocation(OUTER_HELD);
         }
 
-        // The inner span sees only its own 200, while the outer span sees the 210 that were
-        // outstanding at once while the inner span ran.
-        assert_eq!(inner.peak_outstanding_bytes(), Some(200.0));
-        assert_eq!(outer.peak_outstanding_bytes(), Some(210.0));
+        // The inner span sees only what it held itself, while the outer span sees everything
+        // that was outstanding at once while the inner span ran.
+        assert_eq!(inner.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
+        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(OUTER_HELD + INNER_HELD)));
+    }
+
+    #[test]
+    fn enclosing_peak_survives_a_smaller_nested_span() {
+        // The mirror image of the case above: the enclosing span already reached its high
+        // point before the inner span opened, so restoration must keep the enclosing value.
+        const OUTER_HELD: u64 = 900;
+        const INNER_HELD: u64 = 5;
+
+        let session = Session::new().no_stdout().no_file();
+        let outer = session.operation("outer");
+        let inner = session.operation("inner");
+
+        {
+            let _outer_span = outer.measure_thread().iterations(1);
+            register_fake_allocation(OUTER_HELD, 1);
+            register_fake_deallocation(OUTER_HELD);
+
+            {
+                let _inner_span = inner.measure_thread().iterations(1);
+                register_fake_allocation(INNER_HELD, 1);
+                register_fake_deallocation(INNER_HELD);
+            }
+        }
+
+        assert_eq!(inner.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
+        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(OUTER_HELD)));
     }
 
     #[test]
     fn abandoned_nested_span_does_not_suppress_the_enclosing_peak() {
         // The inner span is dropped during a panic and records nothing, but it must still
         // hand the watermark back or the outer span would lose its measurement.
+        const INNER_HELD: u64 = 400;
+
         let session = Session::new().no_stdout().no_file();
         let outer = session.operation("outer");
         let inner = session.operation("inner");
@@ -311,46 +380,101 @@ mod tests {
         {
             let _outer_span = outer.measure_thread().iterations(1);
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_panics(|| {
                 let _inner_span = inner.measure_thread().iterations(1);
-                register_fake_allocation(400, 1);
+                register_fake_allocation(INNER_HELD, 1);
                 panic!("boom");
-            }));
-            assert!(result.is_err());
+            });
 
-            register_fake_deallocation(400);
+            register_fake_deallocation(INNER_HELD);
         }
 
         assert_eq!(inner.peak_outstanding_bytes(), None);
-        assert_eq!(outer.peak_outstanding_bytes(), Some(400.0));
+        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
+    }
+
+    #[test]
+    fn nested_span_without_iterations_still_restores_the_enclosing_peak() {
+        // The missing iteration count is a programmer error that panics from `drop`, which
+        // is the third way a span can close. The watermark hand-off happens before that
+        // check, so the enclosing span keeps its measurement either way.
+        const INNER_HELD: u64 = 400;
+
+        let session = Session::new().no_stdout().no_file();
+        let outer = session.operation("outer");
+        let inner = session.operation("inner");
+
+        {
+            let _outer_span = outer.measure_thread().iterations(1);
+
+            assert_panics(|| {
+                let _inner_span = inner.measure_thread();
+                register_fake_allocation(INNER_HELD, 1);
+            });
+
+            register_fake_deallocation(INNER_HELD);
+        }
+
+        assert_eq!(inner.peak_outstanding_bytes(), None);
+        assert_eq!(outer.peak_outstanding_bytes(), Some(as_reported(INNER_HELD)));
     }
 
     #[test]
     fn sequential_spans_each_contribute_their_peak() {
+        // Equal iteration counts, so the peaks carry equal weight and their average is the
+        // arithmetic mean of the three levels.
+        const LEVELS: [u64; 3] = [100, 700, 400];
+
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
-        {
+        for level in LEVELS {
             let _span = operation.measure_thread().iterations(1);
-            register_fake_allocation(100, 1);
-            register_fake_deallocation(100);
+            register_fake_allocation(level, 1);
+            register_fake_deallocation(level);
         }
 
-        {
-            let _span = operation.measure_thread().iterations(1);
-            register_fake_allocation(700, 1);
-            register_fake_deallocation(700);
-        }
+        assert_eq!(
+            operation.peak_outstanding_bytes(),
+            Some(mean_peak(&LEVELS))
+        );
+    }
 
-        {
-            let _span = operation.measure_thread().iterations(1);
-            register_fake_allocation(400, 1);
-            register_fake_deallocation(400);
-        }
+    #[test]
+    fn concurrent_thread_spans_average_their_peaks() {
+        // Each worker has its own counters and watermark, but both guards record into one
+        // shared `OperationMetrics`. Overlapping the spans exercises that interaction: the
+        // result must be the average of the two levels, not their sum, and neither worker
+        // may observe the other's outstanding memory.
+        const LEVELS: [u64; 2] = [300, 900];
 
-        // Each span measures the same operation, so their peaks are averaged rather than
-        // summed. The spans cover one iteration each and so carry equal weight here.
-        assert_eq!(operation.peak_outstanding_bytes(), Some(400.0));
+        with_watchdog(|| {
+            let session = Session::new().no_stdout().no_file();
+            let operation = session.operation("test");
+
+            // Both workers must be inside their spans at the same time for the test to say
+            // anything about concurrent contributions.
+            let both_inside = Barrier::new(LEVELS.len());
+
+            thread::scope(|scope| {
+                for level in LEVELS {
+                    let operation = &operation;
+                    let both_inside = &both_inside;
+
+                    scope.spawn(move || {
+                        let _span = operation.measure_thread().iterations(1);
+                        register_fake_allocation(level, 1);
+                        both_inside.wait();
+                        register_fake_deallocation(level);
+                    });
+                }
+            });
+
+            assert_eq!(
+                operation.peak_outstanding_bytes(),
+                Some(mean_peak(&LEVELS))
+            );
+        });
     }
 
     #[test]
@@ -367,24 +491,28 @@ mod tests {
 
     #[test]
     fn records_span_via_post_hoc_iterations() {
+        const ITERATIONS: u64 = 5;
+
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
-        drop(operation.measure_thread().iterations(5));
+        drop(operation.measure_thread().iterations(ITERATIONS));
 
-        assert_eq!(operation.total_iterations(), 5);
+        assert_eq!(operation.total_iterations(), ITERATIONS);
     }
 
     #[test]
     fn records_span_via_iterations_guard() {
+        const ITERATIONS: u64 = 3;
+
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
         {
-            let _span = operation.measure_thread().iterations(3);
+            let _span = operation.measure_thread().iterations(ITERATIONS);
         }
 
-        assert_eq!(operation.total_iterations(), 3);
+        assert_eq!(operation.total_iterations(), ITERATIONS);
     }
 
     #[test]
@@ -401,12 +529,11 @@ mod tests {
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_panics(|| {
             let _span = operation.measure_thread().iterations(1);
             panic!("boom");
-        }));
+        });
 
-        assert!(result.is_err());
         assert_eq!(operation.total_iterations(), 0);
     }
 }

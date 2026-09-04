@@ -22,37 +22,43 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// from a panic when the span drops, it records nothing and does not panic again,
 /// leaving the original panic to propagate.
 ///
+/// Reach for this only when the threads doing the work cannot be instrumented
+/// themselves; when they can, give each one its own
+/// [`ThreadSpan`](crate::ThreadSpan) naming the same operation. The trade-offs a
+/// process span accepts are listed under
+/// [`Operation::measure_process`](crate::Operation::measure_process).
+///
 /// # Examples
 ///
-/// The canonical benchmark pattern feeds Criterion's chosen iteration count
-/// straight into [`iterations`](Self::iterations) from within `iter_custom`:
+/// A worker pool that allocates on threads the caller does not own:
 ///
-/// ```no_run
+/// ```
 /// use std::hint::black_box;
-/// use std::time::Instant;
+/// use std::thread;
 ///
 /// use alloc_tracker::{Allocator, Session};
-/// use criterion::Criterion;
 ///
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
-/// fn bench(c: &mut Criterion) {
-///     let session = Session::new();
-///     let operation = session.operation("allocate_buffer");
-///     c.bench_function("allocate_buffer", |b| {
-///         b.iter_custom(|iters| {
-///             let start = Instant::now();
-///             let _span = operation.measure_process().iterations(iters);
+/// # fn main() {
+/// let session = Session::new();
+/// # let session = session.no_stdout().no_file();
+/// let operation = session.operation("fan_out");
 ///
-///             for _ in 0..iters {
-///                 black_box(vec![1_u8; 64]);
-///             }
+/// const WORKERS: usize = 4;
+/// let span = operation.measure_process();
 ///
-///             start.elapsed()
+/// thread::scope(|scope| {
+///     for worker in 0..WORKERS {
+///         scope.spawn(move || {
+///             black_box(vec![worker as u8; 1024]);
 ///         });
-///     });
-/// }
+///     }
+/// });
+///
+/// drop(span.iterations(1));
+/// # }
 /// ```
 #[derive(Debug)]
 #[must_use = "a span must be held across the measured work and given a count with `.iterations(n)`; it records when dropped and panics if the count is missing"]

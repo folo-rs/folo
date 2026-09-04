@@ -2,12 +2,41 @@
 
 User-visible behavior is defined in the package [design](design.md).
 
+## Architecture
+
+Measurement is a one-way pipeline. Each stage owns a distinct piece of state and hands the
+next stage a value rather than a view into its own:
+
+```text
+allocator events → per-thread counters → span measurement → operation metrics
+                                                                    ↓
+                                              outputs ← report ← session
+```
+
+The allocator wrapper turns every allocation and deallocation into an update of the calling
+thread's counters, which live for the lifetime of the process and belong to no session.
+
+A span reads those counters at its boundaries and turns the difference into one measurement
+record. Thread and process spans differ only in which counters they read and in whether they
+can observe a peak; both produce the same record.
+
+An operation folds each record into streaming statistics behind a mutex. Nothing per-span is
+retained, so the cost of an operation does not grow with the number of spans recorded for
+it. A session owns the map from operation name to those statistics, and handing out the same
+name twice hands out the same statistics.
+
+A report is a detached snapshot of that state: it copies the accumulators themselves rather
+than the figures derived from them, which is what lets two reports merge into a statistically
+correct third one. Both the table and the JSON files are rendered from a report, so every
+output of a session necessarily agrees with every other.
+
 ## Counters
 
 The allocator wrapper maintains one counter block per thread: cumulative bytes, cumulative
 allocation count, currently outstanding bytes, and a watermark of outstanding bytes. Blocks
-are shared through a process-wide registry so that process-scope measurement can sum across
-threads, and each thread caches a pointer to its own block in thread-local storage.
+live for the lifetime of the process and are shared through a process-wide registry so that
+process-scope measurement can sum across threads, while each thread keeps a reference to its
+own block in thread-local storage.
 
 Only the owning thread ever writes to a block. That single-writer discipline is what makes
 the hot path cheap: the counters are atomics purely so that other threads may read them, and
@@ -28,8 +57,8 @@ counter block does allocate — it constructs a shared block and inserts it into
 so a guard flag marks the window during which a thread is initializing its own block, and
 allocations occurring inside that window go untracked.
 
-The thread-local pointer is published as the last step before the guard is cleared, and
-nothing between those two steps allocates. The presence of the pointer therefore already
+The thread-local reference is published as the last step before the guard is cleared, and
+nothing between those two steps allocates. The presence of the reference therefore already
 proves that the thread is outside the initialization window, so the hot path performs a
 single thread-local lookup and needs no separate guard check.
 
@@ -65,11 +94,17 @@ scoped bindings satisfy automatically.
 
 ## Peak aggregation
 
-The peak reuses the same span accumulator as the other two metrics, which fits a
-through-origin regression of whole-span totals on iteration counts. A watermark is not a
-total and does not scale with the iteration count, so it is multiplied by the span's
-iteration count on the way in. The regression divides it back out, and the estimate reduces
-to the span watermarks averaged with weight n²:
+The peak reuses the span accumulator that every other metric of an operation uses. That
+accumulator estimates a per-iteration figure by least-squares fitting each span's whole-span
+total against the number of iterations the span covered, with the fitted line forced through
+the origin: zero iterations must cost nothing, so the fit has a slope but no intercept. The
+slope is the reported per-iteration figure.
+
+Writing nᵢ for the iteration count of span i and peakᵢ for the watermark that span reached,
+a watermark is not a total: it is a level that does not grow with nᵢ, so the accumulator's
+model does not describe it. Multiplying it by nᵢ on the way in makes it behave like one. The
+regression then divides that scaling back out, and the estimate reduces to the span
+watermarks averaged with weight nᵢ²:
 
 ```text
 slope = Σ(nᵢ · peakᵢ·nᵢ) / Σ(nᵢ²) = Σ(nᵢ²·peakᵢ) / Σ(nᵢ²)
@@ -80,10 +115,10 @@ estimator, and its confidence interval, for a quantity the estimator was not wri
 one-iteration warmup batch alongside thousand-iteration steady-state batches carries a
 millionth of their weight.
 
-Whether a peak is available at all is tracked separately from the accumulator, as a flag
-that any span lacking a watermark sets for good. Folding an unmeasurable span in as a zero
-would understate the operation instead of withholding it, and merging two reports carries
-the flag across.
+Whether a peak is available at all is not a property of the accumulator, so the accumulator
+is held inside the state that says a peak is available. Any span lacking a watermark replaces
+that state with the unavailable one, which no later span or merge can undo. Folding an
+unmeasurable span in as a zero would understate the operation instead of withholding it.
 
 ## Reporting
 
