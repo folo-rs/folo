@@ -6,7 +6,7 @@ with the commands and workflow jobs.
 
 ## Validation structure
 
-`validation.yml` gives independently useful checks separate jobs so GitHub reports their
+`validation.yml` assigns each independently useful check to a separate job so GitHub reports the
 outcomes in parallel. Cargo-package jobs consume the affected-package set from the `delta`
 job. Repository-wide checks run without that gate.
 
@@ -28,7 +28,7 @@ selection drives both the CI SemVer job and evidence collection by the increment
 skill. Package-name patterns do not determine whether a crate has a consumer contract.
 
 The module also owns the skill's deterministic mechanics: dependency-order presentation,
-publication eligibility, semantic change-decision validation, version-group realignment, and
+publication eligibility, change-level validation, version-group realignment, and
 conversion to `cargo-release-plan apply` input. The just recipes remain thin command-line entry
 points. Pester tests in `scripts/release/ReleasePlan.Tests.ps1` lock these boundaries.
 

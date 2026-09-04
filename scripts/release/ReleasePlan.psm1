@@ -7,17 +7,35 @@
 # mechanics used by the increment-versions skill. See `.github/workflows/implementation.md`.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 
 # Must match packages/cargo-release-plan/src/plan.rs. An incompatible report must fail closed.
 $script:ReleasePlanSchemaVersion = [long] 1
 
-# Local working-file format used by the increment-versions skill.
+# Local working-file format used by the increment-versions skill. Advance it for incompatible
+# working-file shape changes, coordinated with the skill that reads and writes the same contract.
 $script:ChangeDecisionSchemaVersion = [long] 1
+
+# These values come from cargo-semver-checks' exit-status contract. Both represent completed
+# comparisons, so evidence collection keeps the log for either outcome instead of treating denied
+# findings as an infrastructure failure.
+$script:SemverCheckNoFindingsExitCode = 0
+$script:SemverCheckDenyFindingsExitCode = 100
+
+# Keeps transient crates.io index uncertainty from blocking a valid plan while keeping the
+# first-publication gate bounded in CI.
+$script:PublishStatusRetryAttempt = 3
+$script:PublishStatusRetryDelaySeconds = 1
+
+# Publication lookups reuse the workspace's shared transient-retry policy rather than hand-rolling
+# a separate loop at the release-plan boundary.
+Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
 
 # Packages whose library surface is a supported consumer contract. Implementation partitions,
 # test-support packages, and undocumented handoff crates are intentionally absent. A change in a
 # grouped implementation package selects the listed public package from that group.
-$script:SemverCheckPackage = [System.Collections.Generic.HashSet[string]]::new(
+$script:SemverCheckTargetAllowList = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::Ordinal
 )
 @(
@@ -44,7 +62,7 @@ $script:SemverCheckPackage = [System.Collections.Generic.HashSet[string]]::new(
     'region_cached'
     'region_local'
     'vicinal'
-) | ForEach-Object { [void] $script:SemverCheckPackage.Add($_) }
+) | ForEach-Object { [void] $script:SemverCheckTargetAllowList.Add($_) }
 
 function Get-ReleasePlanCargoArgument {
     # Argument vector for `cargo run -p cargo-release-plan --locked -- ...`. Forwards
@@ -162,7 +180,7 @@ function Get-PackageByName {
     return $byName
 }
 
-function Get-SemverCheckPackage {
+function Get-AffectedSemverCheckTarget {
     # Returns the explicit consumer-contract targets affected by a release-plan report. A
     # well-formed report with no selected target is a valid empty result.
     [CmdletBinding()]
@@ -172,35 +190,69 @@ function Get-SemverCheckPackage {
     )
 
     $report = Read-ReleasePlanReport -ReportPath $ReportPath
-    $selected = [System.Collections.Generic.HashSet[string]]::new(
+    $selectedTargets = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
 
     foreach ($package in $report.packages) {
+        $packageName = [string] $package.name
         $status = [string] $package.status
         if ($status -notin @('needs-increment', 'pending-release') -or
             @($package.changed).Count -eq 0) {
             continue
         }
 
-        $candidate = @([string] $package.name)
+        $groupName = $null
+        $candidateTargets = @($packageName)
         if ($package.PSObject.Properties.Name -contains 'group' -and
             -not [string]::IsNullOrWhiteSpace([string] $package.group)) {
-            $group = $report.groups.PSObject.Properties[[string] $package.group]
+            $groupName = [string] $package.group
+            $group = $report.groups.PSObject.Properties[$groupName]
             if ($null -eq $group) {
-                throw "release-plan report at '$ReportPath' package '$($package.name)' names unknown group '$($package.group)'."
+                throw "release-plan report at '$ReportPath' package '$packageName' names unknown group '$groupName'."
             }
-            $candidate = @($group.Value.members | ForEach-Object { [string] $_ })
+            $candidateTargets = @($group.Value.members | ForEach-Object { [string] $_ })
         }
 
-        foreach ($name in $candidate) {
-            if ($script:SemverCheckPackage.Contains($name)) {
-                [void] $selected.Add($name)
+        $supportedTargets = @(
+            $candidateTargets |
+                Where-Object { $script:SemverCheckTargetAllowList.Contains($_) } |
+                Sort-Object -Unique
+        )
+        if ($supportedTargets.Count -eq 0) {
+            $candidateText = if ($candidateTargets.Count -gt 0) {
+                "'" + ($candidateTargets -join "', '") + "'"
+            } else {
+                '(none)'
+            }
+            Write-Verbose (
+                "Changed package '$packageName' has candidate SemVer-check targets " +
+                "$candidateText, but none are in the supported consumer-contract target " +
+                "allow-list, so no cargo-semver-checks target is emitted."
+            ) -Verbose
+            continue
+        }
+
+        foreach ($target in $supportedTargets) {
+            if ($selectedTargets.Add($target)) {
+                if ($null -ne $groupName) {
+                    Write-Verbose (
+                        "Changed package '$packageName' belongs to version group '$groupName'; " +
+                        "supported consumer-contract target '$target' is emitted because group " +
+                        "members are checked through the public package contract."
+                    ) -Verbose
+                } else {
+                    Write-Verbose (
+                        "Changed package '$packageName' is emitted as cargo-semver-checks " +
+                        "target '$target' because it is in the supported consumer-contract " +
+                        "target allow-list."
+                    ) -Verbose
+                }
             }
         }
     }
 
-    return @($selected | Sort-Object)
+    return @($selectedTargets | Sort-Object)
 }
 
 function Get-SemverCheckCargoArgument {
@@ -215,21 +267,28 @@ function Get-SemverCheckCargoArgument {
     return $argument
 }
 
-function Complete-SemverChecksCollect {
-    # Exit 0 means the tool could not determine a required version increment. Exit 100 is its
-    # documented finding exit and is retained as evidence. Any other code is a tool failure.
+function Assert-SemverCheckExitCode {
+    # Both completed cargo-semver-checks outcomes are retained as evidence because a finding exit
+    # still means the comparison ran successfully and produced the log the skill needs.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][int] $ExitCode,
         [Parameter(Mandatory)][string] $LogPath
     )
 
-    if ($ExitCode -eq 0 -or $ExitCode -eq 100) {
-        Write-Host "cargo-semver-checks exited $ExitCode; log written to $LogPath"
+    if ($ExitCode -eq $script:SemverCheckNoFindingsExitCode -or
+        $ExitCode -eq $script:SemverCheckDenyFindingsExitCode) {
+        Write-Host (
+            "cargo-semver-checks exited with code $ExitCode; " +
+            "the log was written to '$LogPath'."
+        )
         return
     }
 
-    throw "cargo-semver-checks failed with exit $ExitCode (log: $LogPath)."
+    throw (
+        "cargo-semver-checks failed with exit code $ExitCode; " +
+        "the log was written to '$LogPath'."
+    )
 }
 
 function Invoke-ReleaseReport {
@@ -253,18 +312,21 @@ function Invoke-ReleaseReport {
     & $Cargo $reportArgument
 
     $reportPath = Join-Path $OutDir 'report.json'
-    $package = @(Get-SemverCheckPackage -ReportPath $reportPath)
+    $targets = @(Get-AffectedSemverCheckTarget -ReportPath $reportPath)
     $logPath = Join-Path $OutDir 'semver-checks.log'
-    if ($package.Count -eq 0) {
+    if ($targets.Count -eq 0) {
         'No consumer-contract package requires a cargo-semver-checks comparison.' |
             Set-Content -LiteralPath $logPath -Encoding utf8
-        Write-Host "No cargo-semver-checks target; log written to $logPath"
+        Write-Host "No cargo-semver-checks target was selected; the log was written to '$logPath'."
         return
     }
 
-    $argument = Get-SemverCheckCargoArgument -Package $package
-    Write-Verbose "Running cargo $($argument -join ' '); output captured at $logPath" -Verbose
+    $argument = Get-SemverCheckCargoArgument -Package $targets
+    Write-Verbose "Running cargo $($argument -join ' '); output captured at '$logPath'." -Verbose
     $previousPreference = $PSNativeCommandUseErrorActionPreference
+    # cargo-semver-checks reports detected SemVer findings with a nonzero exit, so this
+    # invocation must capture output and classify $LASTEXITCODE manually. The finally block
+    # restores the caller's native-command error behavior.
     $PSNativeCommandUseErrorActionPreference = $false
     try {
         & $Cargo $argument 2>&1 | Tee-Object -FilePath $logPath
@@ -272,7 +334,7 @@ function Invoke-ReleaseReport {
     } finally {
         $PSNativeCommandUseErrorActionPreference = $previousPreference
     }
-    Complete-SemverChecksCollect -ExitCode $exitCode -LogPath $logPath
+    Assert-SemverCheckExitCode -ExitCode $exitCode -LogPath $logPath
 }
 
 function Invoke-SemverCheck {
@@ -283,13 +345,13 @@ function Invoke-SemverCheck {
         [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
     )
 
-    $name = @($Package -split '\s+' | Where-Object { $_ })
-    if ($name.Count -eq 0) {
+    $targets = @($Package -split '\s+' | Where-Object { $_ })
+    if ($targets.Count -eq 0) {
         Write-Host 'No consumer-contract packages require cargo-semver-checks; skipping.'
         return
     }
 
-    $argument = Get-SemverCheckCargoArgument -Package $name
+    $argument = Get-SemverCheckCargoArgument -Package $targets
     Write-Verbose "Running cargo $($argument -join ' ')" -Verbose
     & $Cargo $argument
 }
@@ -315,11 +377,34 @@ function Invoke-ExpandReleasePlan {
         throw 'expand-release-plan requires an output path.'
     }
 
-    Write-Verbose "Expanding version groups in $PlanPath via cargo-release-plan expand" -Verbose
-    & $Cargo @(
-        'run', '-p', 'cargo-release-plan', '--locked', '--',
-        'expand', '--plan', $PlanPath, '--out', $ExpandedPath
-    )
+    $expandedDirectory = Split-Path -Parent $ExpandedPath
+    if ([string]::IsNullOrWhiteSpace($expandedDirectory)) {
+        $expandedDirectory = '.'
+    }
+    New-Item -ItemType Directory -Path $expandedDirectory -Force | Out-Null
+
+    $expandedLeaf = Split-Path -Leaf $ExpandedPath
+    $stagingPath = Join-Path $expandedDirectory "$expandedLeaf.$(New-Guid).staging"
+    if (Test-Path -LiteralPath $ExpandedPath) {
+        Remove-Item -LiteralPath $ExpandedPath -Force
+    }
+
+    Write-Verbose (
+        "Expanding version groups from '$PlanPath' to '$ExpandedPath' " +
+        'via cargo-release-plan expand.'
+    ) -Verbose
+    try {
+        & $Cargo @(
+            'run', '-p', 'cargo-release-plan', '--locked', '--',
+            'expand', '--plan', $PlanPath, '--out', $stagingPath
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo-release-plan expand failed with exit code $LASTEXITCODE."
+        }
+        Move-Item -LiteralPath $stagingPath -Destination $ExpandedPath -Force
+    } finally {
+        Remove-Item -LiteralPath $stagingPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Invoke-ApplyReleasePlan {
@@ -364,12 +449,13 @@ function Invoke-ValidateVersions {
                 Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $outDir) -Base $Base
             & $Cargo $reportArgument
 
-            $released = @(Get-SemverCheckPackage -ReportPath (Join-Path $outDir 'report.json'))
+            $releasedTargets =
+                @(Get-AffectedSemverCheckTarget -ReportPath (Join-Path $outDir 'report.json'))
             $previousOutput = $env:GITHUB_OUTPUT
             $env:GITHUB_OUTPUT = $GitHubOutputPath
             try {
                 # The required zero-target representation is a present `released=` output.
-                Set-GitHubOutput -Name released -Value ($released -join ' ')
+                Set-GitHubOutput -Name released -Value ($releasedTargets -join ' ') -AllowEmptyValue
             } finally {
                 $env:GITHUB_OUTPUT = $previousOutput
             }
@@ -411,10 +497,13 @@ function Get-ReachablePackageName {
 }
 
 function Get-ReleasePlanAnalysisBatch {
-    # Returns dependency-first analysis batches. Mutually dependent packages share one batch and
-    # must be reconsidered together until their decisions stop changing. Property names are the
-    # JSON contract the increment-versions skill documents, so they are lower-case.
+    # Returns dependency-first analysis batches by condensing the package dependency graph into
+    # strongly connected components, then emitting those components in topological order. Mutually
+    # dependent packages share one batch and must be reconsidered together until their decisions
+    # stop changing. Property names are the JSON contract the increment-versions skill documents,
+    # so they are lower-case.
     [CmdletBinding()]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)][string] $ReportPath
     )
@@ -449,6 +538,7 @@ function Get-ReleasePlanAnalysisBatch {
         $member = @(
             $name |
                 Where-Object {
+                    # Mutual reachability is the strongly connected component test.
                     $reachable[$packageName].Contains($_) -and
                     $reachable[$_].Contains($packageName)
                 } |
@@ -474,6 +564,7 @@ function Get-ReleasePlanAnalysisBatch {
         $incoming[$entry.Id] = [System.Collections.Generic.HashSet[int]]::new()
         foreach ($memberName in $entry.Members) {
             foreach ($dependencyName in $dependency[$memberName]) {
+                # Component edges retain only external dependencies; internal edges are the SCC.
                 $dependencyComponent = [int] $componentOf[$dependencyName]
                 if ($dependencyComponent -ne $entry.Id) {
                     [void] $incoming[$entry.Id].Add($dependencyComponent)
@@ -488,13 +579,14 @@ function Get-ReleasePlanAnalysisBatch {
     }
     $order = 0
     while ($remaining.Count -gt 0) {
+        # The first sorted member is unique because components are disjoint.
         $next = @(
             $remaining |
                 Where-Object { $incoming[$_].Count -eq 0 } |
-                Sort-Object { $component[$_].Members -join "`0" }
+                Sort-Object { $component[$_].Members[0] }
         )
         if ($next.Count -eq 0) {
-            throw 'release-plan dependency condensation unexpectedly contains a cycle.'
+            throw 'release-plan analysis-batch dependency graph unexpectedly contains a cycle.'
         }
         foreach ($componentId in $next) {
             $order++
@@ -510,6 +602,23 @@ function Get-ReleasePlanAnalysisBatch {
             }
         }
     }
+}
+
+function Get-ReleasePlanAnalysisBatchJson {
+    # Serializes the analysis batches into the JSON array the increment-versions skill stores as a
+    # working file. The serialization sits here rather than in the recipe that prints it, so the
+    # documented field-name contract has one producer that tests can exercise directly.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $ReportPath
+    )
+
+    # The batch contract nests a package-name array inside each batch record.
+    $analysisBatchJsonDepth = 3
+
+    return Get-ReleasePlanAnalysisBatch -ReportPath $ReportPath |
+        ConvertTo-Json -Depth $analysisBatchJsonDepth -AsArray
 }
 
 function Read-ChangeDecision {
@@ -560,9 +669,11 @@ function Read-ChangeDecision {
     return $decision
 }
 
-function Read-ExpandedPlan {
+function Read-ExpandedPlanPackageName {
     # Reads the per-package names cargo-release-plan resolved a plan into. Group expansion is
     # the tool's, so this only validates the shape it promises.
+    [CmdletBinding()]
+    [OutputType([string[]])]
     param(
         [Parameter(Mandatory)][string] $ExpandedPath
     )
@@ -598,6 +709,41 @@ function Read-ExpandedPlan {
     return @($name | Sort-Object)
 }
 
+function Get-PublishStatusWithUnknownRetry {
+    # Retries only the indeterminate crates.io status. Confirmed publication states are stable
+    # enough to return immediately, while Unknown represents the transient read boundary.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'GetPublishStatus',
+        Justification = 'Consumed inside the Invoke-WithRetry -Action closure, which the rule does not trace into.')]
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][scriptblock] $GetPublishStatus,
+        [ValidateRange(1, [int]::MaxValue)][int] $Attempt,
+        [ValidateRange(0, [int]::MaxValue)][int] $DelaySeconds
+    )
+
+    $unknownStatusMessage = "crates.io publication status for '$Name' was Unknown"
+    try {
+        return Invoke-WithRetry -Attempt $Attempt -DelaySeconds $DelaySeconds -Action {
+            $status = [string] (& $GetPublishStatus $Name)
+            switch -CaseSensitive ($status) {
+                'Published' { return 'Published' }
+                'NeverPublished' { return 'NeverPublished' }
+                default { throw $unknownStatusMessage }
+            }
+        } -RetryOn {
+            param($ErrorRecord)
+            return $ErrorRecord.Exception.Message -eq $unknownStatusMessage
+        }
+    } catch {
+        if ($_.Exception.Message -eq $unknownStatusMessage) {
+            return 'Unknown'
+        }
+        throw
+    }
+}
+
 function Assert-IncrementPackagePublished {
     # Fails unless every package that apply would reach has a confirmed crates.io publication.
     # Reads the expanded plan, so the checked set is exactly the set apply will edit.
@@ -607,15 +753,23 @@ function Assert-IncrementPackagePublished {
         [scriptblock] $GetPublishStatus = {
             param([string] $Name)
             Get-CratePublishStatus -Name $Name
-        }
+        },
+        [ValidateRange(1, [int]::MaxValue)][int] $PublishStatusRetryAttempt =
+            $script:PublishStatusRetryAttempt,
+        [ValidateRange(0, [int]::MaxValue)][int] $PublishStatusRetryDelaySeconds =
+            $script:PublishStatusRetryDelaySeconds
     )
 
     Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
-    $package = @(Read-ExpandedPlan -ExpandedPath $ExpandedPath)
+    $packageNames = @(Read-ExpandedPlanPackageName -ExpandedPath $ExpandedPath)
     $neverPublished = [System.Collections.Generic.List[string]]::new()
     $unknown = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in $package) {
-        switch -CaseSensitive (& $GetPublishStatus $name) {
+    foreach ($name in $packageNames) {
+        $status = Get-PublishStatusWithUnknownRetry -Name $name `
+            -GetPublishStatus $GetPublishStatus `
+            -Attempt $PublishStatusRetryAttempt `
+            -DelaySeconds $PublishStatusRetryDelaySeconds
+        switch -CaseSensitive ($status) {
             'Published' { }
             'NeverPublished' { $neverPublished.Add($name) }
             default { $unknown.Add($name) }
@@ -623,8 +777,17 @@ function Assert-IncrementPackagePublished {
     }
     if ($neverPublished.Count -gt 0) {
         $noun = if ($neverPublished.Count -eq 1) { 'package' } else { 'packages' }
-        $pronoun = if ($neverPublished.Count -eq 1) { 'it' } else { 'them' }
-        throw "The increment reaches never-published $($noun): $($neverPublished -join ', '). First-publish $pronoun manually before applying this plan."
+        $instruction = if ($neverPublished.Count -eq 1) {
+            'Publish the package manually first'
+        } else {
+            'Publish these packages manually first'
+        }
+        throw (
+            "The increment reaches never-published $($noun): $($neverPublished -join ', '). " +
+            "$instruction; follow RELEASING.md#first-publish-of-a-new-crate and complete " +
+            'the full procedure, including Trusted Publishing and any binary-release follow-up, ' +
+            'before retrying.'
+        )
     }
     if ($unknown.Count -gt 0) {
         $noun = if ($unknown.Count -eq 1) { 'package' } else { 'packages' }
@@ -682,7 +845,7 @@ function Get-CargoIncrementLevel {
     return 'patch'
 }
 
-function Get-DecisionGroupName {
+function Get-DecisionKey {
     # The key a plan entry folds onto: the package's version group when it has one, otherwise the
     # package itself. Mirrors the tool's own decision keys, so a group counts as already planned
     # whichever member named it.
@@ -703,25 +866,73 @@ function Get-DecisionGroupName {
 }
 
 function Get-GroupAlignmentIncrement {
-    # Exact-version plan entry that puts a drifted group back on one version.
+    # Plan entry that puts a drifted group back on one version.
     #
-    # Aligning is not an increment: the members simply have to agree, and the highest version any
-    # of them already declares is the one they agree on. Raising it instead would publish a new
-    # release of every member for no substantive change. The target is the report's own
+    # Aligning is normally not an increment: the members simply have to agree, and the highest
+    # version any of them already declares is the one they agree on, so raising it would publish
+    # every member for no substantive change. The target is the report's own
     # highest-declared-member version, so the rule is not restated here.
+    #
+    # That exact target is only safe while every member left at its current version keeps its
+    # released content. A member that stays put but depends on a member that moves does not:
+    # applying the plan rewrites the moving member's `=` requirement inside the staying member's
+    # published manifest, which changes released content under an already-published version and
+    # leaves that member needing an increment. Such a group takes the smallest real increment
+    # instead, which moves every member and gives the rewritten requirement a version to ship in.
     param(
         [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)] $Group
+        [Parameter(Mandatory)] $Group,
+        [Parameter(Mandatory)] $ByName
     )
 
     if ($Group.PSObject.Properties.Name -notcontains 'version' -or
         [string]::IsNullOrWhiteSpace([string] $Group.version)) {
         throw "Group '$Name' has no declared version to align its members on."
     }
+    $target = [string] $Group.version
 
+    $moving = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    $staying = [System.Collections.Generic.List[string]]::new()
+    foreach ($member in $Group.members) {
+        $memberName = [string] $member
+        if (-not $ByName.Contains($memberName)) {
+            continue
+        }
+        if ([string] $ByName[$memberName].declared_version -ceq $target) {
+            $staying.Add($memberName)
+        } else {
+            [void] $moving.Add($memberName)
+        }
+    }
+
+    foreach ($memberName in $staying) {
+        foreach ($dependency in $ByName[$memberName].dependencies) {
+            $dependencyName = [string] $dependency.name
+            if (-not $moving.Contains($dependencyName)) {
+                continue
+            }
+            Write-Verbose (
+                "Group '$Name' cannot align on version '$target' because member " +
+                "'$memberName' already declares it and depends on member '$dependencyName', " +
+                'which the alignment moves; the rewritten requirement would change released ' +
+                "content under '$memberName' version '$target'. Incrementing the group instead."
+            ) -Verbose
+            return [ordered]@{
+                name  = $Name
+                level = 'patch'
+            }
+        }
+    }
+
+    Write-Verbose (
+        "Group '$Name' aligns on version '$target', which its members already declare at the " +
+        'highest, because no member that keeps its version depends on one the alignment moves.'
+    ) -Verbose
     return [ordered]@{
         name    = $Name
-        version = [string] $Group.version
+        version = $target
     }
 }
 
@@ -750,7 +961,12 @@ function New-ReleasePlanFile {
         if ($package.PSObject.Properties.Name -notcontains 'anchor' -or
             $null -eq $package.anchor -or
             [string]::IsNullOrWhiteSpace([string] $package.anchor.version)) {
-            throw "Package '$name' has no published version anchor and cannot enter an increment plan."
+            throw (
+                "Package '$name' has no published version anchor. " +
+                'Publish the package manually first; follow ' +
+                'RELEASING.md#first-publish-of-a-new-crate and complete the full procedure, ' +
+                'including Trusted Publishing and any binary-release follow-up, before retrying.'
+            )
         }
         try {
             $anchor = [semver] [string] $package.anchor.version
@@ -768,11 +984,22 @@ function New-ReleasePlanFile {
         }
         $minimum = Get-MinimumVersionForChange -Anchor $anchor -Level $level
         if ($current -ge $minimum) {
+            Write-Verbose (
+                "Decision for package '$name' at semantic level '$level' is not emitted " +
+                "because declared version '$current' already satisfies the minimum version " +
+                "'$minimum' derived from anchor '$anchor'."
+            ) -Verbose
             continue
         }
+        $cargoLevel = Get-CargoIncrementLevel -Current $current -Minimum $minimum
+        Write-Verbose (
+            "Decision for package '$name' at semantic level '$level' is emitted as " +
+            "cargo-release-plan '$cargoLevel' because declared version '$current' is below " +
+            "the minimum version '$minimum' derived from anchor '$anchor'."
+        ) -Verbose
         $increment.Add([ordered]@{
             name  = $name
-            level = Get-CargoIncrementLevel -Current $current -Minimum $minimum
+            level = $cargoLevel
         })
     }
 
@@ -787,7 +1014,7 @@ function New-ReleasePlanFile {
         [System.StringComparer]::Ordinal
     )
     foreach ($entry in $increment) {
-        [void] $planned.Add((Get-DecisionGroupName -ByName $byName -Name ([string] $entry.name)))
+        [void] $planned.Add((Get-DecisionKey -ByName $byName -Name ([string] $entry.name)))
     }
     foreach ($group in @($report.groups.PSObject.Properties | Sort-Object -Property Name)) {
         if ($group.Value.PSObject.Properties.Name -notcontains 'consistent' -or
@@ -795,10 +1022,12 @@ function New-ReleasePlanFile {
             $planned.Contains($group.Name)) {
             continue
         }
-        $increment.Add((Get-GroupAlignmentIncrement -Name $group.Name -Group $group.Value))
+        $increment.Add((Get-GroupAlignmentIncrement -Name $group.Name -Group $group.Value -ByName $byName))
     }
 
     if ($PSCmdlet.ShouldProcess($PlanPath, 'write generated cargo-release-plan input')) {
+        # The generated plan contract contains top-level metadata and increment entries.
+        $releasePlanInputJsonDepth = 4
         $parent = Split-Path -Parent $PlanPath
         if (-not [string]::IsNullOrWhiteSpace($parent)) {
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -806,21 +1035,18 @@ function New-ReleasePlanFile {
         [ordered]@{
             schema_version = $script:ReleasePlanSchemaVersion
             increments     = @($increment)
-        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $PlanPath -Encoding utf8
-        Write-Host "Wrote cargo-release-plan input to $PlanPath"
+        } | ConvertTo-Json -Depth $releasePlanInputJsonDepth |
+            Set-Content -LiteralPath $PlanPath -Encoding utf8
+        Write-Host "Wrote cargo-release-plan input to '$PlanPath'."
     }
 }
 
 Export-ModuleMember -Function `
-    Get-ReleasePlanCargoArgument, `
-    Write-ReleasePlanBaseVerbose, `
-    Get-SemverCheckPackage, `
-    Complete-SemverChecksCollect, `
+    Invoke-ValidateVersions, `
     Invoke-ReleaseReport, `
     Invoke-SemverCheck, `
-    Invoke-ExpandReleasePlan, `
-    Invoke-ApplyReleasePlan, `
-    Invoke-ValidateVersions, `
-    Get-ReleasePlanAnalysisBatch, `
+    Get-ReleasePlanAnalysisBatchJson, `
     Assert-IncrementPackagePublished, `
-    New-ReleasePlanFile
+    New-ReleasePlanFile, `
+    Invoke-ExpandReleasePlan, `
+    Invoke-ApplyReleasePlan

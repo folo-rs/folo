@@ -105,8 +105,8 @@ pub enum RunOutcome {
 /// Executes one requested operation and reports its outcome.
 ///
 /// Selects the command named by `input` and returns what that command produced:
-/// the report directory, the check verdict and its diagnostics, or the apply
-/// summary.
+/// the report summary, the check verdict and its diagnostics, the expanded-plan
+/// summary, or the apply summary.
 ///
 /// # Errors
 ///

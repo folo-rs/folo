@@ -102,10 +102,9 @@ that the artifact model needs correction.
 ### Preview a decision with `expand`
 
 `expand --plan <plan.json> --out <expanded.json>` resolves a plan's version
-groups and increment levels into one explicit entry per package. Because `apply`
-expands groups internally, a caller that presents a plan for approval would
-otherwise be showing a document that moves more packages than it names. `expand`
-makes the full set reviewable before anything is written.
+groups and increment levels into one explicit entry per package. An input plan
+may omit version-group members that `apply` will update; `expand` writes the
+complete explicit package/version set for review.
 
 The expanded document is itself a plan, so the reviewed document is the one that
 gets applied.
@@ -311,16 +310,16 @@ that expand to the same group must all use increment levels or all use one
 matching exact version.
 
 `expand` exposes that resolution as a document so a caller can present the
-complete set of affected packages before approval, rather than discovering it
-from the manifests `apply` has already written.
+complete set of affected packages before approving a plan that omits packages
+`apply` will update.
 
 An inconsistent group is a check failure in its own right, independent of any
 content change. A plan entry naming any member resolves it, and expansion is
 plan-driven, so a group no entry names is left alone. An entry that carries a
-change level raises the group's highest declared version; one that carries that
-highest version as an exact target instead aligns the lagging members onto it
-and leaves the leading member where it is, which is what a group that drifted
-without changing should do.
+increment level raises the group's highest declared version. An entry that
+carries that highest version as an exact target instead moves lagging members up
+to it and leaves the leading member unchanged. The lagging members then become
+pending release because their declared versions advanced.
 
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group

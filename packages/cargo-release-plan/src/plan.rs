@@ -1,8 +1,7 @@
-// Increment-plan parsing and group expansion.
+// Increment-plan parsing, validation, and group expansion.
 //
-// The new version for a group is the highest version declared by any member,
-// raised by the highest required level. Entries affecting the same expanded
-// target must use either increment levels or one matching explicit version.
+// Plans name package or version-group decisions. Expansion resolves those
+// decisions to explicit package versions for both preview and application.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -13,12 +12,11 @@ use semver::Version;
 use serde::Deserialize;
 
 use crate::groups::Groups;
-use crate::text::quote_path;
 use crate::verbose::Verbose;
 use crate::{
     ConflictingPlanIncrementKindError, ConflictingPlanVersionError, InvalidVersionError,
     PlanIncrementSpecError, PlanVersionRegressionError, UnknownIncrementLevelError,
-    UnknownPlanTargetError, UnsupportedPlanSchemaError, VersionOverflowError,
+    UnknownPlanTargetError, UnsupportedPlanSchemaError, VersionOverflowError, quote_path,
 };
 
 /// Shared plan and report schema revision.
@@ -30,25 +28,26 @@ pub(crate) const SCHEMA_VERSION: u32 = 1;
 
 /// On-disk plan file.
 ///
-/// This is the `apply` command's input: a schema stamp plus the increments a
-/// planner decided on. Expansion turns it into an [`ExpandedPlan`].
+/// This is the command-neutral plan shape read by `expand` and `apply`: a schema
+/// stamp plus the increments a planner decided on. Expansion turns it into an
+/// [`ExpandedPlan`].
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct PlanFile {
     pub(crate) schema_version: u32,
     pub(crate) increments: Vec<PlanIncrement>,
 }
 
-/// Package name → new version after group expansion.
+/// Package name → resolved version after group expansion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ExpandedPlan {
     pub(crate) packages: BTreeMap<String, Version>,
 }
 
-/// Expands `plan` against the versions `apply` is allowed to touch.
+/// Expands `plan` against the versions release commands may target.
 ///
-/// `publishable` maps every package `apply` may edit to the version its manifest
-/// declares today. A package outside it is not a valid plan target, and the
-/// highest version among a group's members in it is the increment base.
+/// `publishable` maps every package a plan may target to the version its
+/// manifest declares today. A package outside it is not a valid plan target, and
+/// the highest version among a group's members in it is the increment base.
 pub(crate) fn expand_plan(
     plan: &PlanFile,
     groups: &Groups,
@@ -103,28 +102,30 @@ pub(crate) fn expand_plan(
             .expect(
                 "every decision key comes from a target that resolved to at least one publishable member, and every publishable member has a declared version",
             );
-        let described = decision.describe();
-        let new_version = match decision {
+        let new_version = match &decision {
             IncrementSpec::Version(version) => {
                 // An explicit version must not regress: a lower one would
                 // re-publish a released version with different content. Equality
-                // is accepted, since aligning a lagging group member on the
-                // highest declared version leaves that member unchanged.
+                // is accepted because exact realignment leaves the member that
+                // already declares the highest version unchanged.
                 // Ref: docs/design.md, "Version monotonicity".
-                if version < highest {
-                    return Err(PlanVersionRegressionError::new(&key, version, highest).into());
+                if version < &highest {
+                    return Err(
+                        PlanVersionRegressionError::new(&key, version.clone(), highest).into(),
+                    );
                 }
-                version
+                version.clone()
             }
-            IncrementSpec::Level(level) => increment_version(&highest, level)?,
+            IncrementSpec::Level(level) => increment_version(&highest, *level)?,
         };
         verbose.note(|| {
             format!(
-                "{}: {} declares the highest version among {}, so {} yields {}, which every member takes",
+                "{}: {} declares the highest version among {}, so {} yields {}, which every member \
+                 takes",
                 quote_path(&key),
                 highest,
                 members.join(", "),
-                described,
+                decision.describe(),
                 new_version
             )
         });

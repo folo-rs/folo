@@ -42,6 +42,12 @@ For a public package backed by implementation packages, judge the behavior and A
 through the public package. Internal handoff changes matter only when they alter that exposed
 contract.
 
+Feature gating participates in this judgement. Placing an existing API behind a Cargo feature is
+breaking even when that feature is enabled by default, because a consumer building with default
+features disabled loses the item. Removing a feature is breaking when it withdraws functionality
+or public items a consumer could reach. Adding a new opt-in feature is not breaking; it is a
+compatible capability.
+
 ## Nonbreaking
 
 Choose `nonbreaking` for a meaningful compatible capability: a new API, supported input,
@@ -67,10 +73,10 @@ metadata-only.
 
 ## No increment
 
-Choose no increment only when every entry in the package's `changed` array requires no change:
-its released-content diff, its changed inherited workspace fields, its locked dependency
-changes, and the decisions for its dependencies. Signal this by omitting the package from the
-semantic change-decision file.
+Choose no increment only when the complete evidence set supports it: every entry in the package's
+`changed` array, its released-content diff when it has one, the changed inherited workspace
+fields, the locked dependency changes, and the decisions recorded for its dependencies. Signal
+this by omitting the package from `decisions.json`.
 
 Membership of a group the report marks `"consistent": false` does not change this. A group whose
 members disagree on a version is realigned mechanically when the plan is generated, onto the

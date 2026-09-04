@@ -1,41 +1,37 @@
-// `expand` command: resolve a plan's version groups into per-package versions.
+// `expand` command: write the explicit package/version plan reviewers apply.
 //
-// `apply` expands groups internally, which leaves a planner unable to show which
-// packages a plan actually moves until after it has run. This command exposes
-// that same expansion as a document: it names every package the plan reaches,
-// including group members the plan did not mention, at the version each will
-// carry. The result is itself a plan, so the reviewed document is the one that
-// gets applied rather than a rendering of it.
+// Input plans may name a version group or one member of it instead of every
+// package the release decision reaches. This command writes the complete
+// explicit package/version set, so reviewers see the plan that `apply` consumes.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use ohno::AppError;
-use semver::Version;
 use serde::Serialize;
 
 use crate::metadata::load_tracked_work_tree;
 use crate::plan::{PlanFile, SCHEMA_VERSION, expand_plan};
 use crate::text::plural;
 use crate::verbose::Verbose;
-use crate::{ParsePlanError, ReadFileError, WriteFileError, quote_path};
+use crate::{
+    CreateOutputDirectoryError, ParsePlanError, ReadFileError, WriteFileError, quote_path,
+};
 
 /// On-disk expanded plan body.
 ///
-/// Deliberately the same shape `apply` reads, so the expanded document can be
-/// applied directly. Every entry carries an explicit version because expansion
-/// has already resolved the increment against the group's highest declared
-/// member version.
+/// The expanded document is itself a plan that can be applied directly after
+/// review. Every entry carries an explicit version because expansion has already
+/// resolved the increment against the group's highest declared member version.
 #[derive(Serialize)]
 struct ExpandedPlanFile {
     schema_version: u32,
-    increments: Vec<ExpandedIncrement>,
+    increments: Vec<ExpandedPackageVersion>,
 }
 
 /// One package's resolved version in an expanded plan.
 #[derive(Serialize)]
-struct ExpandedIncrement {
+struct ExpandedPackageVersion {
     name: String,
     version: String,
 }
@@ -52,20 +48,10 @@ pub(crate) fn run_expand(
         serde_json::from_str(&plan).map_err(|error| ParsePlanError::caused_by(plan_path, error))?;
 
     let (work_tree, _) = load_tracked_work_tree(manifest_path)?;
-    // Same target and increment-base rules as `apply`: only Git-tracked
-    // publishable members are valid targets, and a group increments from the
-    // highest version any of its members declares.
-    // Ref: docs/implementation.md, "Plan application".
-    let publishable: BTreeMap<String, Version> = work_tree
-        .packages
-        .iter()
-        .map(|package| {
-            (
-                package.manifest.name.clone(),
-                package.manifest.version.clone(),
-            )
-        })
-        .collect();
+    // Only Git-tracked publishable members are valid targets, and a group
+    // increments from the highest version any of its members declares.
+    // Ref: docs/implementation.md, "Plan expansion and application".
+    let publishable = work_tree.publishable_versions();
     let expanded = expand_plan(&plan, &work_tree.groups, &publishable, verbose)?;
 
     verbose.note(|| {
@@ -82,20 +68,23 @@ pub(crate) fn run_expand(
         increments: expanded
             .packages
             .iter()
-            .map(|(name, version)| ExpandedIncrement {
+            .map(|(name, version)| ExpandedPackageVersion {
                 name: name.clone(),
                 version: version.to_string(),
             })
             .collect(),
     };
-    let json = serde_json::to_string_pretty(&document)
+    let mut json = serde_json::to_string_pretty(&document)
         .expect("an expanded plan holds only strings and a number, which always serialize");
+    json.push('\n');
+    // A bare filename has an empty parent and therefore needs no directory creation.
     if let Some(parent) = out_path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent).map_err(|error| WriteFileError::caused_by(parent, error))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| CreateOutputDirectoryError::caused_by(parent, error))?;
     }
-    fs::write(out_path, format!("{json}\n"))
+    fs::write(out_path, json.as_bytes())
         .map_err(|error| WriteFileError::caused_by(out_path, error))?;
 
     Ok(format!(

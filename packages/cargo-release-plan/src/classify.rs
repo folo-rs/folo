@@ -114,12 +114,13 @@ impl PackageClass {
         }
     }
 
-    /// The rendered patch, empty when the package has no released file difference.
+    /// The rendered file-difference patch.
     ///
-    /// A pending-release package carries one too: deciding whether its existing
-    /// increment still covers the accumulated changes needs the same evidence as
-    /// deciding an increment from scratch. Inherited workspace values and locked
-    /// dependency identities are not file differences and never appear here.
+    /// Empty when the package has no released file difference. Pending-release
+    /// packages retain the patch because judging whether an existing increment
+    /// covers accumulated changes needs the same evidence as choosing a new
+    /// increment. Inherited workspace values and locked dependency identities are
+    /// not file differences and never appear here.
     pub(crate) fn patch(&self) -> &str {
         match &self.verdict {
             Verdict::PendingRelease { patch, .. } | Verdict::NeedsIncrement { patch, .. } => patch,

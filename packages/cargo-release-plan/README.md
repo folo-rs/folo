@@ -19,7 +19,8 @@ elsewhere), or `cargo install cargo-release-plan` to always build from source. T
 ```text
 cargo release-plan report --out-dir <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
 cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|github] [--verify-packaging] [--verbose]
-cargo release-plan expand --plan <plan.json> --out <expanded.json> [--manifest-path <path>] [--verbose]
+cargo release-plan expand --plan <plan.json> --out <expanded.json>
+    [--manifest-path <path>] [--verbose]
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
 
@@ -69,15 +70,13 @@ rules need fixing.
 Resolves a plan's version groups and increment levels into one explicit entry
 per package, written to `--out`.
 
-`apply` performs this expansion internally, which leaves a caller unable to show
-which packages a plan actually moves until after it has run. `expand` makes that
-answer a document: it names every package the plan reaches, including group
-members the plan did not mention, at the version each will carry.
+An input plan may omit version-group members that `apply` will update. `expand`
+writes the complete explicit package/version set for review, naming every
+package the plan reaches, including group members the input plan did not mention,
+at the version each will carry.
 
-The output is itself a plan, so the expanded document is what gets applied
-rather than a rendering of something else. Every entry carries an explicit
-`version`, and applying an expanded plan is equivalent to applying the plan it
-came from.
+The output is itself a plan, so the expanded document is the one passed to
+`apply` after review. Every entry carries an explicit `version`.
 
 Re-expand after changing the input plan. Editing an expanded plan by hand risks
 giving one group's members different versions, which both `expand` and `apply`

@@ -134,7 +134,7 @@ enum Command {
     Report(ReportArgs),
     /// Fail on a needed version increment or an inconsistent version group.
     Check(CheckArgs),
-    /// Resolve a plan's version groups into an explicit per-package plan.
+    /// Produce the explicit plan reviewed and then passed to apply.
     Expand(ExpandArgs),
     /// Apply an approved increment plan to manifests and the lockfile.
     Apply(ApplyArgs),

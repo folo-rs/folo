@@ -122,6 +122,16 @@ pub(crate) struct WriteFileError {
 impl UnwindSafe for WriteFileError {}
 impl RefUnwindSafe for WriteFileError {}
 
+/// An expanded-plan output directory could not be created.
+#[ohno::error]
+#[display("Failed to create output directory '{}'", path.quoted())]
+pub(crate) struct CreateOutputDirectoryError {
+    path: PathBuf,
+}
+
+impl UnwindSafe for CreateOutputDirectoryError {}
+impl RefUnwindSafe for CreateOutputDirectoryError {}
+
 /// A TOML document is not valid.
 #[ohno::error]
 #[display("Failed to parse '{}'", path.quoted())]

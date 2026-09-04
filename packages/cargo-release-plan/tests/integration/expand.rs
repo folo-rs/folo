@@ -8,11 +8,10 @@ use serde_json::Value;
 use crate::fixture::{Fixture, write_package};
 use crate::harness::check;
 
-/// Expansion names group members the plan did not, and the result applies.
+/// Expansion names every group member and produces an applicable result.
 ///
-/// A planner presents the expanded document for approval, so it must list every
-/// package the plan moves and must itself be applicable: the reviewed document
-/// is the one that gets applied.
+/// An expanded plan and the apply operation that consumes it cannot disagree
+/// about which packages a decision reaches.
 /// Ref: docs/design.md, "Version groups".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -66,21 +65,7 @@ shell_impl = { workspace = true }
         .get("increments")
         .and_then(Value::as_array)
         .expect("an expanded plan always carries an increments array");
-    let versions: Vec<(&str, &str)> = increments
-        .iter()
-        .map(|entry| {
-            (
-                entry
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .expect("every expanded increment names a package"),
-                entry
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .expect("every expanded increment carries an explicit version"),
-            )
-        })
-        .collect();
+    let versions = expanded_versions(increments);
     // `shell_impl` was never named, but shares a group with `shell`.
     assert_eq!(
         versions,
@@ -122,7 +107,7 @@ fn expand_rejects_disagreeing_versions_within_one_group() {
     let fixture = Fixture::new(
         r#"
 [workspace.metadata.release-plan.groups]
-g = ["shell", "shell_impl"]
+release-family = ["shell", "shell_impl"]
 "#,
     );
     write_package(&fixture, "shell", "0.1.0", "");
@@ -146,27 +131,26 @@ g = ["shell", "shell_impl"]
         verbose: false,
     })
     .expect_err("members of one group cannot take different versions");
-    assert!(error.to_string().contains('g'), "{error}");
+    assert!(error.to_string().contains("release-family"), "{error}");
 }
 
-/// A change level restores a version group whose members drifted apart.
+/// A patch increment level restores a version group whose members drifted apart.
 ///
 /// `check` fails on an inconsistent group even when no released content
 /// changed, so that failure must be recoverable through the same
-/// level-based decision the increment-versions skill records for every other
+/// increment-level decision recorded in the plan for every other
 /// case. Expansion lifts every member to the highest declared version raised by
 /// the decided level, which is what returns the group to one version.
 /// Ref: docs/design.md, "Version groups".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_level_realigns_an_inconsistent_group() {
+fn a_patch_increment_level_realigns_an_inconsistent_group() {
     let fixture = Fixture::new(
         r#"
 [workspace.metadata.release-plan.groups]
 g = ["shell", "shell_impl"]
 "#,
     );
-    // Members declaring different versions are what makes the group inconsistent.
     write_package(&fixture, "shell", "0.1.0", "");
     write_package(&fixture, "shell_impl", "0.2.0", "");
     fixture.commit("drifted group");
@@ -196,12 +180,9 @@ g = ["shell", "shell_impl"]
         .get("increments")
         .and_then(Value::as_array)
         .expect("an expanded plan always carries an increments array");
-    // Both members land on the highest declared version raised by the level.
-    assert!(
-        increments
-            .iter()
-            .all(|entry| entry.get("version") == Some(&Value::String("0.2.1".to_string()))),
-        "{increments:?}"
+    assert_eq!(
+        expanded_versions(increments),
+        vec![("shell", "0.2.1"), ("shell_impl", "0.2.1")]
     );
 
     run(&RunInput::Apply {
@@ -217,12 +198,11 @@ g = ["shell", "shell_impl"]
     assert!(passed, "{message}");
 }
 
-/// An exact target equal to the group's highest version aligns without releasing.
+/// An exact target equal to the group's highest version aligns lagging members.
 ///
-/// A group that drifted apart without any member changing has to agree on a
-/// version, not receive a new one. Naming the highest declared version lifts the
-/// lagging members onto it and leaves the leading member untouched, so no
-/// member is published for a change it did not make.
+/// Naming the highest declared version moves lagging members up to it and leaves
+/// the leading member unchanged. The lagging members become pending release
+/// because their declared versions advanced.
 /// Ref: docs/design.md, "Version groups".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -259,11 +239,9 @@ g = ["shell", "shell_impl"]
         .get("increments")
         .and_then(Value::as_array)
         .expect("an expanded plan always carries an increments array");
-    assert!(
-        increments
-            .iter()
-            .all(|entry| entry.get("version") == Some(&Value::String("1.1.0".to_string()))),
-        "{increments:?}"
+    assert_eq!(
+        expanded_versions(increments),
+        vec![("shell", "1.1.0"), ("shell_impl", "1.1.0")]
     );
 
     run(&RunInput::Apply {
@@ -282,4 +260,15 @@ g = ["shell", "shell_impl"]
     fixture.commit("align group");
     let (passed, message) = check(&fixture, &base);
     assert!(passed, "{message}");
+}
+
+fn expanded_versions(increments: &[Value]) -> Vec<(&str, &str)> {
+    increments
+        .iter()
+        .map(|entry| {
+            let name = entry.get("name").and_then(Value::as_str).unwrap();
+            let version = entry.get("version").and_then(Value::as_str).unwrap();
+            (name, version)
+        })
+        .collect()
 }

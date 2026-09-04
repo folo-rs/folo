@@ -42,38 +42,6 @@ fn report_requires_out_dir() {
 }
 
 #[test]
-fn expand_requires_both_a_plan_and_an_output_path() {
-    assert!(parse(&["expand"]).unwrap_err().status.is_err());
-    assert!(
-        parse(&["expand", "--plan", "plan.json"])
-            .unwrap_err()
-            .status
-            .is_err()
-    );
-}
-
-#[test]
-fn expand_defaults_the_manifest_path() {
-    let input = parse(&["expand", "--plan", "plan.json", "--out", "expanded.json"])
-        .unwrap()
-        .into_input();
-    match input {
-        RunInput::Expand {
-            plan,
-            out,
-            manifest_path,
-            verbose,
-        } => {
-            assert_eq!(plan, PathBuf::from("plan.json"));
-            assert_eq!(out, PathBuf::from("expanded.json"));
-            assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
-            assert!(!verbose);
-        }
-        other => panic!("expected expand, got {other:?}"),
-    }
-}
-
-#[test]
 fn report_defers_base_and_defaults_the_manifest_path() {
     let input = parse(&["report", "--out-dir", "out"]).unwrap().into_input();
     match input {
@@ -119,6 +87,44 @@ fn check_parses_github_format_and_verify_packaging() {
             assert!(verbose);
         }
         other => panic!("expected check, got {other:?}"),
+    }
+}
+
+#[test]
+fn expand_requires_both_a_plan_and_an_output_path() {
+    assert!(parse(&["expand"]).unwrap_err().status.is_err());
+    assert!(
+        parse(&["expand", "--plan", "plan.json"])
+            .unwrap_err()
+            .status
+            .is_err()
+    );
+    assert!(
+        parse(&["expand", "--out", "expanded.json"])
+            .unwrap_err()
+            .status
+            .is_err()
+    );
+}
+
+#[test]
+fn expand_defaults_the_manifest_path() {
+    let input = parse(&["expand", "--plan", "plan.json", "--out", "expanded.json"])
+        .unwrap()
+        .into_input();
+    match input {
+        RunInput::Expand {
+            plan,
+            out,
+            manifest_path,
+            verbose,
+        } => {
+            assert_eq!(plan, PathBuf::from("plan.json"));
+            assert_eq!(out, PathBuf::from("expanded.json"));
+            assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
+            assert!(!verbose);
+        }
+        other => panic!("expected expand, got {other:?}"),
     }
 }
 

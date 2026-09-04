@@ -26,7 +26,7 @@ are **not** Cargo packages — the workflow files themselves, or the standalone 
 under `scripts/` — must run unconditionally. Delta analysis reports "nothing affected" for
 such a change, so gating those jobs on it would leave the change validated by nothing.
 Release-plan generation (`validate-versions`) is in that class: it compares every
-publishable package's released content to that package's version-anchor. Gating it on
+publishable package's released content to that package's version anchor. Gating it on
 delta's changed-package set would skip a package that already needed an increment.
 
 ## Platform strategy
@@ -128,33 +128,13 @@ Logic worth unit-testing goes one level deeper into a module under `scripts/` co
 Pester suite. Every `run:` step uses `pwsh`; the `setup-environment` composite is the sole
 Bash holdout because it bootstraps PowerShell itself.
 
-## Required checks fan-in
-
-Validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
-required-checks field is a string match on that name: it cannot express "this matrix
-job, but only the legs that actually ran", and it cannot see a check that was skipped
-rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
-false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay on
-Expected — Waiting for status to be reported forever if they are listed as required.
-
-A ruleset that requires merge-blocking Validation therefore lists only this fan-in. The
-job is `if: always()`, `needs:` every merge-blocking job in Validation (including
-`validate-versions` and `semver-checks`), succeeds when every dependency succeeded or was
-skipped where skipping is allowed, and fails on failure, cancelled, or any other result.
-Unconditional gates may not skip. Advisory jobs stay off that list. `alert` stays off it
-— it files issues on a failed push to `main`, it is not a merge gate.
-
-When a new merge-blocking job is added to Validation it is added to this `needs:` list; it
-is never added to the GitHub ruleset. Unconditional gates are also named in the fan-in's
-must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
-required through this fan-in.
-
 ## Pull-request version readiness
 
-Published content changes require an explicit semantic change-level decision before release.
-This applies to the workspace as a whole rather than only packages selected by delta analysis:
-an earlier change can remain pending even when the current pull request does not touch that
-package.
+Published content changes require an explicit **change level** — `breaking`, `nonbreaking`, or
+`patch` — decided before release. The change level describes the substance of the change;
+tooling maps it to a Cargo increment level or an exact target version. This applies to the
+workspace as a whole rather than only packages selected by delta analysis: an earlier change can
+remain pending even when the current pull request does not touch that package.
 
 Release state is read from the branch that publishes, not from the branch a pull request
 targets, so a stacked pull request is assessed against the same baseline as any other and a
@@ -169,11 +149,46 @@ package advances its patch component and a 0.0.z package has no compatible incre
 Automated API comparison supplies evidence for those decisions but does not replace semantic
 review. It is fail-closed when its input format or execution is unsupported. Comparisons cover
 only packages whose surface is a supported consumer contract. Published implementation and
-test-support packages have no independent SemVer contract; changes in a grouped implementation
-package are assessed through the owning public package instead.
+test-support packages have no supported consumer contract of their own; changes in a grouped
+implementation package are assessed through the owning public package instead.
 
 The checks support a valid empty consumer-contract set without turning that case into a
 workspace-wide comparison.
+
+A change level rests on released evidence rather than on the version a manifest already declares.
+A package's own released-content diff, the workspace values it inherits, the locked dependencies
+an executable releases, and the decisions taken for its dependencies all participate, and any
+package-metadata change establishes at least `patch`. A version group whose members disagree is
+realigned mechanically onto the highest version its members declare, so it needs no change level
+of its own. A package the release baseline has never published takes the first-publication path
+rather than an increment. The [`increment-versions`
+skill](../skills/increment-versions/SKILL.md) carries out this policy and owns the procedure.
+
+## Required checks fan-in
+
+Validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
+required-checks field is a string match on that name: it cannot express "this matrix
+job, but only the legs that actually ran", and it cannot see a check that was skipped
+rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
+false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay on
+Expected — Waiting for status to be reported forever if they are listed as required.
+
+A ruleset that requires merge-blocking Validation therefore lists only this fan-in. The
+job is `if: always()`, `needs:` every merge-blocking job in Validation (including
+`validate-versions` and `semver-checks`), succeeds when every dependency reports `success` or an
+allowed `skipped`, and fails on `failure`, `cancelled`, or any other result.
+Unconditional gates may not skip. Advisory jobs stay off that list. `alert` stays off it
+— it files issues on a failed push to `main`, it is not a merge gate.
+
+When a new merge-blocking job is added to Validation it is added to this `needs:` list; it
+is never added to the GitHub ruleset. Unconditional gates are also named in the fan-in's
+must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
+required through this fan-in.
+
+`alert` keeps a `needs:` list of its own, which also names the advisory jobs the fan-in excludes,
+so a new job joins both. The two lists answer different questions — what blocks a merge, and what
+is worth an issue after a push to `main` — and folding `alert` onto the fan-in would tie issue
+filing to the fan-in's skip policy and begin filing issues for cancelled runs.
 
 ## Published user guides
 

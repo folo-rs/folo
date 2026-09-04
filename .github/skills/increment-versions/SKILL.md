@@ -18,9 +18,17 @@ single version, rewrites dependency requirements, and refreshes `Cargo.lock`.
 
 This skill applies to a feature branch. Confirm the branch before Stage 1:
 
-> git rev-parse --abbrev-ref HEAD
+> git symbolic-ref --quiet --short HEAD
 
-Stop and report if that prints `main`.
+Stop and report if that command fails or prints nothing, which means the checkout has no branch
+attached, and stop if it prints `main`. A branch-aware probe is what distinguishes a detached
+checkout from a branch; a probe that resolves a revision instead reports a detached `HEAD` as
+though it were an ordinary branch name.
+
+Choose `{{WORK_DIR}}` as an absolute path and use that absolute form everywhere below. These
+stages mix commands run from the caller's own working directory with `just` recipes, which
+resolve a relative path against the repository root, so one relative working directory would name
+two different places.
 
 **Temporary rule.** [`docs/git-workflow.md`](../../../docs/git-workflow.md) keeps version
 increments off feature branches. While it does, a run stops after Stage 5 and reports the
@@ -50,8 +58,8 @@ Commit none of them.
 
 | Placeholder | Description |
 |-------------|-------------|
-| `WORK_DIR` | The untracked directory holding this run's working files. |
-| `VERIFY_DIR` | A second untracked directory, written by Stage 7 and adopted as `WORK_DIR` when Stage 7 sends the run back to Stage 4. |
+| `WORK_DIR` | The absolute path of the untracked directory holding this run's working files. |
+| `VERIFY_DIR` | A second untracked directory, also absolute, written by Stage 7 and adopted as `WORK_DIR` when Stage 7 sends the run back to Stage 4. |
 | `DIFF_PATH` | A package's `diff_path` value from `report.json`. |
 | `PACKAGE` | A package name. |
 | `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, or `patch`. |
@@ -77,7 +85,7 @@ and the SemVer evidence:
 >
 > git rev-parse FETCH_HEAD > "{{WORK_DIR}}/base.txt"
 >
-> $env:RELEASE_PLAN_BASE = Get-Content "{{WORK_DIR}}/base.txt"; just release-report "{{WORK_DIR}}"
+> $env:RELEASE_PLAN_BASE = Get-Content -LiteralPath "{{WORK_DIR}}/base.txt"; just release-report "{{WORK_DIR}}"
 
 Stop and report if any command exits non-zero. `just release-report` accepts the documented
 cargo-semver-checks finding exit and fails on every other non-zero exit, so a non-zero exit
@@ -95,10 +103,16 @@ compares against a different revision. An environment variable does not outlive 
 set it, so set it in the same invocation as the command that reads it.
 
 [`report.json`](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) lists
-every publishable package with its `status`, `anchor`, `changed` array, `dependencies`, and
-`diff_path`. A package has a `diff_path` when its released files differ from its anchor. One
-whose `changed` entries are all `inherited` or `lockfile` has none, because neither is a file
-difference.
+every publishable package with its `status`, `anchor`, `changed` array, `dependencies`,
+`untracked` paths, and `diff_path`. A package has a `diff_path` when its released files differ
+from its anchor. One whose `changed` entries are all `inherited` or `lockfile` has none, because
+neither is a file difference.
+
+Read each package's `untracked` entries before deciding its level. Untracked paths sit inside the
+package directory but take no part in the released-content comparison, so a path this pull
+request intends to publish contributes no evidence until it is tracked. Track such a path and
+repeat this stage. Account for every remaining path as deliberately unreleased, so it is not
+mistaken for assessed content, and carry those paths into the Stage 5 proposal.
 
 Its `groups` object names each version group's `members` and whether they currently declare one
 version, in `consistent`. `just validate-versions` fails on an inconsistent group as well as on
@@ -121,10 +135,14 @@ batch:
 
 ```json
 [
-  { "order": 1, "packages": ["events"], "cyclic": false },
-  { "order": 2, "packages": ["nm", "nm_impl"], "cyclic": true }
+  { "order": 1, "packages": ["nm_impl"], "cyclic": false },
+  { "order": 2, "packages": ["nm"], "cyclic": false }
 ]
 ```
+
+A batch is `cyclic` only when its members genuinely depend on each other through the
+relationships the report records, which is rare: a public package and the implementation package
+behind it form an ordinary one-way edge, not a cycle.
 
 | Field | Meaning |
 |-------|---------|
@@ -163,8 +181,11 @@ summary that demands an increment continues with a count of the checks that fail
 
 A package absent from the log has no floor. An absent floor is not evidence that no increment
 is required, because `cargo-semver-checks` inspects only part of the Rust API surface. Raise a
-decision to at least its floor and never below it, and never below an increment already
-declared in the package's `Cargo.toml`.
+decision to at least its floor and never below it.
+
+A change level describes the released content, not the version the manifest already declares. A
+package whose version has already moved keeps that movement without it raising the level, because
+Stage 5 retains an increment that is already sufficient.
 
 Use [determining-level.md](determining-level.md) to choose `breaking`, `nonbreaking`, `patch`,
 or no increment.
@@ -212,25 +233,35 @@ group resolves to.
 }
 ```
 
-Present one row per version group, and one per ungrouped package, reading the members from
-`report.json` and the versions from `expanded.json`:
+Present one row per version group and one per ungrouped package, limited to what the plan moves: a
+group qualifies when `expanded.json` names at least one of its members, and an ungrouped package
+qualifies when `expanded.json` names it. Read the members from `report.json` and the versions from
+`expanded.json`. Every other analyzed package belongs in the no-increment summary below rather
+than in this table.
 
 | Packages | Change level | New version |
 |----------|--------------|-------------|
 | `{{PACKAGE}}` | `{{CHANGE_LEVEL}}` | `{{NEW_VERSION}}` |
 
-A group's row lists every member and the level that governs the group, which is the highest
-level decided for any of its members. A group that appears only because it was realigned has no
-change level: write `realignment` in that column, and state that its members are moving onto a
-version one of them already declares, so the realignment publishes nothing new. Follow each row
-with its supporting explanation. The explanation may span multiple paragraphs and must cite the
-`report.json` entry, diff path, or `semver-checks.log` summary it rests on. Name any member that
-is moving only because it shares a group. State that the remaining analyzed packages need no
-increment.
+A group's row lists every member and the level that governs the group, which is the highest level
+decided for any of its members. A group present only because it was realigned has no change
+level, so write `none` in that column and give the reason in the row's explanation: its members
+disagreed on a version and are moving onto the highest version one of them already declared. Name
+the members that realignment moves, because each of them receives a new version and becomes
+pending release; only the member already at that version keeps the version it has.
 
-Report separately, and outside that table, every `report.json` entry that has no `anchor`. Such
-a package has never been published, so it needs a first publication as described in
-[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) rather than an increment.
+Follow each row with its supporting explanation. The explanation may span multiple paragraphs and
+must cite the `report.json` entry, diff path, or `semver-checks.log` summary it rests on. Name any
+member that is moving only because it shares a group. State that the remaining analyzed packages
+need no increment, and report any `untracked` path left deliberately unreleased.
+
+Report separately, and outside that table, every `report.json` entry that has no `anchor`. Such a
+package has never been released, so it has no version to increment. Hand it off for a first
+publication as described in
+[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) rather than publishing it
+from this run: bootstrap publication happens from a clean `main` checkout after these changes
+merge, in dependency order, and configures Trusted Publishing. Name every such package in the
+handoff.
 
 Ask the caller to approve or adjust the change levels. An adjustment is still bound by the
 floors in Stage 4: report the conflict rather than recording a level below one. To record an
@@ -242,20 +273,23 @@ Stop here and report the approved change levels while the temporary rule in Scop
 
 # Stage 6: Apply approved changes
 
-`cargo-release-plan apply` raises an existing version. It cannot create a crate on crates.io,
-so a package that has never been published must first be published by hand as described in
-[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate). Confirm that every
-package the approved expansion names is already published:
+`cargo-release-plan apply` raises an existing version and cannot create a crate on crates.io, so
+confirm that every package the approved expansion names is already published:
 
 > just check-increment-published "{{WORK_DIR}}/expanded.json"
 
-Stop and report without applying anything if the command exits non-zero.
+Stop and report without applying anything if the command exits non-zero, following the
+first-publication handoff above rather than publishing anything from this run.
 
 Apply the approved expansion, which is the document the caller saw:
 
 > just apply-release-plan "{{WORK_DIR}}/expanded.json"
 
-Stop and report if the command exits non-zero.
+A non-zero exit here can leave the work tree partly edited: the command writes the manifests it
+computed one after another and then refreshes the lockfile, so a failure part way through has
+already written some of them. Treat it as a mutating failure. Inspect `git status` and `git diff`,
+report which manifests and which lockfile the run touched, and stop rather than rerunning the
+command over a partly edited tree.
 
 # Stage 7: Verify the result
 
@@ -266,21 +300,33 @@ directory:
 >
 > New-Item -ItemType Directory -Force -Path "{{VERIFY_DIR}}"
 >
-> Copy-Item "{{WORK_DIR}}/base.txt" "{{VERIFY_DIR}}/base.txt"
+> Copy-Item -LiteralPath "{{WORK_DIR}}/base.txt" -Destination "{{VERIFY_DIR}}/base.txt"
 >
-> $env:RELEASE_PLAN_BASE = Get-Content "{{VERIFY_DIR}}/base.txt"; just release-report "{{VERIFY_DIR}}"
+> $env:RELEASE_PLAN_BASE = Get-Content -LiteralPath "{{VERIFY_DIR}}/base.txt"; just release-report "{{VERIFY_DIR}}"
 >
-> $env:RELEASE_PLAN_BASE = Get-Content "{{VERIFY_DIR}}/base.txt"; just validate-versions
+> $env:RELEASE_PLAN_BASE = Get-Content -LiteralPath "{{VERIFY_DIR}}/base.txt"; just validate-versions
 
 Stop and report if `just verify-lockfile` exits non-zero. Refreshing the lockfile is part of
 applying a plan, so a stale lockfile here is a defect to report rather than a decision to revisit.
 
-Return to Stage 4 if either later command exits non-zero. Before doing so, adopt
-`{{VERIFY_DIR}}` as the run's `{{WORK_DIR}}`: the applied increments changed the report, and
-every later stage reads its inputs from `{{WORK_DIR}}`, so leaving the old directory in place
-would regenerate a plan from pre-apply evidence and increment the same packages a second time.
-The copied `base.txt` keeps the adopted directory on the original baseline. Rerun Stage 3
-against the adopted directory's `report.json` first.
+Stop and report if `just release-report` exits non-zero as well. As in Stage 2 that means the
+evidence is incomplete, and incomplete evidence cannot show that a decision was wrong. Only a
+report that completed establishes the state the remaining checks are read against.
+
+A verdict from `just validate-versions` is what sends the run back to Stage 4. Confirm from its
+output that it rejected a package or a version group rather than failing to run, because the
+command exits non-zero either way. Report an execution failure instead of revisiting the
+decisions, which cannot repair it.
+
+`just release-report` exits zero on a SemVer finding, so read `{{VERIFY_DIR}}/semver-checks.log`
+as well. Return to Stage 4 the same way if any package's `Summary` line now demands a level
+above the one that was applied to it.
+
+Before returning to Stage 4, adopt `{{VERIFY_DIR}}` as the run's `{{WORK_DIR}}`: the applied
+increments changed the report, and every later stage reads its inputs from `{{WORK_DIR}}`, so
+leaving the old directory in place would regenerate a plan from pre-apply evidence and increment
+the same packages a second time. The copied `base.txt` keeps the adopted directory on the
+original baseline. Rerun Stage 3 against the adopted directory's `report.json` first.
 
 `just release-report` exits zero on a SemVer finding, so read `{{VERIFY_DIR}}/semver-checks.log`
 as well. Return to Stage 4 the same way if any package's `Summary` line now demands a level

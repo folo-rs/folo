@@ -29,6 +29,12 @@ concurrency:
 env:
   RUST_BACKTRACE: "1"
 
+# Least privilege by default, so pull-request and merge-queue validation do not inherit whatever
+# the repository's default token scope happens to be. Jobs needing more declare it themselves; a
+# job-level block replaces this default rather than adding to it.
+permissions:
+  contents: read
+
 jobs:
   # Determines which packages are impacted by changes in a PR branch compared
   # to origin/main. On a merge-queue run the baseline is merge_group.base_sha (the
@@ -73,38 +79,14 @@ jobs:
 
           # Full workspace only on push to main. merge_group must not take this path: a queue
           # run uses the same pruned job set as a pull request.
-          if ($env:GITHUB_EVENT_NAME -eq 'push') {
-            Write-Host 'Push to main detected, running full workspace validation.'
-            @(
-              'packages='
-              'packages_json=[]'
-              'skip_all=false'
-            ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
-            exit 0
-          }
-
-          # Full history is already checked out (fetch-depth: 0), so -SkipFetch avoids a redundant
-          # fetch. Pull requests analyze origin/main; merge-queue runs pass merge_group.base_sha
-          # so the worktree baseline matches validate-versions. The module cleans up after itself
-          # (no artifacts land in the checkout to dirty the tree).
-          $deltaArgs = @{ SkipFetch = $true }
-          if (-not [string]::IsNullOrWhiteSpace($env:DELTA_BASELINE)) {
-            $deltaArgs['Baseline'] = $env:DELTA_BASELINE
-          }
-          $affected = @(Invoke-CargoDelta @deltaArgs)
-          $output = Get-DeltaOutput -Affected $affected
-
-          if ($affected.Count -eq 0) {
-            Write-Host 'No packages affected by changes.'
-          } else {
-            Write-Host "Affected packages: $($output.Packages)"
-          }
-
-          @(
-            "packages=$($output.Packages)"
-            "packages_json=$($output.PackagesJson)"
-            "skip_all=$($output.SkipAll)"
-          ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+          # Full history is already checked out (fetch-depth: 0), so the workflow wrapper skips a
+          # redundant fetch. Pull requests analyze origin/main; merge-queue runs pass
+          # merge_group.base_sha so the baseline revision matches validate-versions. The module
+          # cleans up after itself (no artifacts land in the checkout to dirty the tree).
+          Get-DeltaWorkflowOutput `
+            -EventName $env:GITHUB_EVENT_NAME `
+            -BaselineRevision $env:DELTA_BASELINE |
+            Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
   # PowerShell test suite for the standalone scripts under scripts/ (the release-automation and
   # binstall-validation modules), plus PSScriptAnalyzer static analysis of those scripts and the
@@ -149,7 +131,7 @@ jobs:
         run: just validate-workflows
 
   # Workspace-wide release-plan generation: every publishable package's released content
-  # versus its version-anchor. Delta cannot narrow that set, so this job is not gated on
+  # versus its version anchor. Delta cannot narrow that set, so this job is not gated on
   # skip_all. Failure text names the increment-versions skill. Expected to stay red until
   # include allow-lists and reconciliation increments land; do not continue-on-error.
   validate-versions:
@@ -160,6 +142,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
+          # cargo-release-plan resolves the release baseline and each package's version anchor
+          # from the release branch's first-parent history, so a truncated clone can hide the
+          # commit that last changed a version and report that package as unchanged.
           fetch-depth: 0
 
       - name: Setup environment
@@ -182,12 +167,13 @@ jobs:
   # that group; implementation and test-support packages are not comparison targets.
   # `--all-features` because gated API is still public API. An empty `released` output is a
   # successful skip. Parallel with the rest of validation; does not gate other jobs.
-  # `if: always()` so a failing version check still surfaces an insufficient increment in
-  # the same round trip. The canary runs first so a broken cargo-semver-checks cannot be
+  # `!cancelled()` rather than `always()` so a failing version check still surfaces an
+  # insufficient increment in the same round trip, while a cancelled run stops here instead of
+  # holding a runner. The canary runs first so a broken cargo-semver-checks cannot be
   # read as "no breaking changes".
   semver-checks:
     needs: [validate-versions]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

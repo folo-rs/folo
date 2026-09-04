@@ -52,6 +52,21 @@ pub(crate) struct WorkTree {
     pub(crate) groups: Groups,
 }
 
+impl WorkTree {
+    /// Returns declared versions for Git-tracked publishable packages.
+    pub(crate) fn publishable_versions(&self) -> BTreeMap<String, Version> {
+        self.packages
+            .iter()
+            .map(|package| {
+                (
+                    package.manifest.name.clone(),
+                    package.manifest.version.clone(),
+                )
+            })
+            .collect()
+    }
+}
+
 /// One publishable workspace member in the work tree.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkPackage {
@@ -246,7 +261,7 @@ fn work_tree_from_metadata(
     // Apply visits every member Cargo can see so an untracked or ignored
     // dependent cannot retain a stale exact pin. This set is deliberately wider
     // than the tracked package set accepted as plan targets.
-    // Ref: docs/implementation.md, "Plan application".
+    // Ref: docs/implementation.md, "Plan expansion and application".
     let members_by_dir: BTreeMap<PathBuf, String> = metadata
         .packages
         .iter()
