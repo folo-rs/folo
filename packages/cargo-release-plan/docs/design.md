@@ -312,10 +312,15 @@ Groups are declared under `[workspace.metadata.release-plan.groups]`.
 publishable package, its status and anchor, the reasons it changed, its
 dependencies and dependents, and group consistency.
 
-Per-package patch files are a readable supplement for file changes. They use
-zero-context unified diffs, report binary changes without rendering binary
-bytes, and preserve addition, deletion, and mode information. Expensive
-line-level comparisons fall back to a whole-file replacement; this changes only
-the presentation, never the release verdict.
+Per-package patch files are a readable supplement for file changes. They cover
+every package whose released files differ from its anchor, including one whose
+version has already moved, because judging whether a pending increment still
+covers the accumulated changes needs the same evidence. Changes that are not
+file differences — inherited workspace values and locked dependency identities —
+are reported only as change entries. They use zero-context
+unified diffs, report binary changes without rendering binary bytes, and
+preserve addition, deletion, and mode information. Expensive line-level
+comparisons fall back to a whole-file replacement; this changes only the
+presentation, never the release verdict.
 
 Internal ownership is documented in the [implementation guide](implementation.md).

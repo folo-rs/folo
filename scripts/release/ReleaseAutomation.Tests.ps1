@@ -593,4 +593,34 @@ Describe 'Set-GitHubOutput' {
             if ($null -ne $original) { $env:GITHUB_OUTPUT = $original }
         }
     }
+
+    It 'writes name= when Value is empty so an empty released set is a present output' {
+        $original = $env:GITHUB_OUTPUT
+        $file = Join-Path ([System.IO.Path]::GetTempPath()) ("out-" + [guid]::NewGuid())
+        try {
+            $env:GITHUB_OUTPUT = $file
+            $released = @()
+            Set-GitHubOutput -Name released -Value ($released -join ' ')
+            $lines = @(Get-Content $file)
+            $lines | Should -Contain 'released='
+            $lines.Count | Should -Be 1
+        } finally {
+            if ($null -ne $original) { $env:GITHUB_OUTPUT = $original } else { Remove-Item Env:GITHUB_OUTPUT -ErrorAction SilentlyContinue }
+            if (Test-Path $file) { Remove-Item $file -Force }
+        }
+    }
+
+    It 'writes a space-separated released list when packages are present' {
+        $original = $env:GITHUB_OUTPUT
+        $file = Join-Path ([System.IO.Path]::GetTempPath()) ("out-" + [guid]::NewGuid())
+        try {
+            $env:GITHUB_OUTPUT = $file
+            $released = @('events', 'nm')
+            Set-GitHubOutput -Name released -Value ($released -join ' ')
+            @(Get-Content $file) | Should -Contain 'released=events nm'
+        } finally {
+            if ($null -ne $original) { $env:GITHUB_OUTPUT = $original } else { Remove-Item Env:GITHUB_OUTPUT -ErrorAction SilentlyContinue }
+            if (Test-Path $file) { Remove-Item $file -Force }
+        }
+    }
 }

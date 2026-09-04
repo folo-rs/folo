@@ -2,16 +2,18 @@
 
 # cargo-delta orchestration shared by the local `just delta*` recipes and the CI `delta` job.
 #
-# cargo-delta answers "which workspace packages are affected by this branch's changes vs.
-# origin/main", so the whole validation matrix can be scoped to just those packages. The same
-# analyze-current / analyze-baseline-via-worktree / run / parse pipeline was previously copied both
-# into the justfile and into .github/workflows/validation.yml, which is exactly how the two drift
-# apart. It lives here once now: the fragile parsing (Read-DeltaAffectedPackage), the removed-package
-# filtering (Select-ExistingPackage) and the CI output shaping (Get-DeltaOutput) are pure and
-# Pester-tested, and the orchestration (Invoke-CargoDelta) is the single seam both callers use. The
-# only intentional difference between callers is baseline
-# freshness: the local recipe fetches origin/main first, whereas CI checks out with full history
-# (fetch-depth: 0) and passes -SkipFetch.
+# cargo-delta answers "which workspace packages are affected by this branch's changes vs. a
+# baseline revision", so the whole validation matrix can be scoped to just those packages. The
+# default baseline is origin/main. A merge-queue run passes the SHA the queue rebased onto
+# (`merge_group.base_sha`) so scoping cannot drift from the version check's base; pull requests
+# keep origin/main. The same analyze-current / analyze-baseline-via-worktree / run / parse
+# pipeline was previously copied both into the justfile and into .github/workflows/validation.yml,
+# which is exactly how the two drift apart. It lives here once now: the fragile parsing
+# (Read-DeltaAffectedPackage), the removed-package filtering (Select-ExistingPackage) and the CI
+# output shaping (Get-DeltaOutput) are pure and Pester-tested, and the orchestration
+# (Invoke-CargoDelta) is the single seam both callers use. The only intentional difference between
+# callers is baseline freshness: the local recipe fetches origin/main first, whereas CI checks
+# out with full history (fetch-depth: 0) and passes -SkipFetch.
 
 Set-StrictMode -Version Latest
 
@@ -37,7 +39,7 @@ function Read-DeltaAffectedPackage {
 
 function Select-ExistingPackage {
     # Filters affected package names down to those that still exist in the current workspace,
-    # preserving order. cargo-delta compares the branch against origin/main, so a package deleted or
+    # preserving order. cargo-delta compares the branch against the baseline revision, so a package deleted or
     # renamed away on this branch is reported as affected (its files changed - they were removed) yet
     # cannot be validated here: a scoped `cargo <cmd> -p <name>` would fail with "package ID
     # specification `<name>` did not match any packages". Dropping such a package is correct - there
@@ -99,16 +101,20 @@ function Get-WorkspacePackage {
 
 function Invoke-CargoDelta {
     # Runs the full cargo-delta pipeline and returns the affected package names as a string array.
-    # Analyzes the current checkout, then analyzes origin/main in a throwaway git worktree (so the
-    # branch is never switched), runs the comparison, and parses the result. Unless -SkipFetch is
-    # given, origin/main is refreshed first (unshallowing a shallow clone) so the baseline is
-    # current; CI passes -SkipFetch because it already checks out full history. All intermediate
-    # artifacts go in a temp directory that is always cleaned up.
+    # Analyzes the current checkout, then analyzes $Baseline in a throwaway git worktree (so the
+    # branch is never switched), runs the comparison, and parses the result. $Baseline defaults to
+    # origin/main; CI merge-queue runs pass merge_group.base_sha instead. Unless -SkipFetch is
+    # given, origin/main is refreshed first (unshallowing a shallow clone) so that default
+    # baseline is current; CI passes -SkipFetch because it already checks out full history. All
+    # intermediate artifacts go in a temp directory that is always cleaned up.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
         [string] $ConfigPath = (Resolve-Path 'delta.toml').Path,
-        [switch] $SkipFetch
+        [switch] $SkipFetch,
+        # Revision whose tree is the cargo-delta baseline. origin/main locally and on pull
+        # requests; merge_group.base_sha on a queue run so scoping matches validate-versions.
+        [string] $Baseline = 'origin/main'
     )
 
     $PSNativeCommandUseErrorActionPreference = $true
@@ -124,6 +130,21 @@ function Invoke-CargoDelta {
         }
     }
 
+    # $Baseline reaches here from a workflow event payload, so an unfetched or misspelled
+    # revision is a realistic input. Resolving it before any analysis turns that into a message
+    # naming the revision, instead of several minutes of work followed by a git worktree error
+    # that reads like a repository fault. The lookup is expected to fail for a bad revision, so
+    # its own error is caught rather than left to $PSNativeCommandUseErrorActionPreference.
+    $resolvedBaseline = $null
+    try {
+        $resolvedBaseline = git rev-parse --verify --quiet "$Baseline^{commit}" 2>$null
+    } catch {
+        $resolvedBaseline = $null
+    }
+    if ([string]::IsNullOrWhiteSpace($resolvedBaseline)) {
+        throw "Delta baseline '$Baseline' does not resolve to a commit in this repository."
+    }
+
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "cargo-delta-$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
     try {
@@ -134,11 +155,11 @@ function Invoke-CargoDelta {
         Write-Host 'Analyzing current branch...'
         cargo delta -c $ConfigPath analyze | Set-Content -Path $currentJson -Encoding utf8
 
-        # Use a git worktree to analyze origin/main without switching branches.
+        # Use a git worktree to analyze the baseline without switching branches.
         $worktreeDir = Join-Path $tempDir 'main-worktree'
-        git worktree add --quiet $worktreeDir origin/main | Out-Null
+        git worktree add --quiet $worktreeDir $Baseline | Out-Null
         try {
-            Write-Host 'Analyzing baseline (origin/main)...'
+            Write-Host "Analyzing baseline ($Baseline)..."
             Push-Location $worktreeDir
             try {
                 cargo delta -c $ConfigPath analyze | Set-Content -Path $baselineJson -Encoding utf8

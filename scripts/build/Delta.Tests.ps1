@@ -63,6 +63,15 @@ Describe 'Invoke-CargoDelta empty-result composition (regression)' {
     }
 }
 
+Describe 'Invoke-CargoDelta baseline validation' {
+    It 'names an unresolvable baseline instead of failing later in the pipeline' {
+        # The baseline arrives from a workflow event payload, so it is rejected before any
+        # analysis runs rather than surfacing as a git worktree error minutes later.
+        { Invoke-CargoDelta -Baseline 'no-such-revision-for-delta-tests' -SkipFetch } |
+            Should -Throw "*'no-such-revision-for-delta-tests' does not resolve to a commit*"
+    }
+}
+
 
 Describe 'Select-ExistingPackage' {
     It 'drops packages that no longer exist in the workspace' {

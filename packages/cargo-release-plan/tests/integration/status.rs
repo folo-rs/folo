@@ -26,6 +26,11 @@ fn increment_early_in_a_branch_with_later_changes_is_pending_release() {
     assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("\"status\": \"pending-release\""));
+    // Judging whether the pending increment still covers the accumulated changes
+    // needs the same evidence as deciding one from scratch, so the patch is emitted.
+    assert!(report.contains("\"diff_path\": \"diffs/demo.patch\""));
+    let patch = fs::read_to_string(fixture.path().join("out/diffs/demo.patch")).unwrap();
+    assert!(patch.contains("pub fn f() { let _ = 1; }"));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

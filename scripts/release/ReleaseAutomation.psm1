@@ -415,10 +415,12 @@ function Test-NeverPublishedCrate {
 function Set-GitHubOutput {
     # Emits a `name=value` step output for the workflow (and echoes it for the run log). No-ops
     # the file append when GITHUB_OUTPUT is unset, so the recipes are runnable locally.
+    # Empty $Value is valid: `validate-versions` writes `released=` when this pull request
+    # releases no consumer-visible packages, and `semver-checks` treats that empty list as a skip.
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][string] $Value
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Value
     )
 
     Write-Host "$Name=$Value"
