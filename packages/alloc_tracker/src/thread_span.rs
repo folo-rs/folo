@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::allocator::{PerThreadCounters, get_or_init_thread_counters};
+use crate::counters::{ThreadCounters, get_or_init_thread_counters};
 use crate::operation_metrics::SpanMeasurement;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
@@ -86,7 +86,7 @@ pub struct ThreadSpan {
     start_bytes: u64,
     start_count: u64,
     start_outstanding: i64,
-    enclosing_peak: i64,
+    enclosing_watermark: i64,
     iterations: Option<u64>,
 
     _single_threaded: PhantomData<*const ()>,
@@ -100,15 +100,15 @@ impl ThreadSpan {
         // Rebase the watermark onto this span's entry level so that it goes on to measure
         // only what this span itself holds. The displaced value is handed back on drop,
         // which is what lets spans nest.
-        let enclosing_peak = counters.peak_outstanding();
-        counters.set_peak_outstanding(start_outstanding);
+        let enclosing_watermark = counters.watermark();
+        counters.set_watermark(start_outstanding);
 
         Self {
             metrics: operation.metrics(),
             start_bytes: counters.bytes(),
             start_count: counters.count(),
             start_outstanding,
-            enclosing_peak,
+            enclosing_watermark,
             iterations: None,
             _single_threaded: PhantomData,
         }
@@ -135,7 +135,8 @@ impl Drop for ThreadSpan {
         // The watermark must go back to the enclosing span before any early exit below. A
         // span that is abandoned without recording would otherwise leave its own rebased
         // watermark in place and silently suppress the enclosing span's peak.
-        let peak_bytes = restore_watermark(counters, self.start_outstanding, self.enclosing_peak);
+        let peak_bytes =
+            restore_watermark(counters, self.start_outstanding, self.enclosing_watermark);
 
         // A panic while the span is held records nothing; panicking again here would
         // abort the process.
@@ -166,16 +167,16 @@ impl Drop for ThreadSpan {
 /// the inner span reached, because memory the inner span held was equally outstanding from
 /// the enclosing span's point of view.
 fn restore_watermark(
-    counters: &PerThreadCounters,
+    counters: ThreadCounters,
     start_outstanding: i64,
-    enclosing_peak: i64,
+    enclosing_watermark: i64,
 ) -> u64 {
-    let span_peak = counters.peak_outstanding();
-    counters.set_peak_outstanding(enclosing_peak.max(span_peak));
+    let span_watermark = counters.watermark();
+    counters.set_watermark(enclosing_watermark.max(span_watermark));
 
     // The watermark was rebased to the entry level and only ever rises, so the difference is
     // already non-negative; the clamp states that invariant rather than correcting for it.
-    span_peak
+    span_watermark
         .saturating_sub(start_outstanding)
         .max(0)
         .cast_unsigned()
@@ -186,7 +187,7 @@ fn restore_watermark(
 /// The whole-span deltas are returned undivided; per-iteration figures are derived
 /// later by the shared span accumulator, which weights each span by its iteration
 /// count.
-fn thread_deltas(counters: &PerThreadCounters, start_bytes: u64, start_count: u64) -> (u64, u64) {
+fn thread_deltas(counters: ThreadCounters, start_bytes: u64, start_count: u64) -> (u64, u64) {
     let bytes_delta = counters
         .bytes()
         .checked_sub(start_bytes)
@@ -206,7 +207,7 @@ mod tests {
 
     use super::*;
     use crate::Session;
-    use crate::allocator::{register_fake_allocation, register_fake_deallocation};
+    use crate::counters::{register_fake_allocation, register_fake_deallocation};
 
     // Static assertions for thread safety.
     // The span should NOT be Send or Sync due to PhantomData<*const ()>.

@@ -259,6 +259,7 @@
 
 mod allocator;
 mod constants;
+mod counters;
 mod operation;
 mod operation_metrics;
 mod process_span;

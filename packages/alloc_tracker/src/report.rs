@@ -574,7 +574,7 @@ mod tests {
 
     use super::*;
     use crate::Session;
-    use crate::allocator::register_fake_allocation;
+    use crate::counters::register_fake_allocation;
 
     /// Builds a detached [`ReportOperation`] from per-iteration deltas for tests
     /// that assert directly on the report surface without a live session.

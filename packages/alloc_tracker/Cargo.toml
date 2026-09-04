@@ -31,6 +31,7 @@ criterion = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

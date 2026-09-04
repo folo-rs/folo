@@ -203,7 +203,7 @@ mod tests {
 
     use super::*;
     use crate::Session;
-    use crate::allocator::register_fake_allocation;
+    use crate::counters::register_fake_allocation;
 
     fn create_test_operation() -> Operation {
         let session = Session::new().no_stdout().no_file();

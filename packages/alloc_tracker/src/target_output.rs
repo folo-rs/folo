@@ -178,7 +178,7 @@ mod tests {
     use serde_json::Value;
 
     use crate::Session;
-    use crate::allocator::register_fake_allocation;
+    use crate::counters::register_fake_allocation;
 
     fn read_json(path: &Path) -> Value {
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()

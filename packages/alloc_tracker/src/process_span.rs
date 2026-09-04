@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::panic::RefUnwindSafe;
 use std::sync::{Arc, Mutex};
 
-use crate::allocator::{AllocationTotals, allocation_totals};
+use crate::counters::{AllocationTotals, allocation_totals};
 use crate::operation_metrics::SpanMeasurement;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
