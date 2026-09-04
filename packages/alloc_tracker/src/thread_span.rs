@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::allocator::get_or_init_thread_counters;
+use crate::operation_metrics::SpanMeasurement;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// A measurement of this thread's allocations over the span's lifetime.
@@ -81,6 +82,8 @@ pub struct ThreadSpan {
     metrics: Arc<Mutex<OperationMetrics>>,
     start_bytes: u64,
     start_count: u64,
+    start_outstanding: i64,
+    enclosing_peak: i64,
     iterations: Option<u64>,
 
     _single_threaded: PhantomData<*const ()>,
@@ -89,10 +92,20 @@ pub struct ThreadSpan {
 impl ThreadSpan {
     pub(crate) fn new(operation: &Operation) -> Self {
         let counters = get_or_init_thread_counters();
+        let start_outstanding = counters.outstanding();
+
+        // Rebase the watermark onto this span's entry level so that it goes on to measure
+        // only what this span itself holds. The displaced value is handed back on drop,
+        // which is what lets spans nest.
+        let enclosing_peak = counters.peak_outstanding();
+        counters.set_peak_outstanding(start_outstanding);
+
         Self {
             metrics: operation.metrics(),
             start_bytes: counters.bytes(),
             start_count: counters.count(),
+            start_outstanding,
+            enclosing_peak,
             iterations: None,
             _single_threaded: PhantomData,
         }
@@ -114,6 +127,11 @@ impl ThreadSpan {
 
 impl Drop for ThreadSpan {
     fn drop(&mut self) {
+        // The watermark must go back to the enclosing span before any early exit below. A
+        // span that is abandoned without recording would otherwise leave its own rebased
+        // watermark in place and silently suppress the enclosing span's peak.
+        let peak_bytes = restore_watermark(self.start_outstanding, self.enclosing_peak);
+
         // A panic while the span is held records nothing; panicking again here would
         // abort the process.
         if std::thread::panicking() {
@@ -126,8 +144,33 @@ impl Drop for ThreadSpan {
         );
         let (bytes_delta, count_delta) = thread_deltas(self.start_bytes, self.start_count);
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.add_span(iterations, bytes_delta, count_delta);
+        data.add_span(SpanMeasurement {
+            iterations,
+            bytes: bytes_delta,
+            count: count_delta,
+            peak_outstanding_bytes: Some(peak_bytes),
+        });
     }
+}
+
+/// Hands the allocation watermark back to the enclosing span and reports how far above its
+/// own entry level the closing span reached.
+///
+/// The enclosing span's watermark is the higher of the value it had on entry and the level
+/// the inner span reached, because memory the inner span held was equally outstanding from
+/// the enclosing span's point of view.
+fn restore_watermark(start_outstanding: i64, enclosing_peak: i64) -> u64 {
+    let counters = get_or_init_thread_counters();
+
+    let span_peak = counters.peak_outstanding();
+    counters.set_peak_outstanding(enclosing_peak.max(span_peak));
+
+    // The watermark was rebased to the entry level and only ever rises, so the difference is
+    // already non-negative; the clamp states that invariant rather than correcting for it.
+    span_peak
+        .saturating_sub(start_outstanding)
+        .max(0)
+        .cast_unsigned()
 }
 
 /// Computes the thread's allocation deltas since a span's start counters.
@@ -157,6 +200,7 @@ mod tests {
 
     use super::*;
     use crate::Session;
+    use crate::allocator::{register_fake_allocation, register_fake_deallocation};
 
     // Static assertions for thread safety.
     // The span should NOT be Send or Sync due to PhantomData<*const ()>.
@@ -165,6 +209,141 @@ mod tests {
 
     // Static assertions for unwind safety.
     static_assertions::assert_impl_all!(ThreadSpan: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn peak_is_the_high_water_mark_not_the_total() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_thread().iterations(1);
+
+            // Three allocations of 100 that never coexist: 300 allocated, 100 held.
+            for _ in 0..3 {
+                register_fake_allocation(100, 1);
+                register_fake_deallocation(100);
+            }
+        }
+
+        assert_eq!(operation.total_bytes_allocated(), 300);
+        assert_eq!(operation.peak_outstanding_bytes(), Some(100));
+    }
+
+    #[test]
+    fn peak_ignores_memory_outstanding_before_the_span() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+
+        // Memory the caller already holds is not the span's doing.
+        register_fake_allocation(1000, 1);
+
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_allocation(50, 1);
+        }
+
+        register_fake_deallocation(1050);
+
+        assert_eq!(operation.peak_outstanding_bytes(), Some(50));
+    }
+
+    #[test]
+    fn peak_under_reports_when_the_span_frees_first() {
+        // A documented limitation of measuring against the entry level: the span holds 500
+        // bytes of its own but never pushes the outstanding total above where it started,
+        // so it reports nothing.
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+
+        register_fake_allocation(1000, 1);
+
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_deallocation(800);
+            register_fake_allocation(500, 1);
+        }
+
+        register_fake_deallocation(700);
+
+        assert_eq!(operation.peak_outstanding_bytes(), Some(0));
+    }
+
+    #[test]
+    fn nested_span_peak_is_visible_to_the_enclosing_span() {
+        let session = Session::new().no_stdout().no_file();
+        let outer = session.operation("outer");
+        let inner = session.operation("inner");
+
+        {
+            let _outer_span = outer.measure_thread().iterations(1);
+            register_fake_allocation(10, 1);
+
+            {
+                let _inner_span = inner.measure_thread().iterations(1);
+                register_fake_allocation(200, 1);
+                register_fake_deallocation(200);
+            }
+
+            register_fake_deallocation(10);
+        }
+
+        // The inner span sees only its own 200, while the outer span sees the 210 that were
+        // outstanding at once while the inner span ran.
+        assert_eq!(inner.peak_outstanding_bytes(), Some(200));
+        assert_eq!(outer.peak_outstanding_bytes(), Some(210));
+    }
+
+    #[test]
+    fn abandoned_nested_span_does_not_suppress_the_enclosing_peak() {
+        // The inner span is dropped during a panic and records nothing, but it must still
+        // hand the watermark back or the outer span would lose its measurement.
+        let session = Session::new().no_stdout().no_file();
+        let outer = session.operation("outer");
+        let inner = session.operation("inner");
+
+        {
+            let _outer_span = outer.measure_thread().iterations(1);
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _inner_span = inner.measure_thread().iterations(1);
+                register_fake_allocation(400, 1);
+                panic!("boom");
+            }));
+            assert!(result.is_err());
+
+            register_fake_deallocation(400);
+        }
+
+        assert_eq!(inner.peak_outstanding_bytes(), None);
+        assert_eq!(outer.peak_outstanding_bytes(), Some(400));
+    }
+
+    #[test]
+    fn sequential_spans_report_their_own_peaks() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_allocation(100, 1);
+            register_fake_deallocation(100);
+        }
+
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_allocation(700, 1);
+            register_fake_deallocation(700);
+        }
+
+        {
+            let _span = operation.measure_thread().iterations(1);
+            register_fake_allocation(300, 1);
+            register_fake_deallocation(300);
+        }
+
+        // The operation reports the highest moment across its spans, not their sum.
+        assert_eq!(operation.peak_outstanding_bytes(), Some(700));
+    }
 
     #[test]
     fn iterations_zero_is_accepted() {

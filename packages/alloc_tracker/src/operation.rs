@@ -170,6 +170,14 @@ impl Operation {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.total_bytes_allocated()
     }
+
+    /// Returns the most bytes held allocated at once across all recorded spans.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn peak_outstanding_bytes(&self) -> Option<u64> {
+        let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
+        data.peak_outstanding_bytes()
+    }
 }
 
 impl fmt::Display for Operation {

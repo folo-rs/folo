@@ -6,6 +6,7 @@ use std::panic::RefUnwindSafe;
 use std::sync::{Arc, Mutex};
 
 use crate::allocator::{AllocationTotals, allocation_totals};
+use crate::operation_metrics::SpanMeasurement;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
 /// A measurement of process-wide allocations over the span's lifetime.
@@ -115,7 +116,16 @@ impl Drop for ProcessSpan {
         );
         let (bytes_delta, count_delta) = process_deltas(self.start_bytes, self.start_count);
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
-        data.add_span(iterations, bytes_delta, count_delta);
+        data.add_span(SpanMeasurement {
+            iterations,
+            bytes: bytes_delta,
+            count: count_delta,
+            // A process-scoped span spans every thread, and the watermark is per-thread, so
+            // there is no single high-water mark for it to read. Reporting nothing keeps the
+            // operation honest rather than substituting the calling thread's figure.
+            // Ref: docs/design.md, "Peak outstanding bytes".
+            peak_outstanding_bytes: None,
+        });
     }
 }
 
@@ -194,6 +204,31 @@ mod tests {
         let operation = session.operation("test");
 
         drop(operation.measure_process());
+    }
+
+    #[test]
+    fn process_span_reports_no_peak() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+
+        drop(operation.measure_process().iterations(1));
+
+        assert_eq!(operation.peak_outstanding_bytes(), None);
+    }
+
+    #[test]
+    fn a_process_span_suppresses_the_peak_of_a_mixed_operation() {
+        // Mixing scopes within one operation makes the peak unknowable rather than merely
+        // understated, so the thread span's figure is withheld too.
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation("test");
+
+        drop(operation.measure_thread().iterations(1));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(0));
+
+        drop(operation.measure_process().iterations(1));
+
+        assert_eq!(operation.peak_outstanding_bytes(), None);
     }
 
     #[test]

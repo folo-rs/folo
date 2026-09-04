@@ -22,6 +22,8 @@ struct OperationOutput<'a> {
     total_iterations: u64,
     total_bytes_allocated: u64,
     total_allocations_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_outstanding_bytes: Option<u64>,
     span_count: u64,
     slope_bytes_per_iteration: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,6 +111,7 @@ impl Report {
                 total_iterations: operation.total_iterations(),
                 total_bytes_allocated: operation.total_bytes_allocated(),
                 total_allocations_count: operation.total_allocations_count(),
+                peak_outstanding_bytes: operation.peak_outstanding_bytes(),
                 span_count: statistics.span_count,
                 slope_bytes_per_iteration: statistics.bytes.slope,
                 interval_low_bytes_per_iteration: statistics.bytes.interval.map(|(low, _)| low),

@@ -11,6 +11,70 @@
 
 use folo_utils::SpanAccumulator;
 
+/// One span's contribution to an operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SpanMeasurement {
+    /// How many iterations of the operation the span covered.
+    pub iterations: u64,
+
+    /// Bytes allocated over the span's lifetime.
+    pub bytes: u64,
+
+    /// Number of allocations over the span's lifetime.
+    pub count: u64,
+
+    /// The most bytes the span held allocated at any one moment, or `None` when the span
+    /// is of a kind that cannot observe it.
+    pub peak_outstanding_bytes: Option<u64>,
+}
+
+/// The peak figure accumulated across an operation's spans.
+///
+/// Spans fold together only while every one of them could observe a peak. A span that could
+/// not — a process-scoped span, which has no single thread's watermark to read — leaves the
+/// operation's peak unknowable rather than merely understated, so the whole operation
+/// reports nothing. Ref: docs/design.md, "Peak outstanding bytes".
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PeakOutstanding {
+    /// No span has contributed yet.
+    #[default]
+    Unmeasured,
+
+    /// Every span so far reported a peak, and this is the highest of them.
+    Known(u64),
+
+    /// At least one span could not report a peak.
+    Unavailable,
+}
+
+impl PeakOutstanding {
+    /// Folds in one span's peak.
+    fn fold(self, span_peak: Option<u64>) -> Self {
+        match (self, span_peak) {
+            (Self::Unavailable, _) | (_, None) => Self::Unavailable,
+            (Self::Unmeasured, Some(peak)) => Self::Known(peak),
+            (Self::Known(highest), Some(peak)) => Self::Known(highest.max(peak)),
+        }
+    }
+
+    /// Combines two independently accumulated peaks.
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Unavailable, _) | (_, Self::Unavailable) => Self::Unavailable,
+            (Self::Unmeasured, folded) | (folded, Self::Unmeasured) => folded,
+            (Self::Known(first), Self::Known(second)) => Self::Known(first.max(second)),
+        }
+    }
+
+    /// The peak in bytes, or `None` when it is unmeasured or unavailable.
+    fn value(self) -> Option<u64> {
+        match self {
+            Self::Known(peak) => Some(peak),
+            Self::Unmeasured | Self::Unavailable => None,
+        }
+    }
+}
+
 /// Metrics tracked for each operation in the session.
 ///
 /// Holds the pooled totals (bytes, allocation count, iterations) and two shared
@@ -22,32 +86,34 @@ pub(crate) struct OperationMetrics {
     total_iterations: u64,
     total_bytes: u64,
     total_count: u64,
+    peak_outstanding: PeakOutstanding,
     bytes: SpanAccumulator,
     allocations: SpanAccumulator,
 }
 
 impl OperationMetrics {
-    /// Records one span covering `iterations` iterations that allocated `bytes`
-    /// bytes across `count` allocations in total.
+    /// Records one span's measurement.
     ///
     /// Folding a span is a handful of additions with no allocation, so it is
     /// cheap enough to run inside a measured span.
-    pub(crate) fn add_span(&mut self, iterations: u64, bytes: u64, count: u64) {
+    pub(crate) fn add_span(&mut self, span: SpanMeasurement) {
         self.total_iterations = self
             .total_iterations
-            .checked_add(iterations)
+            .checked_add(span.iterations)
             .expect("total iterations overflows u64 - this indicates an unrealistic scenario");
         self.total_bytes = self
             .total_bytes
-            .checked_add(bytes)
+            .checked_add(span.bytes)
             .expect("total bytes overflows u64 - this indicates an unrealistic scenario");
         self.total_count = self
             .total_count
-            .checked_add(count)
+            .checked_add(span.count)
             .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
 
-        self.bytes.add(iterations, bytes);
-        self.allocations.add(iterations, count);
+        self.peak_outstanding = self.peak_outstanding.fold(span.peak_outstanding_bytes);
+
+        self.bytes.add(span.iterations, span.bytes);
+        self.allocations.add(span.iterations, span.count);
     }
 
     /// Records one span by its per-iteration deltas and iteration count.
@@ -63,7 +129,12 @@ impl OperationMetrics {
         let count = count_delta
             .checked_mul(iterations)
             .expect("count * iterations overflows u64 - this indicates an unrealistic scenario");
-        self.add_span(iterations, bytes, count);
+        self.add_span(SpanMeasurement {
+            iterations,
+            bytes,
+            count,
+            peak_outstanding_bytes: Some(bytes),
+        });
     }
 
     /// Number of spans recorded (distinct from the total iteration count).
@@ -84,6 +155,14 @@ impl OperationMetrics {
     /// Total number of allocations across all recorded spans.
     pub(crate) fn total_allocations_count(&self) -> u64 {
         self.total_count
+    }
+
+    /// The most bytes any one span held allocated at a single moment.
+    ///
+    /// Returns `None` when no span has been recorded, or when any recorded span was of a
+    /// kind that cannot observe a peak.
+    pub(crate) fn peak_outstanding_bytes(&self) -> Option<u64> {
+        self.peak_outstanding.value()
     }
 
     /// Mean bytes allocated per iteration, pooled across all spans.
@@ -149,6 +228,7 @@ impl OperationMetrics {
             .total_count
             .checked_add(other.total_count)
             .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
+        self.peak_outstanding = self.peak_outstanding.merge(other.peak_outstanding);
         self.bytes.merge(&other.bytes);
         self.allocations.merge(&other.allocations);
     }
@@ -163,6 +243,115 @@ mod tests {
     )]
 
     use super::*;
+
+    /// A span that reports a peak, for tests concerned with the other figures.
+    fn span(iterations: u64, bytes: u64, count: u64) -> SpanMeasurement {
+        SpanMeasurement {
+            iterations,
+            bytes,
+            count,
+            peak_outstanding_bytes: Some(bytes),
+        }
+    }
+
+    /// A span that cannot report a peak, as produced by process-scoped measurement.
+    fn span_without_peak(iterations: u64, bytes: u64, count: u64) -> SpanMeasurement {
+        SpanMeasurement {
+            iterations,
+            bytes,
+            count,
+            peak_outstanding_bytes: None,
+        }
+    }
+
+    #[test]
+    fn peak_is_absent_without_spans() {
+        let metrics = OperationMetrics::default();
+
+        assert_eq!(metrics.peak_outstanding_bytes(), None);
+    }
+
+    #[test]
+    fn peak_reports_the_highest_span() {
+        // The peak answers "how much was live at once", so spans compete rather than sum.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(SpanMeasurement {
+            iterations: 1,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(60),
+        });
+        metrics.add_span(SpanMeasurement {
+            iterations: 1,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(90),
+        });
+        metrics.add_span(SpanMeasurement {
+            iterations: 1,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(70),
+        });
+
+        assert_eq!(metrics.peak_outstanding_bytes(), Some(90));
+    }
+
+    #[test]
+    fn one_span_without_a_peak_suppresses_the_operation_peak() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(span(1, 100, 1));
+        metrics.add_span(span_without_peak(1, 100, 1));
+        metrics.add_span(span(1, 100, 1));
+
+        assert_eq!(metrics.peak_outstanding_bytes(), None);
+    }
+
+    #[test]
+    fn merging_takes_the_higher_peak() {
+        let mut first = OperationMetrics::default();
+        first.add_span(SpanMeasurement {
+            iterations: 1,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(40),
+        });
+
+        let mut second = OperationMetrics::default();
+        second.add_span(SpanMeasurement {
+            iterations: 1,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(70),
+        });
+
+        first.merge(&second);
+
+        assert_eq!(first.peak_outstanding_bytes(), Some(70));
+    }
+
+    #[test]
+    fn merging_with_an_unmeasured_operation_keeps_the_known_peak() {
+        let mut measured = OperationMetrics::default();
+        measured.add_span(span(1, 100, 1));
+
+        measured.merge(&OperationMetrics::default());
+
+        assert_eq!(measured.peak_outstanding_bytes(), Some(100));
+    }
+
+    #[test]
+    fn merging_in_an_unavailable_peak_suppresses_the_result() {
+        let mut measured = OperationMetrics::default();
+        measured.add_span(span(1, 100, 1));
+
+        let mut unavailable = OperationMetrics::default();
+        unavailable.add_span(span_without_peak(1, 100, 1));
+
+        measured.merge(&unavailable);
+
+        assert_eq!(measured.peak_outstanding_bytes(), None);
+    }
 
     #[test]
     fn default_has_no_spans() {
@@ -276,8 +465,8 @@ mod tests {
         // A perfectly linear byte series at 5 bytes/iter: the slope recovers 5
         // regardless of the differing iteration counts across spans.
         let mut metrics = OperationMetrics::default();
-        metrics.add_span(2, 10, 2);
-        metrics.add_span(8, 40, 8);
+        metrics.add_span(span(2, 10, 2));
+        metrics.add_span(span(8, 40, 8));
 
         assert_eq!(metrics.span_count(), 2);
         assert_eq!(metrics.bytes_slope(), Some(5.0));
@@ -288,8 +477,8 @@ mod tests {
         // Two spans at a constant per-iteration rate (5 bytes/iter, 1 alloc/iter):
         // with zero residual dispersion each interval collapses onto its slope.
         let mut metrics = OperationMetrics::default();
-        metrics.add_span(2, 10, 2);
-        metrics.add_span(4, 20, 4);
+        metrics.add_span(span(2, 10, 2));
+        metrics.add_span(span(4, 20, 4));
 
         assert_eq!(metrics.bytes_interval(), Some((5.0, 5.0)));
         assert_eq!(metrics.allocations_interval(), Some((1.0, 1.0)));
@@ -300,7 +489,7 @@ mod tests {
         // One span pins the slopes but carries no dispersion, so neither the byte
         // nor the allocation-count interval is formed.
         let mut metrics = OperationMetrics::default();
-        metrics.add_span(4, 20, 4);
+        metrics.add_span(span(4, 20, 4));
 
         assert!(metrics.bytes_interval().is_none());
         assert!(metrics.allocations_interval().is_none());

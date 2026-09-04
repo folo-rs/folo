@@ -312,6 +312,25 @@ impl ReportOperation {
         self.metrics.total_iterations()
     }
 
+    /// Returns the most bytes this operation held allocated at any one moment.
+    ///
+    /// This is a whole-span figure, not a per-iteration rate: it answers "how much memory
+    /// was live at once" rather than "how much was allocated per iteration". Where several
+    /// spans were recorded, the highest of them is reported.
+    ///
+    /// The figure is measured relative to what was already outstanding when each span
+    /// started, so memory allocated before the span and freed inside it does not count
+    /// against the span. A span that frees more than it allocates before allocating again
+    /// therefore under-reports what it holds.
+    ///
+    /// Returns `None` when no spans were recorded, or when any recorded span was created by
+    /// [`Operation::measure_process`](crate::Operation::measure_process), which has no
+    /// single thread's watermark to read.
+    #[must_use]
+    pub fn peak_outstanding_bytes(&self) -> Option<u64> {
+        self.metrics.peak_outstanding_bytes()
+    }
+
     /// Returns the per-iteration bytes allocated — the primary allocation metric
     /// for this operation.
     ///
@@ -438,78 +457,83 @@ impl fmt::Display for Report {
         writeln!(f, "Allocation statistics:")?;
         writeln!(f)?;
 
-        // Pre-render the per-iteration slope cells so the column widths and the
-        // printed rows are computed from the exact same strings. The confidence
-        // interval is kept out of this summary for readability; it remains in the
-        // JSON output and the `statistics()` API.
-        let rows: Vec<(&str, String, String)> = self
+        let headers = ["Operation", "Bytes/iter", "Allocations/iter", "Peak bytes"];
+
+        // Pre-render every cell so the column widths and the printed rows are computed from
+        // the exact same strings. The confidence interval is kept out of this summary for
+        // readability; it remains in the JSON output and the `statistics()` API.
+        let rows: Vec<[String; TABLE_COLUMNS]> = self
             .sorted_operations()
             .into_iter()
-            .map(|(name, operation)| match operation.statistics() {
-                Some(statistics) => (
-                    name,
-                    format_count(statistics.bytes.slope),
-                    format_count(statistics.allocations.slope),
-                ),
-                None => (name, "n/a".to_owned(), "n/a".to_owned()),
+            .map(|(name, operation)| {
+                let (bytes, allocations) = match operation.statistics() {
+                    Some(statistics) => (
+                        format_count(statistics.bytes.slope),
+                        format_count(statistics.allocations.slope),
+                    ),
+                    None => (NOT_AVAILABLE.to_owned(), NOT_AVAILABLE.to_owned()),
+                };
+
+                let peak = operation
+                    .peak_outstanding_bytes()
+                    .map_or_else(|| NOT_AVAILABLE.to_owned(), |bytes| bytes.to_string());
+
+                [name.to_owned(), bytes, allocations, peak]
             })
             .collect();
 
-        let name_header = "Operation";
-        let bytes_header = "Bytes/iter";
-        let count_header = "Allocations/iter";
+        let mut widths = headers.map(str::len);
+        for row in &rows {
+            for (width, cell) in widths.iter_mut().zip(row) {
+                *width = (*width).max(cell.len());
+            }
+        }
 
-        let max_name_width = rows
-            .iter()
-            .map(|(name, _, _)| name.len())
-            .max()
-            .unwrap_or(0)
-            .max(name_header.len());
-        let max_bytes_width = rows
-            .iter()
-            .map(|(_, bytes, _)| bytes.len())
-            .max()
-            .unwrap_or(0)
-            .max(bytes_header.len());
-        let max_count_width = rows
-            .iter()
-            .map(|(_, _, count)| count.len())
-            .max()
-            .unwrap_or(0)
-            .max(count_header.len());
+        write_table_row(f, headers.iter().copied(), widths)?;
 
-        // Print table header.
-        writeln!(
-            f,
-            "| {name_header:<max_name_width$} | {bytes_header:>max_bytes_width$} | {count_header:>max_count_width$} |",
-        )?;
+        for width in widths {
+            let dashes = width
+                .checked_add(2)
+                .expect("column width fits in memory, adding 2 cannot overflow");
+            write!(f, "|{:-<dashes$}", "")?;
+        }
+        writeln!(f, "|")?;
 
-        // Print separator.
-        let separator_name_width = max_name_width
-            .checked_add(2)
-            .expect("operation name width fits in memory, adding 2 cannot overflow");
-        let separator_bytes_width = max_bytes_width
-            .checked_add(2)
-            .expect("bytes width fits in memory, adding 2 cannot overflow");
-        let separator_count_width = max_count_width
-            .checked_add(2)
-            .expect("count width fits in memory, adding 2 cannot overflow");
-        writeln!(
-            f,
-            "|{:-<separator_name_width$}|{:-<separator_bytes_width$}|{:-<separator_count_width$}|",
-            "", "", "",
-        )?;
-
-        // Print table rows.
-        for (name, bytes, count) in rows {
-            writeln!(
-                f,
-                "| {name:<max_name_width$} | {bytes:>max_bytes_width$} | {count:>max_count_width$} |",
-            )?;
+        for row in &rows {
+            write_table_row(f, row.iter().map(String::as_str), widths)?;
         }
 
         Ok(())
     }
+}
+
+/// Number of columns in the rendered summary table.
+const TABLE_COLUMNS: usize = 4;
+
+/// Rendered in place of a figure the operation cannot supply.
+const NOT_AVAILABLE: &str = "n/a";
+
+/// Writes one row of the summary table.
+///
+/// The operation name is left-aligned and the figures are right-aligned, so digits line up
+/// under their headers.
+#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test - output format is not guaranteed.
+fn write_table_row<'a>(
+    f: &mut fmt::Formatter<'_>,
+    cells: impl Iterator<Item = &'a str>,
+    widths: [usize; TABLE_COLUMNS],
+) -> fmt::Result {
+    let mut cells = cells.zip(widths);
+
+    if let Some((name, width)) = cells.next() {
+        write!(f, "| {name:<width$} |")?;
+    }
+
+    for (cell, width) in cells {
+        write!(f, " {cell:>width$} |")?;
+    }
+
+    writeln!(f)
 }
 
 #[cfg(test)]
