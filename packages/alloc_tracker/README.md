@@ -1,7 +1,9 @@
 Memory allocation tracking utilities for benchmarks and performance analysis.
 
 This package provides utilities to track memory allocations during code execution,
-enabling analysis of allocation patterns in benchmarks and performance tests.
+enabling analysis of allocation patterns in benchmarks and performance tests. It reports
+bytes allocated per iteration, allocations per iteration, and the peak amount of memory
+held at any single moment.
 
 ## Basic usage
 
@@ -45,6 +47,11 @@ fn bench(c: &mut Criterion) {
 You do not need to specify the iteration count up front, as long as it is provided
 before the span is dropped. This allows you to measure work whose extent is not
 known at the start.
+
+`measure_thread` observes only the calling thread and is the right choice whenever the
+measured work stays on that thread. Use `measure_process` when the work is performed by
+other threads, accepting that it also picks up allocations from unrelated threads and
+cannot report peak memory.
 
 ## See also
 

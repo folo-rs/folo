@@ -237,6 +237,43 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    fn writes_peak_outstanding_bytes() {
+        let session = session_with_recorded_work("allocate_vec");
+        let directory = tempfile::tempdir().unwrap();
+
+        session.to_report().write_to_directory(directory.path());
+
+        let value = read_json(&directory.path().join("allocate_vec.json"));
+        // The fake allocation is never released, so the whole of it is outstanding
+        // at the span's high-water mark. The figure is a whole-run maximum and so
+        // is not divided by the span's iteration count.
+        assert_eq!(
+            value.get("peak_outstanding_bytes").and_then(Value::as_u64),
+            Some(800)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
+    fn omits_peak_outstanding_bytes_when_unavailable() {
+        let session = Session::new().no_stdout().no_file();
+        {
+            let operation = session.operation("allocate_vec");
+            // Process spans cannot measure a peak, so the field must be absent
+            // rather than present with a misleading value.
+            let _span = operation.measure_process().iterations(4);
+            register_fake_allocation(800, 8);
+        }
+        let directory = tempfile::tempdir().unwrap();
+
+        session.to_report().write_to_directory(directory.path());
+
+        let value = read_json(&directory.path().join("allocate_vec.json"));
+        assert!(value.get("peak_outstanding_bytes").is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn writes_interval_when_multiple_spans_recorded() {
         // Two identical spans clear the two-span threshold with zero residual
         // dispersion, so the interval collapses onto the slope and is written out.

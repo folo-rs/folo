@@ -5,7 +5,8 @@
 //!
 //! This package provides utilities to track memory allocations during code execution,
 //! enabling analysis of allocation patterns in benchmarks and performance tests.
-//! The tracker reports both the number of bytes allocated and the count of allocations.
+//! The tracker reports the number of bytes allocated, the count of allocations and the
+//! peak amount of memory held at any single moment.
 //!
 //! The core functionality includes:
 //! - [`Allocator`] - A Rust memory allocator wrapper that enables allocation tracking
@@ -42,7 +43,7 @@
 //!
 //! The typical pattern is to drive measurement from Criterion's [`iter_custom()`]
 //! function, feeding its chosen iteration count into
-//! [`iterations()`](ProcessSpan::iterations) so each recorded span covers a whole
+//! [`iterations()`](ThreadSpan::iterations) so each recorded span covers a whole
 //! sample rather than a single iteration:
 //!
 //! ```no_run
@@ -77,21 +78,54 @@
 //! }
 //! ```
 //!
-//! You **must** call [`iterations()`](ProcessSpan::iterations) on the span before
+//! You **must** call [`iterations()`](ThreadSpan::iterations) on the span before
 //! it is dropped. Failure to do so will result in a panic.
+//!
+//! # Measurement scope
+//!
+//! [`Operation::measure_thread`] observes only the calling thread's allocator
+//! activity and is the right choice whenever the measured work stays on that
+//! thread, which covers most benchmarks.
+//!
+//! [`Operation::measure_process`] observes every thread in the process. Reach for
+//! it when the measured work is performed by other threads, accepting that it costs
+//! more to capture, that it attributes concurrent allocation by unrelated threads to
+//! the operation, and that it cannot report peak memory.
+//!
+//! # Metrics
+//!
+//! Bytes per iteration and allocations per iteration are rates: the totals observed
+//! across all of an operation's spans, divided by the total iteration count. They
+//! describe the cost of performing the operation once.
+//!
+//! Peak bytes is not a rate. It is the largest amount of memory the operation was
+//! holding at any single moment, measured relative to the memory already outstanding
+//! when a span began, and taken as the maximum across the operation's spans. The
+//! quantity of interest is how much memory has to exist at once, which is why it is
+//! not averaged over iterations.
+//!
+//! Peak bytes is reported only when every span of the operation could measure it, so
+//! an operation containing even one [`ProcessSpan`] reports no peak rather than one
+//! that describes only part of the work.
+//!
+//! Because the measurement is relative to the level at span entry, an operation that
+//! releases memory it did not allocate creates headroom that masks its own later
+//! allocations. Peak bytes does not describe operations whose main effect is freeing
+//! pre-existing memory. Deallocation is attributed to the thread that performs it, so
+//! a [`ThreadSpan`] covering work that allocates on one thread and frees on another
+//! does not describe how much memory is live in the process.
 //!
 //! # Human-readable summary
 //!
-//! When a [`Session`] is dropped it prints a table of per-iteration figures to
-//! stdout, one row per operation:
+//! When a [`Session`] is dropped it prints a table to stdout, one row per operation:
 //!
 //! ```text
 //! Allocation statistics:
 //!
-//! | Operation       | Bytes/iter | Allocations/iter |
-//! |-----------------|------------|------------------|
-//! | allocate_buffer |       1024 |                3 |
-//! | build_map       |         64 |                1 |
+//! | Operation       | Bytes/iter | Allocations/iter | Peak bytes |
+//! |-----------------|------------|------------------|------------|
+//! | allocate_buffer |       1024 |                3 |       1024 |
+//! | build_map       |         64 |                1 |        n/a |
 //! ```
 //!
 //! # Machine-readable output
