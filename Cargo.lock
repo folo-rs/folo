@@ -39,6 +39,7 @@ dependencies = [
  "all_the_time",
  "criterion",
  "folo_utils",
+ "gungraun",
  "mutants",
  "serde",
  "serde_json",

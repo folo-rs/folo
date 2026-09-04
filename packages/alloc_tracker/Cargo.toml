@@ -32,6 +32,10 @@ mutants = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
 
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
 [[bench]]
 name = "alloc_tracker_example"
 harness = false
@@ -42,6 +46,10 @@ harness = false
 
 [[bench]]
 name = "alloc_tracker_tracking_overhead"
+harness = false
+
+[[bench]]
+name = "alloc_tracker_tracking_overhead_cg"
 harness = false
 
 [lints]
