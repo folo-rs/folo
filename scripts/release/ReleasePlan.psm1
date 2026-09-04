@@ -553,7 +553,7 @@ function Read-ChangeDecision {
             throw "Change names in '$DecisionPath' must be non-empty and unique."
         }
         $level = [string] $change.level
-        if ($level -cnotin @('breaking', 'nonbreaking', 'patch')) {
+        if ($level -cnotin @('breaking', 'nonbreaking', 'patch', 'align')) {
             throw "Change '$name' in '$DecisionPath' has unsupported level '$level'."
         }
     }
@@ -682,6 +682,44 @@ function Get-CargoIncrementLevel {
     return 'patch'
 }
 
+function Get-GroupAlignmentIncrement {
+    # Turns an `align` decision into an exact-version plan entry for the package's group.
+    #
+    # Aligning is not an increment: the group's members simply have to agree on a version, and
+    # the highest one any member already declares is that version. Raising it instead would
+    # publish a new release of every member for no substantive change. The target is read from
+    # the report's group entry, which is the tool's own highest-declared-member version, so the
+    # rule is not restated here.
+    param(
+        [Parameter(Mandatory)] $Report,
+        [Parameter(Mandatory)] $Package,
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    if ($Package.PSObject.Properties.Name -notcontains 'group' -or
+        [string]::IsNullOrWhiteSpace([string] $Package.group)) {
+        throw "Package '$Name' is not in a version group, so it cannot take the align change level."
+    }
+    $groupName = [string] $Package.group
+    $group = $Report.groups.PSObject.Properties[$groupName]
+    if ($null -eq $group) {
+        throw "Package '$Name' names unknown group '$groupName'."
+    }
+    if ($group.Value.PSObject.Properties.Name -notcontains 'consistent' -or
+        $group.Value.consistent) {
+        throw "Group '$groupName' already declares one version, so it cannot take the align change level."
+    }
+    if ($group.Value.PSObject.Properties.Name -notcontains 'version' -or
+        [string]::IsNullOrWhiteSpace([string] $group.Value.version)) {
+        throw "Group '$groupName' has no declared version to align its members on."
+    }
+
+    return [ordered]@{
+        name    = $groupName
+        version = [string] $group.Value.version
+    }
+}
+
 function New-ReleasePlanFile {
     # Converts approved semantic change levels into cargo-release-plan's mechanical input.
     # Existing pending-release increments are retained and raised only when insufficient.
@@ -702,6 +740,11 @@ function New-ReleasePlanFile {
             throw "Change decision names unknown package '$name'."
         }
         $package = $byName[$name]
+        $level = [string] $change.level
+        if ($level -ceq 'align') {
+            $increment.Add((Get-GroupAlignmentIncrement -Report $report -Package $package -Name $name))
+            continue
+        }
         if ($package.PSObject.Properties.Name -notcontains 'anchor' -or
             $null -eq $package.anchor -or
             [string]::IsNullOrWhiteSpace([string] $package.anchor.version)) {
@@ -713,7 +756,15 @@ function New-ReleasePlanFile {
         } catch {
             throw "Package '$name' has an invalid semantic version in the release-plan report."
         }
-        $minimum = Get-MinimumVersionForChange -Anchor $anchor -Level ([string] $change.level)
+        # A prerelease version orders below the release it precedes, so the component comparison
+        # that derives a Cargo increment level from a minimum version cannot express "drop the
+        # prerelease suffix". Rejecting the input keeps a wrong level from being generated
+        # silently; every published package in this workspace declares a release version.
+        if (-not [string]::IsNullOrEmpty($anchor.PreReleaseLabel) -or
+            -not [string]::IsNullOrEmpty($current.PreReleaseLabel)) {
+            throw "Package '$name' declares a prerelease version, which this plan generator does not support."
+        }
+        $minimum = Get-MinimumVersionForChange -Anchor $anchor -Level $level
         if ($current -ge $minimum) {
             continue
         }

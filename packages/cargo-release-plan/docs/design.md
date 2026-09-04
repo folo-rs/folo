@@ -315,11 +315,12 @@ complete set of affected packages before approval, rather than discovering it
 from the manifests `apply` has already written.
 
 An inconsistent group is a check failure in its own right, independent of any
-content change, and a plan entry naming any member resolves it: expansion lifts
-every member to the highest declared version raised by the decided level.
-Expansion is plan-driven, so a group no entry names is left alone; a caller that
-records change levels for the groups the check reports can therefore recover
-from either failure.
+content change. A plan entry naming any member resolves it, and expansion is
+plan-driven, so a group no entry names is left alone. An entry that carries a
+change level raises the group's highest declared version; one that carries that
+highest version as an exact target instead aligns the lagging members onto it
+and leaves the leading member where it is, which is what a group that drifted
+without changing should do.
 
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group

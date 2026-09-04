@@ -66,7 +66,7 @@ pub(crate) fn run_expand(
             )
         })
         .collect();
-    let expanded = expand_plan(&plan, &work_tree.groups, &publishable)?;
+    let expanded = expand_plan(&plan, &work_tree.groups, &publishable, verbose)?;
 
     verbose.note(|| {
         format!(

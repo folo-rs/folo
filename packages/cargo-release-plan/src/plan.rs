@@ -5,6 +5,7 @@
 // target must use either increment levels or one matching explicit version.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
 use ohno::AppError;
@@ -12,6 +13,8 @@ use semver::Version;
 use serde::Deserialize;
 
 use crate::groups::Groups;
+use crate::text::quote_path;
+use crate::verbose::Verbose;
 use crate::{
     ConflictingPlanIncrementKindError, ConflictingPlanVersionError, InvalidVersionError,
     PlanIncrementSpecError, PlanVersionRegressionError, UnknownIncrementLevelError,
@@ -50,6 +53,7 @@ pub(crate) fn expand_plan(
     plan: &PlanFile,
     groups: &Groups,
     publishable: &BTreeMap<String, Version>,
+    verbose: Verbose,
 ) -> Result<ExpandedPlan, AppError> {
     if plan.schema_version != SCHEMA_VERSION {
         return Err(UnsupportedPlanSchemaError::new(plan.schema_version).into());
@@ -60,9 +64,28 @@ pub(crate) fn expand_plan(
     for increment in &plan.increments {
         let targets = resolve_targets(&increment.name, groups, publishable)?;
         let spec = increment.spec()?;
+        verbose.note(|| {
+            format!(
+                "{} requests {} and resolves to {}",
+                quote_path(&increment.name),
+                spec.describe(),
+                targets.join(", ")
+            )
+        });
         for key in decision_keys(&targets, groups) {
             let decision = match decisions.remove(&key) {
-                Some(existing) => existing.merge(spec.clone(), &key)?,
+                Some(existing) => {
+                    let merged = existing.merge(spec.clone(), &key)?;
+                    verbose.note(|| {
+                        format!(
+                            "{}: folded {} into the running decision, giving {}",
+                            quote_path(&key),
+                            spec.describe(),
+                            merged.describe()
+                        )
+                    });
+                    merged
+                }
                 None => spec.clone(),
             };
             decisions.insert(key, decision);
@@ -80,6 +103,7 @@ pub(crate) fn expand_plan(
             .expect(
                 "every decision key comes from a target that resolved to at least one publishable member, and every publishable member has a declared version",
             );
+        let described = decision.describe();
         let new_version = match decision {
             IncrementSpec::Version(version) => {
                 // An explicit version must not regress: a lower one would
@@ -94,6 +118,16 @@ pub(crate) fn expand_plan(
             }
             IncrementSpec::Level(level) => increment_version(&highest, level)?,
         };
+        verbose.note(|| {
+            format!(
+                "{}: {} declares the highest version among {}, so {} yields {}, which every member takes",
+                quote_path(&key),
+                highest,
+                members.join(", "),
+                described,
+                new_version
+            )
+        });
         for member in members {
             packages.insert(member, new_version.clone());
         }
@@ -154,6 +188,17 @@ impl FromStr for IncrementLevel {
     }
 }
 
+impl Display for IncrementLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Patch => "patch",
+            Self::Minor => "minor",
+            Self::Major => "major",
+        };
+        f.write_str(name)
+    }
+}
+
 /// Exactly one of `level` or `version`, parsed.
 ///
 /// A plan entry declares one or the other, and expansion accumulates entries for
@@ -166,6 +211,14 @@ enum IncrementSpec {
 }
 
 impl IncrementSpec {
+    /// Renders the decision for an explanatory note.
+    fn describe(&self) -> String {
+        match self {
+            Self::Level(level) => format!("increment level {level}"),
+            Self::Version(version) => format!("exact version {version}"),
+        }
+    }
+
     /// Folds a further plan entry for the same key into this decision.
     ///
     /// Two levels take the higher and matching explicit versions coalesce.
@@ -319,7 +372,7 @@ mod tests {
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.1")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.1")));
         assert!(!expanded.packages.contains_key("events"));
@@ -342,7 +395,7 @@ mod tests {
                 },
             ],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
     }
@@ -357,7 +410,7 @@ mod tests {
                 version: Some("0.2.0".to_string()),
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
     }
@@ -369,7 +422,7 @@ mod tests {
             schema_version: 9,
             increments: vec![],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
     }
 
@@ -383,7 +436,7 @@ mod tests {
                 version: None,
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<UnknownPlanTargetError>().is_some());
     }
 
@@ -397,7 +450,7 @@ mod tests {
                 version: None,
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<PlanIncrementSpecError>().is_some());
     }
 
@@ -413,7 +466,7 @@ mod tests {
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &versions).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &versions, Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.51")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.51")));
     }
@@ -435,7 +488,7 @@ mod tests {
                 },
             ],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<ConflictingPlanVersionError>().is_some());
     }
 
@@ -456,7 +509,7 @@ mod tests {
                 },
             ],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
     }
@@ -493,7 +546,8 @@ mod tests {
                 schema_version: SCHEMA_VERSION,
                 increments,
             };
-            let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+            let error =
+                expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
             assert!(
                 error
                     .find_source::<ConflictingPlanIncrementKindError>()
@@ -517,7 +571,7 @@ mod tests {
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("events"), Some(&v("0.2.1")));
         assert!(!expanded.packages.contains_key("nm"));
     }
@@ -532,7 +586,7 @@ mod tests {
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("events"), Some(&v("1.0.0")));
     }
 
@@ -553,7 +607,7 @@ mod tests {
                 version: Some("0.1.0".to_string()),
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         let regression = error.find_source::<PlanVersionRegressionError>().unwrap();
         assert_eq!(regression.target(), "events");
     }
@@ -571,7 +625,7 @@ mod tests {
                 version: Some("0.1.0".to_string()),
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current, Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.0")));
     }
 
@@ -586,7 +640,8 @@ mod tests {
                 version: None,
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &publishable).unwrap_err();
+        let error =
+            expand_plan(&plan, &nm_groups(), &publishable, Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<UnknownPlanTargetError>().is_some());
     }
 }

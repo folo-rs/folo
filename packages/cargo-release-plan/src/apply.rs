@@ -103,7 +103,7 @@ pub(crate) fn run_apply(
             )
         })
         .collect();
-    let expanded = expand_plan(&plan, &work_tree.groups, &publishable)?;
+    let expanded = expand_plan(&plan, &work_tree.groups, &publishable, verbose)?;
     verbose.note(|| {
         format!(
             "plan expands to {}; group members are included even when the plan named only one of \

@@ -10,8 +10,10 @@ pending release. Publishing is a separate process described in
 [`RELEASING.md`](../../../RELEASING.md).
 
 A **change level** describes the substance of a package's released changes:
-`breaking`, `nonbreaking`, or `patch`. This skill decides change levels; it does not choose
-version numbers. `cargo-release-plan` maps the approved levels to version numbers and expands
+`breaking`, `nonbreaking`, or `patch`. A fourth decision, `align`, records that a version
+group's members must agree on a version without any of them having changed. This skill decides
+change levels; it does not choose version numbers. `cargo-release-plan` maps the approved levels
+to version numbers and expands
 [version groups](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) so a
 group's members stay on one version, then rewrites dependency requirements and refreshes
 `Cargo.lock`.
@@ -54,7 +56,7 @@ Commit none of them.
 | `VERIFY_DIR` | A second untracked directory, written by Stage 7 and adopted as `WORK_DIR` when Stage 7 sends the run back to Stage 4. |
 | `DIFF_PATH` | A package's `diff_path` value from `report.json`. |
 | `PACKAGE` | A package name. |
-| `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, or `patch`. |
+| `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, `patch`, or `align`. |
 | `NEW_VERSION` | A package's resolved version from `expanded.json`. |
 
 # Stage 1: Verify the SemVer checker
@@ -149,9 +151,12 @@ Decide each package from these inputs:
 A group that `report.json` marks `"consistent": false` needs a decision even when no member's
 released content changed. Its members declare different versions, which is a check failure in
 its own right. Expansion realigns a group only when a decision names one of its members, so
-without a decision here nothing acts on the group and the check stays red. Decide it from
-whatever its members' accumulated changes justify, and `patch` when they justify nothing, so the
-alignment costs the smallest increment that resolves it.
+without a decision here nothing acts on the group and the check stays red.
+
+Decide such a group at the level its members' accumulated changes justify. When they justify
+nothing, decide `align`: the members then move to the highest version any of them already
+declares, which is what they must agree on. A change level would instead raise that highest
+version, publishing a new release of every member for no substantive change.
 
 `semver-checks.log` closes each checked package's block with one `Summary` line. The package is
 the one named in the `Checking` line that opens the block. The table lists line prefixes: a

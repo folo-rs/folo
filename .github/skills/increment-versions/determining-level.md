@@ -73,8 +73,11 @@ changes, and the decisions for its dependencies. Signal this by omitting the pac
 semantic change-decision file.
 
 A member of a group the report marks `"consistent": false` is an exception. Its members declare
-different versions, and only an increment brings them back to one. Nothing realigns a group that
-no decision names, so such a group takes a change level even when nothing about it changed.
+different versions, and they must agree on one. Nothing realigns a group that no decision names,
+so such a group takes a decision even when nothing about it changed: `align` when no member's
+accumulated changes justify a level of their own, and the highest such level otherwise.
+`align` moves the members to the highest version any of them already declares, without
+publishing a new release of the member that is already there.
 
 A package that the report gives no anchor has never been released, so it has no version to
 increment. It follows the first-publication path in

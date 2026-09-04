@@ -505,8 +505,85 @@ Describe 'New-ReleasePlanFile' {
         ($plan.increments | Where-Object name -EQ 'nm').level | Should -Be 'minor'
     }
 
-    It 'keeps a compatible change to a 0.y package on its patch component' {
-        # Cargo treats 0.7.15 as compatible with 0.7.14, so an addition must not consume the
+    It 'aligns a drifted group on its highest declared version without incrementing it' {
+        # Aligning is not a release decision: the members only have to agree, and raising the
+        # highest one would publish every member for no substantive change.
+        $reportPath = Join-Path $TestDrive 'align-report.json'
+        $decisionPath = Join-Path $TestDrive 'align-decision.json'
+        $planPath = Join-Path $TestDrive 'align-plan.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'nm' -Group 'nm' -DeclaredVersion '1.0.0' -AnchorVersion '1.0.0'
+            Get-TestPackage -Name 'nm_impl' -Group 'nm' -DeclaredVersion '1.1.0' -AnchorVersion '1.1.0'
+        ) -Group @{
+            nm = @{ members = @('nm', 'nm_impl'); consistent = $false; version = '1.1.0' }
+        }
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'nm'; level = 'align' }
+        )
+
+        New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+            -PlanPath $planPath
+        $plan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+
+        @($plan.increments).Count | Should -Be 1
+        $plan.increments[0].name | Should -Be 'nm'
+        $plan.increments[0].version | Should -Be '1.1.0'
+        $plan.increments[0].PSObject.Properties.Name | Should -Not -Contain 'level'
+    }
+
+    It 'rejects an align decision for a group that already agrees' {
+        $reportPath = Join-Path $TestDrive 'align-consistent-report.json'
+        $decisionPath = Join-Path $TestDrive 'align-consistent-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'nm' -Group 'nm' -DeclaredVersion '1.0.0' -AnchorVersion '1.0.0'
+        ) -Group @{
+            nm = @{ members = @('nm'); consistent = $true; version = '1.0.0' }
+        }
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'nm'; level = 'align' }
+        )
+
+        {
+            New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+                -PlanPath (Join-Path $TestDrive 'align-consistent-plan.json')
+        } | Should -Throw '*already declares one version*'
+    }
+
+    It 'rejects an align decision for an ungrouped package' {
+        $reportPath = Join-Path $TestDrive 'align-ungrouped-report.json'
+        $decisionPath = Join-Path $TestDrive 'align-ungrouped-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events' -DeclaredVersion '1.0.0' -AnchorVersion '1.0.0'
+        )
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'align' }
+        )
+
+        {
+            New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+                -PlanPath (Join-Path $TestDrive 'align-ungrouped-plan.json')
+        } | Should -Throw '*not in a version group*'
+    }
+
+    It 'rejects a prerelease version rather than deriving a level from it' {
+        # A prerelease orders below the release it precedes, so no component comparison can
+        # express "drop the suffix"; a derived level would silently overshoot.
+        $reportPath = Join-Path $TestDrive 'prerelease-report.json'
+        $decisionPath = Join-Path $TestDrive 'prerelease-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events' -DeclaredVersion '1.1.0-alpha' -AnchorVersion '1.0.0'
+        )
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'nonbreaking' }
+        )
+
+        {
+            New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+                -PlanPath (Join-Path $TestDrive 'prerelease-plan.json')
+        } | Should -Throw '*prerelease version*'
+    }
+
+    It 'keeps a compatible change to a 0.y package on its patch component' {        # Cargo treats 0.7.15 as compatible with 0.7.14, so an addition must not consume the
         # minor component and strand consumers on the old requirement.
         $reportPath = Join-Path $TestDrive 'zero-minor-report.json'
         $decisionPath = Join-Path $TestDrive 'zero-minor-decision.json'
