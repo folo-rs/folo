@@ -420,13 +420,10 @@ impl ReportOperation {
                 slope: self.metrics.allocations_slope()?,
                 interval: self.metrics.allocations_interval(),
             },
-            peak: self
-                .metrics
-                .peak_outstanding_bytes()
-                .map(|slope| MetricStatistics {
-                    slope,
-                    interval: self.metrics.peak_interval(),
-                }),
+            peak: self.peak_outstanding_bytes().map(|slope| MetricStatistics {
+                slope,
+                interval: self.metrics.peak_interval(),
+            }),
         })
     }
 }
@@ -673,6 +670,19 @@ mod tests {
         let operations = report.sorted_operations();
         let (_name, operation) = operations.first().expect("the report has one operation");
         assert!(operation.statistics().is_some());
+    }
+
+    #[test]
+    fn zero_iteration_spans_withhold_the_peak_from_statistics() {
+        // `statistics().peak` promises the availability semantics of
+        // `peak_outstanding_bytes()`, so an undefined rate must be withheld rather than
+        // surfaced as a `NaN` slope that the JSON and the table would then render.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_iterations(800, 8, 0);
+        let operation = ReportOperation { metrics };
+
+        assert_eq!(operation.peak_outstanding_bytes(), None);
+        assert!(operation.statistics().unwrap().peak.is_none());
     }
 
     #[test]

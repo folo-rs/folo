@@ -12,18 +12,17 @@
 //! other if both describe the same workload, so this file is the authority on what a
 //! scenario means and the Callgrind file follows it:
 //!
+//! * Every Callgrind scenario has a counterpart here under the same name, as the pairing
+//!   rule in `docs/callgrind-benchmarks.md` requires.
 //! * Block sizes are the ones the constants below name. The Callgrind file repeats them
 //!   because the two benchmarks are separate binaries, so a change here must be made there
 //!   as well.
 //! * A `tracked_*` scenario measures the steady state, with this thread's counters already
 //!   created and registered. This file primes them once before the group; the Callgrind
 //!   file isolates every benchmark in its own process and so primes them per scenario.
-//! * A Callgrind body measures only what its name says, because Gungraun evaluates the
-//!   setup expression outside the collected region. Its `realloc_grow` case therefore
-//!   covers the reallocation and the release but not the initial allocation, which the
-//!   timing here necessarily includes. Compare figures within a file, not across the two.
-//! * The Callgrind file may isolate variants that have no counterpart here, which
-//!   `docs/naming.md` permits.
+//! * A scenario measures only the operation its name states. Gungraun evaluates a setup
+//!   expression outside the collected region, so the scenarios that operate on an existing
+//!   block obtain it through `iter_batched` here to keep it out of the timed region too.
 
 #![allow(
     missing_docs,
@@ -34,7 +33,7 @@ use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
 use std::hint::black_box;
 
 use alloc_tracker::{Allocator, Session};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
@@ -117,13 +116,34 @@ fn allocator_overhead(c: &mut Criterion) {
         b.iter(|| alloc_dealloc(&ALLOCATOR, layout(LARGE_SIZE)));
     });
 
+    group.bench_function("untracked_dealloc_small", |b| {
+        b.iter_batched(
+            || allocate(&std::alloc::System, layout(SMALL_SIZE)),
+            |block| dealloc(&std::alloc::System, block),
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("tracked_dealloc_small", |b| {
+        b.iter_batched(
+            || allocate(&ALLOCATOR, layout(SMALL_SIZE)),
+            |block| dealloc(&ALLOCATOR, block),
+            BatchSize::SmallInput,
+        );
+    });
+
     group.bench_function("untracked_realloc_grow", |b| {
-        b.iter(|| {
-            alloc_realloc_dealloc(&std::alloc::System, layout(SMALL_SIZE), REALLOC_GROWN_SIZE);
-        });
+        b.iter_batched(
+            || allocate(&std::alloc::System, layout(SMALL_SIZE)),
+            |block| realloc_dealloc(&std::alloc::System, block, REALLOC_GROWN_SIZE),
+            BatchSize::SmallInput,
+        );
     });
     group.bench_function("tracked_realloc_grow", |b| {
-        b.iter(|| alloc_realloc_dealloc(&ALLOCATOR, layout(SMALL_SIZE), REALLOC_GROWN_SIZE));
+        b.iter_batched(
+            || allocate(&ALLOCATOR, layout(SMALL_SIZE)),
+            |block| realloc_dealloc(&ALLOCATOR, block, REALLOC_GROWN_SIZE),
+            BatchSize::SmallInput,
+        );
     });
 
     group.finish();
@@ -137,7 +157,8 @@ fn layout(size: usize) -> Layout {
     )
 }
 
-fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout) {
+/// Allocates one block, pairing it with the layout it must later be released under.
+fn allocate<A: GlobalAlloc>(allocator: &A, layout: Layout) -> (*mut u8, Layout) {
     // SAFETY: `layout` has non-zero size, which is what `GlobalAlloc::alloc` requires.
     let ptr = unsafe { allocator.alloc(layout) };
 
@@ -145,21 +166,29 @@ fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout) {
         handle_alloc_error(layout);
     }
 
-    black_box(ptr);
+    (ptr, layout)
+}
 
-    // SAFETY: `ptr` was returned by `alloc` for this same `layout` and has not been freed.
+fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout) {
+    let block = allocate(allocator, layout);
+
+    black_box(block.0);
+
+    dealloc(allocator, block);
+}
+
+fn dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout)) {
+    let (ptr, layout) = block;
+
+    // SAFETY: `ptr` was returned by this same allocator's `alloc` for this same `layout`
+    // and has not been freed.
     unsafe {
         allocator.dealloc(ptr, layout);
     }
 }
 
-fn alloc_realloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout, new_size: usize) {
-    // SAFETY: `layout` has non-zero size, which is what `GlobalAlloc::alloc` requires.
-    let ptr = unsafe { allocator.alloc(layout) };
-
-    if ptr.is_null() {
-        handle_alloc_error(layout);
-    }
+fn realloc_dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout), new_size: usize) {
+    let (ptr, layout) = block;
 
     let grown_layout = Layout::from_size_align(new_size, layout.align()).expect(
         "the alignment already came from a valid layout and the grown benchmark size is \

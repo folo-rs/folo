@@ -188,7 +188,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::ptr;
+    use std::{ptr, thread};
 
     use testing::with_watchdog;
 
@@ -425,27 +425,34 @@ mod tests {
 
     #[test]
     fn deallocation_on_untracked_thread_creates_no_counters() {
-        // The unit test binary does not install the tracking allocator globally, so a fresh
-        // thread has no counters until something creates activity on purpose.
         with_watchdog(|| {
-            assert!(!thread_has_counters());
+            // This needs a thread that has never allocated. The watchdog runs its closure on
+            // the calling thread under mutation testing, and libtest reuses worker threads
+            // across tests, so the freshness has to come from a thread spawned here.
+            thread::scope(|scope| {
+                scope.spawn(|| {
+                    assert!(!thread_has_counters());
 
-            let layout = test_layout(64);
+                    let layout = test_layout(64);
 
-            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-            let block = unsafe { std::alloc::System.alloc(layout) };
-            assert!(!block.is_null());
+                    // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+                    let block = unsafe { std::alloc::System.alloc(layout) };
+                    assert!(!block.is_null());
 
-            let allocator = Allocator::new(std::alloc::System);
+                    let allocator = Allocator::new(std::alloc::System);
 
-            // SAFETY: The block came from the system allocator with this exact layout, and the
-            // tracking allocator forwards the release to that same allocator.
-            unsafe {
-                allocator.dealloc(block, layout);
-            }
+                    // SAFETY: The block came from the system allocator with this exact
+                    // layout, and the tracking allocator forwards the release to that same
+                    // allocator.
+                    unsafe {
+                        allocator.dealloc(block, layout);
+                    }
 
-            // Creating counters allocates and locks the registry, which a free must never do.
-            assert!(!thread_has_counters());
+                    // Creating counters allocates and locks the registry, which a free must
+                    // never do.
+                    assert!(!thread_has_counters());
+                });
+            });
         });
     }
 
