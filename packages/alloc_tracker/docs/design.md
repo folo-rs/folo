@@ -19,7 +19,8 @@ iteration count may be supplied at any point before the span is dropped, which a
 measuring work whose extent is only known once it is finished.
 
 An operation accumulates every span recorded for it. Spans may nest and may be recorded
-from several threads.
+from several threads. Overlapping spans on one thread must be dropped in reverse order of
+creation, which holding each in a scoped binding achieves naturally.
 
 ## Measurement scope
 
@@ -56,6 +57,15 @@ process-scope span reports no peak at all rather than a figure that silently des
 only part of the work.
 
 #### Limits of the peak figure
+
+The figure is the largest single span watermark, not a sum across spans. An operation
+measured concurrently on several threads therefore reports the most any one of them held,
+not the total held across all of them at once.
+
+The measured quantity is the memory requested through the allocator, sampled at the
+boundaries of allocator calls. Memory an allocator transiently holds inside a call — a
+reallocation that copies into a new block before releasing the old one, for example — is
+not part of it.
 
 Because the watermark is relative to the memory outstanding when the span began, an
 operation that frees memory it did not allocate creates headroom that masks its own

@@ -3,6 +3,9 @@
 
 //! Memory allocation tracking utilities for benchmarks and performance analysis.
 //!
+//! User-visible behavior is documented in `docs/design.md`. Internal architecture is
+//! documented in `docs/implementation.md`.
+//!
 //! This package provides utilities to track memory allocations during code execution,
 //! enabling analysis of allocation patterns in benchmarks and performance tests.
 //! The tracker reports the number of bytes allocated, the count of allocations and the
@@ -107,6 +110,12 @@
 //! Peak bytes is reported only when every span of the operation could measure it, so
 //! an operation containing even one [`ProcessSpan`] reports no peak rather than one
 //! that describes only part of the work.
+//!
+//! The figure is the largest single span watermark, not a sum across spans, so an
+//! operation measured concurrently on several threads reports the most any one of
+//! them held rather than the total held at once. It counts memory requested through
+//! the allocator as seen at the boundaries of allocator calls, so memory an allocator
+//! transiently holds inside a call does not appear in it.
 //!
 //! Because the measurement is relative to the level at span entry, an operation that
 //! releases memory it did not allocate creates headroom that masks its own later

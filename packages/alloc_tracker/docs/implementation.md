@@ -56,6 +56,13 @@ Restoration happens before every early exit in the drop path, including the pani
 case and the missing-iteration-count panic. A span abandoned without recording must still
 return the watermark, or it would silently suppress the peak of the span enclosing it.
 
+The hand-back is what makes reverse-order drops a requirement rather than a convention:
+restoring an outer span's saved watermark while an inner span is still live would raise the
+inner span's baseline and inflate its reported peak. The requirement is stated in the
+design rather than enforced, because enforcing it would mean giving every span an identity
+and a stack to check against, which is more machinery than an ordering convention that
+scoped bindings satisfy automatically.
+
 ## Peak aggregation
 
 An operation folds the peaks of its spans through a tri-state: no span recorded yet, a known

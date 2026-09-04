@@ -20,6 +20,9 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// from a panic when the span drops, it records nothing and does not panic again,
 /// leaving the original panic to propagate.
 ///
+/// Spans may nest, but overlapping spans on one thread must be dropped in reverse order
+/// of creation, which holding each in a scoped binding achieves naturally.
+///
 /// # Examples
 ///
 /// The canonical benchmark pattern feeds Criterion's chosen iteration count

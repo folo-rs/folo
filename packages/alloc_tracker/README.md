@@ -55,6 +55,8 @@ cannot report peak memory.
 
 ## See also
 
+See `docs/design.md` for the full contract.
+
 More details in the [package documentation](https://docs.rs/alloc_tracker/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

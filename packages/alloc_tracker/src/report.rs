@@ -316,12 +316,14 @@ impl ReportOperation {
     ///
     /// This is a whole-span figure, not a per-iteration rate: it answers "how much memory
     /// was live at once" rather than "how much was allocated per iteration". Where several
-    /// spans were recorded, the highest of them is reported.
+    /// spans were recorded, the highest of them is reported; the spans are not summed, so
+    /// concurrent spans report the most any one of them held rather than their total.
     ///
-    /// The figure is measured relative to what was already outstanding when each span
-    /// started, so memory allocated before the span and freed inside it does not count
-    /// against the span. A span that frees more than it allocates before allocating again
-    /// therefore under-reports what it holds.
+    /// The figure counts memory requested through the allocator as seen at the boundaries
+    /// of allocator calls, and is measured relative to what was already outstanding when
+    /// each span started. Memory allocated before a span and freed inside it therefore does
+    /// not count against that span, and a span that frees more than it allocates before
+    /// allocating again under-reports what it holds.
     ///
     /// Returns `None` when no spans were recorded, or when any recorded span was created by
     /// [`Operation::measure_process`](crate::Operation::measure_process), which has no
@@ -358,8 +360,9 @@ impl ReportOperation {
     ///
     /// Returns `None` when no spans were recorded. The returned
     /// [`OperationStatistics`] carries the per-iteration value and its confidence
-    /// interval for both the byte and allocation-count metrics — the same figures
-    /// written to the machine-readable JSON output.
+    /// interval for both the byte and allocation-count metrics. The peak figure is not a
+    /// per-iteration rate and is read separately through
+    /// [`peak_outstanding_bytes`](Self::peak_outstanding_bytes).
     ///
     /// # Examples
     ///
