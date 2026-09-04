@@ -75,6 +75,14 @@ impl Cli {
                 verify_packaging: args.verify_packaging,
                 verbose: args.verbose,
             },
+            Command::Expand(args) => RunInput::Expand {
+                plan: args.plan,
+                out: args.out,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                verbose: args.verbose,
+            },
             Command::Apply(args) => RunInput::Apply {
                 plan: args.plan,
                 dry_run: args.dry_run,
@@ -126,6 +134,8 @@ enum Command {
     Report(ReportArgs),
     /// Fail on a needed version increment or an inconsistent version group.
     Check(CheckArgs),
+    /// Resolve a plan's version groups into an explicit per-package plan.
+    Expand(ExpandArgs),
     /// Apply an approved increment plan to manifests and the lockfile.
     Apply(ApplyArgs),
 }
@@ -176,6 +186,26 @@ struct CheckArgs {
     verify_packaging: bool,
 
     /// Print explanatory notes for each classification decision.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Arguments for `expand`.
+#[derive(Debug, Parser)]
+struct ExpandArgs {
+    /// Path to the plan JSON file to expand.
+    #[arg(long)]
+    plan: PathBuf,
+
+    /// Path that receives the expanded plan JSON.
+    #[arg(long)]
+    out: PathBuf,
+
+    /// Path to the workspace `Cargo.toml`.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+
+    /// Print explanatory notes for each expansion decision.
     #[arg(long)]
     verbose: bool,
 }

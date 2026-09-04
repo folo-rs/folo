@@ -170,15 +170,16 @@ release-analysis-order REPORT:
     Get-ReleasePlanAnalysisBatch -ReportPath "{{ REPORT }}" | ConvertTo-Json -Depth 3 -AsArray
 
 # Fails unless every package reached by the approved semantic changes is already published.
+# Reads the expanded plan, so the checked set is exactly the set apply will edit.
 [group('release')]
 [script]
-check-increment-published REPORT DECISIONS:
+check-increment-published EXPANDED:
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Assert-IncrementPackagePublished -ReportPath "{{ REPORT }}" -DecisionPath "{{ DECISIONS }}"
+    Assert-IncrementPackagePublished -ExpandedPath "{{ EXPANDED }}"
 
 # Converts approved semantic change levels into cargo-release-plan's mechanical plan format.
 [group('release')]
@@ -190,6 +191,19 @@ create-release-plan REPORT DECISIONS PLAN:
 
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
     New-ReleasePlanFile -ReportPath "{{ REPORT }}" -DecisionPath "{{ DECISIONS }}" -PlanPath "{{ PLAN }}"
+
+# Resolves a plan's version groups and increment levels into explicit per-package versions, so
+# the set presented for approval is the set that will be applied. Group expansion stays in
+# cargo-release-plan rather than being reimplemented here.
+[group('release')]
+[script]
+expand-release-plan PLAN EXPANDED:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
+    Invoke-ExpandReleasePlan -PlanPath "{{ PLAN }}" -ExpandedPath "{{ EXPANDED }}"
 
 # Applies an approved increment plan: package versions, version-group expansion, `=`-pin
 # rewrites, and a workspace lockfile refresh. The plan file is an uncommitted working-tree

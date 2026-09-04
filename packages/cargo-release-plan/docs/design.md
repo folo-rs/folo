@@ -99,6 +99,17 @@ dependency resolution and Cargo's package preparation work, which the normal
 offline assessment deliberately avoids. A mismatch on a clean tree is evidence
 that the artifact model needs correction.
 
+### Preview a decision with `expand`
+
+`expand --plan <plan.json> --out <expanded.json>` resolves a plan's version
+groups and increment levels into one explicit entry per package. Because `apply`
+expands groups internally, a caller that presents a plan for approval would
+otherwise be showing a document that moves more packages than it names. `expand`
+makes the full set reviewable before anything is written.
+
+The expanded document is itself a plan, so the reviewed document is the one that
+gets applied.
+
 ### Carry out a decision with `apply`
 
 `apply --plan <plan.json>` turns approved version choices into manifest edits. A
@@ -298,6 +309,10 @@ increment, the plan expands to every member. The target starts from the highest
 declared member version and applies the highest chosen increment level. Entries
 that expand to the same group must all use increment levels or all use one
 matching exact version.
+
+`expand` exposes that resolution as a document so a caller can present the
+complete set of affected packages before approval, rather than discovering it
+from the manifests `apply` has already written.
 
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group

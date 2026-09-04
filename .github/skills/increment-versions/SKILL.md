@@ -11,10 +11,10 @@ pending release. Publishing is a separate process described in
 
 A **change level** describes the substance of a package's released changes:
 `breaking`, `nonbreaking`, or `patch`. This skill decides change levels; it does not choose
-version numbers. `cargo-release-plan apply` mechanically maps the approved levels to version
-numbers, expands
-[version groups](../../../packages/cargo-release-plan/README.md#plan-and-report-schema),
-rewrites dependency requirements, and refreshes `Cargo.lock`.
+version numbers. `cargo-release-plan` maps the approved levels to version numbers and expands
+[version groups](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) so a
+group's members stay on one version, then rewrites dependency requirements and refreshes
+`Cargo.lock`.
 
 This skill applies to a feature branch. Confirm the branch before Stage 1:
 
@@ -41,7 +41,8 @@ afterwards, and read a later stage's inputs from these files rather than from me
 | `semver-checks.log` | Stage 2 | The console output of `cargo-semver-checks`. |
 | `analysis-order.json` | Stage 3 | The analysis batches. |
 | `decisions.json` | Stage 4 | The decided change levels. |
-| `plan.json` | Stage 6 | The generated cargo-release-plan input. |
+| `plan.json` | Stage 5 | The generated cargo-release-plan input. |
+| `expanded.json` | Stage 5 | That plan with version groups resolved into per-package versions. |
 
 Commit none of them.
 
@@ -54,6 +55,7 @@ Commit none of them.
 | `DIFF_PATH` | A package's `diff_path` value from `report.json`. |
 | `PACKAGE` | A package name. |
 | `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, or `patch`. |
+| `NEW_VERSION` | A package's resolved version from `expanded.json`. |
 
 # Stage 1: Verify the SemVer checker
 
@@ -171,26 +173,57 @@ batch reads its dependency decisions from the file. Omit a package that needs no
 }
 ```
 
-# Stage 5: Present the proposal
+# Stage 5: Resolve version groups and present the proposal
 
-Present one row per package in `decisions.json`:
+A version group's members share one version, so a decision for any member moves all of them.
+Resolve that before asking for approval, so the caller sees every package the decision moves and
+the version each will carry rather than a set that widens during apply.
 
-| Package | Change level |
-|---------|--------------|
-| `{{PACKAGE}}` | `{{CHANGE_LEVEL}}` |
+Generate the mechanical cargo-release-plan input, then resolve its groups:
 
-Follow each row with its supporting explanation. The explanation may span multiple paragraphs
-and must cite the `report.json` entry, diff path, or `semver-checks.log` summary it rests on.
-State that the remaining analyzed packages need no increment. Explain that version-group
-members will receive the maximum increment required by any member when the plan is applied.
+> just create-release-plan "{{WORK_DIR}}/report.json" "{{WORK_DIR}}/decisions.json" "{{WORK_DIR}}/plan.json"
+>
+> just expand-release-plan "{{WORK_DIR}}/plan.json" "{{WORK_DIR}}/expanded.json"
+
+Stop and report if either command exits non-zero. `create-release-plan` retains sufficient
+existing pending-release increments and raises insufficient ones. `expand-release-plan` applies
+each group's highest decided level to the highest version any of its members declares, and names
+every member at the resulting version.
+
+`expanded.json` is a cargo-release-plan input whose every entry carries an explicit `version`:
+
+```json
+{
+  "schema_version": 1,
+  "increments": [
+    { "name": "nm", "version": "2.0.0" },
+    { "name": "nm_impl", "version": "2.0.0" }
+  ]
+}
+```
+
+Present one row per version group, and one per ungrouped package, reading the members from
+`report.json` and the versions from `expanded.json`:
+
+| Packages | Change level | New version |
+|----------|--------------|-------------|
+| `{{PACKAGE}}` | `{{CHANGE_LEVEL}}` | `{{NEW_VERSION}}` |
+
+A group's row lists every member and the level that governs the group, which is the highest
+level decided for any of its members. Follow each row with its supporting explanation. The
+explanation may span multiple paragraphs and must cite the `report.json` entry, diff path, or
+`semver-checks.log` summary it rests on. Name any member that is moving only because it shares a
+group. State that the remaining analyzed packages need no increment.
 
 Report separately, and outside that table, every `report.json` entry that has no `anchor`. Such
 a package has never been published, so it needs a first publication as described in
 [`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) rather than an increment.
 
-Ask the caller to approve or adjust the change levels, and update `decisions.json` to match
-what the caller approved. An adjustment is still bound by the floors in Stage 4: report the
-conflict rather than recording a level below one. Do not continue until the caller approves them.
+Ask the caller to approve or adjust the change levels. An adjustment is still bound by the
+floors in Stage 4: report the conflict rather than recording a level below one. To record an
+adjustment, edit `decisions.json` and repeat this stage from `create-release-plan`. Never edit
+`plan.json` or `expanded.json` directly; a hand-edited expansion can give one group's members
+different versions, which the tool rejects. Do not continue until the caller approves.
 
 Stop here and report the approved change levels while the temporary rule in Scope applies.
 
@@ -199,24 +232,17 @@ Stop here and report the approved change levels while the temporary rule in Scop
 `cargo-release-plan apply` raises an existing version. It cannot create a crate on crates.io,
 so a package that has never been published must first be published by hand as described in
 [`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate). Confirm that every
-package the approved changes reach, directly or through a version group, is already published:
+package the approved expansion names is already published:
 
-> just check-increment-published "{{WORK_DIR}}/report.json" "{{WORK_DIR}}/decisions.json"
+> just check-increment-published "{{WORK_DIR}}/expanded.json"
 
-Stop and report without generating or applying a plan if the command exits non-zero.
+Stop and report without applying anything if the command exits non-zero.
 
-Generate the mechanical cargo-release-plan input:
+Apply the approved expansion, which is the document the caller saw:
 
-> just create-release-plan "{{WORK_DIR}}/report.json" "{{WORK_DIR}}/decisions.json" "{{WORK_DIR}}/plan.json"
+> just apply-release-plan "{{WORK_DIR}}/expanded.json"
 
-The command retains sufficient existing pending-release increments, raises insufficient ones,
-and lets apply combine version-group decisions mechanically.
-
-Apply the generated plan:
-
-> just apply-release-plan "{{WORK_DIR}}/plan.json"
-
-Stop and report if either command exits non-zero.
+Stop and report if the command exits non-zero.
 
 # Stage 7: Verify the result
 

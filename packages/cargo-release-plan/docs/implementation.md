@@ -23,7 +23,7 @@ Cli -> RunInput -> run()
 Modules own subjects rather than syntactic categories. `metadata` and `manifest`
 build the work-tree model, `git` owns repository facts, `anchor` resolves release
 history, `classify` combines those inputs, `groups` and `plan` expand release
-decisions, and `apply`, `check`, and `report` own their command outputs.
+decisions, and `apply`, `check`, `expand`, and `report` own their command outputs.
 
 ## Subprocess boundaries
 
@@ -203,6 +203,11 @@ stale JSON and a partial patch set as one complete assessment.
 `plan` first normalizes package and group entries into one target version per
 publishable package. Levels combine by taking the highest and matching explicit
 versions coalesce. Mixed decision kinds and conflicting explicit versions fail.
+
+`expand` and `apply` share that normalization, and both read the same Git-tracked
+publishable package set, so an expanded plan and the apply it feeds cannot
+disagree about which packages a decision reaches. `expand` writes the normalized
+result as a plan and stops; `apply` continues into manifest edits.
 
 `apply` accepts plan targets and validates groups against the same Git-tracked
 publishable package set as classification. It parses and rewrites every affected

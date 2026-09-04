@@ -294,6 +294,34 @@ function Invoke-SemverCheck {
     & $Cargo $argument
 }
 
+function Invoke-ExpandReleasePlan {
+    # Resolves a generated plan's version groups and levels into explicit per-package versions.
+    # Group expansion belongs to cargo-release-plan, so the skill presents the tool's own answer
+    # rather than a second implementation of the same rules.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $PlanPath,
+        [Parameter(Mandatory)][string] $ExpandedPath,
+        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PlanPath)) {
+        throw 'expand-release-plan requires a plan JSON path.'
+    }
+    if (-not (Test-Path -LiteralPath $PlanPath)) {
+        throw "expand-release-plan plan file not found: $PlanPath"
+    }
+    if ([string]::IsNullOrWhiteSpace($ExpandedPath)) {
+        throw 'expand-release-plan requires an output path.'
+    }
+
+    Write-Verbose "Expanding version groups in $PlanPath via cargo-release-plan expand" -Verbose
+    & $Cargo @(
+        'run', '-p', 'cargo-release-plan', '--locked', '--',
+        'expand', '--plan', $PlanPath, '--out', $ExpandedPath
+    )
+}
+
 function Invoke-ApplyReleasePlan {
     # Applies a generated cargo-release-plan file after validating the path supplied by the skill.
     [CmdletBinding()]
@@ -532,47 +560,50 @@ function Read-ChangeDecision {
     return $decision
 }
 
-function Get-ExpandedDecisionPackageName {
+function Read-ExpandedPlan {
+    # Reads the per-package names cargo-release-plan resolved a plan into. Group expansion is
+    # the tool's, so this only validates the shape it promises.
     param(
-        [Parameter(Mandatory)] $Report,
-        [Parameter(Mandatory)] $Decision
+        [Parameter(Mandatory)][string] $ExpandedPath
     )
 
-    $byName = Get-PackageByName -Report $Report
-    $expanded = [System.Collections.Generic.HashSet[string]]::new(
+    if (-not (Test-Path -LiteralPath $ExpandedPath)) {
+        throw "expanded plan file not found: $ExpandedPath"
+    }
+    $plan = Get-Content -LiteralPath $ExpandedPath -Raw | ConvertFrom-Json
+    if ($null -eq $plan -or $plan -is [System.Array]) {
+        throw "expanded plan at '$ExpandedPath' must be a JSON object."
+    }
+    $field = @($plan.PSObject.Properties.Name)
+    if ($field -notcontains 'schema_version' -or
+        ($plan.schema_version -isnot [long] -and $plan.schema_version -isnot [int]) -or
+        [long] $plan.schema_version -ne $script:ReleasePlanSchemaVersion) {
+        throw "expanded plan at '$ExpandedPath' must use schema_version $script:ReleasePlanSchemaVersion."
+    }
+    if ($field -notcontains 'increments' -or $plan.increments -isnot [System.Array]) {
+        throw "expanded plan at '$ExpandedPath' increments must be an array."
+    }
+
+    $name = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
-    foreach ($change in $Decision.changes) {
-        $name = [string] $change.name
-        if (-not $byName.Contains($name)) {
-            throw "Change decision names unknown package '$name'."
+    foreach ($increment in $plan.increments) {
+        if ($null -eq $increment -or
+            $increment.PSObject.Properties.Name -notcontains 'name' -or
+            [string]::IsNullOrWhiteSpace([string] $increment.name)) {
+            throw "expanded plan at '$ExpandedPath' contains an increment without a name."
         }
-        $package = $byName[$name]
-        if ($package.PSObject.Properties.Name -contains 'group' -and
-            -not [string]::IsNullOrWhiteSpace([string] $package.group)) {
-            $group = $Report.groups.PSObject.Properties[[string] $package.group]
-            if ($null -eq $group) {
-                throw "Package '$name' names unknown group '$($package.group)'."
-            }
-            foreach ($member in $group.Value.members) {
-                if (-not $byName.Contains([string] $member)) {
-                    throw "Group '$($package.group)' names unknown package '$member'."
-                }
-                [void] $expanded.Add([string] $member)
-            }
-        } else {
-            [void] $expanded.Add($name)
-        }
+        [void] $name.Add([string] $increment.name)
     }
-    return @($expanded | Sort-Object)
+    return @($name | Sort-Object)
 }
 
 function Assert-IncrementPackagePublished {
     # Fails unless every package that apply would reach has a confirmed crates.io publication.
+    # Reads the expanded plan, so the checked set is exactly the set apply will edit.
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string] $ReportPath,
-        [Parameter(Mandatory)][string] $DecisionPath,
+        [Parameter(Mandatory)][string] $ExpandedPath,
         [scriptblock] $GetPublishStatus = {
             param([string] $Name)
             Get-CratePublishStatus -Name $Name
@@ -580,9 +611,7 @@ function Assert-IncrementPackagePublished {
     )
 
     Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
-    $report = Read-ReleasePlanReport -ReportPath $ReportPath
-    $decision = Read-ChangeDecision -DecisionPath $DecisionPath
-    $package = @(Get-ExpandedDecisionPackageName -Report $report -Decision $decision)
+    $package = @(Read-ExpandedPlan -ExpandedPath $ExpandedPath)
     $neverPublished = [System.Collections.Generic.List[string]]::new()
     $unknown = [System.Collections.Generic.List[string]]::new()
     foreach ($name in $package) {
@@ -714,6 +743,7 @@ Export-ModuleMember -Function `
     Complete-SemverChecksCollect, `
     Invoke-ReleaseReport, `
     Invoke-SemverCheck, `
+    Invoke-ExpandReleasePlan, `
     Invoke-ApplyReleasePlan, `
     Invoke-ValidateVersions, `
     Get-ReleasePlanAnalysisBatch, `

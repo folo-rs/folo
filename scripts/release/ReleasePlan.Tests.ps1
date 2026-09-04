@@ -405,62 +405,78 @@ Describe 'Get-ReleasePlanAnalysisBatch' {
 }
 
 Describe 'Assert-IncrementPackagePublished' {
-    It 'checks every member reached through a version group' {
-        $reportPath = Join-Path $TestDrive 'publish-report.json'
-        $decisionPath = Join-Path $TestDrive 'publish-decision.json'
-        Write-TestReport -Path $reportPath -Package @(
-            Get-TestPackage -Name 'nm' -Group 'nm'
-            Get-TestPackage -Name 'nm_impl' -Group 'nm'
-        ) -Group @{
-            nm = @{ members = @('nm', 'nm_impl'); consistent = $true; version = '1.0.0' }
+    BeforeAll {
+        function Write-TestExpandedPlan {
+            param(
+                [Parameter(Mandatory)][string] $Path,
+                [Parameter(Mandatory)][string[]] $Name
+            )
+
+            [ordered]@{
+                schema_version = 1
+                increments     = @($Name | ForEach-Object { [ordered]@{ name = $_; version = '1.0.1' } })
+            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $Path -Encoding utf8
         }
-        Write-TestDecision -Path $decisionPath -Change @(
-            @{ name = 'nm'; level = 'patch' }
-        )
+    }
+
+    It 'checks every package the expansion reached, including group members' {
+        $expandedPath = Join-Path $TestDrive 'publish-expanded.json'
+        Write-TestExpandedPlan -Path $expandedPath -Name @('nm', 'nm_impl')
         $script:queried = [System.Collections.Generic.List[string]]::new()
 
-        Assert-IncrementPackagePublished -ReportPath $reportPath `
-            -DecisionPath $decisionPath -GetPublishStatus {
-                param([string] $Name)
-                $script:queried.Add($Name)
-                'Published'
-            }
+        Assert-IncrementPackagePublished -ExpandedPath $expandedPath -GetPublishStatus {
+            param([string] $Name)
+            $script:queried.Add($Name)
+            'Published'
+        }
 
         $script:queried | Should -Be @('nm', 'nm_impl')
     }
 
     It 'fails when an expanded package was never published' {
-        $reportPath = Join-Path $TestDrive 'new-report.json'
-        $decisionPath = Join-Path $TestDrive 'new-decision.json'
-        Write-TestReport -Path $reportPath -Package @(
-            Get-TestPackage -Name 'events'
-        )
-        Write-TestDecision -Path $decisionPath -Change @(
-            @{ name = 'events'; level = 'patch' }
-        )
+        $expandedPath = Join-Path $TestDrive 'new-expanded.json'
+        Write-TestExpandedPlan -Path $expandedPath -Name @('events')
 
         {
-            Assert-IncrementPackagePublished -ReportPath $reportPath `
-                -DecisionPath $decisionPath -GetPublishStatus { 'NeverPublished' }
+            Assert-IncrementPackagePublished -ExpandedPath $expandedPath `
+                -GetPublishStatus { 'NeverPublished' }
         } | Should -Throw '*never-published package: events.*First-publish it manually*'
     }
 
     It 'names every never-published package in the plural' {
-        $reportPath = Join-Path $TestDrive 'plural-report.json'
-        $decisionPath = Join-Path $TestDrive 'plural-decision.json'
-        Write-TestReport -Path $reportPath -Package @(
-            Get-TestPackage -Name 'events'
-            Get-TestPackage -Name 'nm'
-        )
-        Write-TestDecision -Path $decisionPath -Change @(
-            @{ name = 'events'; level = 'patch' }
-            @{ name = 'nm'; level = 'patch' }
-        )
+        $expandedPath = Join-Path $TestDrive 'plural-expanded.json'
+        Write-TestExpandedPlan -Path $expandedPath -Name @('events', 'nm')
 
         {
-            Assert-IncrementPackagePublished -ReportPath $reportPath `
-                -DecisionPath $decisionPath -GetPublishStatus { 'NeverPublished' }
+            Assert-IncrementPackagePublished -ExpandedPath $expandedPath `
+                -GetPublishStatus { 'NeverPublished' }
         } | Should -Throw '*never-published packages: events, nm.*First-publish them manually*'
+    }
+
+    It 'fails closed on an expanded plan with an unsupported schema revision' {
+        $expandedPath = Join-Path $TestDrive 'bad-schema-expanded.json'
+        [ordered]@{
+            schema_version = 99
+            increments     = @()
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $expandedPath -Encoding utf8
+
+        {
+            Assert-IncrementPackagePublished -ExpandedPath $expandedPath `
+                -GetPublishStatus { 'Published' }
+        } | Should -Throw '*schema_version*'
+    }
+
+    It 'fails closed on an expanded increment without a name' {
+        $expandedPath = Join-Path $TestDrive 'nameless-expanded.json'
+        [ordered]@{
+            schema_version = 1
+            increments     = @([ordered]@{ version = '1.0.1' })
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $expandedPath -Encoding utf8
+
+        {
+            Assert-IncrementPackagePublished -ExpandedPath $expandedPath `
+                -GetPublishStatus { 'Published' }
+        } | Should -Throw '*without a name*'
     }
 }
 
