@@ -70,7 +70,7 @@ pub(crate) fn run_expand(
 
     verbose.note(|| {
         format!(
-            "{} named {} and expands to {}; the difference is group members the plan did not name",
+            "{} named {} and expands to {}; any difference is group members the plan did not name",
             quote_path(&plan_path.to_string_lossy()),
             plural(plan.increments.len(), "increment"),
             plural(expanded.packages.len(), "package version")

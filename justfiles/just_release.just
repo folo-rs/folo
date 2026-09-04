@@ -181,7 +181,9 @@ check-increment-published EXPANDED:
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
     Assert-IncrementPackagePublished -ExpandedPath "{{ EXPANDED }}"
 
-# Converts approved semantic change levels into cargo-release-plan's mechanical plan format.
+# Converts approved semantic change levels into cargo-release-plan's mechanical plan format, and
+# realigns any inconsistent version group the decisions leave unnamed. Expansion is plan-driven,
+# so a drifted group that no entry reaches would otherwise stay drifted and keep the check red.
 [group('release')]
 [script]
 create-release-plan REPORT DECISIONS PLAN:

@@ -553,7 +553,7 @@ function Read-ChangeDecision {
             throw "Change names in '$DecisionPath' must be non-empty and unique."
         }
         $level = [string] $change.level
-        if ($level -cnotin @('breaking', 'nonbreaking', 'patch', 'align')) {
+        if ($level -cnotin @('breaking', 'nonbreaking', 'patch')) {
             throw "Change '$name' in '$DecisionPath' has unsupported level '$level'."
         }
     }
@@ -682,47 +682,53 @@ function Get-CargoIncrementLevel {
     return 'patch'
 }
 
-function Get-GroupAlignmentIncrement {
-    # Turns an `align` decision into an exact-version plan entry for the package's group.
-    #
-    # Aligning is not an increment: the group's members simply have to agree on a version, and
-    # the highest one any member already declares is that version. Raising it instead would
-    # publish a new release of every member for no substantive change. The target is read from
-    # the report's group entry, which is the tool's own highest-declared-member version, so the
-    # rule is not restated here.
+function Get-DecisionGroupName {
+    # The key a plan entry folds onto: the package's version group when it has one, otherwise the
+    # package itself. Mirrors the tool's own decision keys, so a group counts as already planned
+    # whichever member named it.
     param(
-        [Parameter(Mandatory)] $Report,
-        [Parameter(Mandatory)] $Package,
+        [Parameter(Mandatory)] $ByName,
         [Parameter(Mandatory)][string] $Name
     )
 
-    if ($Package.PSObject.Properties.Name -notcontains 'group' -or
-        [string]::IsNullOrWhiteSpace([string] $Package.group)) {
-        throw "Package '$Name' is not in a version group, so it cannot take the align change level."
+    if (-not $ByName.Contains($Name)) {
+        return $Name
     }
-    $groupName = [string] $Package.group
-    $group = $Report.groups.PSObject.Properties[$groupName]
-    if ($null -eq $group) {
-        throw "Package '$Name' names unknown group '$groupName'."
+    $package = $ByName[$Name]
+    if ($package.PSObject.Properties.Name -notcontains 'group' -or
+        [string]::IsNullOrWhiteSpace([string] $package.group)) {
+        return $Name
     }
-    if ($group.Value.PSObject.Properties.Name -notcontains 'consistent' -or
-        $group.Value.consistent) {
-        throw "Group '$groupName' already declares one version, so it cannot take the align change level."
-    }
-    if ($group.Value.PSObject.Properties.Name -notcontains 'version' -or
-        [string]::IsNullOrWhiteSpace([string] $group.Value.version)) {
-        throw "Group '$groupName' has no declared version to align its members on."
+    return [string] $package.group
+}
+
+function Get-GroupAlignmentIncrement {
+    # Exact-version plan entry that puts a drifted group back on one version.
+    #
+    # Aligning is not an increment: the members simply have to agree, and the highest version any
+    # of them already declares is the one they agree on. Raising it instead would publish a new
+    # release of every member for no substantive change. The target is the report's own
+    # highest-declared-member version, so the rule is not restated here.
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)] $Group
+    )
+
+    if ($Group.PSObject.Properties.Name -notcontains 'version' -or
+        [string]::IsNullOrWhiteSpace([string] $Group.version)) {
+        throw "Group '$Name' has no declared version to align its members on."
     }
 
     return [ordered]@{
-        name    = $groupName
-        version = [string] $group.Value.version
+        name    = $Name
+        version = [string] $Group.version
     }
 }
 
 function New-ReleasePlanFile {
-    # Converts approved semantic change levels into cargo-release-plan's mechanical input.
-    # Existing pending-release increments are retained and raised only when insufficient.
+    # Converts approved semantic change levels into cargo-release-plan's mechanical input, and
+    # makes every inconsistent version group consistent. Existing pending-release increments are
+    # retained and raised only when insufficient.
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string] $ReportPath,
@@ -741,10 +747,6 @@ function New-ReleasePlanFile {
         }
         $package = $byName[$name]
         $level = [string] $change.level
-        if ($level -ceq 'align') {
-            $increment.Add((Get-GroupAlignmentIncrement -Report $report -Package $package -Name $name))
-            continue
-        }
         if ($package.PSObject.Properties.Name -notcontains 'anchor' -or
             $null -eq $package.anchor -or
             [string]::IsNullOrWhiteSpace([string] $package.anchor.version)) {
@@ -772,6 +774,28 @@ function New-ReleasePlanFile {
             name  = $name
             level = Get-CargoIncrementLevel -Current $current -Minimum $minimum
         })
+    }
+
+    # Every version group has to end up on one version, and expansion is plan-driven: a group
+    # moves only when an entry names one of its members. The decisions above can easily leave a
+    # drifted group unnamed, because no member's content changed or because the decided level was
+    # already covered by a pending increment, so the groups no entry reaches are realigned here.
+    # Leaving this to a decision instead would make an inconsistent group unrecoverable exactly
+    # when its decision is skipped as already sufficient.
+    # Ref: packages/cargo-release-plan/docs/design.md, "Version groups".
+    $planned = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($entry in $increment) {
+        [void] $planned.Add((Get-DecisionGroupName -ByName $byName -Name ([string] $entry.name)))
+    }
+    foreach ($group in @($report.groups.PSObject.Properties | Sort-Object -Property Name)) {
+        if ($group.Value.PSObject.Properties.Name -notcontains 'consistent' -or
+            $group.Value.consistent -or
+            $planned.Contains($group.Name)) {
+            continue
+        }
+        $increment.Add((Get-GroupAlignmentIncrement -Name $group.Name -Group $group.Value))
     }
 
     if ($PSCmdlet.ShouldProcess($PlanPath, 'write generated cargo-release-plan input')) {

@@ -28,9 +28,9 @@ selection drives both the CI SemVer job and evidence collection by the increment
 skill. Package-name patterns do not determine whether a crate has a consumer contract.
 
 The module also owns the skill's deterministic mechanics: dependency-order presentation,
-publication eligibility, semantic change-decision validation, and conversion to
-`cargo-release-plan apply` input. The just recipes remain thin command-line entry points.
-Pester tests in `scripts/release/ReleasePlan.Tests.ps1` lock these boundaries.
+publication eligibility, semantic change-decision validation, version-group realignment, and
+conversion to `cargo-release-plan apply` input. The just recipes remain thin command-line entry
+points. Pester tests in `scripts/release/ReleasePlan.Tests.ps1` lock these boundaries.
 
 ## Merge-blocking result
 

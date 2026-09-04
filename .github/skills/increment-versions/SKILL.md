@@ -10,13 +10,11 @@ pending release. Publishing is a separate process described in
 [`RELEASING.md`](../../../RELEASING.md).
 
 A **change level** describes the substance of a package's released changes:
-`breaking`, `nonbreaking`, or `patch`. A fourth decision, `align`, records that a version
-group's members must agree on a version without any of them having changed. This skill decides
-change levels; it does not choose version numbers. `cargo-release-plan` maps the approved levels
-to version numbers and expands
-[version groups](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) so a
-group's members stay on one version, then rewrites dependency requirements and refreshes
-`Cargo.lock`.
+`breaking`, `nonbreaking`, or `patch`. This skill decides change levels; it does not choose
+version numbers, and it does not decide which packages a level reaches. The tooling maps the
+approved levels to version numbers, keeps every
+[version group](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) on a
+single version, rewrites dependency requirements, and refreshes `Cargo.lock`.
 
 This skill applies to a feature branch. Confirm the branch before Stage 1:
 
@@ -56,7 +54,7 @@ Commit none of them.
 | `VERIFY_DIR` | A second untracked directory, written by Stage 7 and adopted as `WORK_DIR` when Stage 7 sends the run back to Stage 4. |
 | `DIFF_PATH` | A package's `diff_path` value from `report.json`. |
 | `PACKAGE` | A package name. |
-| `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, `patch`, or `align`. |
+| `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, or `patch`. |
 | `NEW_VERSION` | A package's resolved version from `expanded.json`. |
 
 # Stage 1: Verify the SemVer checker
@@ -104,7 +102,8 @@ difference.
 
 Its `groups` object names each version group's `members` and whether they currently declare one
 version, in `consistent`. `just validate-versions` fails on an inconsistent group as well as on
-a package needing an increment, so both are conditions this skill resolves.
+a package needing an increment. Stage 5 resolves both, and a proposal row lists a group's
+members.
 
 The files describe the current work-tree content. Repeat this stage if that content changes
 before the decisions are presented or applied.
@@ -148,15 +147,9 @@ Decide each package from these inputs:
 * the entries already recorded in `decisions.json` for the packages it depends on; and
 * the package's floor in `semver-checks.log`.
 
-A group that `report.json` marks `"consistent": false` needs a decision even when no member's
-released content changed. Its members declare different versions, which is a check failure in
-its own right. Expansion realigns a group only when a decision names one of its members, so
-without a decision here nothing acts on the group and the check stays red.
-
-Decide such a group at the level its members' accumulated changes justify. When they justify
-nothing, decide `align`: the members then move to the highest version any of them already
-declares, which is what they must agree on. A change level would instead raise that highest
-version, publishing a new release of every member for no substantive change.
+A group that `report.json` marks `"consistent": false` needs no decision of its own. Deciding
+change levels is this skill's only judgement, and Stage 5 realigns every group the decisions
+leave disagreeing. Judge each member on its own released changes.
 
 `semver-checks.log` closes each checked package's block with one `Summary` line. The package is
 the one named in the `Checking` line that opens the block. The table lists line prefixes: a
@@ -202,9 +195,10 @@ Generate the mechanical cargo-release-plan input, then resolve its groups:
 > just expand-release-plan "{{WORK_DIR}}/plan.json" "{{WORK_DIR}}/expanded.json"
 
 Stop and report if either command exits non-zero. `create-release-plan` retains sufficient
-existing pending-release increments and raises insufficient ones. `expand-release-plan` applies
-each group's highest decided level to the highest version any of its members declares, and names
-every member at the resulting version.
+existing pending-release increments, raises insufficient ones, and realigns any inconsistent
+group the decisions leave unnamed, targeting the highest version its members already declare.
+`expand-release-plan` names every member of a group the plan reaches, at the single version that
+group resolves to.
 
 `expanded.json` is a cargo-release-plan input whose every entry carries an explicit `version`:
 
@@ -226,10 +220,13 @@ Present one row per version group, and one per ungrouped package, reading the me
 | `{{PACKAGE}}` | `{{CHANGE_LEVEL}}` | `{{NEW_VERSION}}` |
 
 A group's row lists every member and the level that governs the group, which is the highest
-level decided for any of its members. Follow each row with its supporting explanation. The
-explanation may span multiple paragraphs and must cite the `report.json` entry, diff path, or
-`semver-checks.log` summary it rests on. Name any member that is moving only because it shares a
-group. State that the remaining analyzed packages need no increment.
+level decided for any of its members. A group that appears only because it was realigned has no
+change level: write `realignment` in that column, and state that its members are moving onto a
+version one of them already declares, so the realignment publishes nothing new. Follow each row
+with its supporting explanation. The explanation may span multiple paragraphs and must cite the
+`report.json` entry, diff path, or `semver-checks.log` summary it rests on. Name any member that
+is moving only because it shares a group. State that the remaining analyzed packages need no
+increment.
 
 Report separately, and outside that table, every `report.json` entry that has no `anchor`. Such
 a package has never been published, so it needs a first publication as described in

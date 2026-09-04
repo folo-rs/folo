@@ -72,12 +72,10 @@ its released-content diff, its changed inherited workspace fields, its locked de
 changes, and the decisions for its dependencies. Signal this by omitting the package from the
 semantic change-decision file.
 
-A member of a group the report marks `"consistent": false` is an exception. Its members declare
-different versions, and they must agree on one. Nothing realigns a group that no decision names,
-so such a group takes a decision even when nothing about it changed: `align` when no member's
-accumulated changes justify a level of their own, and the highest such level otherwise.
-`align` moves the members to the highest version any of them already declares, without
-publishing a new release of the member that is already there.
+Membership of a group the report marks `"consistent": false` does not change this. A group whose
+members disagree on a version is realigned mechanically when the plan is generated, onto the
+highest version any member already declares. Judge each member on its own released changes and
+choose no increment when it has none.
 
 A package that the report gives no anchor has never been released, so it has no version to
 increment. It follows the first-publication path in
