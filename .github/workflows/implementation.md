@@ -31,6 +31,12 @@ publication eligibility, semantic change-decision validation, and conversion to
 `cargo-release-plan apply` input. The just recipes remain thin command-line entry points.
 Pester tests in `scripts/release/ReleasePlan.Tests.ps1` lock these boundaries.
 
+On Windows, the module scopes `CARGO_TARGET_DIR` for direct `cargo-semver-checks` and
+`release-plz update` invocations to a stable, workspace-specific directory beneath the user
+temporary directory. This keeps the SemVer tool's nested placeholder builds independent of
+checkout depth without changing target-directory behavior for unrelated Cargo commands or
+non-Windows validation.
+
 ## Merge-blocking result
 
 The `required-checks` job is the intended single ruleset target. Its `needs` graph contains
