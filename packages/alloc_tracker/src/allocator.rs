@@ -80,10 +80,11 @@ impl PerThreadCounters {
     fn raise_outstanding(&self, delta: i64) {
         let outstanding = self.shift_outstanding(delta);
 
-        if outstanding > self.peak_outstanding.load(atomic::Ordering::Relaxed) {
-            self.peak_outstanding
-                .store(outstanding, atomic::Ordering::Relaxed);
-        }
+        // Storing the maximum unconditionally rather than branching on it: the store is to a
+        // cache line this thread has just dirtied, so skipping it saves nothing worth a branch.
+        let peak = self.peak_outstanding.load(atomic::Ordering::Relaxed);
+        self.peak_outstanding
+            .store(outstanding.max(peak), atomic::Ordering::Relaxed);
     }
 
     /// Applies `delta` to the outstanding total, returning the new value.
@@ -440,7 +441,9 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: We forward the call to the underlying allocator which implements GlobalAlloc.
-        unsafe { self.inner.dealloc(ptr, layout); }
+        unsafe {
+            self.inner.dealloc(ptr, layout);
+        }
 
         track_deallocation(layout.size());
     }
@@ -608,7 +611,9 @@ mod tests {
         let after_alloc = counters.outstanding();
 
         // SAFETY: The block was just obtained from this allocator with this exact layout.
-        unsafe { allocator.dealloc(ptr, layout); }
+        unsafe {
+            allocator.dealloc(ptr, layout);
+        }
         let after_dealloc = counters.outstanding();
 
         assert!(!ptr.is_null());
@@ -637,6 +642,44 @@ mod tests {
     }
 
     #[test]
+    fn successful_reallocation_moves_counters() {
+        const INITIAL: usize = 64;
+        const GROWN: usize = 256;
+
+        let allocator = Allocator::new(System);
+        let layout = test_layout(INITIAL);
+        let counters = get_or_init_thread_counters();
+
+        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+        let block = unsafe { allocator.alloc(layout) };
+        assert!(!block.is_null());
+
+        let before_bytes = counters.bytes();
+        let before_count = counters.count();
+        let before_outstanding = counters.outstanding();
+
+        // SAFETY: The block was just obtained from this allocator with this exact layout, and
+        // the new size is non-zero and does not overflow when rounded up to the alignment.
+        let grown = unsafe { allocator.realloc(block, layout, GROWN) };
+        assert!(!grown.is_null());
+
+        let after_bytes = counters.bytes();
+        let after_count = counters.count();
+        let after_outstanding = counters.outstanding();
+
+        // SAFETY: The grown block came from this allocator, whose layout is now the new size.
+        unsafe {
+            allocator.dealloc(grown, test_layout(GROWN));
+        }
+
+        // A reallocation is one allocator request of the new size, so the cumulative totals
+        // grow by the whole new size while outstanding grows only by the difference.
+        assert_eq!(after_bytes.wrapping_sub(before_bytes), 256);
+        assert_eq!(after_count.wrapping_sub(before_count), 1);
+        assert_eq!(after_outstanding.wrapping_sub(before_outstanding), 192);
+    }
+
+    #[test]
     fn failed_reallocation_does_not_move_counters() {
         let layout = test_layout(64);
         let system = System;
@@ -660,7 +703,9 @@ mod tests {
 
         // SAFETY: The block came from the system allocator with this exact layout and the
         // failed reallocation did not release it.
-        unsafe { system.dealloc(block, layout); }
+        unsafe {
+            system.dealloc(block, layout);
+        }
 
         assert!(grown.is_null());
         assert_eq!(before_bytes, after_bytes);
@@ -685,7 +730,9 @@ mod tests {
 
             // SAFETY: The block came from the system allocator with this exact layout, and
             // the tracking allocator forwards the release to that same allocator.
-            unsafe { allocator.dealloc(block, layout); }
+            unsafe {
+                allocator.dealloc(block, layout);
+            }
 
             // Creating counters allocates and locks the registry, which a free must never do.
             assert!(existing_thread_counters().is_none());

@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::allocator::get_or_init_thread_counters;
+use crate::allocator::{PerThreadCounters, get_or_init_thread_counters};
 use crate::operation_metrics::SpanMeasurement;
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 
@@ -127,10 +127,12 @@ impl ThreadSpan {
 
 impl Drop for ThreadSpan {
     fn drop(&mut self) {
+        let counters = get_or_init_thread_counters();
+
         // The watermark must go back to the enclosing span before any early exit below. A
         // span that is abandoned without recording would otherwise leave its own rebased
         // watermark in place and silently suppress the enclosing span's peak.
-        let peak_bytes = restore_watermark(self.start_outstanding, self.enclosing_peak);
+        let peak_bytes = restore_watermark(counters, self.start_outstanding, self.enclosing_peak);
 
         // A panic while the span is held records nothing; panicking again here would
         // abort the process.
@@ -142,7 +144,8 @@ impl Drop for ThreadSpan {
             "the span was dropped without an iteration count; call `.iterations(1)` \
              if the measured region is a single iteration",
         );
-        let (bytes_delta, count_delta) = thread_deltas(self.start_bytes, self.start_count);
+        let (bytes_delta, count_delta) =
+            thread_deltas(counters, self.start_bytes, self.start_count);
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.add_span(SpanMeasurement {
             iterations,
@@ -159,9 +162,11 @@ impl Drop for ThreadSpan {
 /// The enclosing span's watermark is the higher of the value it had on entry and the level
 /// the inner span reached, because memory the inner span held was equally outstanding from
 /// the enclosing span's point of view.
-fn restore_watermark(start_outstanding: i64, enclosing_peak: i64) -> u64 {
-    let counters = get_or_init_thread_counters();
-
+fn restore_watermark(
+    counters: &PerThreadCounters,
+    start_outstanding: i64,
+    enclosing_peak: i64,
+) -> u64 {
     let span_peak = counters.peak_outstanding();
     counters.set_peak_outstanding(enclosing_peak.max(span_peak));
 
@@ -178,9 +183,7 @@ fn restore_watermark(start_outstanding: i64, enclosing_peak: i64) -> u64 {
 /// The whole-span deltas are returned undivided; per-iteration figures are derived
 /// later by the shared span accumulator, which weights each span by its iteration
 /// count.
-fn thread_deltas(start_bytes: u64, start_count: u64) -> (u64, u64) {
-    let counters = get_or_init_thread_counters();
-
+fn thread_deltas(counters: &PerThreadCounters, start_bytes: u64, start_count: u64) -> (u64, u64) {
     let bytes_delta = counters
         .bytes()
         .checked_sub(start_bytes)
