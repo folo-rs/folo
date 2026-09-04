@@ -73,8 +73,8 @@ changes, and the decisions for its dependencies. Signal this by omitting the pac
 semantic change-decision file.
 
 A member of a group the report marks `"consistent": false` is an exception. Its members declare
-different versions, and only an increment brings them back to one, so such a group takes a
-change level even when nothing about it changed.
+different versions, and only an increment brings them back to one. Nothing realigns a group that
+no decision names, so such a group takes a change level even when nothing about it changed.
 
 A package that the report gives no anchor has never been released, so it has no version to
 increment. It follows the first-publication path in

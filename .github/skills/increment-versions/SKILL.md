@@ -148,9 +148,10 @@ Decide each package from these inputs:
 
 A group that `report.json` marks `"consistent": false` needs a decision even when no member's
 released content changed. Its members declare different versions, which is a check failure in
-its own right, and expansion is what returns them to one version. Decide it from whatever its
-members' accumulated changes justify, and `patch` when they justify nothing, so the alignment
-costs the smallest increment that resolves it.
+its own right. Expansion realigns a group only when a decision names one of its members, so
+without a decision here nothing acts on the group and the check stays red. Decide it from
+whatever its members' accumulated changes justify, and `patch` when they justify nothing, so the
+alignment costs the smallest increment that resolves it.
 
 `semver-checks.log` closes each checked package's block with one `Summary` line. The package is
 the one named in the `Checking` line that opens the block. The table lists line prefixes: a

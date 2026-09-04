@@ -316,9 +316,10 @@ from the manifests `apply` has already written.
 
 An inconsistent group is a check failure in its own right, independent of any
 content change, and a plan entry naming any member resolves it: expansion lifts
-every member to the highest declared version raised by the decided level. A
-caller that only ever records change levels can therefore recover from either
-failure the check reports.
+every member to the highest declared version raised by the decided level.
+Expansion is plan-driven, so a group no entry names is left alone; a caller that
+records change levels for the groups the check reports can therefore recover
+from either failure.
 
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group
