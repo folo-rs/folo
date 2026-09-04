@@ -62,7 +62,7 @@
 //!     c.bench_function("my_operation", |b| {
 //!         b.iter_custom(|iters| {
 //!             let start = Instant::now();
-//!             let _span = operation.measure_process().iterations(iters);
+//!             let _span = operation.measure_thread().iterations(iters);
 //!
 //!             for _ in 0..iters {
 //!                 black_box(vec![1, 2, 3, 4, 5]);
@@ -123,7 +123,7 @@
 //! #   let session = session.no_stdout().no_file();
 //!     let operation = session.operation("drain_queue");
 //!
-//!     let span = operation.measure_process();
+//!     let span = operation.measure_thread();
 //!
 //!     let mut processed = 0_u64;
 //!
@@ -178,7 +178,7 @@
 //! # let session = session.no_stdout().no_file();
 //! {
 //!     let operation = session.operation("work");
-//!     let _span = operation.measure_process().iterations(1);
+//!     let _span = operation.measure_thread().iterations(1);
 //!     let _data = vec![1, 2, 3]; // Some allocation work
 //! }
 //!

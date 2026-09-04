@@ -24,7 +24,7 @@ use crate::OperationMetrics;
 /// # let session = session.no_stdout().no_file();
 /// {
 ///     let operation = session.operation("test_work");
-///     let _span = operation.measure_process().iterations(1);
+///     let _span = operation.measure_thread().iterations(1);
 ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
 /// }
 ///
@@ -57,13 +57,13 @@ use crate::OperationMetrics;
 /// // Record some work in each
 /// {
 ///     let op1 = session1.operation("work");
-///     let _span1 = op1.measure_process().iterations(1);
+///     let _span1 = op1.measure_thread().iterations(1);
 ///     let _data1 = vec![1, 2, 3]; // This allocates memory
 /// }
 ///
 /// {
 ///     let op2 = session2.operation("work");
-///     let _span2 = op2.measure_process().iterations(1);
+///     let _span2 = op2.measure_thread().iterations(1);
 ///     let _data2 = vec![4, 5, 6, 7]; // This allocates more memory
 /// }
 ///
@@ -183,13 +183,13 @@ impl Report {
     /// // Both sessions record the same operation name
     /// {
     ///     let op1 = session1.operation("common_work");
-    ///     let _span1 = op1.measure_process().iterations(1);
+    ///     let _span1 = op1.measure_thread().iterations(1);
     ///     let _data1 = vec![1, 2, 3]; // 3 elements
     /// }
     ///
     /// {
     ///     let op2 = session2.operation("common_work");
-    ///     let _span2 = op2.measure_process().iterations(1);
+    ///     let _span2 = op2.measure_thread().iterations(1);
     ///     let _data2 = vec![4, 5]; // 2 elements
     /// }
     ///
@@ -272,7 +272,7 @@ impl Report {
     /// # let session = session.no_stdout().no_file();
     /// {
     ///     let operation = session.operation("test_work");
-    ///     let _span = operation.measure_process().iterations(1);
+    ///     let _span = operation.measure_thread().iterations(1);
     ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     /// }
     ///
@@ -374,7 +374,7 @@ impl ReportOperation {
     /// # let session = session.no_stdout().no_file();
     /// {
     ///     let operation = session.operation("test_work");
-    ///     let _span = operation.measure_process().iterations(1);
+    ///     let _span = operation.measure_thread().iterations(1);
     ///     let _data = vec![1, 2, 3, 4, 5]; // This allocates memory
     /// }
     ///

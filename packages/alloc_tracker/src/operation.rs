@@ -28,7 +28,7 @@ use crate::{ERR_POISONED_LOCK, OperationMetrics, ProcessSpan, ThreadSpan};
 ///     c.bench_function("string_allocations", |b| {
 ///         b.iter_custom(|iters| {
 ///             let start = Instant::now();
-///             let _span = string_allocations.measure_process().iterations(iters);
+///             let _span = string_allocations.measure_thread().iterations(iters);
 ///
 ///             for _ in 0..iters {
 ///                 black_box(String::from("Hello, world!"));
