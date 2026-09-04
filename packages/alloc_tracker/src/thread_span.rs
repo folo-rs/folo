@@ -232,7 +232,7 @@ mod tests {
         }
 
         assert_eq!(operation.total_bytes_allocated(), 300);
-        assert_eq!(operation.peak_outstanding_bytes(), Some(100));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(100.0));
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
 
         register_fake_deallocation(1050);
 
-        assert_eq!(operation.peak_outstanding_bytes(), Some(50));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(50.0));
     }
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
 
         register_fake_deallocation(700);
 
-        assert_eq!(operation.peak_outstanding_bytes(), Some(0));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(0.0));
     }
 
     #[test]
@@ -295,8 +295,8 @@ mod tests {
 
         // The inner span sees only its own 200, while the outer span sees the 210 that were
         // outstanding at once while the inner span ran.
-        assert_eq!(inner.peak_outstanding_bytes(), Some(200));
-        assert_eq!(outer.peak_outstanding_bytes(), Some(210));
+        assert_eq!(inner.peak_outstanding_bytes(), Some(200.0));
+        assert_eq!(outer.peak_outstanding_bytes(), Some(210.0));
     }
 
     #[test]
@@ -321,11 +321,11 @@ mod tests {
         }
 
         assert_eq!(inner.peak_outstanding_bytes(), None);
-        assert_eq!(outer.peak_outstanding_bytes(), Some(400));
+        assert_eq!(outer.peak_outstanding_bytes(), Some(400.0));
     }
 
     #[test]
-    fn sequential_spans_report_their_own_peaks() {
+    fn sequential_spans_each_contribute_their_peak() {
         let session = Session::new().no_stdout().no_file();
         let operation = session.operation("test");
 
@@ -343,12 +343,13 @@ mod tests {
 
         {
             let _span = operation.measure_thread().iterations(1);
-            register_fake_allocation(300, 1);
-            register_fake_deallocation(300);
+            register_fake_allocation(400, 1);
+            register_fake_deallocation(400);
         }
 
-        // The operation reports the highest moment across its spans, not their sum.
-        assert_eq!(operation.peak_outstanding_bytes(), Some(700));
+        // Each span measures the same operation, so their peaks are averaged rather than
+        // summed. The spans cover one iteration each and so carry equal weight here.
+        assert_eq!(operation.peak_outstanding_bytes(), Some(400.0));
     }
 
     #[test]

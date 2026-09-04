@@ -3,6 +3,12 @@
 //! These tests use a global allocator setup to test the full functionality
 //! of the allocation tracking system, including single-threaded and multithreaded scenarios.
 
+#![expect(
+    clippy::cast_precision_loss,
+    reason = "buffer sizes are compile-time literals of a few hundred kilobytes, well within \
+              the range f64 represents exactly"
+)]
+
 use std::hint::black_box;
 use std::thread;
 
@@ -356,7 +362,7 @@ fn process_report_includes_allocations_from_multiple_threads() {
 }
 
 /// Reads an operation's peak the way a user inspects results: through the session report.
-fn report_peak(session: &Session, operation_name: &str) -> Option<u64> {
+fn report_peak(session: &Session, operation_name: &str) -> Option<f64> {
     session
         .to_report()
         .operations()
@@ -369,31 +375,87 @@ fn report_peak(session: &Session, operation_name: &str) -> Option<u64> {
 
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
-fn peak_stays_below_total_when_buffers_are_released() {
+fn peak_measures_one_iteration_regardless_of_batch_size() {
     // Large enough that incidental allocations by the test itself cannot approach it, so the
     // bounds below hold regardless of what else the harness does on this thread.
     const SIZE: usize = 64 * 1024;
-    const ITERATIONS: usize = 20;
+    const SHORT_BATCH: usize = 20;
+    const LONG_BATCH: usize = 200;
 
-    let session = Session::new().no_stdout().no_file();
-    {
-        let op = session.operation("released_each_iteration");
-        let _span = op.measure_thread().iterations(ITERATIONS as u64);
-        for _ in 0..ITERATIONS {
+    fn allocate_and_release(session: &Session, name: &str, iterations: usize) {
+        let op = session.operation(name);
+        let _span = op.measure_thread().iterations(iterations as u64);
+        for _ in 0..iterations {
             let data = vec![0_u8; SIZE];
             black_box(&data);
         }
     }
 
-    let total = report_total_bytes(&session, "released_each_iteration");
-    let peak = report_peak(&session, "released_each_iteration").expect("a thread span reports one");
+    let session = Session::new().no_stdout().no_file();
+    allocate_and_release(&session, "short_batch", SHORT_BATCH);
+    allocate_and_release(&session, "long_batch", LONG_BATCH);
 
-    // Every buffer is released before the next is taken, so only one is ever live. This is the
-    // whole point of the metric: the cumulative total keeps climbing while the peak does not.
-    assert!(peak >= SIZE as u64, "peak {peak} should cover one buffer");
+    let short_peak = report_peak(&session, "short_batch").expect("a thread span reports one");
+    let long_peak = report_peak(&session, "long_batch").expect("a thread span reports one");
+
+    // Every buffer is released before the next is taken, so only one is ever live — and the
+    // reported peak says so whichever batch size the harness happened to choose.
+    for peak in [short_peak, long_peak] {
+        assert!(peak >= SIZE as f64, "peak {peak} should cover one buffer");
+        assert!(
+            peak < (SIZE * 2) as f64,
+            "peak {peak} should not grow with the batch size"
+        );
+    }
+
+    // Meanwhile the cumulative total does scale with the batch size, which is what makes the
+    // peak worth reporting separately.
+    let short_total = report_total_bytes(&session, "short_batch");
+    let long_total = report_total_bytes(&session, "long_batch");
     assert!(
-        peak < total,
-        "peak {peak} should be far below the cumulative total {total}"
+        long_total > short_total * 5,
+        "cumulative total {long_total} should scale with the batch size, unlike the peak"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
+fn a_warmup_span_does_not_dominate_the_peak() {
+    const STEADY_SIZE: usize = 64 * 1024;
+    const STEADY_BATCH: usize = 1000;
+
+    // Far above the steady state, so the estimate would be visibly wrong if the warmup batch
+    // were given anything close to equal weight.
+    const WARMUP_SIZE: usize = 1024 * 1024;
+
+    let session = Session::new().no_stdout().no_file();
+    {
+        let op = session.operation("warmup_then_steady");
+
+        {
+            let _span = op.measure_thread().iterations(1);
+            let data = vec![0_u8; WARMUP_SIZE];
+            black_box(&data);
+        }
+
+        {
+            let _span = op.measure_thread().iterations(STEADY_BATCH as u64);
+            for _ in 0..STEADY_BATCH {
+                let data = vec![0_u8; STEADY_SIZE];
+                black_box(&data);
+            }
+        }
+    }
+
+    let peak = report_peak(&session, "warmup_then_steady").expect("thread spans report a peak");
+
+    assert!(
+        peak >= STEADY_SIZE as f64,
+        "peak {peak} should cover the steady-state buffer"
+    );
+    assert!(
+        peak < (STEADY_SIZE * 2) as f64,
+        "peak {peak} should reflect the steady state, not the warmup batch"
     );
 }
 
@@ -416,7 +478,7 @@ fn peak_covers_buffers_held_simultaneously() {
     let peak = report_peak(&session, "held_simultaneously").expect("a thread span reports one");
 
     assert!(
-        peak >= (SIZE * BUFFERS) as u64,
+        peak >= (SIZE * BUFFERS) as f64,
         "peak {peak} should cover all {BUFFERS} buffers held at once"
     );
 }

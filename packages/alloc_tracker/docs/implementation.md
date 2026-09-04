@@ -65,15 +65,29 @@ scoped bindings satisfy automatically.
 
 ## Peak aggregation
 
-An operation folds the peaks of its spans through a tri-state: no span recorded yet, a known
-maximum, or unavailable. The distinction between the first and third state is what allows a
-single process-scope span to render the whole operation's peak unavailable, rather than
-having an unmeasurable span fold as a harmless zero. Merging two reports folds the two
-tri-states the same way.
+The peak reuses the same span accumulator as the other two metrics, which fits a
+through-origin regression of whole-span totals on iteration counts. A watermark is not a
+total and does not scale with the iteration count, so it is multiplied by the span's
+iteration count on the way in. The regression divides it back out, and the estimate reduces
+to the span watermarks averaged with weight n²:
+
+```text
+slope = Σ(nᵢ · peakᵢ·nᵢ) / Σ(nᵢ²) = Σ(nᵢ²·peakᵢ) / Σ(nᵢ²)
+```
+
+That is the whole reason for the scaling: it buys the warmup robustness of the shared
+estimator, and its confidence interval, for a quantity the estimator was not written for. A
+one-iteration warmup batch alongside thousand-iteration steady-state batches carries a
+millionth of their weight.
+
+Whether a peak is available at all is tracked separately from the accumulator, as a flag
+that any span lacking a watermark sets for good. Folding an unmeasurable span in as a zero
+would understate the operation instead of withholding it, and merging two reports carries
+the flag across.
 
 ## Reporting
 
 The human-readable table is rendered from a fixed column set with widths computed from the
 formatted cell contents, so adding a column does not require touching the layout logic. The
-JSON output omits the peak field entirely when it is unavailable, which keeps the field
+JSON output omits the peak fields entirely when the peak is unavailable, which keeps them
 additive for existing consumers.

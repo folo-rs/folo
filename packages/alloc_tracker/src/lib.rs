@@ -97,25 +97,34 @@
 //!
 //! # Metrics
 //!
-//! Bytes per iteration and allocations per iteration are rates: the totals observed
-//! across all of an operation's spans, divided by the total iteration count. They
-//! describe the cost of performing the operation once.
+//! Every metric is a per-iteration figure, estimated across an operation's spans
+//! with each span weighted by the square of its iteration count. Benchmark harnesses
+//! run short warmup batches before settling into long steady-state ones, and the
+//! weighting makes those short batches contribute almost nothing.
 //!
-//! Peak bytes is not a rate. It is the largest amount of memory the operation was
-//! holding at any single moment, measured relative to the memory already outstanding
-//! when a span began, and taken as the maximum across the operation's spans. The
-//! quantity of interest is how much memory has to exist at once, which is why it is
-//! not averaged over iterations.
+//! Bytes per iteration and allocations per iteration describe the cost of performing
+//! the operation once.
+//!
+//! Peak bytes is the memory one iteration holds at its high-water moment, measured
+//! relative to the memory already outstanding when a span began. It answers how much
+//! memory has to exist at once, which the cumulative byte count cannot: an operation
+//! that takes and releases a buffer a thousand times and one that holds a thousand
+//! buffers allocate the same total.
+//!
+//! The estimate assumes every iteration within a measured batch reaches the same peak.
+//! An operation that instead accumulates memory across the iterations of a batch has no
+//! per-iteration peak, and reports a figure that grows with the iteration counts the
+//! harness chose.
 //!
 //! Peak bytes is reported only when every span of the operation could measure it, so
 //! an operation containing even one [`ProcessSpan`] reports no peak rather than one
 //! that describes only part of the work.
 //!
-//! The figure is the largest single span watermark, not a sum across spans, so an
-//! operation measured concurrently on several threads reports the most any one of
-//! them held rather than the total held at once. It counts memory requested through
-//! the allocator as seen at the boundaries of allocator calls, so memory an allocator
-//! transiently holds inside a call does not appear in it.
+//! Span watermarks are averaged, not summed, so an operation measured concurrently on
+//! several threads reports what a typical one of them held rather than the total held
+//! at once. It counts memory requested through the allocator as seen at the boundaries
+//! of allocator calls, so memory an allocator transiently holds inside a call does not
+//! appear in it.
 //!
 //! Because the measurement is relative to the level at span entry, an operation that
 //! releases memory it did not allocate creates headroom that masks its own later
@@ -131,10 +140,10 @@
 //! ```text
 //! Allocation statistics:
 //!
-//! | Operation       | Bytes/iter | Allocations/iter | Peak bytes |
-//! |-----------------|------------|------------------|------------|
-//! | allocate_buffer |       1024 |                3 |       1024 |
-//! | build_map       |         64 |                1 |        n/a |
+//! | Operation       | Bytes/iter | Allocations/iter | Peak bytes/iter |
+//! |-----------------|------------|------------------|-----------------|
+//! | allocate_buffer |       1024 |                3 |            1024 |
+//! | build_map       |         64 |                1 |             n/a |
 //! ```
 //!
 //! # Machine-readable output

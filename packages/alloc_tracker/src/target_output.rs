@@ -22,8 +22,6 @@ struct OperationOutput<'a> {
     total_iterations: u64,
     total_bytes_allocated: u64,
     total_allocations_count: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    peak_outstanding_bytes: Option<u64>,
     span_count: u64,
     slope_bytes_per_iteration: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,6 +33,12 @@ struct OperationOutput<'a> {
     interval_low_allocations_per_iteration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     interval_high_allocations_per_iteration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slope_peak_bytes_per_iteration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_low_peak_bytes_per_iteration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_high_peak_bytes_per_iteration: Option<f64>,
 }
 
 impl Report {
@@ -111,7 +115,6 @@ impl Report {
                 total_iterations: operation.total_iterations(),
                 total_bytes_allocated: operation.total_bytes_allocated(),
                 total_allocations_count: operation.total_allocations_count(),
-                peak_outstanding_bytes: operation.peak_outstanding_bytes(),
                 span_count: statistics.span_count,
                 slope_bytes_per_iteration: statistics.bytes.slope,
                 interval_low_bytes_per_iteration: statistics.bytes.interval.map(|(low, _)| low),
@@ -124,6 +127,15 @@ impl Report {
                 interval_high_allocations_per_iteration: statistics
                     .allocations
                     .interval
+                    .map(|(_, high)| high),
+                slope_peak_bytes_per_iteration: statistics.peak.map(|peak| peak.slope),
+                interval_low_peak_bytes_per_iteration: statistics
+                    .peak
+                    .and_then(|peak| peak.interval)
+                    .map(|(low, _)| low),
+                interval_high_peak_bytes_per_iteration: statistics
+                    .peak
+                    .and_then(|peak| peak.interval)
                     .map(|(_, high)| high),
             };
 
@@ -237,25 +249,28 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn writes_peak_outstanding_bytes() {
+    fn writes_peak_bytes_per_iteration() {
         let session = session_with_recorded_work("allocate_vec");
         let directory = tempfile::tempdir().unwrap();
 
         session.to_report().write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("allocate_vec.json"));
-        // The fake allocation is never released, so the whole of it is outstanding
-        // at the span's high-water mark. The figure is a whole-run maximum and so
-        // is not divided by the span's iteration count.
+        // The fake allocation is never released, so the whole of it is outstanding at the
+        // span's high-water mark. A single span pins the estimate on its own peak, and
+        // carries no dispersion, so no interval is formed.
         assert_eq!(
-            value.get("peak_outstanding_bytes").and_then(Value::as_u64),
-            Some(800)
+            value
+                .get("slope_peak_bytes_per_iteration")
+                .and_then(Value::as_f64),
+            Some(800.0)
         );
+        assert!(value.get("interval_low_peak_bytes_per_iteration").is_none());
     }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn omits_peak_outstanding_bytes_when_unavailable() {
+    fn omits_peak_bytes_per_iteration_when_unavailable() {
         let session = Session::new().no_stdout().no_file();
         {
             let operation = session.operation("allocate_vec");
@@ -269,7 +284,7 @@ mod tests {
         session.to_report().write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("allocate_vec.json"));
-        assert!(value.get("peak_outstanding_bytes").is_none());
+        assert!(value.get("slope_peak_bytes_per_iteration").is_none());
     }
 
     #[test]

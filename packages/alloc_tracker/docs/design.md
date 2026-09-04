@@ -37,18 +37,27 @@ concurrent allocation by unrelated threads.
 
 ## Metrics
 
-**Bytes per iteration** and **allocations per iteration** are rates: the totals observed
-across all of the operation's spans, divided by the total iteration count. They describe
-the cost of performing the operation once.
+Every metric is a per-iteration figure, estimated across all of the operation's spans in a
+way that weights each span by the square of its iteration count. Benchmark harnesses run
+short warmup batches before settling into long steady-state ones, and the weighting makes
+those short batches contribute almost nothing without anyone having to identify which they
+were.
+
+**Bytes per iteration** and **allocations per iteration** describe the cost of performing
+the operation once.
 
 ### Peak outstanding bytes
 
-Peak outstanding bytes is not a rate. It is the largest amount of memory that the operation
-was holding at any single moment, measured as a high-water mark relative to the memory
-already outstanding when a span began. Reporting it as a whole-run maximum rather than a
-per-iteration average is deliberate: the quantity of interest is how much memory has to
-exist at once, and averaging that over iterations would describe nothing real. Where an
-operation has several spans, the largest span watermark wins.
+Peak outstanding bytes is the amount of memory one iteration of the operation holds at its
+high-water moment, measured relative to the memory already outstanding when a span began.
+It answers how much memory has to exist at once, which the cumulative byte count cannot:
+an operation that takes and releases a buffer a thousand times and one that holds a
+thousand buffers allocate the same total.
+
+The estimate assumes that every iteration within a measured batch reaches the same peak. A
+batch's watermark is therefore read as that per-iteration peak directly, which is what
+allows batches of different sizes to be combined at all, and what allows a short warmup
+batch with an anomalous watermark to be outweighed by the steady state.
 
 Peak outstanding bytes is reported only when every span of the operation could measure it.
 Process-scope spans cannot, because a process-wide watermark would be perturbed by
@@ -58,9 +67,14 @@ only part of the work.
 
 #### Limits of the peak figure
 
-The figure is the largest single span watermark, not a sum across spans. An operation
-measured concurrently on several threads therefore reports the most any one of them held,
-not the total held across all of them at once.
+An operation that accumulates memory across the iterations of a batch — one whose watermark
+grows with the batch size rather than staying level — has no per-iteration peak for this
+metric to report. It reports a figure that scales with whatever iteration counts the
+harness chose, and is not comparable between runs.
+
+Span watermarks are averaged, not summed. An operation measured concurrently on several
+threads reports what a typical one of them held, not the total held across all of them at
+once.
 
 The measured quantity is the memory requested through the allocator, sampled at the
 boundaries of allocator calls. Memory an allocator transiently holds inside a call — a

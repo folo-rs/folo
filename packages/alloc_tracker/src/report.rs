@@ -128,6 +128,9 @@ pub struct OperationStatistics {
 
     /// Per-iteration allocation-count statistics.
     pub allocations: MetricStatistics,
+
+    /// Per-iteration peak-byte statistics, or `None` when no span could observe a peak.
+    pub peak: Option<MetricStatistics>,
 }
 
 impl Report {
@@ -312,12 +315,14 @@ impl ReportOperation {
         self.metrics.total_iterations()
     }
 
-    /// Returns the most bytes this operation held allocated at any one moment.
+    /// Returns the per-iteration peak — the most bytes this operation held allocated at any
+    /// one moment during an iteration.
     ///
-    /// This is a whole-span figure, not a per-iteration rate: it answers "how much memory
-    /// was live at once" rather than "how much was allocated per iteration". Where several
-    /// spans were recorded, the highest of them is reported; the spans are not summed, so
-    /// concurrent spans report the most any one of them held rather than their total.
+    /// The figure assumes every iteration in a measured batch reaches the same peak, which
+    /// lets spans covering different iteration counts be combined and lets low-iteration
+    /// warmup spans be down-weighted. An operation that instead accumulates memory across
+    /// the iterations of a batch has no batch-size-independent peak, and reports a figure
+    /// that grows with the iteration counts the benchmark harness chose.
     ///
     /// The figure counts memory requested through the allocator as seen at the boundaries
     /// of allocator calls, and is measured relative to what was already outstanding when
@@ -325,12 +330,15 @@ impl ReportOperation {
     /// not count against that span, and a span that frees more than it allocates before
     /// allocating again under-reports what it holds.
     ///
-    /// Returns `None` when no spans were recorded, or when any recorded span was created by
+    /// Returns `None` when no finite figure is available — when no spans were recorded, when
+    /// the recorded spans covered zero iterations, or when any recorded span was created by
     /// [`Operation::measure_process`](crate::Operation::measure_process), which has no
     /// single thread's watermark to read.
     #[must_use]
-    pub fn peak_outstanding_bytes(&self) -> Option<u64> {
-        self.metrics.peak_outstanding_bytes()
+    pub fn peak_outstanding_bytes(&self) -> Option<f64> {
+        self.metrics
+            .peak_outstanding_bytes()
+            .filter(|peak| peak.is_finite())
     }
 
     /// Returns the per-iteration bytes allocated — the primary allocation metric
@@ -360,9 +368,8 @@ impl ReportOperation {
     ///
     /// Returns `None` when no spans were recorded. The returned
     /// [`OperationStatistics`] carries the per-iteration value and its confidence
-    /// interval for both the byte and allocation-count metrics. The peak figure is not a
-    /// per-iteration rate and is read separately through
-    /// [`peak_outstanding_bytes`](Self::peak_outstanding_bytes).
+    /// interval for each metric — the same figures that are written to the
+    /// machine-readable JSON output.
     ///
     /// # Examples
     ///
@@ -407,6 +414,13 @@ impl ReportOperation {
                 slope: self.metrics.allocations_slope()?,
                 interval: self.metrics.allocations_interval(),
             },
+            peak: self
+                .metrics
+                .peak_outstanding_bytes()
+                .map(|slope| MetricStatistics {
+                    slope,
+                    interval: self.metrics.peak_interval(),
+                }),
         })
     }
 }
@@ -460,7 +474,12 @@ impl fmt::Display for Report {
         writeln!(f, "Allocation statistics:")?;
         writeln!(f)?;
 
-        let headers = ["Operation", "Bytes/iter", "Allocations/iter", "Peak bytes"];
+        let headers = [
+            "Operation",
+            "Bytes/iter",
+            "Allocations/iter",
+            "Peak bytes/iter",
+        ];
 
         // Pre-render every cell so the column widths and the printed rows are computed from
         // the exact same strings. The confidence interval is kept out of this summary for
@@ -479,7 +498,7 @@ impl fmt::Display for Report {
 
                 let peak = operation
                     .peak_outstanding_bytes()
-                    .map_or_else(|| NOT_AVAILABLE.to_owned(), |bytes| bytes.to_string());
+                    .map_or_else(|| NOT_AVAILABLE.to_owned(), format_count);
 
                 [name.to_owned(), bytes, allocations, peak]
             })

@@ -3,7 +3,7 @@ Memory allocation tracking utilities for benchmarks and performance analysis.
 This package provides utilities to track memory allocations during code execution,
 enabling analysis of allocation patterns in benchmarks and performance tests. It reports
 bytes allocated per iteration, allocations per iteration, and the peak amount of memory
-held at any single moment.
+one iteration holds at a single moment.
 
 ## Basic usage
 

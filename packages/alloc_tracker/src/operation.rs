@@ -171,10 +171,10 @@ impl Operation {
         data.total_bytes_allocated()
     }
 
-    /// Returns the most bytes held allocated at once across all recorded spans.
+    /// Returns the per-iteration peak bytes held allocated across all recorded spans.
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn peak_outstanding_bytes(&self) -> Option<u64> {
+    pub(crate) fn peak_outstanding_bytes(&self) -> Option<f64> {
         let data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.peak_outstanding_bytes()
     }

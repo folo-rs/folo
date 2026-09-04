@@ -3,7 +3,7 @@
 //! Every measured span contributes its whole-span byte and allocation-count
 //! deltas together with the iteration count it covered. The spans are not
 //! retained: each is folded on arrival into running totals (for the pooled means)
-//! and into two [`SpanAccumulator`]s (for the warmup-robust per-iteration slope
+//! and into [`SpanAccumulator`]s (for the warmup-robust per-iteration slope
 //! and its confidence interval). Allocation figures are not deterministic —
 //! first-run allocations and buffer resizing jitter around the mean over a
 //! Criterion-chosen iteration count — so the slope down-weights low-iteration
@@ -28,67 +28,29 @@ pub(crate) struct SpanMeasurement {
     pub peak_outstanding_bytes: Option<u64>,
 }
 
-/// The peak figure accumulated across an operation's spans.
-///
-/// Spans fold together only while every one of them could observe a peak. A span that could
-/// not — a process-scoped span, which has no single thread's watermark to read — leaves the
-/// operation's peak unknowable rather than merely understated, so the whole operation
-/// reports nothing. Ref: docs/design.md, "Peak outstanding bytes".
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum PeakOutstanding {
-    /// No span has contributed yet.
-    #[default]
-    Unmeasured,
-
-    /// Every span so far reported a peak, and this is the highest of them.
-    Known(u64),
-
-    /// At least one span could not report a peak.
-    Unavailable,
-}
-
-impl PeakOutstanding {
-    /// Folds in one span's peak.
-    fn fold(self, span_peak: Option<u64>) -> Self {
-        match (self, span_peak) {
-            (Self::Unavailable, _) | (_, None) => Self::Unavailable,
-            (Self::Unmeasured, Some(peak)) => Self::Known(peak),
-            (Self::Known(highest), Some(peak)) => Self::Known(highest.max(peak)),
-        }
-    }
-
-    /// Combines two independently accumulated peaks.
-    fn merge(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Unavailable, _) | (_, Self::Unavailable) => Self::Unavailable,
-            (Self::Unmeasured, folded) | (folded, Self::Unmeasured) => folded,
-            (Self::Known(first), Self::Known(second)) => Self::Known(first.max(second)),
-        }
-    }
-
-    /// The peak in bytes, or `None` when it is unmeasured or unavailable.
-    fn value(self) -> Option<u64> {
-        match self {
-            Self::Known(peak) => Some(peak),
-            Self::Unmeasured | Self::Unavailable => None,
-        }
-    }
-}
-
 /// Metrics tracked for each operation in the session.
 ///
-/// Holds the pooled totals (bytes, allocation count, iterations) and two shared
-/// [`SpanAccumulator`]s — one over per-iteration bytes, one over per-iteration
-/// allocation counts — folded in as each span is recorded. No per-span data is
-/// retained.
+/// Holds the pooled totals (bytes, allocation count, iterations) and three shared
+/// [`SpanAccumulator`]s — over per-iteration bytes, per-iteration allocation counts
+/// and the per-iteration peak — folded in as each span is recorded. No per-span data
+/// is retained.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OperationMetrics {
     total_iterations: u64,
     total_bytes: u64,
     total_count: u64,
-    peak_outstanding: PeakOutstanding,
+
+    /// Whether any recorded span was of a kind that cannot observe a peak.
+    ///
+    /// A process-scoped span has no single thread's watermark to read, which leaves the
+    /// operation's peak unknowable rather than merely understated, so one such span
+    /// suppresses the figure for the whole operation.
+    /// Ref: docs/design.md, "Peak outstanding bytes".
+    peak_unavailable: bool,
+
     bytes: SpanAccumulator,
     allocations: SpanAccumulator,
+    peaks: SpanAccumulator,
 }
 
 impl OperationMetrics {
@@ -110,7 +72,19 @@ impl OperationMetrics {
             .checked_add(span.count)
             .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
 
-        self.peak_outstanding = self.peak_outstanding.fold(span.peak_outstanding_bytes);
+        self.peak_unavailable |= span.peak_outstanding_bytes.is_none();
+
+        if let Some(peak) = span.peak_outstanding_bytes {
+            // The accumulator estimates a per-iteration rate by regressing whole-span totals
+            // on iteration counts, so a peak is scaled up by the iteration count on the way in
+            // and divided back out by the regression. The result is the span peaks averaged
+            // with weight n², which is the same warmup-robust weighting the other metrics get.
+            // Ref: docs/implementation.md, "Peak aggregation".
+            let scaled = peak.checked_mul(span.iterations).expect(
+                "peak bytes * iterations overflows u64 - this indicates an unrealistic scenario",
+            );
+            self.peaks.add(span.iterations, scaled);
+        }
 
         self.bytes.add(span.iterations, span.bytes);
         self.allocations.add(span.iterations, span.count);
@@ -157,12 +131,26 @@ impl OperationMetrics {
         self.total_count
     }
 
-    /// The most bytes any one span held allocated at a single moment.
+    /// The warmup-robust per-iteration peak, or `None` when no span reported one.
     ///
     /// Returns `None` when no span has been recorded, or when any recorded span was of a
     /// kind that cannot observe a peak.
-    pub(crate) fn peak_outstanding_bytes(&self) -> Option<u64> {
-        self.peak_outstanding.value()
+    pub(crate) fn peak_outstanding_bytes(&self) -> Option<f64> {
+        if self.peak_unavailable {
+            return None;
+        }
+
+        self.peaks.slope()
+    }
+
+    /// The confidence interval of the per-iteration peak, or `None` when it cannot be
+    /// estimated.
+    pub(crate) fn peak_interval(&self) -> Option<(f64, f64)> {
+        if self.peak_unavailable {
+            return None;
+        }
+
+        self.peaks.interval()
     }
 
     /// Mean bytes allocated per iteration, pooled across all spans.
@@ -228,9 +216,10 @@ impl OperationMetrics {
             .total_count
             .checked_add(other.total_count)
             .expect("total allocations overflows u64 - this indicates an unrealistic scenario");
-        self.peak_outstanding = self.peak_outstanding.merge(other.peak_outstanding);
+        self.peak_unavailable |= other.peak_unavailable;
         self.bytes.merge(&other.bytes);
         self.allocations.merge(&other.allocations);
+        self.peaks.merge(&other.peaks);
     }
 }
 
@@ -272,29 +261,67 @@ mod tests {
     }
 
     #[test]
-    fn peak_reports_the_highest_span() {
-        // The peak answers "how much was live at once", so spans compete rather than sum.
+    fn peak_recovers_a_span_peak_that_does_not_vary_with_batch_size() {
+        // The metric's model: every iteration in a batch reaches the same peak, so the
+        // span peak is the per-iteration peak however many iterations the span covered.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(SpanMeasurement {
+            iterations: 2,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(64),
+        });
+        metrics.add_span(SpanMeasurement {
+            iterations: 8,
+            bytes: 400,
+            count: 4,
+            peak_outstanding_bytes: Some(64),
+        });
+
+        assert_eq!(metrics.peak_outstanding_bytes(), Some(64.0));
+    }
+
+    #[test]
+    fn peak_is_the_squared_iteration_weighted_mean_of_span_peaks() {
+        // (1²·1000 + 3²·100) / (1² + 3²) = 1900 / 10.
         let mut metrics = OperationMetrics::default();
         metrics.add_span(SpanMeasurement {
             iterations: 1,
             bytes: 100,
             count: 1,
-            peak_outstanding_bytes: Some(60),
+            peak_outstanding_bytes: Some(1000),
         });
         metrics.add_span(SpanMeasurement {
-            iterations: 1,
-            bytes: 100,
-            count: 1,
-            peak_outstanding_bytes: Some(90),
-        });
-        metrics.add_span(SpanMeasurement {
-            iterations: 1,
-            bytes: 100,
-            count: 1,
-            peak_outstanding_bytes: Some(70),
+            iterations: 3,
+            bytes: 300,
+            count: 3,
+            peak_outstanding_bytes: Some(100),
         });
 
-        assert_eq!(metrics.peak_outstanding_bytes(), Some(90));
+        assert_eq!(metrics.peak_outstanding_bytes(), Some(190.0));
+    }
+
+    #[test]
+    fn peak_downweights_low_iteration_warmup_spans() {
+        // A warmup span allocating a hundredfold peak over a single iteration barely
+        // moves the estimate away from the steady state its neighbour measured.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(SpanMeasurement {
+            iterations: 1,
+            bytes: 10_000,
+            count: 1,
+            peak_outstanding_bytes: Some(10_000),
+        });
+        metrics.add_span(SpanMeasurement {
+            iterations: 1000,
+            bytes: 100_000,
+            count: 1000,
+            peak_outstanding_bytes: Some(100),
+        });
+
+        let peak = metrics.peak_outstanding_bytes().unwrap();
+        assert!(peak > 100.0, "warmup span pulls the estimate up a little");
+        assert!(peak < 101.0, "but by less than one percent: {peak}");
     }
 
     #[test]
@@ -305,29 +332,57 @@ mod tests {
         metrics.add_span(span(1, 100, 1));
 
         assert_eq!(metrics.peak_outstanding_bytes(), None);
+        assert_eq!(metrics.peak_interval(), None);
     }
 
     #[test]
-    fn merging_takes_the_higher_peak() {
+    fn peak_interval_collapses_onto_an_unvarying_peak() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(SpanMeasurement {
+            iterations: 2,
+            bytes: 100,
+            count: 1,
+            peak_outstanding_bytes: Some(64),
+        });
+        metrics.add_span(SpanMeasurement {
+            iterations: 4,
+            bytes: 200,
+            count: 2,
+            peak_outstanding_bytes: Some(64),
+        });
+
+        assert_eq!(metrics.peak_interval(), Some((64.0, 64.0)));
+    }
+
+    #[test]
+    fn peak_interval_absent_with_a_single_span() {
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(span(4, 20, 4));
+
+        assert!(metrics.peak_interval().is_none());
+    }
+
+    #[test]
+    fn merging_folds_peak_spans_as_if_recorded_together() {
         let mut first = OperationMetrics::default();
         first.add_span(SpanMeasurement {
             iterations: 1,
             bytes: 100,
             count: 1,
-            peak_outstanding_bytes: Some(40),
+            peak_outstanding_bytes: Some(1000),
         });
 
         let mut second = OperationMetrics::default();
         second.add_span(SpanMeasurement {
-            iterations: 1,
-            bytes: 100,
-            count: 1,
-            peak_outstanding_bytes: Some(70),
+            iterations: 3,
+            bytes: 300,
+            count: 3,
+            peak_outstanding_bytes: Some(100),
         });
 
         first.merge(&second);
 
-        assert_eq!(first.peak_outstanding_bytes(), Some(70));
+        assert_eq!(first.peak_outstanding_bytes(), Some(190.0));
     }
 
     #[test]
@@ -337,7 +392,7 @@ mod tests {
 
         measured.merge(&OperationMetrics::default());
 
-        assert_eq!(measured.peak_outstanding_bytes(), Some(100));
+        assert_eq!(measured.peak_outstanding_bytes(), Some(100.0));
     }
 
     #[test]

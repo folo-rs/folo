@@ -224,7 +224,7 @@ mod tests {
         let operation = session.operation("test");
 
         drop(operation.measure_thread().iterations(1));
-        assert_eq!(operation.peak_outstanding_bytes(), Some(0));
+        assert_eq!(operation.peak_outstanding_bytes(), Some(0.0));
 
         drop(operation.measure_process().iterations(1));
 
