@@ -50,7 +50,7 @@ Commit none of them.
 | Placeholder | Description |
 |-------------|-------------|
 | `WORK_DIR` | The untracked directory holding this run's working files. |
-| `VERIFY_DIR` | A second untracked directory, used only by Stage 7. |
+| `VERIFY_DIR` | A second untracked directory, written by Stage 7 and adopted as `WORK_DIR` when Stage 7 sends the run back to Stage 4. |
 | `DIFF_PATH` | A package's `diff_path` value from `report.json`. |
 | `PACKAGE` | A package name. |
 | `CHANGE_LEVEL` | A decided change level: `breaking`, `nonbreaking`, or `patch`. |
@@ -66,16 +66,16 @@ interpreted as an absence of a required increment.
 
 # Stage 2: Collect evidence
 
-Record the release baseline, then write the report, the per-package diffs, and the SemVer
-evidence:
+Create the directory, record the release baseline, then write the report, the per-package diffs,
+and the SemVer evidence:
 
+> New-Item -ItemType Directory -Force -Path "{{WORK_DIR}}"
+>
 > git fetch origin main
 >
 > git rev-parse FETCH_HEAD > "{{WORK_DIR}}/base.txt"
 >
-> $env:RELEASE_PLAN_BASE = Get-Content "{{WORK_DIR}}/base.txt"
->
-> just release-report "{{WORK_DIR}}"
+> $env:RELEASE_PLAN_BASE = Get-Content "{{WORK_DIR}}/base.txt"; just release-report "{{WORK_DIR}}"
 
 Stop and report if any command exits non-zero. `just release-report` accepts the documented
 cargo-semver-checks finding exit and fails on every other non-zero exit, so a non-zero exit
@@ -89,7 +89,8 @@ branch, which would present an already-released increment as still pending.
 
 `base.txt` fixes that baseline for the rest of the run, so every later `just release-report` and
 `just validate-versions` invocation sets `RELEASE_PLAN_BASE` from it and no stage silently
-compares against a different revision.
+compares against a different revision. An environment variable does not outlive the shell that
+set it, so set it in the same invocation as the command that reads it.
 
 [`report.json`](../../../packages/cargo-release-plan/README.md#plan-and-report-schema) lists
 every publishable package with its `status`, `anchor`, `changed` array, `dependencies`, and
@@ -139,10 +140,12 @@ Decide each package from these inputs:
 * the entries already recorded in `decisions.json` for the packages it depends on; and
 * the package's floor in `semver-checks.log`.
 
-`semver-checks.log` closes each checked package with one `Summary` line:
+`semver-checks.log` closes each checked package's block with one `Summary` line. The package is
+the one named in the `Checking` line that opens the block. The table lists line prefixes: a
+summary that demands an increment continues with a count of the checks that failed.
 
-| Summary line | Floor |
-|--------------|-------|
+| Summary line prefix | Floor |
+|---------------------|-------|
 | `Summary no semver update required` | None. |
 | `Summary semver requires new minor version` | `nonbreaking`. |
 | `Summary semver requires new major version` | `breaking`. |
@@ -186,7 +189,8 @@ a package has never been published, so it needs a first publication as described
 [`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) rather than an increment.
 
 Ask the caller to approve or adjust the change levels, and update `decisions.json` to match
-what the caller approved. Do not continue until the caller approves them.
+what the caller approved. An adjustment is still bound by the floors in Stage 4: report the
+conflict rather than recording a level below one. Do not continue until the caller approves them.
 
 Stop here and report the approved change levels while the temporary rule in Scope applies.
 
@@ -221,15 +225,23 @@ directory:
 
 > just verify-lockfile
 >
-> $env:RELEASE_PLAN_BASE = Get-Content "{{WORK_DIR}}/base.txt"
+> New-Item -ItemType Directory -Force -Path "{{VERIFY_DIR}}"
 >
-> just release-report "{{VERIFY_DIR}}"
+> Copy-Item "{{WORK_DIR}}/base.txt" "{{VERIFY_DIR}}/base.txt"
 >
-> just validate-versions
+> $env:RELEASE_PLAN_BASE = Get-Content "{{VERIFY_DIR}}/base.txt"; just release-report "{{VERIFY_DIR}}"
+>
+> $env:RELEASE_PLAN_BASE = Get-Content "{{VERIFY_DIR}}/base.txt"; just validate-versions
 
-Return to Stage 4 if any command exits non-zero, deciding again from the `{{VERIFY_DIR}}`
-evidence: rerun Stage 3 against `{{VERIFY_DIR}}/report.json` first, because the applied
-increments change the report.
+Stop and report if `just verify-lockfile` exits non-zero. Refreshing the lockfile is part of
+applying a plan, so a stale lockfile here is a defect to report rather than a decision to revisit.
+
+Return to Stage 4 if either later command exits non-zero. Before doing so, adopt
+`{{VERIFY_DIR}}` as the run's `{{WORK_DIR}}`: the applied increments changed the report, and
+every later stage reads its inputs from `{{WORK_DIR}}`, so leaving the old directory in place
+would regenerate a plan from pre-apply evidence and increment the same packages a second time.
+The copied `base.txt` keeps the adopted directory on the original baseline. Rerun Stage 3
+against the adopted directory's `report.json` first.
 
 `just release-report` exits zero on a SemVer finding, so read `{{VERIFY_DIR}}/semver-checks.log`
 as well. Return to Stage 4 the same way if any package's `Summary` line now demands a level

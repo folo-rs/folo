@@ -593,10 +593,13 @@ function Assert-IncrementPackagePublished {
         }
     }
     if ($neverPublished.Count -gt 0) {
-        throw "The increment reaches never-published package(s): $($neverPublished -join ', '). First-publish them manually before applying this plan."
+        $noun = if ($neverPublished.Count -eq 1) { 'package' } else { 'packages' }
+        $pronoun = if ($neverPublished.Count -eq 1) { 'it' } else { 'them' }
+        throw "The increment reaches never-published $($noun): $($neverPublished -join ', '). First-publish $pronoun manually before applying this plan."
     }
     if ($unknown.Count -gt 0) {
-        throw "Could not confirm crates.io publication for package(s): $($unknown -join ', ')."
+        $noun = if ($unknown.Count -eq 1) { 'package' } else { 'packages' }
+        throw "Could not confirm crates.io publication for $($noun): $($unknown -join ', ')."
     }
     Write-Host 'Every package reached by the approved changes is already published.'
 }

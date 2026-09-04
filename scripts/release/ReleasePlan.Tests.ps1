@@ -442,7 +442,25 @@ Describe 'Assert-IncrementPackagePublished' {
         {
             Assert-IncrementPackagePublished -ReportPath $reportPath `
                 -DecisionPath $decisionPath -GetPublishStatus { 'NeverPublished' }
-        } | Should -Throw '*never-published*events*'
+        } | Should -Throw '*never-published package: events.*First-publish it manually*'
+    }
+
+    It 'names every never-published package in the plural' {
+        $reportPath = Join-Path $TestDrive 'plural-report.json'
+        $decisionPath = Join-Path $TestDrive 'plural-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'events'
+            Get-TestPackage -Name 'nm'
+        )
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'patch' }
+            @{ name = 'nm'; level = 'patch' }
+        )
+
+        {
+            Assert-IncrementPackagePublished -ReportPath $reportPath `
+                -DecisionPath $decisionPath -GetPublishStatus { 'NeverPublished' }
+        } | Should -Throw '*never-published packages: events, nm.*First-publish them manually*'
     }
 }
 

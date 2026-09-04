@@ -10,14 +10,19 @@ Read the package entry in `report.json`, its referenced diff when present, the p
 `Cargo.toml`, the workspace `Cargo.toml`, and the decisions for its dependencies. Direct
 `[package]` and dependency-table edits appear in the package's released-content diff alongside
 any other changed published files. Values inherited through `.workspace = true` instead
-appear in the report's `changed` array with `source: "inherited"` and may have no package
-diff.
+appear in the report's `changed` array with `source: "inherited"`, and locked dependency
+identities appear with `source: "lockfile"`; neither has a package diff.
 
 Evaluate every `source: "inherited"` entry for every package. A workspace-level edit affects
 each package that inherits the edited field, so a package can require an increment on an
 inherited value alone, without appearing in any original file diff. Read the package's own
 `Cargo.toml` to establish which fields it inherits rather than assuming a workspace-wide
 convention.
+
+Evaluate every `source: "lockfile"` entry the same way. A package that publishes an executable
+releases its resolved dependency closure, so a locked dependency change is a released-content
+change even though it produces no package diff. Judge the consumer impact of the moved
+dependency; it establishes at least `patch`.
 
 A package that is already `pending-release` is judged by these same criteria. Its existing
 version movement is retained, but it does not replace analysis of the accumulated changes: an
@@ -62,9 +67,10 @@ metadata-only.
 
 ## No increment
 
-Choose no increment only when the package's released-content diff, its changed inherited
-workspace fields, and the decisions for its dependencies require no change. Signal this by
-omitting the package from the semantic change-decision file.
+Choose no increment only when every entry in the package's `changed` array requires no change:
+its released-content diff, its changed inherited workspace fields, its locked dependency
+changes, and the decisions for its dependencies. Signal this by omitting the package from the
+semantic change-decision file.
 
 A package that the report gives no anchor has never been released, so it has no version to
 increment. It follows the first-publication path in

@@ -91,8 +91,8 @@ function Assert-RequiredCheck {
         throw 'MUST_SUCCEED_JOBS is empty; unconditional merge-blocking jobs cannot be classified.'
     }
 
-    # The list arrives as a workflow literal split on newlines, so blank and padded entries are
-    # ordinary. Normalizing here keeps an empty entry from being classified as an absent job.
+    # The list arrives as a whitespace-separated workflow literal, so blank and padded entries
+    # are ordinary. Normalizing here keeps an empty entry from being classified as an absent job.
     $normalized = @(
         $MustSucceedJob |
             ForEach-Object { $_.Trim() } |
