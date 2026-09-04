@@ -488,17 +488,21 @@ impl fmt::Display for Report {
             .sorted_operations()
             .into_iter()
             .map(|(name, operation)| {
-                let (bytes, allocations) = match operation.statistics() {
+                let (bytes, allocations, peak) = match operation.statistics() {
                     Some(statistics) => (
                         format_count(statistics.bytes.slope),
                         format_count(statistics.allocations.slope),
+                        statistics.peak.map_or_else(
+                            || NOT_AVAILABLE.to_owned(),
+                            |peak| format_count(peak.slope),
+                        ),
                     ),
-                    None => (NOT_AVAILABLE.to_owned(), NOT_AVAILABLE.to_owned()),
+                    None => (
+                        NOT_AVAILABLE.to_owned(),
+                        NOT_AVAILABLE.to_owned(),
+                        NOT_AVAILABLE.to_owned(),
+                    ),
                 };
-
-                let peak = operation
-                    .peak_outstanding_bytes()
-                    .map_or_else(|| NOT_AVAILABLE.to_owned(), format_count);
 
                 [name.to_owned(), bytes, allocations, peak]
             })
