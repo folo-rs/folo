@@ -354,3 +354,83 @@ fn process_report_includes_allocations_from_multiple_threads() {
     assert!(total >= (THREAD_A_ALLOCS * SIZE_A) as u64);
     assert!(total >= (THREAD_B_ALLOCS * SIZE_B) as u64);
 }
+
+/// Reads an operation's peak the way a user inspects results: through the session report.
+fn report_peak(session: &Session, operation_name: &str) -> Option<u64> {
+    session
+        .to_report()
+        .operations()
+        .find(|&(name, _)| name == operation_name)
+        .map_or_else(
+            || panic!("operation {operation_name:?} should appear in the report"),
+            |(_, op)| op.peak_outstanding_bytes(),
+        )
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
+fn peak_stays_below_total_when_buffers_are_released() {
+    // Large enough that incidental allocations by the test itself cannot approach it, so the
+    // bounds below hold regardless of what else the harness does on this thread.
+    const SIZE: usize = 64 * 1024;
+    const ITERATIONS: usize = 20;
+
+    let session = Session::new().no_stdout().no_file();
+    {
+        let op = session.operation("released_each_iteration");
+        let _span = op.measure_thread().iterations(ITERATIONS as u64);
+        for _ in 0..ITERATIONS {
+            let data = vec![0_u8; SIZE];
+            black_box(&data);
+        }
+    }
+
+    let total = report_total_bytes(&session, "released_each_iteration");
+    let peak = report_peak(&session, "released_each_iteration").expect("a thread span reports one");
+
+    // Every buffer is released before the next is taken, so only one is ever live. This is the
+    // whole point of the metric: the cumulative total keeps climbing while the peak does not.
+    assert!(peak >= SIZE as u64, "peak {peak} should cover one buffer");
+    assert!(
+        peak < total,
+        "peak {peak} should be far below the cumulative total {total}"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
+fn peak_covers_buffers_held_simultaneously() {
+    const SIZE: usize = 64 * 1024;
+    const BUFFERS: usize = 8;
+
+    let session = Session::new().no_stdout().no_file();
+    {
+        let op = session.operation("held_simultaneously");
+        let _span = op.measure_thread().iterations(1);
+        let held: Vec<Vec<u8>> = std::iter::repeat_with(|| vec![0_u8; SIZE])
+            .take(BUFFERS)
+            .collect();
+        black_box(&held);
+    }
+
+    let peak = report_peak(&session, "held_simultaneously").expect("a thread span reports one");
+
+    assert!(
+        peak >= (SIZE * BUFFERS) as u64,
+        "peak {peak} should cover all {BUFFERS} buffers held at once"
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
+fn process_span_reports_no_peak() {
+    let session = Session::new().no_stdout().no_file();
+    {
+        let op = session.operation("process_scope");
+        let _span = op.measure_process().iterations(1);
+        let data = vec![0_u8; 64 * 1024];
+        black_box(&data);
+    }
+
+    assert_eq!(report_peak(&session, "process_scope"), None);
+}
