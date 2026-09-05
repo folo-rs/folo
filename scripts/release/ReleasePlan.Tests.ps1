@@ -839,6 +839,59 @@ Describe 'New-ReleasePlanFile' {
         $plan.increments[0].version | Should -Be '1.1.0'
     }
 
+    It 'refuses to realign a group that strands an outside published dependent' {
+        # Applying the plan rewrites the requirement an outside package pins the moving member
+        # at, changing that package's published manifest under a version crates.io already
+        # carries. Nothing about the group can fix that, so the operator has to decide a level
+        # for the dependent too.
+        $reportPath = Join-Path $TestDrive 'stranded-report.json'
+        $decisionPath = Join-Path $TestDrive 'stranded-decision.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'nm' -Group 'nm' -DeclaredVersion '1.1.0' -AnchorVersion '1.1.0'
+            Get-TestPackage -Name 'nm_impl' -Group 'nm' -DeclaredVersion '1.0.0' `
+                -AnchorVersion '1.0.0'
+            Get-TestPackage -Name 'events' -DeclaredVersion '2.0.0' -AnchorVersion '2.0.0' `
+                -Dependencies @(@{ name = 'nm_impl' })
+        ) -Group @{
+            nm = @{ members = @('nm', 'nm_impl'); consistent = $false; version = '1.1.0' }
+        }
+        Write-TestDecision -Path $decisionPath -Change @()
+
+        {
+            New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+                -PlanPath (Join-Path $TestDrive 'stranded-plan.json')
+        } | Should -Throw '*published package: events*'
+    }
+
+    It 'realigns a group whose outside dependent already has a decision' {
+        # The dependent is moving under its own decision, so the rewritten requirement ships
+        # under a new version and the group can align normally.
+        $reportPath = Join-Path $TestDrive 'decided-dependent-report.json'
+        $decisionPath = Join-Path $TestDrive 'decided-dependent-decision.json'
+        $planPath = Join-Path $TestDrive 'decided-dependent-plan.json'
+        Write-TestReport -Path $reportPath -Package @(
+            Get-TestPackage -Name 'nm' -Group 'nm' -DeclaredVersion '1.1.0' -AnchorVersion '1.1.0'
+            Get-TestPackage -Name 'nm_impl' -Group 'nm' -DeclaredVersion '1.0.0' `
+                -AnchorVersion '1.0.0'
+            Get-TestPackage -Name 'events' -Status 'needs-increment' `
+                -Changed @(@{ path = 'src/lib.rs' }) -DeclaredVersion '2.0.0' `
+                -AnchorVersion '2.0.0' -Dependencies @(@{ name = 'nm_impl' })
+        ) -Group @{
+            nm = @{ members = @('nm', 'nm_impl'); consistent = $false; version = '1.1.0' }
+        }
+        Write-TestDecision -Path $decisionPath -Change @(
+            @{ name = 'events'; level = 'patch' }
+        )
+
+        New-ReleasePlanFile -ReportPath $reportPath -DecisionPath $decisionPath `
+            -PlanPath $planPath
+        $plan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+
+        @($plan.increments).Count | Should -Be 2
+        ($plan.increments | Where-Object name -EQ 'nm').version | Should -Be '1.1.0'
+        ($plan.increments | Where-Object name -EQ 'events').level | Should -Be 'patch'
+    }
+
     It 'increments a drifted group when an unmoved member depends on a moving member' {
         # Aligning would raise nm_impl and rewrite the `=` requirement nm publishes for it, while
         # nm keeps a version crates.io already carries. That is changed released content under a

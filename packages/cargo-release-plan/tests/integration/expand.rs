@@ -64,7 +64,7 @@ shell_impl = { workspace = true }
     let increments = expanded
         .get("increments")
         .and_then(Value::as_array)
-        .expect("an expanded plan always carries an increments array");
+        .unwrap();
     let versions = expanded_versions(increments);
     // `shell_impl` was never named, but shares a group with `shell`.
     assert_eq!(
@@ -141,14 +141,9 @@ release-family = ["shell"]
     let names: Vec<&str> = expanded
         .get("increments")
         .and_then(Value::as_array)
-        .expect("an expanded plan always carries an increments array")
+        .unwrap()
         .iter()
-        .map(|entry| {
-            entry
-                .get("name")
-                .and_then(Value::as_str)
-                .expect("every expanded increment names a package")
-        })
+        .map(|entry| entry.get("name").and_then(Value::as_str).unwrap())
         .collect();
     assert_eq!(names, vec!["shell"]);
 
@@ -259,7 +254,7 @@ g = ["shell", "shell_impl"]
     let increments = expanded
         .get("increments")
         .and_then(Value::as_array)
-        .expect("an expanded plan always carries an increments array");
+        .unwrap();
     assert_eq!(
         expanded_versions(increments),
         vec![("shell", "0.2.1"), ("shell_impl", "0.2.1")]
@@ -318,7 +313,7 @@ g = ["shell", "shell_impl"]
     let increments = expanded
         .get("increments")
         .and_then(Value::as_array)
-        .expect("an expanded plan always carries an increments array");
+        .unwrap();
     assert_eq!(
         expanded_versions(increments),
         vec![("shell", "1.1.0"), ("shell_impl", "1.1.0")]

@@ -334,9 +334,5 @@ leaving the old directory in place would regenerate a plan from pre-apply eviden
 the same packages a second time. The copied `base.txt` keeps the adopted directory on the
 original baseline. Rerun Stage 3 against the adopted directory's `report.json` first.
 
-`just release-report` exits zero on a SemVer finding, so read `{{VERIFY_DIR}}/semver-checks.log`
-as well. Return to Stage 4 the same way if any package's `Summary` line now demands a level
-above the one that was applied to it.
-
 Commit the resulting `Cargo.toml`, dependency requirement, and `Cargo.lock` edits, and
 summarize the approved package change levels in the pull request description.

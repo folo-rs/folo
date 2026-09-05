@@ -1106,9 +1106,12 @@ jobs:
   # A fresh issue is filed per failing run - no dedup, no auto-close - mirroring the release
   # workflow's per-run alert: each failure is investigated and closed individually, and a
   # later green run does not touch prior issues. `failure()` fires only on a real failure, so
-  # a fully-green (or skipped-only) run files nothing. `needs` lists every job so a failure in
-  # any of them reaches this gate. `alert` stays off the `required-checks` fan-in: it files
-  # issues on a failed push to `main`, it is not a merge gate.
+  # a fully-green (or skipped-only) run files nothing. `needs` lists every merge-blocking and
+  # advisory job directly, so a failure in any of them reaches this gate. `required-checks` is
+  # deliberately NOT among them: it converts a cancelled dependency into a failure, so
+  # depending on it would turn a cancelled push-to-main run into a filed issue about a failure
+  # that never happened. `alert` also stays off the fan-in's own `needs:` - it files issues,
+  # it is not a merge gate.
   alert:
     needs:
       - delta
@@ -1142,7 +1145,6 @@ jobs:
       - test-azure
       - test-azure-gh
       - coverage-notify
-      - required-checks
     if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

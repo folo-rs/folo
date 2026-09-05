@@ -54,7 +54,9 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   green the fan-in.
 - Add the new job to the `alert` job's `needs:` list as well. That list covers everything worth
   an issue after a failed push to `main`, including the advisory jobs the fan-in excludes, so the
-  two lists are maintained together rather than derived from each other.
+  two lists are maintained together rather than derived from each other. Never add
+  `required-checks` itself to `alert`: the fan-in reports a cancelled dependency as a failure, so
+  depending on it would file an issue about a cancelled run.
 - The job's GitHub check name is the literal `required-checks` (`name: required-checks`).
   Do not rename it.
 - Merge-queue runs use the same pruned job set as pull requests. A `github.event_name ==

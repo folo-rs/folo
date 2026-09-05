@@ -880,16 +880,18 @@ function Get-GroupAlignmentIncrement {
     # every member for no substantive change. The target is the report's own
     # highest-declared-member version, so the rule is not restated here.
     #
-    # That exact target is only safe while every member left at its current version keeps its
-    # released content. A member that stays put but depends on a member that moves does not:
-    # applying the plan rewrites the moving member's `=` requirement inside the staying member's
-    # published manifest, which changes released content under an already-published version and
-    # leaves that member needing an increment. Such a group takes the smallest real increment
-    # instead, which moves every member and gives the rewritten requirement a version to ship in.
+    # That exact target is only safe while every package left at its current version keeps its
+    # released content, and applying a plan rewrites the version requirement of any workspace
+    # path dependency on a package the plan moves. A package that stays put while depending on a
+    # moving member therefore has its published manifest rewritten under a version the registry
+    # already carries. Where that package is a group member, incrementing the group instead
+    # resolves it, because every member then moves. Where it is outside the group, no choice here
+    # can resolve it: it needs an increment of its own, which is a decision rather than mechanics.
     param(
         [Parameter(Mandatory)][string] $Name,
         [Parameter(Mandatory)] $Group,
-        [Parameter(Mandatory)] $ByName
+        [Parameter(Mandatory)] $ByName,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $DecidedPackage
     )
 
     if ($Group.PSObject.Properties.Name -notcontains 'version' -or
@@ -898,20 +900,47 @@ function Get-GroupAlignmentIncrement {
     }
     $target = [string] $Group.version
 
+    $member = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
     $moving = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
     )
     $staying = [System.Collections.Generic.List[string]]::new()
-    foreach ($member in $Group.members) {
-        $memberName = [string] $member
+    foreach ($groupMember in $Group.members) {
+        $memberName = [string] $groupMember
         if (-not $ByName.Contains($memberName)) {
             continue
         }
+        [void] $member.Add($memberName)
         if ([string] $ByName[$memberName].declared_version -ceq $target) {
             $staying.Add($memberName)
         } else {
             [void] $moving.Add($memberName)
         }
+    }
+
+    # A package outside the group is never moved by realigning it, so a dependent that already
+    # has an increment of its own is fine and only an undecided one is a problem.
+    $decided = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]] $DecidedPackage,
+        [System.StringComparer]::Ordinal
+    )
+    $stranded = [System.Collections.Generic.List[string]]::new()
+    foreach ($packageName in $ByName.Keys) {
+        if ($member.Contains($packageName) -or $decided.Contains($packageName)) {
+            continue
+        }
+        foreach ($dependency in $ByName[$packageName].dependencies) {
+            if ($moving.Contains([string] $dependency.name)) {
+                $stranded.Add($packageName)
+                break
+            }
+        }
+    }
+    if ($stranded.Count -gt 0) {
+        $noun = if ($stranded.Count -eq 1) { 'package' } else { 'packages' }
+        throw "Realigning group '$Name' on version '$target' rewrites the requirement it is pinned at inside published $($noun): $($stranded -join ', '). Decide a change level for $(if ($stranded.Count -eq 1) { 'it' } else { 'them' }) as well, so the rewritten requirement ships under a new version."
     }
 
     foreach ($memberName in $staying) {
@@ -935,7 +964,7 @@ function Get-GroupAlignmentIncrement {
 
     Write-Verbose (
         "Group '$Name' aligns on version '$target', which its members already declare at the " +
-        'highest, because no member that keeps its version depends on one the alignment moves.'
+        'highest, because no package that keeps its version depends on one the alignment moves.'
     ) -Verbose
     return [ordered]@{
         name    = $Name
@@ -1029,7 +1058,9 @@ function New-ReleasePlanFile {
             $planned.Contains($group.Name)) {
             continue
         }
-        $increment.Add((Get-GroupAlignmentIncrement -Name $group.Name -Group $group.Value -ByName $byName))
+        $decidedPackage = @($increment | ForEach-Object { [string] $_.name })
+        $increment.Add((Get-GroupAlignmentIncrement -Name $group.Name -Group $group.Value `
+                    -ByName $byName -DecidedPackage $decidedPackage))
     }
 
     if ($PSCmdlet.ShouldProcess($PlanPath, 'write generated cargo-release-plan input')) {
