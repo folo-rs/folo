@@ -105,10 +105,11 @@ impl Operation {
     /// Begins measuring allocations made by every thread in the process.
     ///
     /// Use this for one caller-owned measurement enclosing work whose threads cannot be
-    /// instrumented. When they can, prefer giving each worker its own
-    /// [`measure_thread`](Self::measure_thread) span naming this same operation: spans
-    /// aggregate per operation regardless of which thread produced them, and thread scope
-    /// avoids everything this scope gives up.
+    /// instrumented, or that several threads collaborate on iteration by iteration. When
+    /// the threads can be instrumented and each processes iterations of its own, prefer
+    /// giving every worker its own [`measure_thread`](Self::measure_thread) span naming
+    /// this same operation: spans aggregate per operation regardless of which thread
+    /// produced them, and thread scope avoids everything this scope gives up.
     ///
     /// A process span accepts the following in exchange for its reach:
     ///

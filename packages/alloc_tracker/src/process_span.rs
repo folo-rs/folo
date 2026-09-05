@@ -21,10 +21,11 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, SpanMeasurement};
 /// from a panic when the span drops, it records nothing and does not panic again,
 /// leaving the original panic to propagate.
 ///
-/// Reach for this only when the threads doing the work cannot be instrumented
-/// themselves; when they can, give each one its own
-/// [`ThreadSpan`](crate::ThreadSpan) naming the same operation. The trade-offs a
-/// process span accepts are listed under
+/// Reach for this when the threads doing the work cannot be instrumented themselves, or
+/// when several of them collaborate on every iteration so that no single thread's span
+/// covers a whole one. When each worker can be instrumented and counts iterations of its
+/// own, give each one its own [`ThreadSpan`](crate::ThreadSpan) naming the same operation
+/// instead. The trade-offs a process span accepts are listed under
 /// [`Operation::measure_process`](crate::Operation::measure_process).
 ///
 /// # Examples

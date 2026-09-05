@@ -365,8 +365,9 @@ mod tests {
         session.to_report().write_to_directory(directory.path());
 
         let value = read_json(&directory.path().join("failed.json"));
-        // A zero-iteration measurement has no per-iteration rate, so every slope is NaN,
-        // which serde_json renders as JSON null.
+        // A zero-iteration measurement has no per-iteration rate. The bytes and allocations
+        // slopes are always present, so theirs are NaN, which serde_json renders as JSON
+        // null. The peak instead expresses unavailability by being absent altogether.
         assert!(
             value
                 .get("slope_bytes_per_iteration")
@@ -380,6 +381,10 @@ mod tests {
                 .expect("the allocations slope field is always present")
                 .is_null(),
             "a zero-iteration allocations slope must serialize as null"
+        );
+        assert!(
+            value.get("slope_peak_bytes_per_iteration").is_none(),
+            "a zero-iteration peak must be omitted rather than serialized as null"
         );
         assert_eq!(
             value.get("total_iterations").and_then(Value::as_u64),

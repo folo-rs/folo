@@ -31,9 +31,16 @@ A span measures either thread scope or process scope.
 
 Thread scope observes only the allocator activity of the thread that created the span. It
 is the appropriate choice whenever the measured work stays on the calling thread, which
-covers most benchmarks. Work spread across threads is still best measured this way when
-those threads can be instrumented: each worker opens its own thread-scoped span, and spans
-naming the same operation aggregate together no matter which thread produced them.
+covers most benchmarks. It also covers work spread across threads that can be instrumented,
+provided each worker processes iterations of its own: every worker opens a thread-scoped
+span counting the iterations it completed itself, and spans naming the same operation
+aggregate together no matter which thread produced them.
+
+An operation combines its spans as repeated samples of one per-iteration cost rather than
+adding them up. Threads that collaborate on every iteration therefore cannot each open a
+span counting the whole batch: every such span describes only that worker's share of an
+iteration, and combining them yields that share rather than the iteration's full cost.
+Measure work of that shape with a single process-scoped span enclosing all of it.
 
 Overlapping thread-scoped spans on one thread must be dropped in reverse order of creation.
 Holding each span in a scoped binding naturally produces that order. Process-scoped spans

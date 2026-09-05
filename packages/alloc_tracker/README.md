@@ -50,8 +50,10 @@ known at the start.
 
 `measure_thread` observes only the calling thread and is the right choice whenever the
 measured work stays on that thread. It also covers work spread across threads that you can
-instrument: each worker opens its own span naming the same operation. Use `measure_process`
-when the work is performed by threads you cannot instrument, accepting that it also picks up
+instrument, provided each worker counts iterations of its own: an operation combines its
+spans as repeated samples of one per-iteration cost rather than adding them up. Use
+`measure_process` when the work is performed by threads you cannot instrument, or when
+several threads collaborate on every iteration, accepting that it also picks up
 allocations from unrelated threads, that its totals are approximate, and that it withholds
 peak memory from the whole operation.
 

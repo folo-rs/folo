@@ -91,8 +91,11 @@
 //! thread, which covers most benchmarks.
 //!
 //! Work spread across threads is still best measured this way when those threads can
-//! be instrumented: each worker opens its own span naming the same operation, and the
-//! spans aggregate together.
+//! be instrumented and each processes iterations of its own: every worker opens a span
+//! naming the same operation, counting the iterations it completed itself. An operation
+//! combines its spans as repeated samples of one per-iteration cost rather than adding
+//! them up, so threads that collaborate on every iteration need
+//! [`Operation::measure_process`] instead.
 //!
 //! [`Operation::measure_process`] observes every thread in the process. Reach for it
 //! when the measured work is performed by threads that cannot be instrumented,
