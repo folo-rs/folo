@@ -226,12 +226,18 @@ group resolves to.
 ```json
 {
   "schema_version": 1,
+  "expanded": true,
   "increments": [
     { "name": "nm", "version": "2.0.0" },
     { "name": "nm_impl", "version": "2.0.0" }
   ]
 }
 ```
+
+The `expanded` stamp binds the document to the packages it names. Applying it after a version
+group gained a member fails rather than editing a package that was never presented, so a group
+membership change between approval and Stage 6 sends the run back to this stage rather than
+widening what was approved. Repeat this stage from `create-release-plan` if that happens.
 
 Present one row per version group and one per ungrouped package, limited to what the plan moves: a
 group qualifies when `expanded.json` names at least one of its members, and an ungrouped package

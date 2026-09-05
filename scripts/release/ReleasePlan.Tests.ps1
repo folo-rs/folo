@@ -625,15 +625,29 @@ Describe 'Assert-IncrementPackagePublished' {
         function Write-TestExpandedPlan {
             param(
                 [Parameter(Mandatory)][string] $Path,
-                [Parameter(Mandatory)][string[]] $Name
+                [Parameter(Mandatory)][string[]] $Name,
+                [bool] $Expanded = $true
             )
 
             [ordered]@{
                 schema_version = $script:ValidReleasePlanSchemaVersion
+                expanded       = $Expanded
                 increments     = @($Name | ForEach-Object { [ordered]@{ name = $_; version = '1.0.1' } })
             } | ConvertTo-Json -Depth $script:ExpandedPlanFixtureJsonDepth |
                 Set-Content -LiteralPath $Path -Encoding utf8
         }
+    }
+
+    It 'rejects a plan that expansion did not produce' {
+        # An input plan may leave version-group members unnamed, so clearing publication against
+        # one would check a narrower set than apply edits.
+        $planPath = Join-Path $TestDrive 'unexpanded.json'
+        Write-TestExpandedPlan -Path $planPath -Name @('events') -Expanded $false
+
+        {
+            Assert-IncrementPackagePublished -ExpandedPath $planPath `
+                -GetPublishStatus { 'Published' }
+        } | Should -Throw '*is not an expanded plan*'
     }
 
     It 'checks every package the expansion reached, including group members' {
@@ -730,6 +744,7 @@ Describe 'Assert-IncrementPackagePublished' {
         $expandedPath = Join-Path $TestDrive 'nameless-expanded.json'
         [ordered]@{
             schema_version = $script:ValidReleasePlanSchemaVersion
+            expanded       = $true
             increments     = @([ordered]@{ version = '1.0.1' })
         } | ConvertTo-Json -Depth $script:ExpandedPlanFixtureJsonDepth |
             Set-Content -LiteralPath $expandedPath -Encoding utf8

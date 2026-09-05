@@ -692,6 +692,12 @@ function Read-ExpandedPlanPackageName {
         [long] $plan.schema_version -ne $script:ReleasePlanSchemaVersion) {
         throw "expanded plan at '$ExpandedPath' must use schema_version $script:ReleasePlanSchemaVersion."
     }
+    # Only an expanded plan names every package apply will edit. Checking publication against an
+    # input plan would clear a narrower set than the one that gets written, because expansion
+    # reaches the version-group members such a plan leaves unnamed.
+    if ($field -notcontains 'expanded' -or $plan.expanded -isnot [bool] -or -not $plan.expanded) {
+        throw "plan at '$ExpandedPath' is not an expanded plan; run 'just expand-release-plan' and check the result."
+    }
     if ($field -notcontains 'increments' -or $plan.increments -isnot [System.Array]) {
         throw "expanded plan at '$ExpandedPath' increments must be an array."
     }

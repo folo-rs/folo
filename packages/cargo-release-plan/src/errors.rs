@@ -217,6 +217,33 @@ impl UnknownPlanTargetError {
     }
 }
 
+/// An expanded plan no longer names every package it reaches.
+///
+/// An expanded plan is an approval artifact: it lists every package the decision
+/// moves, so a reviewer can see the whole set before it is applied. Expanding it
+/// again must therefore reproduce exactly that set. Reaching a package it does
+/// not name means the workspace's group configuration changed after the
+/// document was produced, so applying it would edit a package nobody approved.
+#[ohno::error]
+#[display(
+    "Expanded plan reaches packages it does not name: {}. The workspace's version groups changed \
+     after this document was produced, so re-expand the source plan and review it again",
+    unnamed.join(", ")
+)]
+pub(crate) struct ExpandedPlanDriftError {
+    unnamed: Vec<String>,
+}
+
+impl UnwindSafe for ExpandedPlanDriftError {}
+impl RefUnwindSafe for ExpandedPlanDriftError {}
+
+#[cfg(test)]
+impl ExpandedPlanDriftError {
+    pub(crate) fn unnamed(&self) -> &[String] {
+        &self.unnamed
+    }
+}
+
 /// An increment level is not `major`, `minor`, or `patch`.
 #[ohno::error]
 #[display(
@@ -803,6 +830,14 @@ mod tests {
     );
     assert_impl_all!(
         CreateOutputDirectoryError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        ExpandedPlanDriftError: Send,
         Sync,
         Debug,
         error::Error,

@@ -23,9 +23,12 @@ use crate::{
 /// The expanded document is itself a plan that can be applied directly after
 /// review. Every entry carries an explicit version because expansion has already
 /// resolved the increment against the group's highest declared member version.
+/// The `expanded` stamp is what lets `apply` hold it to the package set it
+/// names, rather than widening it through the group configuration of the day.
 #[derive(Serialize)]
 struct ExpandedPlanFile {
     schema_version: u32,
+    expanded: bool,
     increments: Vec<ExpandedPackageVersion>,
 }
 
@@ -65,6 +68,7 @@ pub(crate) fn run_expand(
 
     let document = ExpandedPlanFile {
         schema_version: SCHEMA_VERSION,
+        expanded: true,
         increments: expanded
             .packages
             .iter()

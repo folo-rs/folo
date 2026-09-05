@@ -107,7 +107,12 @@ may omit version-group members that `apply` will update; `expand` writes the
 complete explicit package/version set for review.
 
 The expanded document is itself a plan, so the reviewed document is the one that
-gets applied.
+gets applied. It is also marked as expanded, which binds it to the package set it
+names: applying it after a version group gained a member fails rather than
+quietly editing a package that was never reviewed. Recovering from that means
+expanding the source plan again and reviewing the wider set. An unmarked input
+plan keeps the opposite behavior, since naming a group and letting expansion
+reach its members is how such a plan is written.
 
 ### Carry out a decision with `apply`
 

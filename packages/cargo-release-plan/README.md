@@ -125,6 +125,13 @@ Each increment must supply exactly one of `level` or `version`. Entries that
 expand to the same target must use the same choice: levels combine by taking the
 highest, while explicit versions must match.
 
+An optional top-level `expanded` marks a document written by `expand`. It names
+every package the plan reaches, so applying it holds the plan to exactly that
+set: reaching any other package means the workspace's version groups changed
+after the document was produced, which is rejected rather than applied. A plan
+without the marker may name a group and let expansion widen it, which is how an
+input plan is written.
+
 ### Plan and report schema
 
 `report.json` uses the same schema revision. Top-level fields are
