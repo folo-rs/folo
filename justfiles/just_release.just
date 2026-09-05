@@ -118,7 +118,7 @@ check-never-published:
 #
 # `RELEASE_PLAN_BASE` supplies the release baseline when set (CI passes the release branch, or
 # `merge_group.base_sha` on a queue run); an empty value falls through to the tool default. When
-# `GITHUB_OUTPUT` is set, a report is written first so the `released` step output reaches
+# `GITHUB_OUTPUT` is set, a report is written first so the `semver_targets` step output reaches
 # `semver-checks` even if the check then fails. Released-content comparison stays in the Rust
 # tool; this recipe is only its command-line entry point.
 #

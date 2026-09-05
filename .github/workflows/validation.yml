@@ -137,7 +137,7 @@ jobs:
   validate-versions:
     runs-on: ubuntu-latest
     outputs:
-      released: ${{ steps.check.outputs.released }}
+      semver_targets: ${{ steps.check.outputs.semver_targets }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -162,10 +162,12 @@ jobs:
         run: just validate-versions
         shell: pwsh
 
-  # cargo-semver-checks scoped to the explicit consumer-contract package set. A released
-  # change in any version-group member selects the supported consumer-contract members of
-  # that group; implementation and test-support packages are not comparison targets.
-  # `--all-features` because gated API is still public API. An empty `released` output is a
+  # cargo-semver-checks scoped to the explicit consumer-contract package set. `semver_targets`
+  # holds that selection: the supported consumer-contract packages carrying unreleased content
+  # changes, which is narrower than the set this pull request will publish, because
+  # implementation and test-support packages have no consumer contract to compare. An unreleased
+  # change in any version-group member selects the supported members of that group.
+  # `--all-features` because gated API is still public API. An empty `semver_targets` output is a
   # successful skip. Parallel with the rest of validation; does not gate other jobs.
   # `!cancelled()` rather than `always()` so a failing version check still surfaces an
   # insufficient increment in the same round trip, while a cancelled run stops here instead of
@@ -187,7 +189,7 @@ jobs:
         shell: pwsh
 
       - name: Run cargo-semver-checks on releasing packages
-        run: just package="${{ needs.validate-versions.outputs.released }}" semver-checks
+        run: just package="${{ needs.validate-versions.outputs.semver_targets }}" semver-checks
         shell: pwsh
 
   # Formatting is platform-agnostic, so run only on Ubuntu for efficiency.

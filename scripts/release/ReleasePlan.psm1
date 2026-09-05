@@ -449,13 +449,14 @@ function Invoke-ValidateVersions {
                 Get-ReleasePlanCargoArgument -Command @('report', '--out-dir', $outDir) -Base $Base
             & $Cargo $reportArgument
 
-            $releasedTargets =
+            $semverTargets =
                 @(Get-AffectedSemverCheckTarget -ReportPath (Join-Path $outDir 'report.json'))
             $previousOutput = $env:GITHUB_OUTPUT
             $env:GITHUB_OUTPUT = $GitHubOutputPath
             try {
-                # The required zero-target representation is a present `released=` output.
-                Set-GitHubOutput -Name released -Value ($releasedTargets -join ' ') -AllowEmptyValue
+                # The required zero-target representation is a present `semver_targets=` output.
+                Set-GitHubOutput -Name semver_targets -Value ($semverTargets -join ' ') `
+                    -AllowEmptyValue
             } finally {
                 $env:GITHUB_OUTPUT = $previousOutput
             }

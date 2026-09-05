@@ -328,14 +328,14 @@ Describe 'Get-AffectedSemverCheckTarget' {
             Should -Throw '*packages must be an array*'
     }
 
-    It 'joins an empty selected set to the required released= representation' {
+    It 'joins an empty selected set to the required semver_targets= representation' {
         $path = Join-Path $TestDrive 'empty.json'
         Write-TestReport -Path $path -Package @(
             Get-TestPackage -Name 'events'
         )
-        $released = @(Get-TestAffectedSemverCheckTarget -ReportPath $path)
-        $released.Count | Should -Be 0
-        ($released -join ' ') | Should -BeExactly ''
+        $target = @(Get-TestAffectedSemverCheckTarget -ReportPath $path)
+        $target.Count | Should -Be 0
+        ($target -join ' ') | Should -BeExactly ''
     }
 }
 
@@ -496,7 +496,7 @@ Describe 'Invoke-ApplyReleasePlan' {
 }
 
 Describe 'Invoke-ValidateVersions' {
-    It 'emits released= when the report selects nothing, then runs check' {
+    It 'emits semver_targets= when the report selects nothing, then runs check' {
         $output = Join-Path $TestDrive 'github-output'
         New-Item -ItemType File -Path $output | Out-Null
         $script:calls = [System.Collections.Generic.List[object]]::new()
@@ -511,12 +511,12 @@ Describe 'Invoke-ValidateVersions' {
             }
         }
         Invoke-ValidateVersions -GitHubOutputPath $output -Base 'abc' -Cargo $cargo
-        @(Get-Content -LiteralPath $output) | Should -Be @('released=')
+        @(Get-Content -LiteralPath $output) | Should -Be @('semver_targets=')
         $script:calls.Count | Should -Be 2
         $script:calls[1] | Should -Contain 'check'
     }
 
-    It 'emits space-separated released targets when the report selects packages' {
+    It 'emits space-separated SemVer targets when the report selects packages' {
         $output = Join-Path $TestDrive 'github-output-populated'
         New-Item -ItemType File -Path $output | Out-Null
         $cargo = {
@@ -534,7 +534,7 @@ Describe 'Invoke-ValidateVersions' {
 
         Invoke-ValidateVersions -GitHubOutputPath $output -Base 'abc' -Cargo $cargo
 
-        @(Get-Content -LiteralPath $output) | Should -Be @('released=events nm')
+        @(Get-Content -LiteralPath $output) | Should -Be @('semver_targets=events nm')
     }
 
     It 'removes its temporary report directory even when check fails' {
