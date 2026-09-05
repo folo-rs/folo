@@ -470,8 +470,9 @@ impl fmt::Display for ReportOperation {
     }
 }
 
-// No API contract to test - output format is not guaranteed.
-#[cfg_attr(coverage_nightly, coverage(off))] // Too annoying to test every question mark operator.
+// The layout carries no API contract, and the formatter's error paths are unreachable here,
+// so only the figure availability the table promises is worth asserting on. Tests cover that.
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_empty() {
@@ -608,6 +609,7 @@ mod tests {
     use super::*;
     use crate::Session;
     use crate::counters::register_fake_allocation;
+    use crate::span_measurement::SpanMeasurement;
 
     /// Builds a detached [`ReportOperation`] from per-iteration deltas for tests
     /// that assert directly on the report surface without a live session.
@@ -921,5 +923,65 @@ mod tests {
         let report = Report::new();
         let display_output = report.to_string();
         assert!(display_output.contains("No allocation statistics captured."));
+    }
+
+    #[test]
+    fn report_display_renders_each_peak_according_to_its_availability() {
+        // An operation with no peak figure renders as unavailable in the table
+        // (design.md, "Reporting"). The column layout carries no API contract, so this
+        // inspects each operation's own row rather than matching the table verbatim.
+        let mut measured = OperationMetrics::default();
+        measured.add_iterations(250, 3, 4);
+
+        // A process span withholds the peak, which makes the whole operation unable to
+        // report one even though its byte and allocation rates remain well defined.
+        let mut process_measured = OperationMetrics::default();
+        process_measured.add_span(SpanMeasurement {
+            iterations: 4,
+            bytes: 1000,
+            count: 12,
+            peak_outstanding_bytes: None,
+        });
+
+        // Zero iterations leave every rate undefined, but only the peak can say so.
+        let mut zero_iterations = OperationMetrics::default();
+        zero_iterations.add_iterations(250, 3, 0);
+
+        let mut operations = HashMap::new();
+        operations.insert("thread".to_owned(), ReportOperation { metrics: measured });
+        operations.insert(
+            "process".to_owned(),
+            ReportOperation {
+                metrics: process_measured,
+            },
+        );
+        operations.insert(
+            "nothing".to_owned(),
+            ReportOperation {
+                metrics: zero_iterations,
+            },
+        );
+        let report = Report { operations };
+
+        let display_output = report.to_string();
+        let row = |name: &str| {
+            display_output
+                .lines()
+                .find(|line| line.contains(name))
+                .unwrap_or_else(|| panic!("the table has a row for {name}, got {display_output}"))
+                .to_owned()
+        };
+
+        let thread_row = row("thread");
+        assert!(thread_row.contains("250"), "got {thread_row}");
+        assert!(!thread_row.contains(NOT_AVAILABLE), "got {thread_row}");
+
+        let process_row = row("process");
+        assert!(process_row.contains("250"), "got {process_row}");
+        assert!(process_row.contains(NOT_AVAILABLE), "got {process_row}");
+
+        let nothing_row = row("nothing");
+        assert!(nothing_row.contains("NaN"), "got {nothing_row}");
+        assert!(nothing_row.contains(NOT_AVAILABLE), "got {nothing_row}");
     }
 }
