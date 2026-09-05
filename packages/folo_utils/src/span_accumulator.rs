@@ -24,6 +24,11 @@
 //! noise-aware analysis consumes. The interval is a deterministic function of the
 //! folded statistics, so identical measurements always yield identical bounds.
 //!
+//! A span may also carry a *level* — a quantity each iteration reaches on its own
+//! rather than contributes to, such as a high-water mark. Folding one with
+//! [`SpanAccumulator::add_level`] applies the same warmup-robust weighting, yielding
+//! the levels averaged rather than a rate.
+//!
 //! Folding a span is a handful of additions and one multiply, allocation-free, so
 //! it is cheap enough to run inside a measured span even when a benchmark
 //! (against best practice) records one span per iteration.
@@ -84,13 +89,33 @@ impl SpanAccumulator {
     /// For the common `iterations == 1` case every power of nᵢ is one, so this
     /// reduces to a few additions and a single multiply.
     pub fn add(&mut self, iterations: u64, total: u64) {
+        self.add_moments(iterations as f64, total as f64);
+    }
+
+    /// Folds one span covering `iterations` iterations whose measured quantity is a
+    /// per-iteration `level` rather than a whole-span total.
+    ///
+    /// A level is a quantity each iteration reaches on its own instead of contributing
+    /// to — a high-water mark, for example — so unlike a total it does not grow with the
+    /// span's length. Scaling it by the iteration count makes it behave like a total, and
+    /// the slope divides that scaling back out, so the estimate is an average of the spans'
+    /// levels in which each span is weighted by the square of its own iteration count — the
+    /// same warmup-robust weighting [`add`](Self::add) gives totals.
+    ///
+    /// The scaling happens in `f64`, so an arbitrarily large level and iteration count
+    /// combine without overflow.
+    pub fn add_level(&mut self, iterations: u64, level: u64) {
+        let n = iterations as f64;
+        self.add_moments(n, level as f64 * n);
+    }
+
+    /// Folds one span given the iteration count and total it regresses on.
+    fn add_moments(&mut self, n: f64, t: f64) {
         self.span_count = self
             .span_count
             .checked_add(1)
             .expect("span count overflows u64 - this indicates an unrealistic scenario");
 
-        let n = iterations as f64;
-        let t = total as f64;
         let n2 = n * n;
 
         self.s_nn += n2;
@@ -198,6 +223,52 @@ mod tests {
         assert!(
             (actual - expected).abs() < 1e-9,
             "expected {expected}, got {actual}"
+        );
+    }
+
+    fn accumulate_levels(spans: &[(u64, u64)]) -> SpanAccumulator {
+        let mut accumulator = SpanAccumulator::new();
+        for &(iterations, level) in spans {
+            accumulator.add_level(iterations, level);
+        }
+        accumulator
+    }
+
+    #[test]
+    fn level_slope_recovers_an_unvarying_level() {
+        // A level does not grow with the span, so however many iterations each span
+        // covered, the estimate is the level itself.
+        let accumulator = accumulate_levels(&[(2, 64), (8, 64), (1000, 64)]);
+        assert_eq!(accumulator.slope(), Some(64.0));
+    }
+
+    #[test]
+    fn level_slope_is_the_squared_iteration_weighted_mean() {
+        // Squaring the iteration counts gives the longer span the greater say, so the
+        // result sits nearer its level than an unweighted mean of the two would.
+        let accumulator = accumulate_levels(&[(1, 1000), (3, 100)]);
+        assert_eq!(accumulator.slope(), Some(190.0));
+    }
+
+    #[test]
+    fn level_scaling_does_not_overflow_integer_range() {
+        // The scale-up happens in f64, so a level and an iteration count whose product
+        // exceeds u64 still yield the level back.
+        const LEVEL: u64 = 3_000_000_000_000;
+        const ITERATIONS: u64 = 9_000_000_000;
+
+        // What is being protected is overflow resistance, not bit-exact arithmetic: the
+        // level survives a multiply and a divide in f64. Deliberately far looser than the
+        // rounding those two operations can introduce, and far tighter than any plausible
+        // loss of the level itself, so it fails only if the scaling genuinely breaks.
+        const TOLERANCE: f64 = 1e-9;
+
+        let accumulator = accumulate_levels(&[(ITERATIONS, LEVEL)]);
+        let slope = accumulator.slope().unwrap();
+
+        assert!(
+            (slope - LEVEL as f64).abs() < LEVEL as f64 * TOLERANCE,
+            "expected about {LEVEL}, got {slope}"
         );
     }
 
