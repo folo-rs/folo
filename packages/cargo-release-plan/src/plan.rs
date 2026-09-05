@@ -1,10 +1,10 @@
-// Increment-plan parsing and group expansion.
+// Increment-plan parsing, validation, and group expansion.
 //
-// The new version for a group is the highest version declared by any member,
-// raised by the highest required level. Entries affecting the same expanded
-// target must use either increment levels or one matching explicit version.
+// Plans name package or version-group decisions. Expansion resolves those
+// decisions to explicit package versions for both preview and application.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
 use ohno::AppError;
@@ -12,10 +12,12 @@ use semver::Version;
 use serde::Deserialize;
 
 use crate::groups::Groups;
+use crate::verbose::Verbose;
 use crate::{
-    ConflictingPlanIncrementKindError, ConflictingPlanVersionError, InvalidVersionError,
-    PlanIncrementSpecError, PlanVersionRegressionError, UnknownIncrementLevelError,
-    UnknownPlanTargetError, UnsupportedPlanSchemaError, VersionOverflowError,
+    ConflictingPlanIncrementKindError, ConflictingPlanVersionError, ExpandedPlanDriftError,
+    InvalidVersionError, PlanIncrementSpecError, PlanVersionRegressionError,
+    UnknownIncrementLevelError, UnknownPlanTargetError, UnsupportedPlanSchemaError,
+    VersionOverflowError, quote_path,
 };
 
 /// Shared plan and report schema revision.
@@ -27,29 +29,39 @@ pub(crate) const SCHEMA_VERSION: u32 = 1;
 
 /// On-disk plan file.
 ///
-/// This is the `apply` command's input: a schema stamp plus the increments a
-/// planner decided on. Expansion turns it into an [`ExpandedPlan`].
+/// This is the command-neutral plan shape read by `expand` and `apply`: a schema
+/// stamp plus the increments a planner decided on. Expansion turns it into an
+/// [`ExpandedPlan`].
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct PlanFile {
     pub(crate) schema_version: u32,
+    /// Whether this document already names every package the plan reaches.
+    ///
+    /// `expand` sets it; a hand-written plan leaves it absent. It is what lets
+    /// expansion tell an approval artifact, whose package set is the reviewed
+    /// set, from an input plan that may deliberately name a group and let
+    /// expansion widen it.
+    #[serde(default)]
+    pub(crate) expanded: bool,
     pub(crate) increments: Vec<PlanIncrement>,
 }
 
-/// Package name → new version after group expansion.
+/// Package name → resolved version after group expansion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ExpandedPlan {
     pub(crate) packages: BTreeMap<String, Version>,
 }
 
-/// Expands `plan` against the versions `apply` is allowed to touch.
+/// Expands `plan` against the versions release commands may target.
 ///
-/// `publishable` maps every package `apply` may edit to the version its manifest
-/// declares today. A package outside it is not a valid plan target, and the
-/// highest version among a group's members in it is the increment base.
+/// `publishable` maps every package a plan may target to the version its
+/// manifest declares today. A package outside it is not a valid plan target, and
+/// the highest version among a group's members in it is the increment base.
 pub(crate) fn expand_plan(
     plan: &PlanFile,
     groups: &Groups,
     publishable: &BTreeMap<String, Version>,
+    verbose: Verbose,
 ) -> Result<ExpandedPlan, AppError> {
     if plan.schema_version != SCHEMA_VERSION {
         return Err(UnsupportedPlanSchemaError::new(plan.schema_version).into());
@@ -60,9 +72,28 @@ pub(crate) fn expand_plan(
     for increment in &plan.increments {
         let targets = resolve_targets(&increment.name, groups, publishable)?;
         let spec = increment.spec()?;
+        verbose.note(|| {
+            format!(
+                "{} requests {} and resolves to {}",
+                quote_path(&increment.name),
+                spec.describe(),
+                targets.join(", ")
+            )
+        });
         for key in decision_keys(&targets, groups) {
             let decision = match decisions.remove(&key) {
-                Some(existing) => existing.merge(spec.clone(), &key)?,
+                Some(existing) => {
+                    let merged = existing.merge(spec.clone(), &key)?;
+                    verbose.note(|| {
+                        format!(
+                            "{}: folded {} into the running decision, giving {}",
+                            quote_path(&key),
+                            spec.describe(),
+                            merged.describe()
+                        )
+                    });
+                    merged
+                }
                 None => spec.clone(),
             };
             decisions.insert(key, decision);
@@ -80,22 +111,59 @@ pub(crate) fn expand_plan(
             .expect(
                 "every decision key comes from a target that resolved to at least one publishable member, and every publishable member has a declared version",
             );
-        let new_version = match decision {
+        let new_version = match &decision {
             IncrementSpec::Version(version) => {
                 // An explicit version must not regress: a lower one would
                 // re-publish a released version with different content. Equality
-                // is accepted, since aligning a lagging group member on the
-                // highest declared version leaves that member unchanged.
+                // is accepted because exact realignment leaves the member that
+                // already declares the highest version unchanged.
                 // Ref: docs/design.md, "Version monotonicity".
-                if version < highest {
-                    return Err(PlanVersionRegressionError::new(&key, version, highest).into());
+                if version < &highest {
+                    return Err(
+                        PlanVersionRegressionError::new(&key, version.clone(), highest).into(),
+                    );
                 }
-                version
+                version.clone()
             }
-            IncrementSpec::Level(level) => increment_version(&highest, level)?,
+            IncrementSpec::Level(level) => increment_version(&highest, *level)?,
         };
+        verbose.note(|| {
+            format!(
+                "{}: {} declares the highest version among {}, so {} yields {}, which every member \
+                 takes",
+                quote_path(&key),
+                highest,
+                members.join(", "),
+                decision.describe(),
+                new_version
+            )
+        });
         for member in members {
             packages.insert(member, new_version.clone());
+        }
+    }
+
+    if plan.expanded {
+        // An expanded plan is the document a reviewer approved, so the set it
+        // names is the set that was approved. Expansion resolves each entry
+        // through the group configuration as it stands now, which reaches a
+        // member added to a group after the document was produced — silently
+        // widening the approved set and bypassing the publication check that ran
+        // over the named packages. Only an expanded plan can be checked this
+        // way: an input plan may deliberately name a group and leave expansion
+        // to widen it.
+        let named: BTreeSet<&str> = plan
+            .increments
+            .iter()
+            .map(|increment| increment.name.as_str())
+            .collect();
+        let unnamed: Vec<String> = packages
+            .keys()
+            .filter(|package| !named.contains(package.as_str()))
+            .cloned()
+            .collect();
+        if !unnamed.is_empty() {
+            return Err(ExpandedPlanDriftError::new(unnamed).into());
         }
     }
 
@@ -154,6 +222,17 @@ impl FromStr for IncrementLevel {
     }
 }
 
+impl Display for IncrementLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Patch => "patch",
+            Self::Minor => "minor",
+            Self::Major => "major",
+        };
+        f.write_str(name)
+    }
+}
+
 /// Exactly one of `level` or `version`, parsed.
 ///
 /// A plan entry declares one or the other, and expansion accumulates entries for
@@ -166,6 +245,14 @@ enum IncrementSpec {
 }
 
 impl IncrementSpec {
+    /// Renders the decision for an explanatory note.
+    fn describe(&self) -> String {
+        match self {
+            Self::Level(level) => format!("increment level {level}"),
+            Self::Version(version) => format!("exact version {version}"),
+        }
+    }
+
     /// Folds a further plan entry for the same key into this decision.
     ///
     /// Two levels take the higher and matching explicit versions coalesce.
@@ -313,22 +400,97 @@ mod tests {
     fn expands_group_when_one_member_is_listed() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "nm_impl".to_string(),
                 level: Some("patch".to_string()),
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.1")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.1")));
         assert!(!expanded.packages.contains_key("events"));
+    }
+
+    /// An expanded plan is rejected once its group gained a member.
+    ///
+    /// The expanded document is the approved set, so reaching a package it does
+    /// not name means the group configuration moved underneath it. Applying it
+    /// would edit a package nobody reviewed and that the publication check never
+    /// saw.
+    #[test]
+    fn an_expanded_plan_rejects_a_member_added_after_it_was_written() {
+        // Names only `nm`, as an expansion written while the group held it alone.
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            expanded: true,
+            increments: vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: None,
+                version: Some("0.1.1".to_string()),
+            }],
+        };
+        // `nm_groups` has since gained `nm_impl`.
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
+        let drift = error
+            .find_source::<ExpandedPlanDriftError>()
+            .expect("a widened expanded plan reports drift");
+        assert_eq!(drift.unnamed(), ["nm_impl".to_string()]);
+    }
+
+    /// An expanded plan naming every member still applies.
+    ///
+    /// The guard must reject only a widened set, not the ordinary case where the
+    /// document already names everything expansion reaches.
+    #[test]
+    fn an_expanded_plan_naming_every_member_is_accepted() {
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            expanded: true,
+            increments: vec![
+                PlanIncrement {
+                    name: "nm".to_string(),
+                    level: None,
+                    version: Some("0.1.1".to_string()),
+                },
+                PlanIncrement {
+                    name: "nm_impl".to_string(),
+                    level: None,
+                    version: Some("0.1.1".to_string()),
+                },
+            ],
+        };
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
+        assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.1")));
+        assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.1")));
+    }
+
+    /// An unmarked plan may still widen through its group.
+    ///
+    /// Naming a group, or one member of it, and letting expansion reach the rest
+    /// is the input plan's whole purpose, so the drift guard must not apply to a
+    /// document `expand` did not produce.
+    #[test]
+    fn an_input_plan_may_still_widen_through_its_group() {
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            expanded: false,
+            increments: vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: Some("patch".to_string()),
+                version: None,
+            }],
+        };
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
+        assert!(expanded.packages.contains_key("nm_impl"));
     }
 
     #[test]
     fn highest_level_wins_inside_a_group() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![
                 PlanIncrement {
                     name: "nm".to_string(),
@@ -342,7 +504,7 @@ mod tests {
                 },
             ],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
     }
@@ -351,13 +513,14 @@ mod tests {
     fn explicit_version_is_applied_to_the_group() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "nm".to_string(),
                 level: None,
                 version: Some("0.2.0".to_string()),
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
     }
@@ -367,9 +530,10 @@ mod tests {
         let plan = PlanFile {
             // Arbitrary revision distinct from the supported schema.
             schema_version: 9,
+            expanded: false,
             increments: vec![],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
     }
 
@@ -377,13 +541,14 @@ mod tests {
     fn rejects_unknown_target() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "ghost".to_string(),
                 level: Some("patch".to_string()),
                 version: None,
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<UnknownPlanTargetError>().is_some());
     }
 
@@ -391,13 +556,14 @@ mod tests {
     fn rejects_missing_level_and_version() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: None,
                 version: None,
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<PlanIncrementSpecError>().is_some());
     }
 
@@ -407,13 +573,14 @@ mod tests {
         versions.insert("nm_impl".to_string(), v("0.1.50"));
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "nm".to_string(),
                 level: Some("patch".to_string()),
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &versions).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &versions, Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.51")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.51")));
     }
@@ -422,6 +589,7 @@ mod tests {
     fn rejects_conflicting_explicit_versions() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![
                 PlanIncrement {
                     name: "nm".to_string(),
@@ -435,7 +603,7 @@ mod tests {
                 },
             ],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<ConflictingPlanVersionError>().is_some());
     }
 
@@ -443,6 +611,7 @@ mod tests {
     fn matching_explicit_versions_merge() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![
                 PlanIncrement {
                     name: "nm".to_string(),
@@ -456,7 +625,7 @@ mod tests {
                 },
             ],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.2.0")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.2.0")));
     }
@@ -491,9 +660,11 @@ mod tests {
         ] {
             let plan = PlanFile {
                 schema_version: SCHEMA_VERSION,
+                expanded: false,
                 increments,
             };
-            let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+            let error =
+                expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
             assert!(
                 error
                     .find_source::<ConflictingPlanIncrementKindError>()
@@ -511,13 +682,14 @@ mod tests {
     fn ungrouped_package_is_incremented_alone() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: Some("patch".to_string()),
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("events"), Some(&v("0.2.1")));
         assert!(!expanded.packages.contains_key("nm"));
     }
@@ -526,13 +698,14 @@ mod tests {
     fn major_level_increments_the_major_component() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: Some("major".to_string()),
                 version: None,
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current()).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("events"), Some(&v("1.0.0")));
     }
 
@@ -547,13 +720,14 @@ mod tests {
     fn explicit_version_below_the_declared_version_is_rejected() {
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: None,
                 version: Some("0.1.0".to_string()),
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &current()).unwrap_err();
+        let error = expand_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
         let regression = error.find_source::<PlanVersionRegressionError>().unwrap();
         assert_eq!(regression.target(), "events");
     }
@@ -565,13 +739,14 @@ mod tests {
         current.insert("nm_impl".to_string(), v("0.0.9"));
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "nm".to_string(),
                 level: None,
                 version: Some("0.1.0".to_string()),
             }],
         };
-        let expanded = expand_plan(&plan, &nm_groups(), &current).unwrap();
+        let expanded = expand_plan(&plan, &nm_groups(), &current, Verbose::new(false)).unwrap();
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.0")));
     }
 
@@ -580,13 +755,15 @@ mod tests {
         let publishable = BTreeMap::from([("events".to_string(), v("0.2.0"))]);
         let plan = PlanFile {
             schema_version: SCHEMA_VERSION,
+            expanded: false,
             increments: vec![PlanIncrement {
                 name: "nm".to_string(),
                 level: Some("patch".to_string()),
                 version: None,
             }],
         };
-        let error = expand_plan(&plan, &nm_groups(), &publishable).unwrap_err();
+        let error =
+            expand_plan(&plan, &nm_groups(), &publishable, Verbose::new(false)).unwrap_err();
         assert!(error.find_source::<UnknownPlanTargetError>().is_some());
     }
 }

@@ -92,18 +92,9 @@ pub(crate) fn run_apply(
     // Git-tracked publishable members decide which plan targets are valid and
     // supply their increment bases. All Cargo-visible member manifests remain
     // available below for dependent-pin rewrites.
-    // Ref: docs/implementation.md, "Plan application".
-    let publishable: BTreeMap<String, Version> = work_tree
-        .packages
-        .iter()
-        .map(|package| {
-            (
-                package.manifest.name.clone(),
-                package.manifest.version.clone(),
-            )
-        })
-        .collect();
-    let expanded = expand_plan(&plan, &work_tree.groups, &publishable)?;
+    // Ref: docs/implementation.md, "Plan expansion and application".
+    let publishable = work_tree.publishable_versions();
+    let expanded = expand_plan(&plan, &work_tree.groups, &publishable, verbose)?;
     verbose.note(|| {
         format!(
             "plan expands to {}; group members are included even when the plan named only one of \
@@ -414,7 +405,7 @@ fn set_package_version_item(table: &mut dyn TableLike, new_version: &Version) ->
         // than having the shared workspace value changed: the plan increments
         // one package, while the shared value governs every member that
         // inherits it, so editing it would silently increment them all.
-        // Ref: docs/implementation.md, "Plan application".
+        // Ref: docs/implementation.md, "Plan expansion and application".
         Some(item) if is_workspace_inherit(item) => {
             *item = Item::Value(Value::from(new_version.to_string()));
             true
@@ -459,7 +450,7 @@ fn set_formatted(formatted: &mut Formatted<String>, rewritten: String) -> bool {
 /// which is also what an unparsable requirement gets: Cargo would reject that
 /// anyway, so the apply leaves behind a manifest Cargo can read rather than one
 /// it cannot.
-/// Ref: docs/implementation.md, "Plan application".
+/// Ref: docs/implementation.md, "Plan expansion and application".
 fn rewrite_req(old: &str, new_version: &Version) -> String {
     let trimmed = old.trim();
     if let Ok(req) = VersionReq::parse(trimmed)

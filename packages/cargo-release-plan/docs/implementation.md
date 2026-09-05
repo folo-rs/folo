@@ -7,7 +7,7 @@ describes the internal boundaries that keep that behavior consistent.
 
 The binary is intentionally thin. `main` parses Cargo's injected subcommand
 argument, then delegates to the library `run()` entry used by integration tests.
-The selected command drives one of three paths:
+The selected command drives command-specific paths through shared components:
 
 ```text
 Cli -> RunInput -> run()
@@ -15,15 +15,16 @@ Cli -> RunInput -> run()
                     +-> classify -> check diagnostics
                     |           \-> report JSON + patches
                     |
-                    \-> load workspace -> expand plan -> compute edits
-                                                       -> write manifests
-                                                       -> refresh lockfile
+                    \-> load workspace -> normalize plan
+                                       |-> expanded-plan JSON
+                                       \-> compute edits -> write manifests
+                                                         -> refresh lockfile
 ```
 
 Modules own subjects rather than syntactic categories. `metadata` and `manifest`
 build the work-tree model, `git` owns repository facts, `anchor` resolves release
 history, `classify` combines those inputs, `groups` and `plan` expand release
-decisions, and `apply`, `check`, and `report` own their command outputs.
+decisions, and `apply`, `check`, `expand`, and `report` own their command outputs.
 
 ## Subprocess boundaries
 
@@ -198,11 +199,15 @@ before replacing the patch tree and writes the new marker through a same-directo
 staging file after every patch succeeds. A failed rerun therefore cannot present
 stale JSON and a partial patch set as one complete assessment.
 
-## Plan application
+## Plan expansion and application
 
 `plan` first normalizes package and group entries into one target version per
 publishable package. Levels combine by taking the highest and matching explicit
 versions coalesce. Mixed decision kinds and conflicting explicit versions fail.
+
+`expand` and `apply` share that normalization, and both read the same Git-tracked
+publishable package set. The normalized result branches to expanded-plan output
+for `expand`, and to manifest edits, writes, and lockfile processing for `apply`.
 
 `apply` accepts plan targets and validates groups against the same Git-tracked
 publishable package set as classification. It parses and rewrites every affected

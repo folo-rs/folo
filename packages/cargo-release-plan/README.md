@@ -19,6 +19,8 @@ elsewhere), or `cargo install cargo-release-plan` to always build from source. T
 ```text
 cargo release-plan report --out-dir <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
 cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|github] [--verify-packaging] [--verbose]
+cargo release-plan expand --plan <plan.json> --out <expanded.json>
+    [--manifest-path <path>] [--verbose]
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
 
@@ -30,15 +32,17 @@ remote advertises, falling back to `origin/main`. `--manifest-path` defaults to
 
 ### `report`
 
-Writes `<dir>/report.json` plus a `<dir>/diffs/<package>.patch` for each package
-that needs an increment on account of a file difference. The JSON names each
-package's status, anchor, changed paths, inherited workspace fields,
-intra-workspace dependencies, and version groups, and is the complete verdict.
+Writes `<dir>/report.json` plus a `<dir>/diffs/<package>.patch` for every package
+whose released files differ from its anchor, whether or not its version has
+already moved. The JSON names each package's status, anchor, changed paths,
+inherited workspace fields, intra-workspace dependencies, and version groups,
+and is the complete verdict.
 
 Each `.patch` is a zero-context unified diff in the shape `diff -U0` produces,
-so it can be piped into standard tooling. Inherited workspace value changes are
-not diffs and appear only as `changed` entries with `source: "inherited"`, so a
-package that fails on an inherited value alone has no patch. Enumerate `status`
+so it can be piped into standard tooling. Only `source: "package"` changes are
+file differences: inherited workspace values and locked dependency identities
+are not, so a package whose `changed` entries are all `inherited` or `lockfile`
+has no patch. Enumerate `status`
 in `report.json` rather than the `diffs/` directory to find every package that
 needs an increment.
 
@@ -60,6 +64,23 @@ appear only in Cargo's list. It also resolves the dependency graph and performs
 Cargo's package-preparation work, so gating on it would give up the normal
 offline, no-resolve path. A divergence on a clean tree is evidence that the
 rules need fixing.
+
+### `expand`
+
+Resolves a plan's version groups and increment levels into one explicit entry
+per package, written to `--out`.
+
+An input plan may omit version-group members that `apply` will update. `expand`
+writes the complete explicit package/version set for review, naming every
+package the plan reaches, including group members the input plan did not mention,
+at the version each will carry.
+
+The output is itself a plan, so the expanded document is the one passed to
+`apply` after review. Every entry carries an explicit `version`.
+
+Re-expand after changing the input plan. Editing an expanded plan by hand risks
+giving one group's members different versions, which both `expand` and `apply`
+reject.
 
 ### `apply`
 
@@ -103,6 +124,13 @@ and is rejected when it is lower than a version the target already declares.
 Each increment must supply exactly one of `level` or `version`. Entries that
 expand to the same target must use the same choice: levels combine by taking the
 highest, while explicit versions must match.
+
+An optional top-level `expanded` marks a document written by `expand`. It names
+every package the plan reaches, so applying it holds the plan to exactly that
+set: reaching any other package means the workspace's version groups changed
+after the document was produced, which is rejected rather than applied. A plan
+without the marker may name a group and let expansion widen it, which is how an
+input plan is written.
 
 ### Plan and report schema
 

@@ -99,6 +99,21 @@ dependency resolution and Cargo's package preparation work, which the normal
 offline assessment deliberately avoids. A mismatch on a clean tree is evidence
 that the artifact model needs correction.
 
+### Preview a decision with `expand`
+
+`expand --plan <plan.json> --out <expanded.json>` resolves a plan's version
+groups and increment levels into one explicit entry per package. An input plan
+may omit version-group members that `apply` will update; `expand` writes the
+complete explicit package/version set for review.
+
+The expanded document is itself a plan, so the reviewed document is the one that
+gets applied. It is also marked as expanded, which binds it to the package set it
+names: applying it after a version group gained a member fails rather than
+quietly editing a package that was never reviewed. Recovering from that means
+expanding the source plan again and reviewing the wider set. An unmarked input
+plan keeps the opposite behavior, since naming a group and letting expansion
+reach its members is how such a plan is written.
+
 ### Carry out a decision with `apply`
 
 `apply --plan <plan.json>` turns approved version choices into manifest edits. A
@@ -299,6 +314,18 @@ declared member version and applies the highest chosen increment level. Entries
 that expand to the same group must all use increment levels or all use one
 matching exact version.
 
+`expand` exposes that resolution as a document so a caller can present the
+complete set of affected packages before approving a plan that omits packages
+`apply` will update.
+
+An inconsistent group is a check failure in its own right, independent of any
+content change. A plan entry naming any member resolves it, and expansion is
+plan-driven, so a group no entry names is left alone. An entry that carries a
+increment level raises the group's highest declared version. An entry that
+carries that highest version as an exact target instead moves lagging members up
+to it and leaves the leading member unchanged. The lagging members then become
+pending release because their declared versions advanced.
+
 Members not yet published by the baseline are exempt from the consistency check,
 which lets a new package join a group before its first release. Group
 configuration may contain only publishable workspace packages and cannot use a
@@ -312,10 +339,15 @@ Groups are declared under `[workspace.metadata.release-plan.groups]`.
 publishable package, its status and anchor, the reasons it changed, its
 dependencies and dependents, and group consistency.
 
-Per-package patch files are a readable supplement for file changes. They use
-zero-context unified diffs, report binary changes without rendering binary
-bytes, and preserve addition, deletion, and mode information. Expensive
-line-level comparisons fall back to a whole-file replacement; this changes only
-the presentation, never the release verdict.
+Per-package patch files are a readable supplement for file changes. They cover
+every package whose released files differ from its anchor, including one whose
+version has already moved, because judging whether a pending increment still
+covers the accumulated changes needs the same evidence. Changes that are not
+file differences — inherited workspace values and locked dependency identities —
+are reported only as change entries. They use zero-context
+unified diffs, report binary changes without rendering binary bytes, and
+preserve addition, deletion, and mode information. Expensive line-level
+comparisons fall back to a whole-file replacement; this changes only the
+presentation, never the release verdict.
 
 Internal ownership is documented in the [implementation guide](implementation.md).
