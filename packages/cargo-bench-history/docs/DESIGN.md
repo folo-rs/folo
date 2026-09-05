@@ -581,6 +581,11 @@ auto-detected) partition holds no runs at all the hint names that partition and 
 widening it. A zero-run outcome is thus never mistaken for "no data", and an auto-detected
 partition that quietly missed is never mistaken for an empty project.
 
+Packaging this `collect → analyze → report` flow as a reusable, Marketplace-published
+GitHub Action for other repositories — its shape, binary distribution, configuration
+surface, and hosting — is designed in [`reusable-action.md`](reusable-action.md) (issue
+#284).
+
 ### 7.4 `backfill`
 
 `backfill` reconstructs history by checking out each commit in a range and running

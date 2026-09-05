@@ -11,8 +11,11 @@ feature carrying in-workspace test/bench utilities.
 > **This file is agent instructions, not a design or implementation guide.** User-visible
 > behavior lives in [`docs/DESIGN.md`](docs/DESIGN.md). Package ownership and internal tenets
 > live in [`docs/implementation.md`](docs/implementation.md), with the `analyze` data flow in
-> [`docs/analyze.md`](docs/analyze.md). Keep the owning document in sync when changing behavior,
-> package boundaries, storage format, or the analysis pipeline. Do not restate that content here.
+> [`docs/analyze.md`](docs/analyze.md), and the reusable GitHub Action that packages the
+> collect/analyze/report flow for other repositories in
+> [`docs/reusable-action.md`](docs/reusable-action.md). Keep the owning document in sync when
+> changing behavior, package boundaries, storage format, or the analysis pipeline. Do not
+> restate that content here.
 
 ## Ports and fakes
 
