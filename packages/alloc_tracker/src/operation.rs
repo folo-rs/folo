@@ -139,6 +139,23 @@ impl Operation {
     /// #[global_allocator]
     /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
     ///
+    /// // Stands in for a library that spreads work over a worker pool it owns. The pool is
+    /// // sized independently of the workload, so the thread count stays bounded however
+    /// // many iterations Criterion asks for.
+    /// fn fan_out(items: u64) {
+    ///     const WORKERS: u64 = 4;
+    ///
+    ///     thread::scope(|scope| {
+    ///         for _ in 0..WORKERS {
+    ///             scope.spawn(|| {
+    ///                 for _ in 0..items.div_ceil(WORKERS) {
+    ///                     black_box(vec![1, 2, 3, 4, 5]);
+    ///                 }
+    ///             });
+    ///         }
+    ///     });
+    /// }
+    ///
     /// fn bench(c: &mut Criterion) {
     ///     let session = Session::new();
     ///     let operation = session.operation("process_work");
@@ -147,13 +164,9 @@ impl Operation {
     ///             let start = Instant::now();
     ///             let _span = operation.measure_process().iterations(iters);
     ///
-    ///             // The work happens on threads this benchmark does not instrument,
-    ///             // which is what process scope exists for.
-    ///             thread::scope(|scope| {
-    ///                 for _ in 0..iters {
-    ///                     scope.spawn(|| black_box(vec![1, 2, 3, 4, 5]));
-    ///                 }
-    ///             });
+    ///             // The work lands on threads this benchmark cannot instrument, which is
+    ///             // what process scope exists for.
+    ///             fan_out(iters);
     ///
     ///             start.elapsed()
     ///         });

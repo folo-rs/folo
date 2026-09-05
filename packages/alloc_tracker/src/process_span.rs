@@ -30,7 +30,7 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 ///
 /// # Examples
 ///
-/// A worker pool that allocates on threads the caller does not own:
+/// Work that a library fans out over its own threads:
 ///
 /// ```
 /// use std::hint::black_box;
@@ -41,21 +41,27 @@ use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
 /// #[global_allocator]
 /// static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 ///
+/// // Stands in for a library that owns its worker threads. You cannot give them thread
+/// // spans because you never see them, which is what leaves process scope as the option.
+/// fn fan_out(items: usize) {
+///     thread::scope(|scope| {
+///         for item in 0..items {
+///             scope.spawn(move || {
+///                 black_box(vec![item as u8; 1024]);
+///             });
+///         }
+///     });
+/// }
+///
 /// # fn main() {
 /// let session = Session::new();
 /// # let session = session.no_stdout().no_file();
 /// let operation = session.operation("fan_out");
 ///
-/// const WORKERS: usize = 4;
+/// const ITEMS: usize = 4;
 /// let span = operation.measure_process();
 ///
-/// thread::scope(|scope| {
-///     for worker in 0..WORKERS {
-///         scope.spawn(move || {
-///             black_box(vec![worker as u8; 1024]);
-///         });
-///     }
-/// });
+/// fan_out(ITEMS);
 ///
 /// drop(span.iterations(1));
 /// # }

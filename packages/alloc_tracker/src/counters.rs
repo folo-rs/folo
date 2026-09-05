@@ -351,6 +351,8 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::{iter, thread};
 
+    use testing::with_watchdog;
+
     use super::*;
 
     static_assertions::assert_impl_all!(PerThreadCounters: Send, Sync);
@@ -489,36 +491,38 @@ mod tests {
         // Writers drive the production single-writer path while a reader sums the registry.
         // The barrier makes the phases overlap: every writer has registered its counters
         // before the reader starts, and the reader is running while the writes land.
-        let baseline = allocation_totals();
+        with_watchdog(|| {
+            let baseline = allocation_totals();
 
-        let ready = Arc::new(Barrier::new(usize::try_from(WRITER_THREADS).unwrap() + 1));
+            let ready = Arc::new(Barrier::new(usize::try_from(WRITER_THREADS).unwrap() + 1));
 
-        let writers: Vec<_> = iter::repeat_with(|| {
-            let ready = Arc::clone(&ready);
-            thread::spawn(move || {
-                // Register this thread's counters, then wait for everyone.
-                register_fake_allocation(BYTES_PER_ALLOC, 1);
-                ready.wait();
-
-                for _ in 1..ALLOCS_PER_WRITER {
+            let writers: Vec<_> = iter::repeat_with(|| {
+                let ready = Arc::clone(&ready);
+                thread::spawn(move || {
+                    // Register this thread's counters, then wait for everyone.
                     register_fake_allocation(BYTES_PER_ALLOC, 1);
-                }
+                    ready.wait();
+
+                    for _ in 1..ALLOCS_PER_WRITER {
+                        register_fake_allocation(BYTES_PER_ALLOC, 1);
+                    }
+                })
             })
-        })
-        .take(usize::try_from(WRITER_THREADS).unwrap())
-        .collect();
+            .take(usize::try_from(WRITER_THREADS).unwrap())
+            .collect();
 
-        ready.wait();
-        for _ in 0..20 {
-            let _totals = allocation_totals();
-        }
+            ready.wait();
+            for _ in 0..20 {
+                let _totals = allocation_totals();
+            }
 
-        for handle in writers {
-            handle.join().unwrap();
-        }
+            for handle in writers {
+                handle.join().unwrap();
+            }
 
-        let final_totals = allocation_totals();
-        let bytes_delta = final_totals.bytes.wrapping_sub(baseline.bytes);
-        assert!(bytes_delta >= WRITER_THREADS * ALLOCS_PER_WRITER * BYTES_PER_ALLOC);
+            let final_totals = allocation_totals();
+            let bytes_delta = final_totals.bytes.wrapping_sub(baseline.bytes);
+            assert!(bytes_delta >= WRITER_THREADS * ALLOCS_PER_WRITER * BYTES_PER_ALLOC);
+        });
     }
 }
