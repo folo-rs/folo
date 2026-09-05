@@ -281,4 +281,5 @@ pub(crate) use operation_metrics::*;
 pub use process_span::*;
 pub use report::*;
 pub use session::*;
+pub(crate) use span_measurement::*;
 pub use thread_span::*;

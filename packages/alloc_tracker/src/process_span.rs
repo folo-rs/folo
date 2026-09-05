@@ -6,8 +6,7 @@ use std::panic::RefUnwindSafe;
 use std::sync::{Arc, Mutex};
 
 use crate::counters::{AllocationTotals, allocation_totals};
-use crate::span_measurement::SpanMeasurement;
-use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, SpanMeasurement};
 
 /// A measurement of process-wide allocations over the span's lifetime.
 ///

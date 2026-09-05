@@ -16,78 +16,7 @@
 
 use folo_utils::SpanAccumulator;
 
-use crate::span_measurement::SpanMeasurement;
-
-/// What is known about an operation's peak outstanding bytes.
-///
-/// Only some kinds of span can observe a peak, and a single span that cannot leaves the
-/// operation's peak unknowable rather than merely understated
-/// (`docs/design.md`, "Peak outstanding bytes"). Holding the estimator inside the
-/// available variant means an operation cannot be in the contradictory state of having
-/// both an accumulated estimate and a reason the estimate is meaningless.
-#[derive(Clone, Debug)]
-enum PeakEstimate {
-    /// Every span recorded so far reported a peak, folded into the estimator.
-    ///
-    /// The estimator is empty until the first span arrives, which is why an operation with
-    /// no spans at all still reports no peak.
-    Available(SpanAccumulator),
-
-    /// At least one recorded span could not observe a peak.
-    Unavailable,
-}
-
-impl PeakEstimate {
-    /// Records what one span observed, which may be nothing.
-    fn record(&mut self, iterations: u64, peak: Option<u64>) {
-        let Self::Available(peaks) = self else {
-            return;
-        };
-
-        let Some(peak) = peak else {
-            *self = Self::Unavailable;
-            return;
-        };
-
-        // A peak is a level rather than a total — it does not grow with the number of
-        // iterations the span covered — so the accumulator weights it as one, giving the
-        // span peaks averaged with the same warmup-robust weighting the other metrics get.
-        // Ref: docs/implementation.md, "Peak aggregation".
-        peaks.add_level(iterations, peak);
-    }
-
-    /// Folds another operation's peak knowledge into this one.
-    fn merge(&mut self, other: &Self) {
-        match (&mut *self, other) {
-            (Self::Available(peaks), Self::Available(other_peaks)) => peaks.merge(other_peaks),
-            (Self::Available(_), Self::Unavailable) => *self = Self::Unavailable,
-            (Self::Unavailable, _) => {}
-        }
-    }
-
-    /// The warmup-robust typical span peak, or `None` when there is none to report.
-    fn slope(&self) -> Option<f64> {
-        match self {
-            Self::Available(peaks) => peaks.slope(),
-            Self::Unavailable => None,
-        }
-    }
-
-    /// The confidence interval of the typical span peak, or `None` when it cannot be
-    /// estimated.
-    fn interval(&self) -> Option<(f64, f64)> {
-        match self {
-            Self::Available(peaks) => peaks.interval(),
-            Self::Unavailable => None,
-        }
-    }
-}
-
-impl Default for PeakEstimate {
-    fn default() -> Self {
-        Self::Available(SpanAccumulator::default())
-    }
-}
+use crate::SpanMeasurement;
 
 /// Metrics tracked for each operation in the session.
 ///
@@ -255,6 +184,76 @@ impl OperationMetrics {
         self.bytes.merge(&other.bytes);
         self.allocations.merge(&other.allocations);
         self.peak.merge(&other.peak);
+    }
+}
+/// What is known about an operation's peak outstanding bytes.
+///
+/// Only some kinds of span can observe a peak, and a single span that cannot leaves the
+/// operation's peak unknowable rather than merely understated
+/// (`docs/design.md`, "Peak outstanding bytes"). Holding the estimator inside the
+/// available variant means an operation cannot be in the contradictory state of having
+/// both an accumulated estimate and a reason the estimate is meaningless.
+#[derive(Clone, Debug)]
+enum PeakEstimate {
+    /// Every span recorded so far reported a peak, folded into the estimator.
+    ///
+    /// The estimator is empty until the first span arrives, which is why an operation with
+    /// no spans at all still reports no peak.
+    Available(SpanAccumulator),
+
+    /// At least one recorded span could not observe a peak.
+    Unavailable,
+}
+
+impl PeakEstimate {
+    /// Records what one span observed, which may be nothing.
+    fn record(&mut self, iterations: u64, peak: Option<u64>) {
+        let Self::Available(peaks) = self else {
+            return;
+        };
+
+        let Some(peak) = peak else {
+            *self = Self::Unavailable;
+            return;
+        };
+
+        // A peak is a level rather than a total — it does not grow with the number of
+        // iterations the span covered — so the accumulator weights it as one, giving the
+        // span peaks averaged with the same warmup-robust weighting the other metrics get.
+        // Ref: docs/implementation.md, "Peak aggregation".
+        peaks.add_level(iterations, peak);
+    }
+
+    /// Folds another operation's peak knowledge into this one.
+    fn merge(&mut self, other: &Self) {
+        match (&mut *self, other) {
+            (Self::Available(peaks), Self::Available(other_peaks)) => peaks.merge(other_peaks),
+            (Self::Available(_), Self::Unavailable) => *self = Self::Unavailable,
+            (Self::Unavailable, _) => {}
+        }
+    }
+
+    /// The warmup-robust typical span peak, or `None` when there is none to report.
+    fn slope(&self) -> Option<f64> {
+        match self {
+            Self::Available(peaks) => peaks.slope(),
+            Self::Unavailable => None,
+        }
+    }
+
+    /// The confidence interval of the typical span peak, or `None` when it cannot be
+    /// estimated.
+    fn interval(&self) -> Option<(f64, f64)> {
+        match self {
+            Self::Available(peaks) => peaks.interval(),
+            Self::Unavailable => None,
+        }
+    }
+}
+
+impl Default for PeakEstimate {
+    fn default() -> Self {
+        Self::Available(SpanAccumulator::default())
     }
 }
 
@@ -442,6 +441,23 @@ mod tests {
         measured.merge(&unavailable);
 
         assert_eq!(measured.peak_outstanding_bytes(), None);
+    }
+
+    #[test]
+    fn merging_into_an_unavailable_peak_leaves_it_suppressed() {
+        // `Report::merge` merges its argument into a clone of the receiver, so which
+        // report is passed first decides which `PeakEstimate::merge` arm runs. The
+        // unavailable state must absorb an available one just as it survives being
+        // merged into, or the peak would come back for one argument order only.
+        let mut unavailable = OperationMetrics::default();
+        unavailable.add_span(span_without_peak(1, 100, 1));
+
+        let mut measured = OperationMetrics::default();
+        measured.add_span(span(1, 100, 1));
+
+        unavailable.merge(&measured);
+
+        assert_eq!(unavailable.peak_outstanding_bytes(), None);
     }
 
     #[test]

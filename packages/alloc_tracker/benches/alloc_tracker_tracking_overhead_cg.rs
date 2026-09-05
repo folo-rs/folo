@@ -104,9 +104,7 @@ mod linux {
     ///
     /// Called from a Gungraun setup expression, so the allocation stays outside the
     /// collected region.
-    fn allocate<A: GlobalAlloc>(allocator: &A, size: usize) -> (*mut u8, Layout) {
-        let layout = layout(size);
-
+    fn allocate<A: GlobalAlloc>(allocator: &A, layout: Layout) -> (*mut u8, Layout) {
         // SAFETY: `layout` has non-zero size, which is what `GlobalAlloc::alloc` requires.
         let ptr = unsafe { allocator.alloc(layout) };
 
@@ -117,19 +115,39 @@ mod linux {
         (ptr, layout)
     }
 
-    /// Brings this thread's tracked-allocation state to the steady state the `tracked_*`
-    /// scenarios measure, passing `size` through so it can be used as a setup expression.
+    /// Warms the underlying allocator and hands back the layout the measured body uses.
     ///
-    /// Gungraun isolates every benchmark in its own process, so without this the first
-    /// tracked allocation inside a measured body would also create and register this
-    /// thread's counters.
-    fn primed(size: usize) -> usize {
-        alloc_dealloc(&ALLOCATOR, SMALL_SIZE);
-        size
+    /// Gungraun isolates every benchmark in its own process and collects a single
+    /// invocation, so an untouched allocator would charge first-touch costs to the measured
+    /// body. The tracked variants receive the same warmup from `primed`, which is what lets
+    /// the difference between a pair be read as tracking work.
+    fn warmed(size: usize) -> Layout {
+        let layout = layout(size);
+        alloc_dealloc(&std::alloc::System, layout);
+        layout
     }
 
-    fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, size: usize) {
-        let (ptr, layout) = allocate(allocator, size);
+    /// As [`warmed`], and additionally brings this thread's tracked-allocation state to the
+    /// steady state the `tracked_*` scenarios measure.
+    ///
+    /// Going through `ALLOCATOR` creates and registers this thread's counters, so the
+    /// measured body does not also pay for their one-time initialization.
+    fn primed(size: usize) -> Layout {
+        let layout = layout(size);
+        alloc_dealloc(&ALLOCATOR, layout);
+        layout
+    }
+
+    /// Allocates one block and pairs it with the layout a reallocation will grow it into.
+    fn growable<A: GlobalAlloc>(allocator: &A) -> ((*mut u8, Layout), Layout) {
+        (
+            allocate(allocator, layout(SMALL_SIZE)),
+            layout(REALLOC_GROWN_SIZE),
+        )
+    }
+
+    fn alloc_dealloc<A: GlobalAlloc>(allocator: &A, layout: Layout) {
+        let (ptr, layout) = allocate(allocator, layout);
 
         black_box(ptr);
 
@@ -139,18 +157,17 @@ mod linux {
         }
     }
 
-    fn realloc_dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout)) {
+    fn realloc_dealloc<A: GlobalAlloc>(
+        allocator: &A,
+        block: (*mut u8, Layout),
+        grown_layout: Layout,
+    ) {
         let (ptr, layout) = block;
 
-        let grown_layout = Layout::from_size_align(REALLOC_GROWN_SIZE, layout.align()).expect(
-            "the alignment already came from a valid layout and the grown benchmark size is \
-             orders of magnitude below the layout size limit",
-        );
-
-        // SAFETY: `ptr` was returned by `alloc` for `layout`, and `REALLOC_GROWN_SIZE` is
-        // non-zero and small enough that rounding it up to `layout`'s alignment cannot
+        // SAFETY: `ptr` was returned by `alloc` for `layout`, and `grown_layout` was built
+        // at the same alignment with a size small enough that rounding it up cannot
         // overflow `isize`.
-        let grown = unsafe { allocator.realloc(ptr, layout, REALLOC_GROWN_SIZE) };
+        let grown = unsafe { allocator.realloc(ptr, layout, grown_layout.size()) };
 
         if grown.is_null() {
             // The original block is still live, but a benchmark that cannot obtain memory
@@ -158,8 +175,7 @@ mod linux {
             handle_alloc_error(grown_layout);
         }
 
-        // SAFETY: `grown` was returned by `realloc` for `REALLOC_GROWN_SIZE` at `layout`'s
-        // alignment.
+        // SAFETY: `grown` was returned by `realloc` for `grown_layout`'s size and alignment.
         unsafe {
             allocator.dealloc(grown, grown_layout);
         }
@@ -176,51 +192,53 @@ mod linux {
     }
 
     #[library_benchmark]
-    #[bench::run(SMALL_SIZE)]
-    fn allocator_untracked_alloc_dealloc_small(size: usize) {
-        alloc_dealloc(&std::alloc::System, black_box(size));
+    #[bench::run(warmed(SMALL_SIZE))]
+    fn allocator_untracked_alloc_dealloc_small(layout: Layout) {
+        alloc_dealloc(&std::alloc::System, black_box(layout));
     }
 
     #[library_benchmark]
     #[bench::run(primed(SMALL_SIZE))]
-    fn allocator_tracked_alloc_dealloc_small(size: usize) {
-        alloc_dealloc(&ALLOCATOR, black_box(size));
+    fn allocator_tracked_alloc_dealloc_small(layout: Layout) {
+        alloc_dealloc(&ALLOCATOR, black_box(layout));
     }
 
     #[library_benchmark]
-    #[bench::run(LARGE_SIZE)]
-    fn allocator_untracked_alloc_dealloc_large(size: usize) {
-        alloc_dealloc(&std::alloc::System, black_box(size));
+    #[bench::run(warmed(LARGE_SIZE))]
+    fn allocator_untracked_alloc_dealloc_large(layout: Layout) {
+        alloc_dealloc(&std::alloc::System, black_box(layout));
     }
 
     #[library_benchmark]
     #[bench::run(primed(LARGE_SIZE))]
-    fn allocator_tracked_alloc_dealloc_large(size: usize) {
-        alloc_dealloc(&ALLOCATOR, black_box(size));
+    fn allocator_tracked_alloc_dealloc_large(layout: Layout) {
+        alloc_dealloc(&ALLOCATOR, black_box(layout));
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&std::alloc::System, SMALL_SIZE))]
+    #[bench::run(allocate(&std::alloc::System, layout(SMALL_SIZE)))]
     fn allocator_untracked_dealloc_small(block: (*mut u8, Layout)) {
         dealloc(&std::alloc::System, black_box(block));
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&ALLOCATOR, SMALL_SIZE))]
+    #[bench::run(allocate(&ALLOCATOR, layout(SMALL_SIZE)))]
     fn allocator_tracked_dealloc_small(block: (*mut u8, Layout)) {
         dealloc(&ALLOCATOR, black_box(block));
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&std::alloc::System, SMALL_SIZE))]
-    fn allocator_untracked_realloc_grow(block: (*mut u8, Layout)) {
-        realloc_dealloc(&std::alloc::System, black_box(block));
+    #[bench::run(growable(&std::alloc::System))]
+    fn allocator_untracked_realloc_grow(prepared: ((*mut u8, Layout), Layout)) {
+        let (block, grown_layout) = black_box(prepared);
+        realloc_dealloc(&std::alloc::System, block, grown_layout);
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&ALLOCATOR, SMALL_SIZE))]
-    fn allocator_tracked_realloc_grow(block: (*mut u8, Layout)) {
-        realloc_dealloc(&ALLOCATOR, black_box(block));
+    #[bench::run(growable(&ALLOCATOR))]
+    fn allocator_tracked_realloc_grow(prepared: ((*mut u8, Layout), Layout)) {
+        let (block, grown_layout) = black_box(prepared);
+        realloc_dealloc(&ALLOCATOR, block, grown_layout);
     }
 
     library_benchmark_group!(
@@ -262,6 +280,12 @@ mod linux {
     fn fixture() -> &'static Fixture {
         let fixture = &*FIXTURE;
         drop(fixture.thread_op.measure_thread().iterations(1));
+
+        // A process span's first submission also flips the operation's peak state to
+        // unavailable, which never happens again. Criterion amortizes that across its
+        // iterations; Gungraun collects one invocation, so it has to be primed away here.
+        drop(fixture.process_op.measure_process().iterations(1));
+
         fixture
     }
 

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::Report;
+use crate::{Report, ReportOperation};
 
 /// Subdirectory of the Cargo target directory that receives the JSON files.
 const OUTPUT_SUBDIRECTORY: &str = "alloc_tracker";
@@ -76,6 +76,25 @@ impl Report {
     /// filesystem-safe and existing files are overwritten. The directory is
     /// created if it does not exist.
     ///
+    /// Each file carries the totals, the span count, and a per-iteration slope for every
+    /// metric, each slope optionally accompanied by the low and high bounds of its
+    /// confidence interval:
+    ///
+    /// | Key | Meaning |
+    /// |-----|---------|
+    /// | `operation` | The operation's name |
+    /// | `total_iterations`, `total_bytes_allocated`, `total_allocations_count` | Totals across every span |
+    /// | `span_count` | How many spans the estimates were fitted from |
+    /// | `slope_bytes_per_iteration` | Bytes allocated per iteration |
+    /// | `slope_allocations_per_iteration` | Allocations per iteration |
+    /// | `slope_peak_bytes_per_iteration` | Peak outstanding bytes per iteration |
+    /// | `interval_low_*`, `interval_high_*` | Bounds for the matching slope |
+    ///
+    /// The two omission rules are independent. An interval pair is absent whenever that
+    /// metric's dispersion cannot be estimated, which a single span never supplies. All
+    /// three peak keys are absent together when the operation has no peak to report at
+    /// all; see [`ReportOperation::peak_outstanding_bytes`] for when that happens.
+    ///
     /// Writes nothing if no operations were captured.
     ///
     /// # Panics
@@ -89,17 +108,18 @@ impl Report {
     pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
         let directory = directory.as_ref();
 
-        // Build every output up front, detecting sanitized-name collisions before
-        // touching the filesystem. Two operation names that sanitize to the same
-        // file name would otherwise silently overwrite each other's results.
+        // Resolve every destination up front, detecting sanitized-name collisions before
+        // touching the filesystem. Two operation names that sanitize to the same file name
+        // would otherwise silently overwrite each other's results. Only the names are
+        // needed for that, so the bodies are serialized later, one at a time.
         let mut file_names: HashMap<String, &str> = HashMap::new();
-        let mut outputs: Vec<(PathBuf, String)> = Vec::new();
+        let mut destinations: Vec<(PathBuf, &str, &ReportOperation)> = Vec::new();
         for (name, operation) in self.sorted_operations() {
-            let Some(statistics) = operation.statistics() else {
+            if operation.statistics().is_none() {
                 // Registered but never measured operations have no spans and thus
                 // no statistics, so they leave no output file behind.
                 continue;
-            };
+            }
 
             let file_name = format!("{}.json", folo_utils::sanitize_file_name(name));
             if let Some(previous) = file_names.insert(file_name.clone(), name) {
@@ -109,6 +129,31 @@ impl Report {
                      overwriting benchmark results"
                 );
             }
+
+            destinations.push((directory.join(file_name), name, operation));
+        }
+
+        // Without any output, no directory is created, so a probe run that captured
+        // no measurable work leaves nothing behind.
+        if destinations.is_empty() {
+            return;
+        }
+
+        fs::create_dir_all(directory).unwrap_or_else(|error| {
+            panic!(
+                "failed to create benchmark output directory {}: {error}",
+                directory.display()
+            )
+        });
+
+        // One buffer serves every file: it reaches the size of the largest body once
+        // instead of each operation leaving a separate allocation behind.
+        let mut buffer: Vec<u8> = Vec::new();
+
+        for (path, name, operation) in destinations {
+            let statistics = operation
+                .statistics()
+                .expect("operations without statistics were filtered out above");
 
             let output = OperationOutput {
                 operation: name,
@@ -128,38 +173,24 @@ impl Report {
                     .allocations
                     .interval
                     .map(|(_, high)| high),
-                slope_peak_bytes_per_iteration: statistics.peak.map(|peak| peak.slope),
+                slope_peak_bytes_per_iteration: statistics
+                    .peak_outstanding_bytes
+                    .map(|peak| peak.slope),
                 interval_low_peak_bytes_per_iteration: statistics
-                    .peak
+                    .peak_outstanding_bytes
                     .and_then(|peak| peak.interval)
                     .map(|(low, _)| low),
                 interval_high_peak_bytes_per_iteration: statistics
-                    .peak
+                    .peak_outstanding_bytes
                     .and_then(|peak| peak.interval)
                     .map(|(_, high)| high),
             };
 
-            let json = serde_json::to_string_pretty(&output)
+            buffer.clear();
+            serde_json::to_writer_pretty(&mut buffer, &output)
                 .expect("serializing fixed primitive fields to JSON cannot fail");
 
-            outputs.push((directory.join(file_name), json));
-        }
-
-        // Without any output, no directory is created, so a probe run that captured
-        // no measurable work leaves nothing behind.
-        if outputs.is_empty() {
-            return;
-        }
-
-        fs::create_dir_all(directory).unwrap_or_else(|error| {
-            panic!(
-                "failed to create benchmark output directory {}: {error}",
-                directory.display()
-            )
-        });
-
-        for (path, json) in outputs {
-            fs::write(&path, json).unwrap_or_else(|error| {
+            fs::write(&path, &buffer).unwrap_or_else(|error| {
                 panic!(
                     "failed to write benchmark output file {}: {error}",
                     path.display()

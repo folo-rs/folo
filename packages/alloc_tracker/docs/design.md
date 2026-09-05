@@ -74,18 +74,19 @@ batch's watermark is therefore read as that per-iteration peak directly, which i
 allows batches of different sizes to be combined at all, and what allows a short warmup
 batch with an anomalous watermark to be outweighed by the steady state.
 
-Peak outstanding bytes is reported only when every span of the operation could measure it.
+Peak outstanding bytes requires that every span of the operation could measure it.
 Process-scope spans cannot, because a process-wide watermark would be perturbed by
 unrelated threads to the point of meaninglessness, so an operation that contains even one
 process-scope span reports no peak at all rather than a figure that silently describes
-only part of the work.
+only part of the work. Spans that measured a peak but covered no iterations leave the rate
+undefined, which also leaves nothing to report.
 
 #### Limits of the peak figure
 
 An operation that accumulates memory across the iterations of a batch — one whose watermark
-grows with the batch size rather than staying level — has no per-iteration peak for this
-metric to report. It reports a figure that scales with whatever iteration counts the
-harness chose, and is not comparable between runs.
+grows with the batch size rather than staying level — violates the assumption the estimate
+rests on. Nothing detects this, so a figure is still reported; it scales with whatever
+iteration counts the harness chose and is not comparable between runs.
 
 Span watermarks are averaged, not summed. An operation measured concurrently on several
 threads reports what a typical one of them held, not the total held across all of them at
@@ -130,6 +131,6 @@ question is not how much a piece of code allocates but whether it allocates at a
 the tripwire makes the next allocation attempted through the installed allocator panic.
 
 The tripwire is process-global and fires once: it disarms itself as it triggers, so the
-panic can unwind through code that allocates on its way out. It is available only when the
-corresponding package feature is enabled, keeping the check out of builds that do not want
-it.
+code that runs as the panic propagates does not re-trigger it. It is available only when
+the corresponding package feature is enabled, keeping the check out of builds that do not
+want it.

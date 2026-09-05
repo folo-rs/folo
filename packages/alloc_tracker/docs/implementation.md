@@ -100,11 +100,12 @@ total against the number of iterations the span covered, with the fitted line fo
 the origin: zero iterations must cost nothing, so the fit has a slope but no intercept. The
 slope is the reported per-iteration figure.
 
-Writing nᵢ for the iteration count of span i and peakᵢ for the watermark that span reached,
-a watermark is not a total: it is a level that does not grow with nᵢ, so the accumulator's
-model does not describe it. Multiplying it by nᵢ on the way in makes it behave like one. The
-regression then divides that scaling back out, and the estimate reduces to the span
-watermarks averaged with weight nᵢ²:
+Writing nᵢ for the iteration count of span i and peakᵢ for that span's baseline-relative
+peak — the watermark it reached less the outstanding level it entered on — a peak is not a
+total: it is a level that does not grow with nᵢ, so the accumulator's model does not
+describe it. Multiplying it by nᵢ on the way in makes it behave like one. The regression
+then divides that scaling back out, and the estimate reduces to the span peaks averaged
+with weight nᵢ²:
 
 ```text
 slope = Σ(nᵢ · peakᵢ·nᵢ) / Σ(nᵢ²) = Σ(nᵢ²·peakᵢ) / Σ(nᵢ²)

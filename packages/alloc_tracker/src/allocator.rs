@@ -285,30 +285,52 @@ mod tests {
     }
 
     #[test]
-    fn zeroed_allocation_and_deallocation_move_outstanding() {
+    fn zeroed_allocation_zeroes_memory_and_moves_every_counter() {
         const SIZE: usize = 1024;
 
         let allocator = Allocator::new(std::alloc::System);
         let layout = test_layout(SIZE);
         let counters = get_or_init_thread_counters();
 
-        let before = counters.outstanding();
+        let before_bytes = counters.bytes();
+        let before_count = counters.count();
+        let before_outstanding = counters.outstanding();
+
+        // Drop the watermark to the current level so the rise this allocation causes is
+        // attributable to it rather than to whatever ran earlier on this thread.
+        counters.set_watermark(before_outstanding);
 
         // SAFETY: The layout has a non-zero size and a power-of-two alignment.
         let block = unsafe { allocator.alloc_zeroed(layout) };
         assert!(!block.is_null());
 
-        let after_alloc = counters.outstanding();
+        // SAFETY: The allocator just returned this block for a layout of SIZE bytes, so
+        // that many bytes are initialized and readable.
+        let contents = unsafe { std::slice::from_raw_parts(block, SIZE) };
+        assert!(
+            contents.iter().all(|&byte| byte == 0),
+            "alloc_zeroed must hand back zeroed memory"
+        );
+
+        let size = i64::try_from(SIZE).unwrap();
+        assert_eq!(counters.bytes(), before_bytes.wrapping_add(SIZE as u64));
+        assert_eq!(counters.count(), before_count.wrapping_add(1));
+        assert_eq!(
+            counters.outstanding().wrapping_sub(before_outstanding),
+            size
+        );
+        assert_eq!(
+            counters.watermark().wrapping_sub(before_outstanding),
+            size,
+            "the watermark must follow the outstanding level up"
+        );
 
         // SAFETY: The block was just obtained from this allocator with this exact layout.
         unsafe {
             allocator.dealloc(block, layout);
         }
 
-        assert_eq!(
-            after_alloc.wrapping_sub(before),
-            i64::try_from(SIZE).unwrap()
-        );
+        assert_eq!(counters.outstanding(), before_outstanding);
     }
 
     #[test]
@@ -335,14 +357,18 @@ mod tests {
         let counters = get_or_init_thread_counters();
 
         let before_bytes = counters.bytes();
+        let before_count = counters.count();
         let before_outstanding = counters.outstanding();
+        let before_watermark = counters.watermark();
 
         // SAFETY: The layout has a non-zero size and a power-of-two alignment.
         let block = unsafe { allocator.alloc_zeroed(layout) };
         assert!(block.is_null());
 
         assert_eq!(counters.bytes(), before_bytes);
+        assert_eq!(counters.count(), before_count);
         assert_eq!(counters.outstanding(), before_outstanding);
+        assert_eq!(counters.watermark(), before_watermark);
     }
 
     #[test]

@@ -10,7 +10,7 @@
 ///
 /// The byte and allocation figures are whole-span totals rather than per-iteration rates:
 /// dividing is the operation's job, because it weights spans against each other
-/// (`docs/implementation.md`, "Per-iteration estimates").
+/// (`docs/implementation.md`, "Peak aggregation").
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SpanMeasurement {
     /// How many iterations of the operation the span covered.

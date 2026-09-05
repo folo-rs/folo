@@ -114,9 +114,9 @@ impl Operation {
     ///
     /// * Allocations made by unrelated threads during the span are attributed to this
     ///   operation.
-    /// * Capture is more expensive, because it consults every thread in the process.
-    /// * The totals are approximate: they are assembled from per-thread counters read one
-    ///   after another rather than from one instantaneous view of the process.
+    /// * Capture is more expensive than thread scope.
+    /// * The totals are approximate: they do not represent one instantaneous view of the
+    ///   process.
     /// * No peak can be observed, and one such span withholds the peak from the whole
     ///   operation, including from thread spans that did measure one.
     ///
@@ -146,10 +146,14 @@ impl Operation {
     ///     const WORKERS: u64 = 4;
     ///
     ///     thread::scope(|scope| {
-    ///         for _ in 0..WORKERS {
-    ///             scope.spawn(|| {
-    ///                 for _ in 0..items.div_ceil(WORKERS) {
+    ///         for worker in 0..WORKERS {
+    ///             // Striding the item indices distributes any remainder without running
+    ///             // more bodies than the caller reports as iterations.
+    ///             scope.spawn(move || {
+    ///                 let mut item = worker;
+    ///                 while item < items {
     ///                     black_box(vec![1, 2, 3, 4, 5]);
+    ///                     item = item.saturating_add(WORKERS);
     ///                 }
     ///             });
     ///         }

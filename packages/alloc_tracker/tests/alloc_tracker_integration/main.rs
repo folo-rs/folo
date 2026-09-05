@@ -7,11 +7,6 @@
 
 use alloc_tracker::{Allocator, ReportOperation, Session};
 
-mod cumulative;
-mod lifecycle;
-mod multithreading;
-mod peak;
-
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
@@ -47,3 +42,8 @@ fn report_operation<R>(
 
     read(operation)
 }
+
+mod cumulative;
+mod lifecycle;
+mod multithreading;
+mod peak;

@@ -244,7 +244,8 @@ mod tests {
 
     #[test]
     fn level_slope_is_the_squared_iteration_weighted_mean() {
-        // (1²·1000 + 3²·100) / (1² + 3²) = 1900 / 10.
+        // Squaring the iteration counts gives the longer span the greater say, so the
+        // result sits nearer its level than an unweighted mean of the two would.
         let accumulator = accumulate_levels(&[(1, 1000), (3, 100)]);
         assert_eq!(accumulator.slope(), Some(190.0));
     }
@@ -256,11 +257,17 @@ mod tests {
         const LEVEL: u64 = 3_000_000_000_000;
         const ITERATIONS: u64 = 9_000_000_000;
 
+        // What is being protected is overflow resistance, not bit-exact arithmetic: the
+        // level survives a multiply and a divide in f64. Deliberately far looser than the
+        // rounding those two operations can introduce, and far tighter than any plausible
+        // loss of the level itself, so it fails only if the scaling genuinely breaks.
+        const TOLERANCE: f64 = 1e-9;
+
         let accumulator = accumulate_levels(&[(ITERATIONS, LEVEL)]);
         let slope = accumulator.slope().unwrap();
 
         assert!(
-            (slope - LEVEL as f64).abs() < LEVEL as f64 * 1e-9,
+            (slope - LEVEL as f64).abs() < LEVEL as f64 * TOLERANCE,
             "expected about {LEVEL}, got {slope}"
         );
     }

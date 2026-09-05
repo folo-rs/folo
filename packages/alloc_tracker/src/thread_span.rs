@@ -4,8 +4,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::counters::{ThreadCounters, get_or_init_thread_counters};
-use crate::span_measurement::SpanMeasurement;
-use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics};
+use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, SpanMeasurement};
 
 /// A measurement of this thread's allocations over the span's lifetime.
 ///
@@ -205,7 +204,7 @@ fn thread_deltas(counters: ThreadCounters, start_bytes: u64, start_count: u64) -
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::panic::{self, AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
     use std::sync::Barrier;
     use std::thread;
 
@@ -442,8 +441,8 @@ mod tests {
 
     #[test]
     fn sequential_spans_each_contribute_their_peak() {
-        // Equal iteration counts, so the peaks carry equal weight and their average is the
-        // arithmetic mean of the three levels.
+        // Equal iteration counts, so the peaks carry equal weight and the result is their
+        // arithmetic mean.
         const LEVELS: [u64; 3] = [100, 700, 400];
 
         let session = Session::new().no_stdout().no_file();
@@ -462,8 +461,8 @@ mod tests {
     fn concurrent_thread_spans_average_their_peaks() {
         // Each worker has its own counters and watermark, but both guards record into one
         // shared `OperationMetrics`. Overlapping the spans exercises that interaction: the
-        // result must be the average of the two levels, not their sum, and neither worker
-        // may observe the other's outstanding memory.
+        // result must be the average of the levels, not their sum, and no worker may
+        // observe another's outstanding memory.
         const LEVELS: [u64; 2] = [300, 900];
 
         with_watchdog(|| {
@@ -480,10 +479,21 @@ mod tests {
                     let both_inside = &both_inside;
 
                     scope.spawn(move || {
-                        let _span = operation.measure_thread().iterations(1);
-                        register_fake_allocation(level, 1);
+                        // Reaching the rendezvous is separated from the measured work so a
+                        // panic in that work cannot strand the other worker. Watchdogs are
+                        // disabled under mutation testing, so nothing would break the
+                        // deadlock. Ref: docs/testing.md, "Tests must not hang".
+                        let opened = panic::catch_unwind(AssertUnwindSafe(|| {
+                            let span = operation.measure_thread().iterations(1);
+                            register_fake_allocation(level, 1);
+                            span
+                        }));
+
                         both_inside.wait();
+
+                        let span = opened.unwrap_or_else(|payload| panic::resume_unwind(payload));
                         register_fake_deallocation(level);
+                        drop(span);
                     });
                 }
             });

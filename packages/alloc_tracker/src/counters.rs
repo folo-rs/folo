@@ -25,11 +25,11 @@ use crate::ERR_POISONED_LOCK;
 /// permanently and distort every later span delta. Wrapping keeps subsequent deltas —
 /// which is all a span reads — correct as long as the span itself does not span a wrap.
 #[derive(Debug)]
-pub(crate) struct PerThreadCounters {
+struct PerThreadCounters {
     bytes: AtomicU64,
     count: AtomicU64,
     outstanding: AtomicI64,
-    peak_outstanding: AtomicI64,
+    watermark: AtomicI64,
 }
 
 impl PerThreadCounters {
@@ -39,17 +39,17 @@ impl PerThreadCounters {
             bytes: AtomicU64::new(0),
             count: AtomicU64::new(0),
             outstanding: AtomicI64::new(0),
-            peak_outstanding: AtomicI64::new(0),
+            watermark: AtomicI64::new(0),
         }
     }
 
     #[inline]
-    pub(crate) fn bytes(&self) -> u64 {
+    fn bytes(&self) -> u64 {
         self.bytes.load(atomic::Ordering::Relaxed)
     }
 
     #[inline]
-    pub(crate) fn count(&self) -> u64 {
+    fn count(&self) -> u64 {
         self.count.load(atomic::Ordering::Relaxed)
     }
 
@@ -59,7 +59,7 @@ impl PerThreadCounters {
     /// another thread, and blocks allocated before its counters existed or during the
     /// initialization window that deliberately skips tracking. The counter therefore records
     /// this thread's allocator traffic, not the memory it owns.
-    pub(crate) fn outstanding(&self) -> i64 {
+    fn outstanding(&self) -> i64 {
         self.outstanding.load(atomic::Ordering::Relaxed)
     }
 
@@ -68,8 +68,8 @@ impl PerThreadCounters {
     /// Spans own this value: each resets it on entry and restores it on exit, so it means
     /// "the highest level reached since the innermost live span started" rather than an
     /// all-time maximum.
-    pub(crate) fn watermark(&self) -> i64 {
-        self.peak_outstanding.load(atomic::Ordering::Relaxed)
+    fn watermark(&self) -> i64 {
+        self.watermark.load(atomic::Ordering::Relaxed)
     }
 }
 
@@ -96,12 +96,12 @@ impl ThreadCounters {
     }
 
     #[inline]
-    pub(crate) fn register_allocation(self, bytes: u64) {
+    fn register_allocation(self, bytes: u64) {
         self.add_to_totals(bytes);
         self.raise_outstanding(as_delta(bytes));
     }
 
-    pub(crate) fn register_deallocation(self, bytes: u64) {
+    fn register_deallocation(self, bytes: u64) {
         self.shift_outstanding(as_delta(bytes).wrapping_neg());
     }
 
@@ -110,7 +110,7 @@ impl ThreadCounters {
     /// The cumulative total counts the full new size, matching how the allocator reports the
     /// request. Only the difference is outstanding, because the old block is released as part
     /// of the same operation.
-    pub(crate) fn register_reallocation(self, old_bytes: u64, new_bytes: u64) {
+    fn register_reallocation(self, old_bytes: u64, new_bytes: u64) {
         self.add_to_totals(new_bytes);
         self.raise_outstanding(as_delta(new_bytes).wrapping_sub(as_delta(old_bytes)));
     }
@@ -135,7 +135,7 @@ impl ThreadCounters {
         // `alloc_tracker_tracking_overhead` benchmarks report.
         let watermark = self.counters.watermark();
         self.counters
-            .peak_outstanding
+            .watermark
             .store(outstanding.max(watermark), atomic::Ordering::Relaxed);
     }
 
@@ -169,7 +169,7 @@ impl ThreadCounters {
     /// Overwrites the high-water mark, for a span establishing or restoring its baseline.
     pub(crate) fn set_watermark(self, value: i64) {
         self.counters
-            .peak_outstanding
+            .watermark
             .store(value, atomic::Ordering::Relaxed);
     }
 }
@@ -235,6 +235,9 @@ fn existing_thread_counters() -> Option<ThreadCounters> {
 }
 
 /// Whether this thread's counters have been created yet.
+///
+/// Exists so tests can prove the deallocation path never initializes thread-local state,
+/// which is what keeps a free from re-entering the allocator.
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
 pub(crate) fn thread_has_counters() -> bool {
@@ -250,7 +253,7 @@ pub(crate) struct AllocationTotals {
 
 impl AllocationTotals {
     #[inline]
-    pub(crate) const fn zero() -> Self {
+    const fn zero() -> Self {
         Self { bytes: 0, count: 0 }
     }
 }
@@ -287,8 +290,10 @@ fn thread_counters_for_tracking() -> Option<ThreadCounters> {
     Some(get_or_init_thread_counters())
 }
 
-/// Updates allocation tracking counters for the given size.
-/// Only per-thread counters are updated; process-wide views sum them on demand.
+/// Records a successful allocation of `size` bytes on the calling thread.
+///
+/// Called only after the wrapped allocator returned a non-null pointer, so the counters
+/// never describe a request that failed.
 pub(crate) fn track_allocation(size: usize) {
     let size: u64 = size.try_into().expect("usize always fits into u64");
 
@@ -297,7 +302,11 @@ pub(crate) fn track_allocation(size: usize) {
     }
 }
 
-/// Updates tracking counters for a block resized from `old_size` to `new_size`.
+/// Records a successful resize from `old_size` to `new_size` on the calling thread.
+///
+/// Called only after the wrapped allocator returned a non-null pointer. The two sizes affect
+/// the counters differently: the cumulative total gains the whole new size, while only the
+/// difference is outstanding, because the old block is released by the same call.
 pub(crate) fn track_reallocation(old_size: usize, new_size: usize) {
     let old_size: u64 = old_size.try_into().expect("usize always fits into u64");
     let new_size: u64 = new_size.try_into().expect("usize always fits into u64");
@@ -339,6 +348,10 @@ pub(crate) fn register_fake_allocation(bytes: u64, count: u64) {
 }
 
 /// Records a deallocation on this thread without going through the global allocator.
+///
+/// Lets a span test balance the synthetic outstanding state that
+/// [`register_fake_allocation`] created, so watermark scenarios can be built without
+/// installing the tracking allocator.
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))] // Test scaffolding, not shipped behavior.
 pub(crate) fn register_fake_deallocation(bytes: u64) {
@@ -349,7 +362,7 @@ pub(crate) fn register_fake_deallocation(bytes: u64) {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::{Arc, Barrier};
-    use std::{iter, thread};
+    use std::{iter, panic, thread};
 
     use testing::with_watchdog;
 
@@ -499,9 +512,17 @@ mod tests {
             let writers: Vec<_> = iter::repeat_with(|| {
                 let ready = Arc::clone(&ready);
                 thread::spawn(move || {
-                    // Register this thread's counters, then wait for everyone.
-                    register_fake_allocation(BYTES_PER_ALLOC, 1);
+                    // Register this thread's counters, then wait for everyone. Arriving at
+                    // the barrier is kept off the panicking path so a failure here cannot
+                    // block the reader forever, which no watchdog would break under
+                    // mutation testing. Ref: docs/testing.md, "Tests must not hang".
+                    let registered = panic::catch_unwind(|| {
+                        register_fake_allocation(BYTES_PER_ALLOC, 1);
+                    });
+
                     ready.wait();
+
+                    registered.unwrap_or_else(|payload| panic::resume_unwind(payload));
 
                     for _ in 1..ALLOCS_PER_WRITER {
                         register_fake_allocation(BYTES_PER_ALLOC, 1);

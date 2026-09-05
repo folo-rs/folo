@@ -10,14 +10,14 @@ use crate::{report_peak, report_total_bytes};
 ///
 /// Large enough that incidental allocations by the test harness cannot approach it, so the
 /// bounds below hold regardless of what else runs on this thread.
-const BUFFER: usize = 64 * 1024;
+const BUFFER_SIZE: usize = 64 * 1024;
 
 /// How much of a second buffer a reported peak may include before the test concludes that
 /// more than the intended number of buffers was live.
 ///
 /// The scenarios allocate nothing else of comparable size, so any fraction would do; a whole
 /// extra buffer is simply the least arbitrary choice.
-const HEADROOM: usize = BUFFER;
+const HEADROOM: usize = BUFFER_SIZE;
 
 /// A byte count as the report exposes it.
 #[expect(
@@ -42,7 +42,7 @@ fn peak_measures_one_iteration_regardless_of_batch_size() {
         let op = session.operation(name);
         let _span = op.measure_thread().iterations(iterations as u64);
         for _ in 0..iterations {
-            let data = vec![0_u8; BUFFER];
+            let data = vec![0_u8; BUFFER_SIZE];
             black_box(&data);
         }
     }
@@ -57,9 +57,12 @@ fn peak_measures_one_iteration_regardless_of_batch_size() {
     // Every buffer is released before the next is taken, so only one is ever live — and the
     // reported peak says so whichever batch size the harness happened to choose.
     for peak in [short_peak, long_peak] {
-        assert!(peak >= as_reported(BUFFER), "peak {peak} covers one buffer");
         assert!(
-            peak < as_reported(BUFFER + HEADROOM),
+            peak >= as_reported(BUFFER_SIZE),
+            "peak {peak} covers one buffer"
+        );
+        assert!(
+            peak < as_reported(BUFFER_SIZE + HEADROOM),
             "peak {peak} does not grow with the batch size"
         );
     }
@@ -84,7 +87,7 @@ fn a_warmup_span_does_not_dominate_the_peak() {
     /// that the estimate would be visibly wrong if the warmup batch carried anything close to
     /// equal weight.
     const WARMUP_RATIO: usize = 16;
-    const WARMUP_BUFFER: usize = BUFFER * WARMUP_RATIO;
+    const WARMUP_BUFFER_SIZE: usize = BUFFER_SIZE * WARMUP_RATIO;
 
     let session = Session::new().no_stdout().no_file();
     {
@@ -92,14 +95,14 @@ fn a_warmup_span_does_not_dominate_the_peak() {
 
         {
             let _span = op.measure_thread().iterations(1);
-            let data = vec![0_u8; WARMUP_BUFFER];
+            let data = vec![0_u8; WARMUP_BUFFER_SIZE];
             black_box(&data);
         }
 
         {
             let _span = op.measure_thread().iterations(STEADY_BATCH as u64);
             for _ in 0..STEADY_BATCH {
-                let data = vec![0_u8; BUFFER];
+                let data = vec![0_u8; BUFFER_SIZE];
                 black_box(&data);
             }
         }
@@ -108,11 +111,11 @@ fn a_warmup_span_does_not_dominate_the_peak() {
     let peak = report_peak(&session, "warmup_then_steady").unwrap();
 
     assert!(
-        peak >= as_reported(BUFFER),
+        peak >= as_reported(BUFFER_SIZE),
         "peak {peak} covers the steady-state buffer"
     );
     assert!(
-        peak < as_reported(BUFFER + HEADROOM),
+        peak < as_reported(BUFFER_SIZE + HEADROOM),
         "peak {peak} reflects the steady state, not the warmup batch"
     );
 }
@@ -120,7 +123,7 @@ fn a_warmup_span_does_not_dominate_the_peak() {
 #[test]
 #[cfg_attr(miri, ignore)] // Test uses the real platform which cannot be executed under Miri.
 fn peak_covers_buffers_held_simultaneously() {
-    const BUFFERS: usize = 8;
+    const BUFFER_COUNT: usize = 8;
 
     let session = Session::new().no_stdout().no_file();
     {
@@ -129,15 +132,15 @@ fn peak_covers_buffers_held_simultaneously() {
 
         // A fixed-size array keeps the handles on the stack, so the only heap allocations the
         // span sees are the buffers whose simultaneous lifetime it is measuring.
-        let held: [Vec<u8>; BUFFERS] = std::array::from_fn(|_| vec![0_u8; BUFFER]);
+        let held: [Vec<u8>; BUFFER_COUNT] = std::array::from_fn(|_| vec![0_u8; BUFFER_SIZE]);
         black_box(&held);
     }
 
     let peak = report_peak(&session, "held_simultaneously").unwrap();
 
     assert!(
-        peak >= as_reported(BUFFER * BUFFERS),
-        "peak {peak} covers all {BUFFERS} buffers held at once"
+        peak >= as_reported(BUFFER_SIZE * BUFFER_COUNT),
+        "peak {peak} covers all {BUFFER_COUNT} buffers held at once"
     );
 }
 
@@ -148,7 +151,7 @@ fn process_span_reports_no_peak() {
     {
         let op = session.operation("process_scope");
         let _span = op.measure_process().iterations(1);
-        let data = vec![0_u8; BUFFER];
+        let data = vec![0_u8; BUFFER_SIZE];
         black_box(&data);
     }
 

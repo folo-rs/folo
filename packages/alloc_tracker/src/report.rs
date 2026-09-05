@@ -129,11 +129,11 @@ pub struct OperationStatistics {
     /// Per-iteration allocation-count statistics.
     pub allocations: MetricStatistics,
 
-    /// Per-iteration peak-byte statistics, or `None` when the operation has no peak to
-    /// report.
+    /// Per-iteration peak-outstanding-byte statistics, or `None` when the operation has no
+    /// peak to report.
     ///
     /// See [`ReportOperation::peak_outstanding_bytes`] for when that is the case.
-    pub peak: Option<MetricStatistics>,
+    pub peak_outstanding_bytes: Option<MetricStatistics>,
 }
 
 impl Report {
@@ -420,7 +420,7 @@ impl ReportOperation {
                 slope: self.metrics.allocations_slope()?,
                 interval: self.metrics.allocations_interval(),
             },
-            peak: self.peak_outstanding_bytes().map(|slope| MetricStatistics {
+            peak_outstanding_bytes: self.peak_outstanding_bytes().map(|slope| MetricStatistics {
                 slope,
                 interval: self.metrics.peak_interval(),
             }),
@@ -500,7 +500,7 @@ impl fmt::Display for Report {
                     Some(statistics) => [
                         format_count(statistics.bytes.slope),
                         format_count(statistics.allocations.slope),
-                        statistics.peak.map_or_else(
+                        statistics.peak_outstanding_bytes.map_or_else(
                             || NOT_AVAILABLE.to_owned(),
                             |peak| format_count(peak.slope),
                         ),
@@ -577,7 +577,9 @@ impl TableRow<'_> {
 ///
 /// The operation name is left-aligned and the figures are right-aligned, so digits line up
 /// under their headers.
-#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test - output format is not guaranteed.
+// The layout carries no API contract and the formatter's error paths are unreachable here.
+// Which figures appear is contractual, and the table tests cover that.
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn write_table_row<'a>(
     f: &mut fmt::Formatter<'_>,
     cells: impl Iterator<Item = &'a str>,
@@ -676,7 +678,7 @@ mod tests {
 
     #[test]
     fn zero_iteration_spans_withhold_the_peak_from_statistics() {
-        // `statistics().peak` promises the availability semantics of
+        // `statistics().peak_outstanding_bytes` promises the availability semantics of
         // `peak_outstanding_bytes()`, so an undefined rate must be withheld rather than
         // surfaced as a `NaN` slope that the JSON and the table would then render.
         let mut metrics = OperationMetrics::default();
@@ -684,7 +686,13 @@ mod tests {
         let operation = ReportOperation { metrics };
 
         assert_eq!(operation.peak_outstanding_bytes(), None);
-        assert!(operation.statistics().unwrap().peak.is_none());
+        assert!(
+            operation
+                .statistics()
+                .unwrap()
+                .peak_outstanding_bytes
+                .is_none()
+        );
     }
 
     #[test]
@@ -839,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn statistics_expose_both_metric_estimates() {
+    fn statistics_expose_byte_and_allocation_estimates() {
         // A single recorded span yields a span count of one and a slope equal to
         // the per-iteration mean, but carries no dispersion information, so the
         // interval is withheld.
@@ -928,18 +936,26 @@ mod tests {
     #[test]
     fn report_display_renders_each_peak_according_to_its_availability() {
         // An operation with no peak figure renders as unavailable in the table
-        // (design.md, "Reporting"). The column layout carries no API contract, so this
-        // inspects each operation's own row rather than matching the table verbatim.
+        // (design.md, "Reporting"). Each metric gets a distinct value so that finding one
+        // in the peak column proves the column carries the peak and not a neighbour.
+        const ITERATIONS: u64 = 4;
+        const PEAK_PER_ITERATION: u64 = 700;
+
         let mut measured = OperationMetrics::default();
-        measured.add_iterations(250, 3, 4);
+        measured.add_span(SpanMeasurement {
+            iterations: ITERATIONS,
+            bytes: 250 * ITERATIONS,
+            count: 3 * ITERATIONS,
+            peak_outstanding_bytes: Some(PEAK_PER_ITERATION),
+        });
 
         // A process span withholds the peak, which makes the whole operation unable to
         // report one even though its byte and allocation rates remain well defined.
         let mut process_measured = OperationMetrics::default();
         process_measured.add_span(SpanMeasurement {
-            iterations: 4,
-            bytes: 1000,
-            count: 12,
+            iterations: ITERATIONS,
+            bytes: 250 * ITERATIONS,
+            count: 3 * ITERATIONS,
             peak_outstanding_bytes: None,
         });
 
@@ -964,24 +980,21 @@ mod tests {
         let report = Report { operations };
 
         let display_output = report.to_string();
-        let row = |name: &str| {
-            display_output
+
+        // Splitting on the cell separator addresses the peak by column without pinning the
+        // widths or alignment, neither of which is contractual.
+        let peak_cell = |name: &str| {
+            let row = display_output
                 .lines()
                 .find(|line| line.contains(name))
-                .unwrap_or_else(|| panic!("the table has a row for {name}, got {display_output}"))
-                .to_owned()
+                .unwrap_or_else(|| panic!("the table has a row for {name}, got {display_output}"));
+            let cells: Vec<&str> = row.trim_matches('|').split('|').map(str::trim).collect();
+            assert_eq!(cells.len(), TABLE_COLUMNS, "got {row}");
+            cells.last().copied().unwrap().to_owned()
         };
 
-        let thread_row = row("thread");
-        assert!(thread_row.contains("250"), "got {thread_row}");
-        assert!(!thread_row.contains(NOT_AVAILABLE), "got {thread_row}");
-
-        let process_row = row("process");
-        assert!(process_row.contains("250"), "got {process_row}");
-        assert!(process_row.contains(NOT_AVAILABLE), "got {process_row}");
-
-        let nothing_row = row("nothing");
-        assert!(nothing_row.contains("NaN"), "got {nothing_row}");
-        assert!(nothing_row.contains(NOT_AVAILABLE), "got {nothing_row}");
+        assert_eq!(peak_cell("thread"), PEAK_PER_ITERATION.to_string());
+        assert_eq!(peak_cell("process"), NOT_AVAILABLE);
+        assert_eq!(peak_cell("nothing"), NOT_AVAILABLE);
     }
 }

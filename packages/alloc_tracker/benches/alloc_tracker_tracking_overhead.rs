@@ -97,35 +97,41 @@ fn span_overhead(c: &mut Criterion) {
 fn allocator_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("alloc_tracker_tracking_overhead/allocator");
 
+    // Validating a layout is input preparation rather than allocator work, so every
+    // layout a scenario needs is built once here instead of inside a timed closure.
+    let small = layout(SMALL_SIZE);
+    let large = layout(LARGE_SIZE);
+    let grown = layout(REALLOC_GROWN_SIZE);
+
     // The first tracked allocation on a thread initializes that thread's counters and
     // registers them globally. Pay that one-time cost here so it does not land in the
     // measurements below.
-    alloc_dealloc(&ALLOCATOR, layout(SMALL_SIZE));
+    alloc_dealloc(&ALLOCATOR, small);
 
     group.bench_function("untracked_alloc_dealloc_small", |b| {
-        b.iter(|| alloc_dealloc(&std::alloc::System, layout(SMALL_SIZE)));
+        b.iter(|| alloc_dealloc(&std::alloc::System, black_box(small)));
     });
     group.bench_function("tracked_alloc_dealloc_small", |b| {
-        b.iter(|| alloc_dealloc(&ALLOCATOR, layout(SMALL_SIZE)));
+        b.iter(|| alloc_dealloc(&ALLOCATOR, black_box(small)));
     });
 
     group.bench_function("untracked_alloc_dealloc_large", |b| {
-        b.iter(|| alloc_dealloc(&std::alloc::System, layout(LARGE_SIZE)));
+        b.iter(|| alloc_dealloc(&std::alloc::System, black_box(large)));
     });
     group.bench_function("tracked_alloc_dealloc_large", |b| {
-        b.iter(|| alloc_dealloc(&ALLOCATOR, layout(LARGE_SIZE)));
+        b.iter(|| alloc_dealloc(&ALLOCATOR, black_box(large)));
     });
 
     group.bench_function("untracked_dealloc_small", |b| {
         b.iter_batched(
-            || allocate(&std::alloc::System, layout(SMALL_SIZE)),
+            || allocate(&std::alloc::System, small),
             |block| dealloc(&std::alloc::System, block),
             BatchSize::SmallInput,
         );
     });
     group.bench_function("tracked_dealloc_small", |b| {
         b.iter_batched(
-            || allocate(&ALLOCATOR, layout(SMALL_SIZE)),
+            || allocate(&ALLOCATOR, small),
             |block| dealloc(&ALLOCATOR, block),
             BatchSize::SmallInput,
         );
@@ -133,15 +139,15 @@ fn allocator_overhead(c: &mut Criterion) {
 
     group.bench_function("untracked_realloc_grow", |b| {
         b.iter_batched(
-            || allocate(&std::alloc::System, layout(SMALL_SIZE)),
-            |block| realloc_dealloc(&std::alloc::System, block, REALLOC_GROWN_SIZE),
+            || allocate(&std::alloc::System, small),
+            |block| realloc_dealloc(&std::alloc::System, block, grown),
             BatchSize::SmallInput,
         );
     });
     group.bench_function("tracked_realloc_grow", |b| {
         b.iter_batched(
-            || allocate(&ALLOCATOR, layout(SMALL_SIZE)),
-            |block| realloc_dealloc(&ALLOCATOR, block, REALLOC_GROWN_SIZE),
+            || allocate(&ALLOCATOR, small),
+            |block| realloc_dealloc(&ALLOCATOR, block, grown),
             BatchSize::SmallInput,
         );
     });
@@ -187,17 +193,13 @@ fn dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout)) {
     }
 }
 
-fn realloc_dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout), new_size: usize) {
+fn realloc_dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout), grown_layout: Layout) {
     let (ptr, layout) = block;
 
-    let grown_layout = Layout::from_size_align(new_size, layout.align()).expect(
-        "the alignment already came from a valid layout and the grown benchmark size is \
-         orders of magnitude below the layout size limit",
-    );
-
-    // SAFETY: `ptr` was returned by `alloc` for `layout`, and `new_size` is non-zero and
-    // small enough that rounding it up to `layout`'s alignment cannot overflow `isize`.
-    let grown = unsafe { allocator.realloc(ptr, layout, new_size) };
+    // SAFETY: `ptr` was returned by `alloc` for `layout`, and `grown_layout` was built at
+    // the same alignment with a size small enough that rounding it up cannot overflow
+    // `isize`.
+    let grown = unsafe { allocator.realloc(ptr, layout, grown_layout.size()) };
 
     if grown.is_null() {
         // The original block is still live, but a benchmark that cannot obtain memory has
@@ -207,7 +209,7 @@ fn realloc_dealloc<A: GlobalAlloc>(allocator: &A, block: (*mut u8, Layout), new_
 
     black_box(grown);
 
-    // SAFETY: `grown` was returned by `realloc` for `new_size` at `layout`'s alignment.
+    // SAFETY: `grown` was returned by `realloc` for `grown_layout`'s size and alignment.
     unsafe {
         allocator.dealloc(grown, grown_layout);
     }
