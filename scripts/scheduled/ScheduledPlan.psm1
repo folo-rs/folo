@@ -32,15 +32,17 @@ function Get-ScheduledCheck {
         }
     }
     # These synchronization-heavy families benefit from seed exploration rather than mutations.
+    # Use one shard unless a package approaches the job timeout.
+    # Ref: .github/workflows/design.md#shallow-and-deep-validation.
     foreach ($family in @(
-            @{ package = 'events_once'; shards = 4 },
-            @{ package = 'events'; shards = 2 },
-            @{ package = 'awaiter_set'; shards = 2 },
-            @{ package = 'nm_impl'; shards = 2 })) {
+            @{ package = 'events_once'; shards = 1 },
+            @{ package = 'events'; shards = 1 },
+            @{ package = 'awaiter_set'; shards = 1 },
+            @{ package = 'nm_impl'; shards = 1 })) {
         foreach ($index in 1..$family.shards) {
             $shard = "$index/$($family.shards)"
             $checks += @{
-                id = "miri-many-$($family.package)-$index"; recipe = 'miri-harder'
+                id = "miri-harder-$($family.package)-$index"; recipe = 'miri-harder'
                 platform = 'ubuntu-latest'; packages = @($family.package); shard = $shard
             }
         }

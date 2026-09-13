@@ -47,6 +47,11 @@ Local and scheduled deep validation share the same Just recipes. Scheduling choo
 scope and captures diagnostics; it does not implement different checker commands or
 pass/fail rules. Necessary check behavior belongs in the shared recipes.
 
+Many-seed Miri jobs use the canonical recipe name, `miri-harder`, in their job names.
+Each selected package runs its full seed budget in one shard by default. Additional
+shards are reserved for packages approaching the job timeout; scheduled validation
+does not need extra horizontal scaling solely to shorten already-small jobs.
+
 Nightly runs execute the entire deep suite even on unchanged source. Build caches
 remain ordinary performance aids, not receipts used to skip validation. Hosted
 execution and reporting do not depend on the availability of a Local App.

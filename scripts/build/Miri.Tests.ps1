@@ -21,6 +21,10 @@ Describe 'Get-MiriSeedRange' {
         Get-MiriSeedRange -Spec '' -TotalSeeds 32 | Should -Be '..32'
     }
 
+    It 'keeps the full seed budget in a single explicit shard' {
+        Get-MiriSeedRange -Spec '1/1' | Should -Be '0..64'
+    }
+
     It 'splits evenly when the count divides the total' {
         Get-MiriSeedRange -Spec '1/8' | Should -Be '0..8'
         Get-MiriSeedRange -Spec '2/8' | Should -Be '8..16'
