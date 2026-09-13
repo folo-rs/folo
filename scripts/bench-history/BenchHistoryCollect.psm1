@@ -42,7 +42,9 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 # Benchmark-history collection omits the slow, special-purpose `benchmarks` crate and deprecated
-# `infinity_pool`. Main and backfill use Cargo's repeated `--exclude`; PR delta filtering uses the
+# `infinity_pool`. The latter is retained for legacy use, not ongoing performance development;
+# excluding it avoids spending CI time and regression-triage effort on performance we do not maintain.
+# Main and backfill use Cargo's repeated `--exclude`; PR delta filtering uses the
 # same list before deciding whether anything is left to collect. Analysis drops their historical
 # series when absent at the context commit; no stored measurements need to be deleted or blessed.
 # Ref: .github/workflows/design.md#benchmark-history.

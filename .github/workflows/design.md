@@ -391,7 +391,9 @@ append-only and idempotent, which is what makes a re-run safe and lets a read-th
 of the bulk history persist between runs.
 
 Collection excludes the slow, special-purpose `benchmarks` package and the deprecated
-`infinity_pool` package. Main collection, re-collection and nightly backfill use the same
+`infinity_pool` package. `infinity_pool` is retained for legacy use, not ongoing performance
+development, so measuring it would consume CI time and regression-triage effort without
+supporting active maintenance goals. Main collection, re-collection and nightly backfill use the same
 package exclusion list; PR collection removes those packages from its affected set before
 deciding whether there is anything to measure. Deprecation does not require deleting a
 package's benchmark suite.
