@@ -1880,8 +1880,9 @@ mod tests {
 
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use jiff::Timestamp;
     use serial_test::serial;
+
+    use crate::unique_test_container;
 
     /// The Azurite blob endpoint, overridable for a non-default emulator.
     ///
@@ -1891,14 +1892,6 @@ mod tests {
     fn azurite_endpoint() -> String {
         env::var("AZURITE_BLOB_ENDPOINT")
             .unwrap_or_else(|_| "https://127.0.0.1:10000/devstoreaccount1".to_owned())
-    }
-
-    /// A fresh, valid container name (lowercase, 3-63 chars) unique to one test.
-    fn unique_container() -> String {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = Timestamp::now().as_nanosecond();
-        format!("bh-test-{nanos}-{n}")
     }
 
     /// Whether an Azurite blob endpoint is reachable via a short TCP connect.
@@ -2015,7 +2008,7 @@ mod tests {
         }
         let storage = AzureBlobStorage::from_parts(
             "devstoreaccount1",
-            &unique_container(),
+            &unique_test_container(),
             Some(azurite_endpoint()),
             Arc::new(FakeEntraCredential),
             azurite_http_client(),

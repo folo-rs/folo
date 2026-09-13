@@ -23,3 +23,11 @@ Local writes compress data and publish it atomically. Azure operations retain SD
 while conditional creates persist an opaque request identity so a collision caused by an automatic
 retry after a committed upload is recognized as success. Read-through caching uses per-project
 invalidation markers after remote overwrites and deletions.
+
+Azure and Azurite tests share a container-name generator behind `private-test-util`. Each
+container gets a fresh random UUID, retaining its full identity in Azure's lowercase naming
+format. Isolation therefore does not depend on clock precision, process-local counters, or
+serialization within a test binary; concurrent processes and jobs can use the same account
+without sharing test data or cleanup targets.
+The `bh-it-` prefix keeps real-Azure containers discoverable by the infrastructure's
+leftover-container cleanup script.
