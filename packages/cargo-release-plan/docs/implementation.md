@@ -95,6 +95,11 @@ assumed to span nextest's separate test processes. Both native and mutation runs
 exercise the same behavioral suite; runtime reductions do not rely on a relaxed
 deadline or mutation-only test exclusions.
 
+Filesystem path tests create symlinked temporary roots explicitly rather than
+depending on the host's temporary-directory layout. Expected destinations use a
+canonical existing ancestor followed by the missing suffix, preserving assertions
+about symlink resolution and parent traversal without assuming a root spelling.
+
 ## Workspace snapshots
 
 `cargo metadata --no-deps` supplies candidate current members and normalized

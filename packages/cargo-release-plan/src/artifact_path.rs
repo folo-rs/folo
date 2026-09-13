@@ -74,6 +74,8 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use tempfile::tempdir;
+    #[cfg(unix)]
+    use tempfile::tempdir_in;
 
     use super::*;
 
@@ -120,7 +122,15 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore = "creates a directory symlink")]
     fn existing_symlink_ancestors_are_resolved_before_missing_components() {
-        let directory = tempdir().unwrap();
+        // Exercise a noncanonical temporary root regardless of the host's temporary directory.
+        let root = tempdir().unwrap();
+        let root_alias = root.path().join("root-alias");
+        symlink(root.path(), &root_alias).unwrap();
+        let directory = tempdir_in(&root_alias).unwrap();
+        assert_ne!(
+            directory.path(),
+            fs::canonicalize(directory.path()).unwrap()
+        );
         let real = directory.path().join("nested").join("real");
         fs::create_dir_all(&real).unwrap();
         let alias = directory.path().join("alias");
@@ -158,7 +168,10 @@ mod tests {
         );
         assert_eq!(
             resolve_path(&alias.join("new").join("plan.json")).unwrap(),
-            real.join("new").join("plan.json")
+            fs::canonicalize(&real)
+                .unwrap()
+                .join("new")
+                .join("plan.json")
         );
     }
 }
