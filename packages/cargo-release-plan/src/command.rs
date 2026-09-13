@@ -206,6 +206,8 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt as _;
 
+    use tempfile::TempDir;
+
     use super::*;
     use crate::CommandIoError;
 
@@ -244,25 +246,30 @@ mod tests {
         assert!(error.find_source::<CommandIoError>().is_some());
     }
 
-    #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
+    #[cfg_attr(miri, ignore = "spawns Git in a temporary directory")]
     #[test]
     fn run_capture_ok_returns_stdout_on_success() {
+        let dir = TempDir::new().unwrap();
+        // Quoting arguments does not require a repository, so this exercises successful
+        // capture even in a disposable source copy without Git metadata.
         let stdout = run_capture_ok(
             "git",
-            &["rev-parse", "--is-inside-work-tree"],
-            Path::new("."),
+            &["rev-parse", "--sq-quote", "captured stdout"],
+            dir.path(),
         )
         .unwrap();
-        assert_eq!(stdout.as_deref().map(str::trim), Some("true"));
+        assert_eq!(stdout.as_deref(), Some(" 'captured stdout'\n"));
     }
 
-    #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
+    #[cfg_attr(miri, ignore = "spawns Git in a temporary directory")]
     #[test]
     fn run_capture_ok_none_on_nonzero_exit() {
+        let dir = TempDir::new().unwrap();
+        // Invalid ref syntax fails independently of repository contents or discovery.
         let stdout = run_capture_ok(
             "git",
-            &["rev-parse", "--verify", "cargo-release-plan-no-such-rev"],
-            Path::new("."),
+            &["check-ref-format", "refs/heads/invalid..ref"],
+            dir.path(),
         )
         .unwrap();
         assert!(stdout.is_none());
