@@ -1,7 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for RequiredChecks.psm1. The allowed-result policy (must-succeed vs may-skip)
-# is the contract the Validation `required-checks` fan-in publishes to GitHub, so it is
+# is the contract the Standard validation `required-checks` fan-in publishes to GitHub, so it is
 # exercised against realistic `toJSON(needs)` payloads here rather than only in CI.
 
 BeforeAll {
@@ -10,7 +10,7 @@ BeforeAll {
 
 Describe 'Assert-RequiredCheck' {
     It 'does not throw when every job succeeded or skipped where allowed' {
-        $json = '{"delta":{"result":"success"},"careful":{"result":"skipped"}}'
+        $json = '{"delta":{"result":"success"},"test-arm":{"result":"skipped"}}'
         { Assert-RequiredCheck -NeedsJson $json -MustSucceedJob @('delta') } | Should -Not -Throw
     }
 
@@ -82,9 +82,9 @@ Describe 'Get-RequiredCheckFailure' {
 
     It 'reports cancelled and other non-allowed results' {
         InModuleScope RequiredChecks {
-            $json = '{"mutants":{"result":"cancelled"},"hack":{"result":"neutral"}}'
+            $json = '{"test-x64":{"result":"cancelled"},"hack":{"result":"neutral"}}'
             $result = @(Get-RequiredCheckFailure -NeedsJson $json -MustSucceedJob @('delta'))
-            $result | Should -Contain 'mutants=cancelled'
+            $result | Should -Contain 'test-x64=cancelled'
             $result | Should -Contain 'hack=neutral'
         }
     }
@@ -138,5 +138,75 @@ Describe 'Get-RequiredCheckFailure' {
             Get-RequiredCheckFailure -NeedsJson $json -MustSucceedJob $job |
                 Should -Be @('semver-checks=absent', 'validate-versions=absent')
         }
+    }
+}
+
+Describe 'Planned tooling results' {
+    BeforeEach {
+        $script:plan = @{ workflows = $false; script_analysis = $false; script_domains = @() }
+        $script:needs = @{
+            changes = @{ result = 'success'; outputs = @{} }
+            delta = @{ result = 'success'; outputs = @{ packages_json = '[]'; script_domains = '[]' } }
+            'test-scripts' = @{ result = 'skipped' }
+            'validate-scripts' = @{ result = 'skipped' }
+            'validate-workflows' = @{ result = 'skipped' }
+        }
+        function Assert-PlannedResult {
+            $needs.changes.outputs.plan = ConvertTo-Json -InputObject $plan -Compress
+            Assert-RequiredCheck -NeedsJson (ConvertTo-Json -InputObject $needs -Depth 10) `
+                -MustSucceedJob @('changes', 'delta')
+        }
+    }
+
+    It 'accepts planned skips but rejects a selected workflow check that skipped' {
+        { Assert-PlannedResult } | Should -Not -Throw
+        $plan.workflows = $true
+        { Assert-PlannedResult } | Should -Throw
+        $needs['validate-workflows'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'requires script analysis when selected' {
+        $plan.script_analysis = $true
+        { Assert-PlannedResult } | Should -Throw
+        $needs['validate-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'requires path-selected script tests and rejects lost domains' {
+        $plan.script_domains = @('book')
+        { Assert-PlannedResult } | Should -Throw
+        $needs.delta.outputs.script_domains = '["book"]'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'requires integration tests for an affected native helper' {
+        $needs.delta.outputs.packages_json = '["release-target-check"]'
+        { Assert-PlannedResult } | Should -Throw
+        $needs.delta.outputs.script_domains = '["release"]'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'rejects omitted conditional jobs even for a no-work plan' -ForEach @(
+        'test-scripts', 'validate-scripts', 'validate-workflows'
+    ) {
+        $needs.Remove($_)
+        { Assert-PlannedResult } | Should -Throw
+    }
+
+    It 'rejects failed or cancelled planners even when all tooling jobs skipped' -ForEach @(
+        'failure', 'cancelled', 'skipped'
+    ) {
+        $needs.changes.result = $_
+        { Assert-PlannedResult } | Should -Throw
+    }
+
+    It 'rejects absent planner output' {
+        $needs.delta.outputs.Remove('script_domains')
+        { Assert-PlannedResult } | Should -Throw
     }
 }

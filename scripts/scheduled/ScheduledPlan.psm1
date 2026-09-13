@@ -1,0 +1,53 @@
+#requires -Version 7
+
+# Deep validation uses this catalog to build its full nightly matrix before tool setup.
+# It needs no Rust toolchain or GitHub state.
+# Ref: .github/workflows/implementation.md#deep-execution.
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+function Get-ScheduledCheck {
+    [CmdletBinding()]
+    [OutputType([hashtable[]])]
+    param()
+    $checks = @()
+    foreach ($platform in @('ubuntu-latest', 'windows-latest', 'ubuntu-24.04-arm', 'windows-11-arm')) {
+        $checks += @{
+            id = "miri-$platform"; recipe = 'miri'; platform = $platform; packages = @()
+            shard = ''
+        }
+    }
+    foreach ($platform in @('ubuntu-latest', 'windows-latest')) {
+        # Mutation shards bound each runner's workload; tests remain serial within each leg.
+        foreach ($index in 1..8) {
+            $checks += @{
+                id = "mutants-$platform-$index"; recipe = 'mutants'; platform = $platform
+                packages = @(); shard = "$index/8"
+            }
+        }
+        $checks += @{
+            id = "careful-$platform"; recipe = 'careful'; platform = $platform
+            packages = @(); shard = ''
+        }
+    }
+    # These synchronization-heavy families benefit from seed exploration rather than mutations.
+    # Use one shard unless a package approaches the job timeout.
+    # Ref: .github/workflows/design.md#shallow-and-deep-validation.
+    foreach ($family in @(
+            @{ package = 'events_once'; shards = 1 },
+            @{ package = 'events'; shards = 1 },
+            @{ package = 'awaiter_set'; shards = 1 },
+            @{ package = 'nm_impl'; shards = 1 })) {
+        foreach ($index in 1..$family.shards) {
+            $shard = "$index/$($family.shards)"
+            $checks += @{
+                id = "miri-harder-$($family.package)-$index"; recipe = 'miri-harder'
+                platform = 'ubuntu-latest'; packages = @($family.package); shard = $shard
+            }
+        }
+    }
+    return $checks
+}
+
+Export-ModuleMember -Function Get-ScheduledCheck

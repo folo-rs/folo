@@ -3,8 +3,8 @@
 # Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml)
 # and the local `just check-never-published` recipe.
 #
-# The workflow steps and release recipes are thin `just` wrappers (in justfiles/just_automation.just
-# and justfiles/just_release.just) that import this module and call its functions, so the
+# The workflow steps and release recipes are thin `just` wrappers (in justfiles/just_release.just)
+# that import this module and call its functions, so the
 # non-trivial logic lives here where it can be exercised by the Pester suite
 # (ReleaseAutomation.Tests.ps1) against fixtures rather than only by pushing to `main`.
 #
@@ -78,119 +78,290 @@ function Get-BinaryTarget {
     @($Package.targets | Where-Object { $_.kind -contains 'bin' })
 }
 
-function Get-PublishableBinaryCrate {
-    # Derives the crates this workflow releases: publishable to a registry AND owning a `bin`
-    # target. In `cargo metadata` the `publish` field is null (any registry), an empty list
-    # (never publish), or a non-empty registry list, so "publishable" is null-or-non-empty.
-    # Returns {Name, Version, Binary, ReleaseTargets} objects sorted by name, where Binary is the
-    # package's single binary target and ReleaseTargets is its declared release-target restriction
-    # (empty for the usual "all targets" case). A release archive has one binary path, so packages
-    # with several binary targets are rejected rather than silently publishing only one. Runs the
-    # real `cargo metadata` (offline with --no-deps); tests point it at a fixture via -ManifestPath.
+function Test-PathCaseInsensitive {
+    # Cargo opens manifests through the filesystem while Git pathspecs are case-sensitive by
+    # default. Probe the workspace directory instead of inferring its behavior from the operating
+    # system; an inconclusive probe keeps the stricter case-sensitive result.
+    param(
+        [Parameter(Mandatory)][string] $Directory
+    )
+
+    try {
+        $entryName = @(
+            Get-ChildItem -LiteralPath $Directory -Force -ErrorAction Stop |
+                ForEach-Object { $_.Name }
+        )
+    } catch {
+        return $false
+    }
+    $present = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal
+    )
+    foreach ($name in $entryName) {
+        [void] $present.Add($name)
+    }
+    foreach ($name in $entryName) {
+        $flippedBuilder = [Text.StringBuilder]::new($name.Length)
+        foreach ($character in $name.ToCharArray()) {
+            if ([char]::IsUpper($character)) {
+                [void] $flippedBuilder.Append([char]::ToLowerInvariant($character))
+            } elseif ([char]::IsLower($character)) {
+                [void] $flippedBuilder.Append([char]::ToUpperInvariant($character))
+            } else {
+                [void] $flippedBuilder.Append($character)
+            }
+        }
+        $flipped = $flippedBuilder.ToString()
+        if ($flipped -ceq $name -or $present.Contains($flipped)) {
+            continue
+        }
+        return Test-Path -LiteralPath (Join-Path $Directory $flipped)
+    }
+    return $false
+}
+
+function Get-WorkspaceMember {
+    # Returns current Cargo workspace members with publication eligibility and manifest identity.
+    # Tracking is opt-in because the increment publication gate needs it, while ordinary release
+    # discovery retains its Cargo-defined scope and must not gain a Git failure boundary.
     [CmdletBinding()]
     param(
-        [string] $ManifestPath
+        [string] $ManifestPath,
+        [switch] $IncludeTracking
     )
 
     $cargoArgs = @('metadata', '--no-deps', '--format-version', '1')
     if ($ManifestPath) { $cargoArgs += @('--manifest-path', $ManifestPath) }
 
-    $metadata = & cargo @cargoArgs | ConvertFrom-Json
-    $metadata.packages |
-        Where-Object { ($null -eq $_.publish) -or ($_.publish.Count -gt 0) } |
-        Where-Object { $_.targets | Where-Object { $_.kind -contains 'bin' } } |
+    $configuredTargetDirectory =
+        [Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR', 'Process')
+    try {
+        # Cargo rejects an explicitly present empty value. Treat it as the absence it represents
+        # for this subprocess without changing the caller's environment permanently.
+        if ($null -ne $configuredTargetDirectory -and
+            $configuredTargetDirectory.Length -eq 0) {
+            Remove-Item Env:CARGO_TARGET_DIR
+        }
+        $metadata = & cargo @cargoArgs | ConvertFrom-Json
+    } finally {
+        if ($null -ne $configuredTargetDirectory) {
+            [Environment]::SetEnvironmentVariable(
+                'CARGO_TARGET_DIR',
+                $configuredTargetDirectory,
+                'Process'
+            )
+        }
+    }
+    $workspaceMemberId = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($id in $metadata.workspace_members) {
+        [void] $workspaceMemberId.Add([string] $id)
+    }
+
+    $workspaceRoot = [IO.Path]::GetFullPath([string] $metadata.workspace_root)
+    $repositoryRoot = $null
+    $workspacePrefix = $null
+    $caseInsensitivePath = $false
+    if ($IncludeTracking) {
+        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $gitOutput = @(& git -C $workspaceRoot rev-parse --show-toplevel 2>&1)
+            $gitExitCode = $LASTEXITCODE
+        } finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        }
+        if ($gitExitCode -ne 0) {
+            $diagnostic = @(
+                $gitOutput | ForEach-Object { $_.ToString() }
+            ) -join [Environment]::NewLine
+            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+                $diagnostic = '(no diagnostic output)'
+            }
+            throw (
+                "git rev-parse failed while resolving the repository for workspace " +
+                "'$workspaceRoot' with exit code $gitExitCode`: $diagnostic"
+            )
+        }
+        $repositoryRootLine = @(
+            $gitOutput |
+                ForEach-Object { $_.ToString() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ($repositoryRootLine.Count -ne 1) {
+            throw (
+                "git rev-parse returned an invalid repository root for workspace " +
+                "'$workspaceRoot'."
+            )
+        }
+        $repositoryRoot = [IO.Path]::GetFullPath($repositoryRootLine[0])
+
+        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $gitOutput = @(& git -C $workspaceRoot rev-parse --show-prefix 2>&1)
+            $gitExitCode = $LASTEXITCODE
+        } finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        }
+        if ($gitExitCode -ne 0) {
+            $diagnostic = @(
+                $gitOutput | ForEach-Object { $_.ToString() }
+            ) -join [Environment]::NewLine
+            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+                $diagnostic = '(no diagnostic output)'
+            }
+            throw (
+                "git rev-parse failed while resolving the workspace prefix for " +
+                "'$workspaceRoot' with exit code $gitExitCode`: $diagnostic"
+            )
+        }
+        $workspacePrefixLine = @(
+            $gitOutput |
+                ForEach-Object { $_.ToString() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ($workspacePrefixLine.Count -gt 1) {
+            throw (
+                "git rev-parse returned an invalid workspace prefix for " +
+                "'$workspaceRoot'."
+            )
+        }
+        $workspacePrefix = if ($workspacePrefixLine.Count -eq 0) {
+            ''
+        } else {
+            $workspacePrefixLine[0].TrimEnd('/', '\')
+        }
+        $caseInsensitivePath = Test-PathCaseInsensitive -Directory $workspaceRoot
+    }
+
+    foreach ($package in $metadata.packages | Sort-Object -Property name) {
+        if (-not $workspaceMemberId.Contains([string] $package.id)) {
+            continue
+        }
+
+        $packageManifestPath = [IO.Path]::GetFullPath([string] $package.manifest_path)
+        $tracked = $null
+        if ($IncludeTracking) {
+            # Cargo's workspace root and package manifests share Cargo's path spelling. Rebase
+            # their relative relationship through Git's workspace prefix instead of subtracting
+            # Git's independently spelled repository root from a Cargo path. This also retains
+            # leading parent components for supported sibling members.
+            $workspaceRelativeManifestPath =
+                [IO.Path]::GetRelativePath($workspaceRoot, $packageManifestPath)
+            $gitWorkspacePath = [IO.Path]::GetFullPath(
+                [IO.Path]::Combine($repositoryRoot, $workspacePrefix)
+            )
+            $gitManifestPath = [IO.Path]::GetFullPath(
+                [IO.Path]::Combine($gitWorkspacePath, $workspaceRelativeManifestPath)
+            )
+            $relativeManifestPath =
+                [IO.Path]::GetRelativePath($repositoryRoot, $gitManifestPath)
+            $outsideRepository =
+                [IO.Path]::IsPathRooted($relativeManifestPath) -or
+                $relativeManifestPath -eq '..' -or
+                $relativeManifestPath.StartsWith(
+                    "..$([IO.Path]::DirectorySeparatorChar)",
+                    [StringComparison]::Ordinal
+                )
+            if ($outsideRepository) {
+                $tracked = $false
+            } else {
+                # Git pathspecs are relative to -C and accept slash separators on every
+                # supported host. Explicit literal magic prevents manifest directory names from
+                # being interpreted as patterns; `icase` follows a case-insensitive checkout.
+                $gitPath = $relativeManifestPath.Replace('\', '/')
+                $gitPathspec = if ($caseInsensitivePath) {
+                    ":(icase,literal)$gitPath"
+                } else {
+                    ":(literal)$gitPath"
+                }
+                $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+                try {
+                    $PSNativeCommandUseErrorActionPreference = $false
+                    $gitOutput = @(
+                        & git -C $repositoryRoot ls-files --error-unmatch -- $gitPathspec 2>&1
+                    )
+                    $gitExitCode = $LASTEXITCODE
+                } finally {
+                    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+                }
+                switch ($gitExitCode) {
+                    0 { $tracked = $true }
+                    1 { $tracked = $false }
+                    default {
+                        $diagnostic = @(
+                            $gitOutput | ForEach-Object { $_.ToString() }
+                        ) -join [Environment]::NewLine
+                        if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+                            $diagnostic = '(no diagnostic output)'
+                        }
+                        throw (
+                            "git ls-files failed while checking workspace manifest " +
+                            "'$relativeManifestPath' with exit code $gitExitCode`: $diagnostic"
+                        )
+                    }
+                }
+            }
+        }
+
+        [pscustomobject]@{
+            Name         = [string] $package.name
+            Version      = [string] $package.version
+            ManifestPath = $packageManifestPath
+            Publishable  = ($null -eq $package.publish) -or ($package.publish.Count -gt 0)
+            Tracked      = $tracked
+            Package      = $package
+        }
+    }
+}
+
+function Get-TrackedWorkspaceMember {
+    # The current workspace members whose manifests Git tracks. Version-group membership remains
+    # cargo-release-plan's responsibility; this projection only secures the publication gate.
+    [CmdletBinding()]
+    param(
+        [string] $ManifestPath
+    )
+
+    Get-WorkspaceMember -ManifestPath $ManifestPath -IncludeTracking |
+        Where-Object Tracked
+}
+
+function Get-PublishableBinaryCrate {
+    # Derives the crates this workflow releases: Cargo workspace members publishable to a registry
+    # AND owning a `bin` target. In `cargo metadata` the `publish` field is null (any registry), an
+    # empty list (never publish), or a non-empty registry list.
+    # Returns {Name, Version, Binary, ReleaseTargets} objects sorted by name, where Binary is the
+    # package's single binary target and ReleaseTargets is its declared release-target restriction
+    # (empty for the usual "all targets" case). A release archive has one binary path, so packages
+    # with several binary targets are rejected rather than silently publishing only one. Runs real
+    # Cargo metadata; tests point it at a fixture via -ManifestPath.
+    [CmdletBinding()]
+    param(
+        [string] $ManifestPath
+    )
+
+    Get-WorkspaceMember -ManifestPath $ManifestPath |
+        Where-Object Publishable |
+        Where-Object { $_.Package.targets | Where-Object { $_.kind -contains 'bin' } } |
         ForEach-Object {
-            $binaryTargets = @(Get-BinaryTarget -Package $_)
+            $binaryTargets = @(Get-BinaryTarget -Package $_.Package)
             if ($binaryTargets.Count -ne 1) {
                 throw (
-                    "Publishable binary package '$($_.name)' declares $($binaryTargets.Count) " +
+                    "Publishable binary package '$($_.Name)' declares $($binaryTargets.Count) " +
                     'binary targets; release automation requires exactly one.'
                 )
             }
             [pscustomobject]@{
-                Name           = $_.name
-                Version        = $_.version
+                Name           = $_.Name
+                Version        = $_.Version
                 Binary         = [string] $binaryTargets[0].name
-                ReleaseTargets = @(Get-DeclaredReleaseTarget -Package $_)
+                ReleaseTargets = @(Get-DeclaredReleaseTarget -Package $_.Package)
             }
         } |
         Sort-Object -Property Name -Unique
-}
-
-function Add-GitReleaseEnableFlag {
-    # Pure line-based edit: returns a copy of $Line with `git_release_enable = true` set for each
-    # crate in $CrateName. The committed release-plz.toml keeps releases off at the workspace
-    # level (most crates are libraries); this turns it on only for the binary crates.
-    #
-    # `name = "<crate>"` is unique and is the first key of its [[package]] block, so inserting
-    # right after that line lands the flag inside the block. The match is exact (trimmed) so
-    # `cargo-bench-history` does not collide with `cargo-bench-history-stress`. A crate with no
-    # existing entry gets a fresh [[package]] block. An existing `git_release_enable` line is
-    # forced to `true` (so a per-package `= false` override cannot defeat enabling a binary
-    # crate); idempotent when it is already `true`.
-    [CmdletBinding()]
-    param(
-        [string[]] $Line,
-        [string[]] $CrateName
-    )
-
-    $lines = [System.Collections.Generic.List[string]]::new()
-    foreach ($item in $Line) { $lines.Add($item) }
-
-    foreach ($crate in $CrateName) {
-        $needle = 'name = "' + $crate + '"'
-        $nameIndex = -1
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i].Trim() -eq $needle) { $nameIndex = $i; break }
-        }
-
-        if ($nameIndex -ge 0) {
-            $existingIndex = -1
-            for ($j = $nameIndex + 1; $j -lt $lines.Count; $j++) {
-                $trimmed = $lines[$j].Trim()
-                if ($trimmed.StartsWith('[')) { break }
-                if ($trimmed -match '^git_release_enable\s*=') { $existingIndex = $j; break }
-            }
-            if ($existingIndex -ge 0) {
-                # Force an existing assignment to true: a per-package `git_release_enable = false`
-                # must not defeat enabling releases for a binary crate. Preserve the original
-                # indentation of the line being replaced.
-                $indent = if ($lines[$existingIndex] -match '^(\s*)') { $Matches[1] } else { '' }
-                $lines[$existingIndex] = "${indent}git_release_enable = true"
-            } else {
-                $lines.Insert($nameIndex + 1, 'git_release_enable = true')
-            }
-        } else {
-            $lines.Add('')
-            $lines.Add('[[package]]')
-            $lines.Add($needle)
-            $lines.Add('git_release_enable = true')
-        }
-    }
-
-    # Comma keeps a single-line result an array rather than a bare string.
-    , $lines.ToArray()
-}
-
-function New-ReleasePlzConfig {
-    # Reads the committed release-plz.toml at $SourcePath, injects `git_release_enable = true`
-    # for each $CrateName, and writes the result to $OutputPath. The output is UTF-8 without a
-    # BOM and uses LF line endings with a trailing newline, deterministically on every platform,
-    # so the artifact does not vary with the runner OS. The caller writes this outside the
-    # working tree so `cargo publish` never sees a dirty repo.
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)][string] $SourcePath,
-        [Parameter(Mandatory)][string] $OutputPath,
-        [string[]] $CrateName
-    )
-
-    $sourceLines = [System.IO.File]::ReadAllText($SourcePath) -split "`r?`n"
-    $newLines = Add-GitReleaseEnableFlag -Line $sourceLines -CrateName $CrateName
-    $content = ($newLines -join "`n").TrimEnd("`n") + "`n"
-    if ($PSCmdlet.ShouldProcess($OutputPath, 'write CI release-plz config')) {
-        [System.IO.File]::WriteAllText($OutputPath, $content, [System.Text.UTF8Encoding]::new($false))
-    }
 }
 
 function Get-BinaryReleaseAsset {
@@ -204,14 +375,17 @@ function Get-BinaryReleaseAsset {
     # the workflow looks successful while binaries are still missing.
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string] $Tag
+        [Parameter(Mandatory)][string] $Tag,
+        [string] $Repository
     )
 
     # Disable the native-error preference locally so a non-zero exit does not terminate here
     # before we can classify it; we inspect the exit code and output ourselves. 2>&1 merges
     # stderr (where gh prints "release not found") into the captured output.
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = gh release view $Tag --json assets 2>&1
+    $arguments = @('release', 'view', $Tag, '--json', 'assets')
+    if ($Repository) { $arguments += @('--repo', $Repository) }
+    $output = & gh @arguments 2>&1
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -ne 0) {
@@ -227,87 +401,6 @@ function Get-BinaryReleaseAsset {
     , @($parsed.assets.name)
 }
 
-function New-MissingBinaryRelease {
-    # Creates the GitHub tag and release that binary assets need when release-plz did not create
-    # them. This occurs after a manual crates.io publish and can also occur when crates.io
-    # publication succeeded before forge release creation failed. The release workflow invokes
-    # this only after its publish job succeeded, so every current manifest version is already
-    # published. Target commits come from cargo-release-plan version anchors, which identify the
-    # source revision that introduced each published version.
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)][object[]] $Crate,
-        [Parameter(Mandatory)][hashtable] $TargetCommitByName
-    )
-
-    foreach ($crateInfo in $Crate) {
-        $tag = "$($crateInfo.Name)-v$($crateInfo.Version)"
-        if ($null -ne (Get-BinaryReleaseAsset -Tag $tag)) {
-            Write-Verbose "GitHub release '$tag' already exists."
-            continue
-        }
-
-        $targetCommit = [string] $TargetCommitByName[[string] $crateInfo.Name]
-        if ([string]::IsNullOrWhiteSpace($targetCommit)) {
-            throw "Creating missing binary release '$tag' requires its version-anchor commit."
-        }
-        Write-Verbose (
-            "GitHub release '$tag' is missing; creating it at version anchor '$targetCommit'."
-        )
-        if ($PSCmdlet.ShouldProcess($tag, "create GitHub release at $targetCommit")) {
-            gh release create $tag `
-                --target $targetCommit `
-                --title $tag `
-                --notes "Prebuilt binaries for $($crateInfo.Name) $($crateInfo.Version)."
-        }
-    }
-}
-
-function Invoke-BinaryReleaseReconciliation {
-    # Generates a release-plan report for the current tree, resolves each binary package's
-    # version-anchor commit, and creates any missing GitHub releases at those anchors. Report
-    # generation and temporary-file cleanup stay here so the just recipe remains a thin entry
-    # point and the orchestration can be tested with an injected Cargo boundary.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][object[]] $Crate,
-        [Parameter(Mandatory)][AllowEmptyString()][string] $Base,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Base)) {
-        throw 'Binary release reconciliation requires the checked-out commit as its base.'
-    }
-
-    $outDir = Join-Path ([System.IO.Path]::GetTempPath()) "binary-release-plan-$(New-Guid)"
-    New-Item -ItemType Directory -Path $outDir | Out-Null
-    try {
-        $argument = @(
-            'run', '-p', 'cargo-release-plan', '--locked', '--',
-            'report', '--out-dir', $outDir
-        )
-        $argument += @('--base', $Base)
-        & $Cargo $argument
-        if ($LASTEXITCODE -ne 0) {
-            throw "cargo-release-plan report failed with exit code $LASTEXITCODE."
-        }
-
-        Import-Module (Join-Path $PSScriptRoot 'ReleasePlan.psm1') -Force
-        $anchors = @(
-            Get-ReleasePlanPackageAnchor `
-                -ReportPath (Join-Path $outDir 'report.json') `
-                -Name $Crate.Name
-        )
-        $targetCommitByName = @{}
-        foreach ($anchor in $anchors) {
-            $targetCommitByName[[string] $anchor.Name] = [string] $anchor.Commit
-        }
-        New-MissingBinaryRelease -Crate $Crate -TargetCommitByName $targetCommitByName
-    } finally {
-        Remove-Item -LiteralPath $outDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
 function Get-MissingBinaryMatrix {
     # Reconciles desired vs. actual binary assets. For each crate it computes the expected tag
     # `{Name}-v{Version}` and the per-target archive/checksum pair
@@ -321,7 +414,8 @@ function Get-MissingBinaryMatrix {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object[]] $Crate,
-        [object[]] $Target = (Get-ReleaseTarget)
+        [object[]] $Target = (Get-ReleaseTarget),
+        [string] $Repository
     )
 
     # Verbose emits the full decision history - every crate, its expected tag, whether the
@@ -364,7 +458,7 @@ function Get-MissingBinaryMatrix {
             Write-Verbose "  Crate restricts its release targets to: $($declaredTargets -join ', ') (declared in [package.metadata.folo] release-targets), so these targets are not built for it: $skippedText."
         }
 
-        $assets = Get-BinaryReleaseAsset -Tag $tag
+        $assets = Get-BinaryReleaseAsset -Tag $tag -Repository $Repository
         if ($null -eq $assets) {
             throw (
                 "GitHub release '$tag' is missing. Run the missing-release reconciliation " +
@@ -436,7 +530,7 @@ function ConvertTo-MatrixJson {
 }
 
 function Invoke-ReleasePublish {
-    # Publishes changed crates to crates.io via `release-plz release` using the composed CI
+    # Publishes changed crates to crates.io via `release-plz release` using the registry-only
     # config, with bounded retries. release-plz is idempotent (it skips already-published
     # versions), so a retry or a whole re-run safely resumes a partially-published release. NOT
     # for local use: it performs real publishes. The native-error preference is disabled locally
@@ -460,22 +554,18 @@ function Invoke-ReleasePublish {
 }
 
 function Get-PublishableCrate {
-    # Every crate publishable to a registry (unlike Get-PublishableBinaryCrate, not filtered to
-    # binaries), as {Name, Version} objects sorted by name. Used by the never-published preflight,
-    # which must warn about any brand-new crate, library or binary. Runs the real `cargo metadata`
-    # (offline with --no-deps); tests point it at a fixture workspace via -ManifestPath.
+    # Every Cargo workspace crate publishable to a registry (unlike Get-PublishableBinaryCrate,
+    # not filtered to binaries), as {Name, Version} objects sorted by name. Used by the
+    # never-published preflight, which must warn about any brand-new crate, library or binary.
+    # Runs real Cargo metadata; tests point it at a fixture workspace via -ManifestPath.
     [CmdletBinding()]
     param(
         [string] $ManifestPath
     )
 
-    $cargoArgs = @('metadata', '--no-deps', '--format-version', '1')
-    if ($ManifestPath) { $cargoArgs += @('--manifest-path', $ManifestPath) }
-
-    $metadata = & cargo @cargoArgs | ConvertFrom-Json
-    $metadata.packages |
-        Where-Object { ($null -eq $_.publish) -or ($_.publish.Count -gt 0) } |
-        ForEach-Object { [pscustomobject]@{ Name = $_.name; Version = $_.version } } |
+    Get-WorkspaceMember -ManifestPath $ManifestPath |
+        Where-Object Publishable |
+        ForEach-Object { [pscustomobject]@{ Name = $_.Name; Version = $_.Version } } |
         Sort-Object -Property Name -Unique
 }
 
@@ -575,16 +665,13 @@ Export-ModuleMember -Function `
     Get-ReleaseTarget, `
     Get-DeclaredReleaseTarget, `
     Get-BinaryTarget, `
+    Get-TrackedWorkspaceMember, `
     Get-PublishableBinaryCrate, `
     Get-PublishableCrate, `
     Get-CrateIndexPath, `
     Get-CratePublishStatus, `
     Test-NeverPublishedCrate, `
-    Add-GitReleaseEnableFlag, `
-    New-ReleasePlzConfig, `
     Get-BinaryReleaseAsset, `
-    New-MissingBinaryRelease, `
-    Invoke-BinaryReleaseReconciliation, `
     Get-MissingBinaryMatrix, `
     ConvertTo-MatrixJson, `
     Invoke-ReleasePublish, `

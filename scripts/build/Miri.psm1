@@ -10,8 +10,10 @@
 # miri-specific seed slicing (including the "too many shards for the seed budget" guard) is here.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
-Import-Module (Join-Path $PSScriptRoot 'Sharding.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Sharding.psm1')
 
 function Get-MiriSeedRange {
     # Computes the `-Zmiri-many-seeds` range string for a shard spec. With no spec (an empty

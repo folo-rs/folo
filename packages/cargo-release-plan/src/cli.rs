@@ -58,6 +58,50 @@ impl Cli {
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
+            Command::InspectPlan(args) => RunInput::InspectPlan {
+                plan: args.plan,
+                require_resolved: args.require_resolved,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                verbose: args.verbose,
+            },
+            Command::AnalysisOrder(args) => RunInput::AnalysisOrder {
+                report: args.report,
+                verbose: args.verbose,
+            },
+            Command::SemverTargets(args) => RunInput::SemverTargets {
+                report: args.report,
+                verbose: args.verbose,
+            },
+            Command::Propose(args) => RunInput::Propose {
+                report: args.report,
+                decisions: args.decisions,
+                out: args.out,
+                verbose: args.verbose,
+            },
+            Command::VerifyPreview(args) => RunInput::VerifyPreview {
+                plan: args.plan,
+                manifest_path: args.manifest_path,
+                verbose: args.verbose,
+            },
+            Command::Prepare(args) => RunInput::Prepare {
+                output: args.output,
+                base: args.base,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                verbose: args.verbose,
+            },
+            Command::Preview(args) => RunInput::Preview {
+                plan: args.plan,
+                prepared: args.prepared,
+                output: args.output,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                verbose: args.verbose,
+            },
             Command::Report(args) => RunInput::Report {
                 out_dir: args.out_dir,
                 base: args.base,
@@ -78,6 +122,7 @@ impl Cli {
             Command::Expand(args) => RunInput::Expand {
                 plan: args.plan,
                 out: args.out,
+                preserve_input: args.preserve_input,
                 manifest_path: args
                     .manifest_path
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
@@ -130,20 +175,130 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Validate an expanded plan and print publication and evidence facts as JSON.
+    InspectPlan(InspectPlanArgs),
+    /// Print dependency-ordered analysis batches from a report as JSON.
+    AnalysisOrder(ArtifactReportArgs),
+    /// Print affected consumer-contract package names as a JSON array.
+    SemverTargets(ArtifactReportArgs),
+    /// Complete mechanical version decisions without inspecting a workspace.
+    Propose(ProposeArgs),
+    /// Refresh the live lockfile offline and capture evidence before semantic grading.
+    Prepare(PrepareArgs),
+    /// Resolve all prospective plan effects offline and capture the state for application.
+    Preview(PreviewArgs),
+    /// Verify that the retained compatibility workspace still matches the resolved plan.
+    VerifyPreview(VerifyPreviewArgs),
     /// Write report.json and per-package diffs for the changes needing a release.
     Report(ReportArgs),
     /// Fail on a release the workspace's manifests cannot support.
     ///
     /// Fails when a publishable package has unreleased changes without a version increment, when
     /// a version group disagrees with itself, when a requirement on another workspace package
-    /// does not name the version that package declares or does not pin a group sibling exactly,
-    /// or when a package whose public API exposes a workspace dependency stays compatible while
-    /// that dependency releases a breaking change.
+    /// does not name the version that package declares, when an exact workspace requirement is
+    /// malformed, or when a package whose public API exposes a workspace dependency stays
+    /// compatible while that dependency releases a breaking change.
     Check(CheckArgs),
-    /// Produce the explicit plan reviewed and then passed to apply.
+    /// Expand groups without resolution; pass the result through preview before apply.
     Expand(ExpandArgs),
-    /// Apply an approved increment plan to manifests and the lockfile.
+    /// Install captured files without resolution, or make proposed manifest-only edits.
     Apply(ApplyArgs),
+}
+
+/// Report-only commands never discover or resolve a workspace.
+#[derive(Debug, Parser)]
+struct ArtifactReportArgs {
+    /// Report JSON file or directory containing report.json.
+    #[arg(long)]
+    report: PathBuf,
+    /// Print explanatory selection notes to stderr.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Semantic decisions are supplied by the caller, not inferred from report evidence.
+#[derive(Debug, Parser)]
+struct ProposeArgs {
+    /// Report JSON file or directory containing report.json.
+    #[arg(long)]
+    report: PathBuf,
+    /// Change decisions JSON file.
+    #[arg(long)]
+    decisions: PathBuf,
+    /// Destination for the proposed plan JSON.
+    #[arg(long)]
+    out: PathBuf,
+    /// Print explanatory version-resolution notes to stderr.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Inspection keeps expanded-plan validation out of workflow adapters.
+#[derive(Debug, Parser)]
+struct InspectPlanArgs {
+    /// Expanded plan to validate before publication checks or evidence collection.
+    #[arg(long)]
+    plan: PathBuf,
+    /// Require a captured preview valid for application to the selected workspace.
+    #[arg(long)]
+    require_resolved: bool,
+    /// Path to the workspace Cargo.toml.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    /// Print explanatory validation notes to stderr.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Arguments for explicit pre-grading preparation.
+#[derive(Debug, Parser)]
+struct PrepareArgs {
+    /// Directory receiving report.json, diffs/, and prepared.json.
+    #[arg(long, visible_alias = "out-dir")]
+    output: PathBuf,
+    /// Release baseline, defaulting to the remote default branch.
+    #[arg(long)]
+    base: Option<String>,
+    /// Path to the workspace Cargo.toml.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    /// Print explanatory preparation notes.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Arguments for proposal-specific offline resolution.
+#[derive(Debug, Parser)]
+struct PreviewArgs {
+    /// Proposed version decisions.
+    #[arg(long)]
+    plan: PathBuf,
+    /// Prepared artifact whose report was assessed.
+    #[arg(long)]
+    prepared: PathBuf,
+    /// Directory receiving plan.json, report.json, diffs/, and retained workspace/.
+    #[arg(long)]
+    output: PathBuf,
+    /// Path to the workspace Cargo.toml.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    /// Print explanatory expansion and resolver notes.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Explicit candidate selection prevents compatibility checks from using the original tree.
+#[derive(Debug, Parser)]
+struct VerifyPreviewArgs {
+    /// Path to the resolved plan JSON.
+    #[arg(long)]
+    plan: PathBuf,
+    /// The `resolved.evidence_manifest_path` emitted by preview.
+    #[arg(long)]
+    manifest_path: PathBuf,
+    /// Print explanatory verification notes.
+    #[arg(long)]
+    verbose: bool,
 }
 
 /// Arguments for `report`.
@@ -207,6 +362,10 @@ struct ExpandArgs {
     #[arg(long)]
     out: PathBuf,
 
+    /// Reject input/output aliases and stage the output before replacing it.
+    #[arg(long)]
+    preserve_input: bool,
+
     /// Path to the workspace `Cargo.toml`.
     #[arg(long)]
     manifest_path: Option<PathBuf>,
@@ -219,11 +378,11 @@ struct ExpandArgs {
 /// Arguments for `apply`.
 #[derive(Debug, Parser)]
 struct ApplyArgs {
-    /// Path to the approved plan JSON file.
+    /// Path to the plan JSON file to apply.
     #[arg(long)]
     plan: PathBuf,
 
-    /// Compute edits without writing files or refreshing the lockfile.
+    /// Validate and describe planned writes without changing files.
     #[arg(long)]
     dry_run: bool,
 

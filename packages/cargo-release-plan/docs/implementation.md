@@ -15,16 +15,34 @@ Cli -> RunInput -> run()
                     +-> classify -> check diagnostics
                     |           \-> report JSON + patches
                     |
-                    \-> load workspace -> normalize plan
-                                       |-> expanded-plan JSON
-                                       \-> compute edits -> write manifests
-                                                         -> refresh lockfile
+                    +-> report artifact -> analysis batches / compatibility targets
+                    |                 \-> semantic decisions -> proposed plan
+                    |
+                    +-> prepare -> offline workspace resolution -> evidence + input snapshot
+                    |
+                    +-> preview -> normalize plan -> disposable prospective workspace
+                    |                            \-> rewrite + resolve + classify to fixed point
+                    |                              -> expanded plan + captured files
+                    |                              -> retained compatibility workspace
+                    |
+                    \-> apply -> validate original or fully applied snapshot -> install files
 ```
 
 Modules own subjects rather than syntactic categories. `metadata` and `manifest`
 build the work-tree model, `git` owns repository facts, `anchor` resolves release
 history, `classify` combines those inputs, `groups` and `plan` expand release
-decisions, and `apply`, `check`, `expand`, and `report` own their command outputs.
+decisions, and the command-specific modules own preparation, preview, application, and reporting.
+
+Artifact-only planning shares the report producer's serde model. Report loading
+validates the schema and cross-package identities before consumers build dependency
+graphs or version targets. Analysis ordering follows recorded dependencies rather
+than exact-version grouping. Compatibility selection follows group closure but
+emits only packages declaring a consumer contract.
+Dependency and dependent references must name a reported workspace target; an
+incomplete report cannot silently remove a relationship from release assessment.
+Classification and report validation share the status derivation from anchor,
+declared version, and change evidence. Deserialization cannot manufacture a pending
+release without a version increase or comparison evidence for an anchorless package.
 
 ## Subprocess boundaries
 
@@ -34,7 +52,7 @@ extensions the maintainer's Git understands instead of maintaining a second Git
 implementation.
 
 The subprocess boundary also covers `cargo metadata --no-deps`,
-`cargo package --list`, and the offline lockfile refresh. Classification never
+`cargo package --list`, and explicit offline preparation/preview. Classification never
 runs a build or a full dependency resolution.
 
 Git paths remain repository-relative and `/`-separated. Operating-system paths
@@ -48,14 +66,52 @@ Git failure must be interpreted in process: a path absent from a revision. A
 translated diagnostic would otherwise turn ordinary package creation or deletion
 into an error.
 
+Output-capture unit tests use repository-independent Git operations in disposable
+directories to cover successful output capture and nonzero exits. Tests that need
+repository state create it explicitly in temporary fixtures; integration tests
+share a hermetic fixture. The source tree's Git metadata is never a test prerequisite.
+
+### Test boundaries
+
+Pure decision and validation tests own the combinations of versions, dependency
+forms, captured-state differences, and artifact selections. They use small inputs
+without acquiring repository state or resolving a Cargo workspace. Orchestration
+tests inject acquisition at its existing boundary so they exercise production
+ordering, including rejection before writes and completion-marker invalidation,
+without rebuilding a successful preview for every failure case.
+
+Integration tests establish the real Git, Cargo, filesystem, and executable
+connections: history and index semantics, manifest discovery, offline resolution,
+captured-workspace identity, and a complete CLI release-plan round trip. A test
+classifies each unchanged workspace state only once where the resulting report
+can establish all its assertions. Output-format combinations belong to renderer
+tests, not additional repository classifications. Structural expansion tests stop
+at the expanded artifact; only preview tests acquire resolved evidence.
+
+Fixtures remain independently mutable. Immutable Git initialization and empty
+global configuration can be shared within a test process, while commits still
+use Git's normal index and filtering behavior. Process-local reuse must not be
+assumed to span nextest's separate test processes. Both native and mutation runs
+exercise the same behavioral suite; runtime reductions do not rely on a relaxed
+deadline or mutation-only test exclusions.
+
+Filesystem path tests create symlinked temporary roots explicitly rather than
+depending on the host's temporary-directory layout. Expected destinations use a
+canonical existing ancestor followed by the missing suffix, preserving assertions
+about symlink resolution and parent traversal without assuming a root spelling.
+
 ## Workspace snapshots
 
 `cargo metadata --no-deps` supplies candidate current members and normalized
-dependency relationships. Git-tracked manifests constrain that candidate set,
-so an untracked or ignored manifest found through a member glob cannot become a
-package in the release model. Historical workspaces cannot use Cargo without
-checking out each commit, so `SnapshotCache` reconstructs them from tracked
-manifests.
+dependency relationships. Git-tracked manifests constrain that candidate set.
+The current model keeps both every tracked version target and the publishable
+`WorkPackage` projection used for classification. An untracked or ignored
+manifest found through a member glob can become neither a version target nor a
+release assessment. Each tracked current member manifest is loaded and parsed
+once per work-tree snapshot; its parsed document and derived package facts are
+shared by version-target construction, exact-dependency discovery, and the
+publishable projection. Historical workspaces cannot use Cargo without checking
+out each commit, so `SnapshotCache` reconstructs them from tracked manifests.
 
 The reconstruction starts from the root package and declared member patterns,
 then follows in-workspace path dependencies to a fixed point while honoring
@@ -84,7 +140,7 @@ baseline first-parent commits
                                       |
 work-tree metadata -------------------+-> released-content comparison
                                       +-> inherited-value comparison
-workspace lockfiles ------------------+-> binary/example closure comparison
+workspace lockfiles ------------------+-> installable binary closure comparison
 ```
 
 ### Anchor and change set
@@ -156,7 +212,7 @@ no textual hunk.
 ### Lockfile closures
 
 `lockfile` parses only package identities and dependency references. Each
-package with a binary or example target starts a breadth-first walk from the
+package with an installable binary target starts a breadth-first walk from the
 source-less entry matching both its name and declared version. Name alone is
 insufficient because another path dependency can share it; missing source alone
 is insufficient because that dependency can also be source-less.
@@ -168,18 +224,43 @@ search the package list. An unresolved or ambiguous edge makes the lockfile
 incomplete and stops classification. A visited set terminates cycles. The root
 is excluded from the result even if a dependency cycle reaches it.
 
-The parsed work-tree lockfile is shared across all lockfile-bearing packages.
+The parsed work-tree lockfile is shared across all binary packages.
 Historical lockfiles are shared by packages with the same anchor commit, so a
 workspace-sized endpoint is parsed once rather than once per package.
 
-Both endpoint target shapes come from explicit manifest target declarations and
-Cargo's automatic target layouts, while respecting the manifest's `autobins` and
-`autoexamples` controls. Work-tree automatic discovery considers only tracked
-paths that remain present, so an untracked or ignored source file cannot turn a
-library artifact into a lockfile-bearing artifact.
+An endpoint-specific installation graph supplies effective normal and build
+declarations for every tracked workspace member, including unpublished members.
+At each matching source-less lockfile node, outgoing edges must satisfy the
+declaration's package name, version requirement, and source identity. Checking
+only name and version would admit a same-named development dependency from a
+different source. Applicable patches and named-registry configuration participate
+in that source comparison. Direct path declarations and path patches retain their
+manifests' exact package names and versions, including excluded targets. A broad
+compatible requirement cannot distinguish separate source-less packages.
 
-Each endpoint that has a binary or example target must have a lockfile resolving
-the package at its corresponding declared version. An endpoint without either
+An unavailable installation-only path identity is required only when a binary
+closure actually reaches that declaration. Unrelated library assessment does not
+depend on reconstructing install-time resolution.
+
+Source comparison accepts identical URLs directly and otherwise supports Cargo's
+ordinary ASCII hierarchical spellings, including trailing-slash, `.git`, and
+GitHub normalization. Missing registry mappings, unknown protocols, and unequal
+URLs needing unsupported normalization produce operational errors rather than
+silently excluding an installation dependency.
+
+The dependency-table selector is shared with manifest rewriting. Canonical
+hyphenated table names take precedence, including when empty; otherwise supported
+legacy underscore spellings participate. Reading and rewriting therefore agree
+about which declaration Cargo uses.
+
+Both endpoint target shapes come from explicit manifest target declarations and
+Cargo's automatic binary layouts, while respecting the manifest's `autobins`
+control. Work-tree automatic discovery considers only tracked
+paths that remain present, so an untracked or ignored source file cannot turn a
+library artifact into an installable binary artifact.
+
+Each endpoint that has an installable binary target must have a lockfile resolving
+the package at its corresponding declared version. An endpoint without such a
 target contributes an empty closure and does not require a lockfile. Missing or
 incomplete required lockfile data stops classification because regenerating
 historical resolution would violate the offline, no-full-resolution boundary. A
@@ -198,16 +279,23 @@ recomputed from the classification, because every gating rule already appends a
 line. A rule added to the rendering therefore cannot be reported without also
 failing the check, which a second condition kept in step by hand would allow.
 
-Two of those rules are properties of the manifests rather than of the
-released-content comparison. An intra-workspace requirement must name the exact
-version its target declares, which is checked against the normalized requirement
-`cargo metadata` reports, so a bare requirement arrives as a caret one and both
-spellings that name the version are accepted; between version-group members only
-the exact spelling is, for every edge that survives packaging including a
-versioned development one. A package whose public API exposes another
+Some rules are properties of the manifests rather than of the released-content
+comparison. An intra-workspace requirement must name the version its target
+declares, which is checked against the normalized requirement `cargo metadata`
+reports, so a bare requirement arrives as a caret one and both spellings that
+name the version are accepted. A package whose public API exposes another
 package must move incompatibly whenever that package does, compared against each
 package's own anchor so an increment that landed in an earlier pull request
 still counts.
+
+Version-group discovery reads effective declarations from every tracked member
+before the publishable projection is built. It resolves local path identity,
+dependency aliases, workspace inheritance, dependency kind, and target-specific
+tables without a full Cargo resolution. Exact requirements are validated from
+the raw effective TOML because Cargo normalization loses suffix and compound
+syntax. Validated declarations retain their source and target identities for
+stale-version diagnostics. The resulting undirected edges are reduced to
+deterministic connected components independently of release classification.
 
 `apply` preserves each requirement's exact-or-compatible spelling while
 rewriting the version it names, so applying a plan maintains both forms rather
@@ -237,28 +325,56 @@ stale JSON and a partial patch set as one complete assessment.
 
 ## Plan resolution and application
 
+Proposal generation turns caller-supplied semantic change decisions into ordinary
+plan increments. It uses the shared group and plan resolver for version algebra
+and target expansion rather than reproducing those rules in workflow scripts.
+Group realignment and dependent release propagation settle together before final
+plan invariants are checked. Pure Rust scenario tests exercise the generated
+outcome, including no regression, complete group alignment, and release coverage
+for rewritten dependent requirements.
+
+The repository's PowerShell boundary invokes artifact commands and handles
+compatibility subprocesses and registry publication probes. Registry availability
+is not evidence for the Rust tool's offline release decision.
+Expanded-plan inspection uses the shared target resolver and application dry-run
+validation to return publication-eligible names and the evidence manifest. Workflow
+adapters therefore do not maintain another plan-schema validator or rediscover
+publication eligibility from package naming.
+Inspection and compatibility verification share the candidate-location and
+captured-state checks, so metadata cannot direct a caller to an unchecked workspace.
+Proposal and preview output guards resolve existing path ancestors before
+normalizing missing components. Creating an output directory therefore cannot
+turn an accepted destination into an alias of the input evidence.
+The PowerShell preview wrapper leaves initial directory creation and marker
+invalidation to Rust. It may invalidate a successfully produced preview if later
+compatibility evidence fails, but a rejected native invocation grants no ownership
+over the requested output path.
+The expansion wrapper requests Rust's input-preserving mode and supplies the final
+destination directly. Rust checks aliases and promotes an exclusively created
+temporary file only after a complete write. General expansion retains its separate
+in-place behavior when that mode is not selected.
+
 `plan` owns both planning stages and the resolution shared between them. It first
-resolves package and group entries into one target version per publishable
-package. Levels combine by taking the highest and matching explicit versions
-coalesce. Mixed decision kinds and conflicting explicit versions fail.
+resolves package and group entries into one target version per tracked version
+target. Levels combine by taking the highest and matching explicit versions
+coalesce. Mixed decision kinds, conflicting explicit versions, regressions, and
+non-plain group targets fail before writes.
 
 A plan's stage decides what resolution guarantees. A proposed plan may reach
 packages it does not name, which is how a decision about one group member moves
 the group. An expanded plan must resolve to exactly the set it names and must
 already carry a version for each, because that document is what a caller
-reviewed; reaching another package means the group configuration changed after it
+recorded; reaching another package means the exact dependency graph changed after it
 was written, and a surviving increment level would be re-resolved against the
 manifests of the day. Both are rejected. The stage is matched on rather than
 tested as a condition, so a new code path has to state which rule it wants.
 
-`expand` and `apply` share that resolution and both read the same Git-tracked
-publishable package set. The resolved versions branch to expanded-plan output for
-`expand`, and to manifest edits, writes, and lockfile processing for `apply`. The
-resolved versions are not themselves the expanded plan: `apply` resolves a
-proposed plan to the same shape without any expanded plan existing.
+Structural expansion and prospective preview share version-target resolution.
+Both read the same Git-tracked version-target set. Preview also computes manifest
+edits and resolves the resulting lockfile before writing the complete artifact.
 
-`apply` accepts plan targets and validates groups against the same Git-tracked
-publishable package set as classification. It parses and rewrites every affected
+`apply` accepts plan targets and validates groups against the Git-tracked
+version-target set. It parses and rewrites every affected
 manifest in memory before writing any of them. All Cargo-visible members remain
 rewrite candidates, including non-publishable, untracked, and ignored members,
 because they may carry exact pins to a package being incremented. A dependency
@@ -272,20 +388,59 @@ requirement is changed only when:
 The last criterion is the same predicate `check` validates the requirement
 convention with, kept in one place so the two cannot drift: `apply` must rewrite
 exactly what `check` would reject, and leave exactly what it would accept.
-Leaving an already-correct requirement byte for byte is what keeps an exact
-group alignment, which resolves the leading member to the version it already
-declares, from editing that member's dependents under an unchanged version. A
-requirement whose form is wrong for its edge, such as a compatible requirement
-between version-group members, is reported rather than rewritten: that is a
-manifest defect rather than a consequence of a version moving.
+Leaving an already-correct requirement byte for byte keeps an alignment, which
+resolves the leading member to the version it already declares, from editing
+that member's dependents under an unchanged version.
 
 Paths are normalized lexically first and canonicalized only for link or
 case-variant spellings, keeping the ordinary path free of filesystem calls.
 
-After manifest writes, `cargo update --offline --workspace` refreshes an existing
-workspace lockfile. A workspace-wide update avoids ambiguous bare package names
-when the lockfile also contains a registry package of the same name. Empty plans
-and workspaces without a lockfile skip the refresh.
+### Prepared and prospective resolution
+
+Preparation owns the intended `cargo update --offline --workspace` refresh before
+the report is graded. A workspace-wide update avoids ambiguous bare package names
+when the lockfile also contains a registry package of the same name. Offline
+resolution may reselect transitive edges among versions already locked; it is not
+limited to replacing workspace package identities.
+
+The prepared artifact contains only the post-refresh input snapshot. It cannot
+carry an alternative file overlay: both semantic grading and prospective cloning
+must start from the live state that preparation captured.
+
+Preview uses a disposable prospective workspace so version and requirement
+rewrites never become original planning inputs. Each iteration derives its
+candidate from the prepared input rather than incrementing the preceding
+candidate again. Classification uses the same pinned release baseline throughout.
+New binary closure effects and their dependent/group consequences expand the
+candidate until it is stable. Existing sufficient versions are retained.
+
+Cycle history retains a Git object digest for each complete version/artifact
+state rather than retaining serialized lockfiles and manifests for every pass.
+Input fingerprint fields use fixed-width little-endian lengths so changing the
+process pointer width does not change their encoding.
+
+The final prospective checkout is retained for external compatibility tools.
+Its evidence manifest path is separate from the original input identity used by
+application. Compatibility tooling uses both that manifest and its working
+directory; a subsequent read-only verification compares the retained checkout
+with the captured state. Generated build products do not become released inputs.
+
+The source fingerprint also includes untracked and ignored files beneath `src/`,
+because they can affect a workspace build even though they are excluded from
+Git-based release classification. Changing them requires fresh compatibility
+evidence, not an additional release reason.
+
+The resolved artifact binds the original input snapshot to captured output
+files, not to temporary workspace paths. Application recognizes either the
+original snapshot or the fully applied snapshot. It rejects other states before
+writes and installs captured bytes without invoking Cargo resolution. Lockfile
+maintenance is independent of binary relevance: a library-only workspace still
+receives a consistent resolved lockfile after version rewrites.
+
+Capture and application canonicalize the selected manifest before Cargo discovers
+workspace paths. Prospective directories are normalized after creation as well.
+This keeps Windows short-name spellings from being mixed with canonical roots
+when paths are rebased, without assuming filesystem case sensitivity.
 
 ## Diagnostics
 

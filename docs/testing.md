@@ -8,6 +8,17 @@ tests.
 The `unwrap()` / `expect()` rule (both test and production sides) lives in
 [`docs/error-handling.md`](error-handling.md).
 
+## Test behavior, not checked-in wording
+
+Do not test that checked-in source, configuration, prompts or documentation contain
+particular literal text. Parsing a static example and comparing its fields with
+copied literals has the same problem: it freezes content without exercising behavior.
+Test execution, transformations and observable outcomes instead. Structural checks
+that validate relationships, such as resolving documentation links or matching job
+dependencies to definitions, remain useful. Assertions on text produced by code
+under test are also valid; the distinction is whether the test exercises behavior,
+not whether its expected result is a string.
+
 ## Testing for panics and errors
 
 It is good to create tests that verify expected panics/errors are returned.
@@ -121,14 +132,64 @@ and prioritise it independently.
 Tests that talk to the real operating system generally fail to execute under Miri.
 This is fine and expected. However, a Miri test run must still succeed with a
 clean result! If there are tests that cannot be executed under Miri, they should
-be excluded via `#[cfg_attr(miri, ignore))]` (plus a comment justifying why it is
-correct to exclude them).
+be excluded via `#[cfg_attr(miri, ignore = "specific reason")]`.
 
 Naturally, if it is possible to redesign a test so it does not rely on the
 operating system, that is even better. However, this is not always possible.
 
-Miri is too slow when running tests with large data sets (anything with 100s or
-1000s of items). Exclude such tests from running under Miri.
+### Keep Miri workloads small
+
+A test that is fast natively can still monopolize an interpreter for minutes.
+Design tests around the smallest fixture and fewest iterations that establish
+the property, not production-scale sample sizes. Consider total work: exhaustive
+permutations, nested searches, repeated compression, and repeatedly constructing
+an end-to-end fixture can be expensive even when each input is small.
+
+Run changed tests with `just package=<name> miri` and inspect their durations.
+If a test takes more than 10 seconds under Miri, reduce its workload. Prefer
+smaller fixtures for every runner when they preserve the same assertions.
+Otherwise, select smaller test-only parameters with `cfg!(miri)` while keeping
+the native coverage.
+
+Include successful tests reported as slow when reviewing CI logs, not just
+timeouts. Group them by shared fixtures and helpers so one unnecessarily large
+input is not repeated throughout a suite. Match CI's `RUST_BACKTRACE=1` setting
+when measuring error and panic scenarios, and rerun the affected suites after
+focused reductions to catch other users of the same helpers.
+
+Keep full producer documents in parser/schema compatibility tests. Higher-level
+orchestration tests generally need only small representative documents passed
+through the real parser. Likewise, separate independent scenarios instead of
+rebuilding an end-to-end fixture for each branch inside one test.
+
+Production constants that only tune performance, such as cache capacities or
+inline-storage sizes, may use smaller values under `cfg(miri)` when exposing them
+as test parameters is impractical. Document why the smaller value preserves
+correctness and retain representative coverage of the affected implementation
+paths. Do not change correctness-relevant parameters or production semantics
+under `cfg(miri)` or `cfg(test)` to make tests cheaper.
+
+When the property genuinely requires exhaustive enumeration, statistical
+calibration, or a large data set, keep that test native-only with
+`#[cfg_attr(miri, ignore = "specific reason")]`. Explain which workload makes
+interpretation inappropriate, and retain small representative Miri tests of the
+underlying operations. Do not ignore an entire crate merely because some of its
+tests are expensive. Inspect related tests and shared fixtures when fixing a slow
+test so the same workload is not repeated elsewhere.
+
+The `default-miri` profile in `.config/nextest.toml`, automatically selected by
+`cargo miri nextest run` and `just miri`, reports a test as slow after 10 seconds
+and terminates it as a failure after 60 seconds. The termination limit is a
+last-chance runner safeguard, not a target runtime or an assertion in test code.
+Fix slow workloads rather than increasing the limit, adding retries, or marking
+timeouts as successes. Native and mutation-test profiles do not inherit this
+Miri-only deadline.
+
+`just miri-harder` runs whole library test suites across many seeds using
+`cargo miri test`, not nextest, so the per-test deadline does not apply to that
+batched run. Keep each test's single-seed workload small before running it across
+many seeds; CI runs this additional coverage only after the bounded base Miri
+pass succeeds.
 
 Doctests are not executed under Miri. There is no need to make doctests
 Miri-compatible.
@@ -215,12 +276,11 @@ covered by tests. For example:
   (anything `#[cfg(test)]`) need to be excluded. Integration tests in `tests/`
   are automatically excluded, though — no need to worry about those.
 * Defensive branches that can never be reached due to defense in depth layering.
-* Code that is only ever executed in a const context, as const context is not
-  covered in coverage measurements.
 * When code has no API contract to test (e.g. `fmt::Debug` implementations which
   may contractually write anything).
-* Facade types whose only purpose is to redirect calls to either a real or mock
-  implementation — not worth testing.
+* Facade pass-through methods whose only purpose is to redirect calls to either a
+  real or mock implementation. Const facade constructors remain instrumented and
+  are called at runtime as described below.
 
 To exclude code from coverage measurement, mark it with
 `#[cfg_attr(coverage_nightly, coverage(off))]`. This also requires
@@ -233,3 +293,37 @@ known gaps rather than trying to restructure the code to work around them.
 
 When excluding code for any other reason than "it is test code", leave a comment
 to explain why.
+
+### Cover const functions at runtime
+
+Coverage instrumentation cannot observe compile-time evaluation. A `const fn`
+that production code and behavioral tests only use in constants or static
+initializers therefore appears uncovered even though the compiler evaluates it.
+
+Add a focused test that calls the function in a non-const expression and passes
+the result through `std::hint::black_box()`. The test supplies the runtime
+context; the optimization barrier prevents the compiler from discarding the
+call or replacing it with a precomputed value:
+
+```rust
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::hint::black_box;
+
+    use super::*;
+
+    #[test]
+    fn constructor_executes_at_runtime() {
+        _ = black_box(Widget::new());
+    }
+}
+```
+
+Passing an already initialized `const` or `static` item to `black_box()` does not
+execute the const function and therefore does not generate coverage. When one
+const function consumes the result of another, pass each call through
+`black_box()` before passing the intermediate value onward. This makes both
+runtime calls explicit and prevents either from being folded away. Do not
+exclude a function from coverage merely because its production callers evaluate
+it in a const context.

@@ -33,34 +33,28 @@
 
 use std::time::Duration;
 
-mod sealed {
-    use std::time::Duration;
+/// The unconditional emit primitives, sealed within this module so no caller
+/// can invoke them directly.
+///
+/// Every note or timing a command emits flows through the guarded helpers on
+/// [`ReporterExt`] — which are the only surface that can reach these methods —
+/// so the `--verbose` guard is applied in exactly one place and can never be
+/// bypassed or forgotten at a call site.
+trait Sink {
+    /// Whether notes are consumed at all, gating the guarded helpers.
+    fn enabled(&self) -> bool;
 
-    /// The unconditional emit primitives, sealed within [`report`](super) so no
-    /// caller can invoke them directly.
-    ///
-    /// Every note or timing a command emits flows through the guarded helpers on
-    /// [`ReporterExt`](super::ReporterExt) — which are the only surface that can
-    /// reach these methods — so the `--verbose` guard is applied in exactly one
-    /// place and can never be bypassed or forgotten at a call site.
-    pub(in crate::report) trait Sink {
-        /// Whether notes are consumed at all, gating the guarded helpers.
-        fn enabled(&self) -> bool;
+    /// Records a single diagnostic note unconditionally.
+    fn emit_note(&self, message: &str);
 
-        /// Records a single diagnostic note unconditionally.
-        fn emit_note(&self, message: &str);
+    /// Records the wall-clock duration of a named pipeline `stage`
+    /// unconditionally.
+    fn emit_timing(&self, stage: &str, elapsed: Duration);
 
-        /// Records the wall-clock duration of a named pipeline `stage`
-        /// unconditionally.
-        fn emit_timing(&self, stage: &str, elapsed: Duration);
-
-        /// Emits an always-on announcement unconditionally (not gated on
-        /// `--verbose`).
-        fn emit_announcement(&self, message: &str);
-    }
+    /// Emits an always-on announcement unconditionally (not gated on
+    /// `--verbose`).
+    fn emit_announcement(&self, message: &str);
 }
-
-use sealed::Sink;
 
 /// Receives human-facing diagnostic notes emitted while a command runs.
 ///
@@ -269,10 +263,11 @@ mod test_support {
 
     use super::Sink;
 
-    /// A [`Reporter`](super::Reporter) that records every note in memory so tests
+    /// A [`Reporter`](super::Reporter) that records diagnostics in memory so tests
     /// can assert on the diagnostic trail.
     #[derive(Debug, Default)]
     pub struct RecordingReporter {
+        quiet: bool,
         notes: RefCell<Vec<String>>,
         timings: RefCell<Vec<String>>,
         announcements: RefCell<Vec<String>>,
@@ -283,6 +278,17 @@ mod test_support {
         #[must_use]
         pub fn new() -> Self {
             Self::default()
+        }
+
+        /// Records announcements without enabling verbose notes or stage timings.
+        ///
+        /// Use this for orchestration tests that do not inspect verbose diagnostics.
+        #[must_use]
+        pub fn quiet() -> Self {
+            Self {
+                quiet: true,
+                ..Self::default()
+            }
         }
 
         /// Returns a snapshot of the notes recorded so far.
@@ -319,7 +325,7 @@ mod test_support {
 
     impl Sink for RecordingReporter {
         fn enabled(&self) -> bool {
-            true
+            !self.quiet
         }
 
         fn emit_note(&self, message: &str) {
@@ -329,7 +335,9 @@ mod test_support {
         fn emit_timing(&self, stage: &str, _elapsed: Duration) {
             // Record only the stage label; the elapsed time is non-deterministic, so
             // tests assert that a stage *was* timed, not how long it took.
-            self.timings.borrow_mut().push(stage.to_owned());
+            if !self.quiet {
+                self.timings.borrow_mut().push(stage.to_owned());
+            }
         }
 
         fn emit_announcement(&self, message: &str) {
@@ -364,6 +372,19 @@ mod tests {
         let notes_only = StderrReporter::with_timing(true, false);
         assert!(notes_only.enabled());
         assert!(!notes_only.timing_enabled);
+    }
+
+    #[test]
+    fn quiet_recording_reporter_keeps_only_announcements() {
+        let reporter = RecordingReporter::quiet();
+        assert!(!reporter.enabled());
+        reporter.note_with(|| panic!("quiet notes must not be formatted"));
+        reporter.if_enabled(|_| panic!("quiet diagnostics must not be evaluated"));
+        reporter.timing("stage", Duration::ZERO);
+        reporter.announce("selected base");
+        assert!(reporter.notes().is_empty());
+        assert!(!reporter.timed("stage"));
+        assert_eq!(reporter.announcements(), ["selected base"]);
     }
 
     #[test]

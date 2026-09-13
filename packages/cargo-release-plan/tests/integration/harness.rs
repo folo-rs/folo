@@ -4,18 +4,27 @@
 //! drive one run and reduce its outcome to what a test asserts on.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 
 use crate::fixture::{Fixture, write_package};
 
 pub(crate) fn seeded_package() -> Fixture {
+    Fixture::from_template(&SEEDED_PACKAGE)
+}
+
+/// A known ordinary-file workspace, committed once and only ever copied.
+///
+/// The real Git seed preserves the index and tree modes. Each caller receives
+/// independent files, refs, objects and configuration before changing its state.
+static SEEDED_PACKAGE: LazyLock<Fixture> = LazyLock::new(|| {
     let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");
     fixture.commit("seed");
     fixture
-}
+});
 
 /// Workspace whose declared member contains a second package reached by path.
 ///
@@ -140,7 +149,7 @@ pub(crate) fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
     fs::write(
         &plan_path,
         format!(
-            r#"{{ "schema_version": 2, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
+            r#"{{ "schema_version": 4, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
         ),
     )
     .unwrap();
@@ -152,4 +161,30 @@ pub(crate) fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
         verbose: true,
     })
     .unwrap();
+}
+
+pub(crate) fn resolved_plan(fixture: &Fixture, proposal: &Path) -> PathBuf {
+    let prepared = prepare(fixture);
+    let output = fixture.path().join("preview");
+    run(&RunInput::Preview {
+        plan: proposal.to_path_buf(),
+        prepared,
+        output: output.clone(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    output.join("plan.json")
+}
+
+pub(crate) fn prepare(fixture: &Fixture) -> PathBuf {
+    let prepared = fixture.path().join("prepared");
+    run(&RunInput::Prepare {
+        output: prepared.clone(),
+        base: Some("HEAD".to_owned()),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    prepared.join("prepared.json")
 }

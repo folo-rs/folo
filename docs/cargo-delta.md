@@ -42,6 +42,14 @@ The comparison anchor depends on the environment:
 Command-level validation, fetch policy mechanics and cargo-delta parameter wiring live in
 `scripts/build/Delta.psm1`.
 
+## Baseline worktree lifetime
+
+Baseline analysis uses a temporary Git worktree without switching the caller's checkout.
+Worktree removal is attempted only after successful creation, even when analysis fails.
+An analysis failure is preserved when removal succeeds; a removal failure is surfaced even
+when analysis succeeds. If both fail, an aggregate exception retains both original exceptions,
+with the analysis failure first.
+
 ## Local usage
 
 ```bash
@@ -71,3 +79,7 @@ Pull request and merge-queue builds use delta to validate only impacted packages
 builds act as a backstop and always validate the full workspace. If the backstop catches something
 that the delta build missed, the `delta.toml` configuration should be updated to prevent
 recurrence.
+
+Non-Cargo checks use independent change domains rather than `skip_all`. Script integration
+tests also consume the affected-package set for the native helpers they exercise. See
+[non-Cargo change planning](../.github/workflows/implementation.md#non-cargo-change-planning).

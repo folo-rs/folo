@@ -580,6 +580,7 @@ async fn unexpected_status(operation: &str, response: Response) -> AppError {
 pub(crate) mod fake {
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
+    use std::future::ready;
 
     use super::*;
     use crate::errors::{AmbiguousCreateError, RequestFailedError};
@@ -669,7 +670,10 @@ pub(crate) mod fake {
     }
 
     impl GitHub for FakeGitHub {
-        async fn open_issues(&self, _repository: &Repository) -> Result<Vec<Issue>, AppError> {
+        fn open_issues(
+            &self,
+            _repository: &Repository,
+        ) -> impl Future<Output = Result<Vec<Issue>, AppError>> {
             let calls = self.issue_list_calls.get();
             self.issue_list_calls.set(
                 calls
@@ -677,17 +681,17 @@ pub(crate) mod fake {
                     .expect("the fake cannot perform usize::MAX issue-list calls"),
             );
             if self.fail_issue_list.get() && calls != 0 {
-                return Err(RequestFailedError::new("listing fake issues").into());
+                return ready(Err(RequestFailedError::new("listing fake issues").into()));
             }
-            Ok(self.issues())
+            ready(Ok(self.issues()))
         }
 
-        async fn create_issue(
+        fn create_issue(
             &self,
             _repository: &Repository,
             _title: &str,
             body: &str,
-        ) -> Result<Issue, AppError> {
+        ) -> impl Future<Output = Result<Issue, AppError>> {
             let issue = Issue {
                 number: self.next_id(),
                 title: _title.to_owned(),
@@ -695,37 +699,41 @@ pub(crate) mod fake {
             };
             self.issues.borrow_mut().insert(issue.number, issue.clone());
             if self.fail_issue_create_after_commit.replace(false) {
-                return Err(AmbiguousCreateError::new().into());
+                return ready(Err(AmbiguousCreateError::new().into()));
             }
-            Ok(issue)
+            ready(Ok(issue))
         }
 
-        async fn update_issue(
+        fn update_issue(
             &self,
             _repository: &Repository,
             number: u64,
             title: Option<&str>,
             body: &str,
-        ) -> Result<(), AppError> {
+        ) -> impl Future<Output = Result<(), AppError>> {
             if let Some(issue) = self.issues.borrow_mut().get_mut(&number) {
                 if let Some(title) = title {
                     issue.title = title.to_owned();
                 }
                 issue.body = body.to_owned();
             }
-            Ok(())
+            ready(Ok(()))
         }
 
-        async fn close_issue(&self, _repository: &Repository, number: u64) -> Result<(), AppError> {
+        fn close_issue(
+            &self,
+            _repository: &Repository,
+            number: u64,
+        ) -> impl Future<Output = Result<(), AppError>> {
             self.issues.borrow_mut().remove(&number);
-            Ok(())
+            ready(Ok(()))
         }
 
-        async fn comments(
+        fn comments(
             &self,
             _repository: &Repository,
             pull_request: u64,
-        ) -> Result<Vec<Comment>, AppError> {
+        ) -> impl Future<Output = Result<Vec<Comment>, AppError>> {
             let calls = self.comment_list_calls.get();
             self.comment_list_calls.set(
                 calls
@@ -733,17 +741,17 @@ pub(crate) mod fake {
                     .expect("the fake cannot perform usize::MAX comment-list calls"),
             );
             if self.fail_comment_list.get() && calls != 0 {
-                return Err(RequestFailedError::new("listing fake comments").into());
+                return ready(Err(RequestFailedError::new("listing fake comments").into()));
             }
-            Ok(self.comments_for(pull_request))
+            ready(Ok(self.comments_for(pull_request)))
         }
 
-        async fn create_comment(
+        fn create_comment(
             &self,
             _repository: &Repository,
             pull_request: u64,
             body: &str,
-        ) -> Result<Comment, AppError> {
+        ) -> impl Future<Output = Result<Comment, AppError>> {
             let comment = Comment {
                 id: self.next_id(),
                 body: body.to_owned(),
@@ -752,56 +760,63 @@ pub(crate) mod fake {
                 .borrow_mut()
                 .insert(comment.id, (pull_request, comment.clone()));
             if self.fail_comment_create_after_commit.replace(false) {
-                return Err(AmbiguousCreateError::new().into());
+                return ready(Err(AmbiguousCreateError::new().into()));
             }
-            Ok(comment)
+            ready(Ok(comment))
         }
 
-        async fn update_comment(
+        fn update_comment(
             &self,
             _repository: &Repository,
             id: u64,
             body: &str,
-        ) -> Result<(), AppError> {
+        ) -> impl Future<Output = Result<(), AppError>> {
             if let Some((_, comment)) = self.comments.borrow_mut().get_mut(&id) {
                 comment.body = body.to_owned();
             }
-            Ok(())
+            ready(Ok(()))
         }
 
-        async fn delete_comment(&self, _repository: &Repository, id: u64) -> Result<(), AppError> {
+        fn delete_comment(
+            &self,
+            _repository: &Repository,
+            id: u64,
+        ) -> impl Future<Output = Result<(), AppError>> {
             self.comments.borrow_mut().remove(&id);
-            Ok(())
+            ready(Ok(()))
         }
 
-        async fn pull_request_head(
+        fn pull_request_head(
             &self,
             _repository: &Repository,
             pull_request: u64,
-        ) -> Result<CommitSha, AppError> {
+        ) -> impl Future<Output = Result<CommitSha, AppError>> {
             if self.fail_pull_head.get() {
-                return Err(RequestFailedError::new("reading the fake pull-request head").into());
+                return ready(Err(RequestFailedError::new(
+                    "reading the fake pull-request head",
+                )
+                .into()));
             }
-            Ok(self
+            ready(Ok(self
                 .pull_heads
                 .borrow()
                 .get(&pull_request)
                 .cloned()
-                .expect("the test must seed the pull-request head"))
+                .expect("the test must seed the pull-request head")))
         }
 
-        async fn compare(
+        fn compare(
             &self,
             _repository: &Repository,
             base: &CommitSha,
             head: &CommitSha,
-        ) -> Result<Comparison, AppError> {
-            Ok(self
+        ) -> impl Future<Output = Result<Comparison, AppError>> {
+            ready(Ok(self
                 .comparisons
                 .borrow()
                 .get(&(base.as_str().to_owned(), head.as_str().to_owned()))
                 .copied()
-                .unwrap_or(Comparison { ahead_by: None }))
+                .unwrap_or(Comparison { ahead_by: None })))
         }
     }
 }

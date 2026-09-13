@@ -1,0 +1,971 @@
+name: Standard validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Merge-queue runs must execute this workflow: a required check that never fires as
+  # merge_group is a failed check, and the queue never merges. Queue entries use the same
+  # pruned job set as pull_request because every full-matrix guard keys on
+  # `github.event_name == 'push'`, which is false here. Push to main remains the full
+  # backstop. The concurrency group (`github.head_ref || github.ref`) already distinguishes
+  # queue refs: head_ref is empty and github.ref is unique. cancel-standard-validation.yml stays
+  # pull-request-only.
+  merge_group:
+    branches: [main]
+
+concurrency:
+  # Share the ref-specific group with the PR-close companion so closing a PR cancels stale work.
+  # Ref: .github/workflows/design.md#concurrency.
+  group: standard-validation-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Emit a backtrace whenever a test (or any Rust process) panics, so a rare flake — such as the
+# alloc_tracker panic-on-next-alloc global-state race — is diagnosable straight from the failing
+# run's log instead of the log only advising a re-run with RUST_BACKTRACE set. Panic messages are
+# unchanged, so `#[should_panic]` matching is unaffected. Rendered `ohno` error text is not: an
+# `ohno` error renders its captured backtrace as part of its `Display`, and `message()` renders an
+# error's source through `Display`. Assertions on rendered error text must therefore hold with
+# backtraces captured — see docs/error-handling.md.
+env:
+  RUST_BACKTRACE: "1"
+
+# Least privilege by default, so pull-request and merge-queue validation do not inherit whatever
+# the repository's default token scope happens to be. Jobs needing more declare it themselves; a
+# job-level block replaces this default rather than adding to it.
+permissions:
+  contents: read
+
+jobs:
+  # Git and preinstalled PowerShell are sufficient to scope non-Cargo checks before setup.
+  # Complete history supports the whole PR and the queue's immutable combined candidate.
+  # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Plan non-Cargo validation
+        id: plan
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/build/ValidationPlan.psm1 -Force
+          $eventData = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -AsHashtable
+          $plan = Get-ValidationWorkflowPlan -EventName $env:GITHUB_EVENT_NAME -EventData $eventData -Verbose
+          "plan=$(ConvertTo-Json -InputObject $plan -Compress)" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+  # Determines which packages are impacted by changes in a PR branch compared
+  # to origin/main. On a merge-queue run the baseline is merge_group.base_sha (the
+  # commit the queue rebased onto) so scoping cannot drift from validate-versions.
+  # On push to main (backstop), all packages are validated.
+  delta:
+    needs: changes
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.compute.outputs.packages }}
+      packages_json: ${{ steps.compute.outputs.packages_json }}
+      skip_all: ${{ steps.compute.outputs.skip_all }}
+      script_domains: ${{ steps.scripts.outputs.domains }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        # The delta job runs before - and gates - every package-scoped job, so it uses the same
+        # setup-environment composite as they do rather than a hand-picked minimal toolchain. That
+        # keeps a single install path (cargo-delta comes from `just install-tools` like every other
+        # tool) and, on a cold cache, primes the shared `prerequisites` cache this job's dependents
+        # then restore instead of each recompiling from scratch. On a warm cache the setup is a
+        # ~30-second restore.
+        uses: ./.github/actions/setup-environment
+
+      - name: Compute delta
+        id: compute
+        shell: pwsh
+        env:
+          # Empty on pull_request and push; the SHA the queue rebased onto on merge_group.
+          DELTA_BASELINE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # The cargo-delta pipeline lives in the Pester-tested Delta module, shared with the local
+          # `just delta` recipe so the two cannot drift. See scripts/build/Delta.psm1.
+          Import-Module ./scripts/build/Delta.psm1 -Force
+
+          # Full workspace only on push to main. merge_group must not take this path: a queue
+          # run uses the same pruned job set as a pull request.
+          # Full history is already checked out (fetch-depth: 0), so the workflow wrapper skips a
+          # redundant fetch. Pull requests analyze origin/main; merge-queue runs pass
+          # merge_group.base_sha so the baseline revision matches validate-versions. The module
+          # cleans up after itself (no artifacts land in the checkout to dirty the tree).
+          Get-DeltaWorkflowOutput `
+            -EventName $env:GITHUB_EVENT_NAME `
+            -BaselineRevision $env:DELTA_BASELINE |
+            Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Include affected native helpers in script scope
+        # Pester integration tests exercise real Rust helpers. Consume Cargo's dependency impact
+        # instead of making every lockfile edit trigger the full script suite.
+        # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
+        id: scripts
+        shell: pwsh
+        env:
+          CHANGE_PLAN: ${{ needs.changes.outputs.plan }}
+          AFFECTED_PACKAGES: ${{ steps.compute.outputs.packages_json }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/build/ValidationPlan.psm1 -Force
+          $domains = @(Get-ValidationScriptDomain -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose)
+          "domains=$(ConvertTo-Json -InputObject $domains -Compress)" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+  # Run the union of selected domains once. An empty Cargo delta cannot discard script inputs.
+  # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
+  test-scripts:
+    needs: delta
+    if: needs.delta.outputs.script_domains != '[]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run script test suites
+        shell: pwsh
+        env:
+          SCRIPT_DOMAINS: ${{ needs.delta.outputs.script_domains }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $domains = @(ConvertFrom-Json -InputObject $env:SCRIPT_DOMAINS)
+          just test-scripts ($domains -join ' ')
+
+  # Static analysis has script/configuration inputs, not Cargo-package inputs.
+  # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
+  validate-scripts:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.plan).script_analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-environment
+      - name: Validate scripts (PSScriptAnalyzer)
+        run: just validate-scripts
+      - name: Retain script-analysis diagnostics
+        # Preserve native engine/inner exceptions and file/rule context without relaxing the gate.
+        # Setup failures may occur before the analyzer creates any diagnostic files.
+        # Ref: docs/build-and-tooling.md#powershell-linting.
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: script-analysis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/script-analysis
+          if-no-files-found: ignore
+
+  # Reuse the pinned standalone installers without restoring the Rust development environment.
+  # Ref: .github/workflows/implementation.md#workflow-lint-environment.
+  validate-workflows:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.plan).workflows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-workflow-lint
+
+      - name: Validate workflows
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          actionlint -color
+
+  # Workspace-wide release-plan generation: every publishable package's released content
+  # versus its version anchor. Delta cannot narrow that set, so this job is not gated on
+  # skip_all. Failure text names the increment-versions skill. Expected to stay red until
+  # include allow-lists and reconciliation increments land; do not continue-on-error.
+  validate-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      semver_targets: ${{ steps.check.outputs.semver_targets }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # cargo-release-plan resolves the release baseline and each package's version anchor
+          # from the release branch's first-parent history, so a truncated clone can hide the
+          # commit that last changed a version and report that package as unchanged.
+          fetch-depth: 0
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      # Live Cargo metadata belongs with unconditional release validation: target autodiscovery
+      # can change the binary set without a manifest edit.
+      # Ref: .github/workflows/implementation.md#release-validation.
+      - name: Validate binstall metadata
+        run: just validate-binstall
+
+      - name: Check package versions
+        if: ${{ !cancelled() }}
+        id: check
+        env:
+          # The release baseline is the tip of the branch releases are made from, which is
+          # not the branch a pull request targets: a stacked pull request targets an
+          # unreleased parent, and anchoring on it would treat that parent's pending
+          # increment as a release. A queue run is the exception, because the queue rebased
+          # the entry onto the named release-branch commit and must be scoped to it.
+          RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.event.repository.default_branch) }}
+        run: just validate-versions
+        shell: pwsh
+
+  # cargo-semver-checks scoped to the consumer-contract package set. `semver_targets`
+  # holds that selection: the packages carrying unreleased content changes that declare a
+  # consumer contract, which is narrower than the set this pull request will publish, because
+  # implementation and test-support packages declare they have none. An unreleased
+  # change in any version-group member selects the contract members of that group.
+  # `--all-features` because gated API is still public API. An empty `semver_targets` output is a
+  # successful skip. Parallel with the rest of validation; does not gate other jobs.
+  # `!cancelled()` rather than `always()` so a failing version check still surfaces an
+  # insufficient increment in the same round trip, while a cancelled run stops here instead of
+  # holding a runner. The canary runs first so a broken cargo-semver-checks cannot be
+  # read as "no breaking changes".
+  semver-checks:
+    needs: [validate-versions]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Verify cargo-semver-checks can run
+        run: just verify-semver-checks
+        shell: pwsh
+
+      - name: Run cargo-semver-checks on releasing packages
+        run: just package="${{ needs.validate-versions.outputs.semver_targets }}" semver-checks
+        shell: pwsh
+
+  # Formatting is platform-agnostic, so run only on Ubuntu for efficiency.
+  format-check:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run format-check
+        run: just format-check
+
+  # Default features check is platform-agnostic, so run only on Ubuntu for efficiency.
+  default-features-check:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run default-features-check
+        run: just default-features-check
+
+  # Fails when a library's public API exposes an external type that is not on its allow-list, so an
+  # accidental addition to the external surface is caught in review. Uses an
+  # Ubuntu + Windows matrix, because the public surface is platform-dependent (cfg-gated items) and
+  # macOS (also cfg(unix)) is redundant with ubuntu here. Delta-scoped like the other package jobs.
+  check-external-types:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-external-types on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" check-external-types
+
+  clippy-dev:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run clippy dev on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" clippy dev
+
+  # The x86_64 test pass (ubuntu-latest and windows-latest - both x86_64). Runs the full
+  # test suite (unit, integration and example tests) with coverage instrumentation, so the
+  # coverage report is a side effect of the regular test run rather than a second,
+  # separately re-executed pass. Also runs the benchmark targets once to verify they do not
+  # panic. Uploads both the coverage report and the test results to Codecov.
+  #
+  # macOS is deliberately not here: GitHub's `macos-latest` runner is Apple Silicon (arm64),
+  # so macOS is exercised by Deep validation's `test-arm` job. Keeping this job x86_64-only keeps
+  # its name accurate and stops the matrix drifting as the `-latest` labels change.
+  #
+  # Coverage requires the nightly toolchain (llvm-tools-preview is installed only there via
+  # `just install-tools`), so this is the nightly test pass. The MSRV test pass runs on the
+  # ARM runners in Deep validation, and MSRV compilation of every target is
+  # covered by `check-frozen` (which compiles all targets on MSRV against the frozen minimums).
+  # Paired with `test-arm`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
+  test-x64:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    # Whether a coverage report was produced at all. A delta-scoped run can measure only packages
+    # that carry no instrumented code, which leaves nothing to upload and nothing for the coverage
+    # notification gate to release. The matrix legs measure the same scope and write this output in
+    # completion order, so the last one to finish decides. Were platform-gated code ever to make
+    # them disagree, the worst case is a commit whose coverage status goes unreleased - never one
+    # released off an incomplete set of uploads.
+    outputs:
+      coverage_report: ${{ steps.coverage.outputs.report }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        # The benchmark smoke check below runs every bench target once, and on Linux the
+        # `*_cg` targets are real Gungraun harnesses that execute under Valgrind.
+        uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
+
+      - name: Run tests with coverage on ${{ matrix.platform }}
+        id: coverage
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          just package="${{ needs.delta.outputs.packages }}" coverage-measure
+          just coverage-report-ci
+
+          $report = if (Test-Path lcov.info) { 'true' } else { 'false' }
+          "report=$report" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Upload coverage to Codecov
+        if: steps.coverage.outputs.report == 'true'
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: true
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/nextest/default/junit.xml
+          flags: ${{ matrix.platform }}
+          report_type: test_results
+
+      - name: Run benchmark targets on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test-benches
+
+  # macOS is dropped on PRs (a doctest pass on macOS is rarely informative); the full
+  # three-platform matrix runs on push to `main`.
+  test-docs:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run test-docs on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" test-docs
+
+  # macOS is dropped on PRs (rustdoc output does not vary by platform, so a macOS docs build
+  # is rarely informative); the full three-platform matrix runs on push to `main`.
+  docs:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run docs on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" docs
+
+      - name: Run docs-default-features on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" docs-default-features
+
+  clippy-release:
+    needs: [delta, clippy-dev]
+    # Push-to-`main` only: release-profile Clippy rarely diverges from the dev pass on a PR.
+    if: github.event_name == 'push' && needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run clippy release on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" clippy release
+
+  build-release:
+    needs: [delta, clippy-dev]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run build release on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" build release
+
+  # Verifies the workspace still compiles at the minimum dependency versions declared in
+  # Cargo.toml (our published minimum-version promises), rather than the higher versions
+  # pinned in Cargo.lock. The `check-frozen` recipe freezes every workspace dependency to
+  # its declared minimum, regenerates the lockfile, and runs `check`. Gated behind clippy-dev
+  # because checking the frozen minimums is pointless if the code does not even build with
+  # the normal lockfile versions.
+  check-frozen:
+    needs: [delta, clippy-dev]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-frozen on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" check-frozen
+
+  run-examples:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    # Work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run examples on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" run-examples
+
+  # Azure Blob storage backend tests against the Azurite emulator.
+  #
+  # The Azure backend's network paths self-skip when no
+  # emulator is reachable (so the multi-platform test jobs stay green
+  # without one). They run for real only here: Azurite is provisioned on the host
+  # and BENCH_HISTORY_REQUIRE_AZURITE turns an unreachable emulator into a hard
+  # failure, so a misconfigured emulator can never silently degrade into skipping
+  # every test. This job also collects coverage so the azure.rs network paths
+  # reach Codecov - the multi-platform `test-x64` job runs without an emulator and
+  # therefore cannot cover them; Codecov merges this azure-flagged upload with it.
+  #
+  # Runs on a single platform (Linux) by choice, not by limitation: the Azure Blob
+  # backend is OS-agnostic network I/O (HTTP via the azure SDK), so exercising it on
+  # one platform fully covers it - also running it on Windows/macOS would only
+  # duplicate the same coverage. Linux is picked because it is the cheapest/fastest
+  # runner and because Azurite runs directly on the host there via npm (service
+  # containers cannot reliably bind it to a reachable address). Package-gated: the
+  # job is only relevant when cargo-bench-history is affected.
+  #
+  # Named `test-azurite` because it runs against the Azurite emulator, not a real
+  # Azure account; `test-azure` is reserved for a future job that targets real Azure.
+  test-azurite:
+    needs: [delta]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+    runs-on: ubuntu-latest
+    env:
+      BENCH_HISTORY_REQUIRE_AZURITE: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          # Only this job needs the Azurite emulator, so it is the sole opt-in; every other job
+          # skips its ~3-minute npm install. The start-azurite step below then just launches it.
+          install-azurite: "true"
+
+      - name: Start Azurite
+        uses: ./.github/actions/start-azurite
+
+      - name: Generate azure coverage on ubuntu-latest
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # Exercise adapter unit tests as well as CLI scenarios while the emulator is available.
+          # Ref: .github/workflows/implementation.md#azure-emulator-coverage.
+          just package="cargo-bench-history cbh_storage" coverage-measure
+          just coverage-report-ci
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          flags: azure
+          fail_ci_if_error: true
+
+  # Azure Blob storage backend tests against a real Azure Storage account.
+  #
+  # Complements `test-azurite` by exercising the Microsoft Entra ID authentication
+  # path that the emulator (account-key/SAS) never touches: a real Storage account
+  # with shared-key access disabled, reached over HTTPS, authenticated through
+  # GitHub OIDC workload identity federation - no stored secret. Each test creates a
+  # fresh blob container and deletes it when it finishes (even on panic); the final
+  # `if: always()` sweep is a backstop for a container a crashed run might leave.
+  #
+  # Gated so it only runs when federation can succeed:
+  #   * package-gated to cargo-bench-history (same gate as test-azurite);
+  #   * same-repo only - a fork PR cannot mint an OIDC token for our tenant, so it
+  #     would fail federation; the condition lets fork PRs skip cleanly instead;
+  #   * not merge_group - the test identity's federated subjects are pull_request and
+  #     the main branch ref, so a queue OIDC token cannot exchange.
+  # The Azure identifiers it needs are committed (non-secret) in constants.env, the
+  # same source `just test-azure` reads locally, so local and CI target the same
+  # account. The `just test-azure` recipe sets ENABLE_AZURE=1, which is what actually
+  # opts the real-Azure tests in (they self-skip without it) and turns a missing
+  # account into a hard failure, so once the job runs it can never silently degrade
+  # into skipping every test.
+  #
+  # Single-platform (Linux) by choice, not limitation: the Azure Blob backend is
+  # OS-agnostic network I/O, so one platform fully covers it and Linux is the
+  # cheapest runner. Unlike test-azurite it collects no coverage (azurite already
+  # covers azure.rs); its value is proving the real Entra + real Blob endpoint
+  # round-trip end to end.
+  #
+  # The account, managed identity and federated credentials are scripted/Bicep'd in
+  # infra/azure-bench-history-test/ - see that directory's README to deploy or re-create.
+  test-azure:
+    needs: delta
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+      && github.event_name != 'merge_group'
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed
+    # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v3` hands
+    # that token to Azure, which matches it against the managed identity's federated
+    # credentials (see infra/azure-bench-history-test/main.bicep) and issues an access
+    # token - so CI authenticates with no stored secret. The default GITHUB_TOKEN
+    # cannot request an OIDC token unless this permission is granted explicitly (and
+    # fork PRs cannot get it at all, hence the same-repo gate above). `contents: read`
+    # is the minimum the checkout needs.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      # Surface the non-secret AZURE_* identity values and the account name from
+      # constants.env (the same source `just test-azure` reads) as job env vars, so
+      # the azure/login inputs and the cleanup step can reference them without
+      # duplicating values in repo Variables. Each line is `KEY=value`; comments skip.
+      - name: Load Azure identifiers from constants.env
+        shell: bash
+        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+
+      - name: Sign in to Azure (OIDC workload identity federation)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run real-Azure storage tests
+        run: just test-azure
+
+      - name: Delete leaked test containers
+        if: always()
+        shell: pwsh
+        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
+        # which the load step above put into the job env. Each test already deletes its
+        # own container when it finishes, so this backstop only needs to sweep containers
+        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
+        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
+        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
+        # leak is older than the cutoff and gets swept here or on a later run.
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
+
+  # Variant of test-azure that exercises cargo-bench-history's SELF-MINTING GitHub
+  # OIDC credential - the exact credential the prod collection (bench-history.yml)
+  # depends on - against the real test account. The unit tests in storage/github_oidc.rs
+  # stub the HTTP exchange, and test-azure above takes the local-az DeveloperToolsCredential
+  # fallback, so without this job nothing would prove the self-minting path actually
+  # round-trips real GitHub OIDC -> Entra -> Blob until the post-merge collection run.
+  #
+  # The only difference from test-azure is exporting AZURE_CLIENT_ID: setting it is the
+  # switch that makes from_config build a ClientAssertionCredential (which mints a fresh
+  # OIDC JWT per token exchange) instead of the DeveloperToolsCredential it would use
+  # otherwise. azure/login is retained ONLY so the test harness's container cleanup
+  # (which shells out to `az`) works; the code under test ignores the az session once
+  # AZURE_CLIENT_ID is set.
+  test-azure-gh:
+    needs: delta
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'cargo-bench-history'))
+      && github.event_name != 'merge_group'
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # `id-token: write` injects the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN values that the
+    # tool itself reads to mint OIDC assertions on demand (the prod-critical path), and
+    # the test identity's `pull_request` federated credential lets same-repo PR runs
+    # federate in. Fork PRs cannot get an OIDC token for our tenant, hence the same-repo
+    # gate above. merge_group is skipped for the same reason as test-azure: the
+    # federated subjects do not cover queue refs. `contents: read` is the minimum the
+    # checkout needs.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Load Azure identifiers from constants.env
+        shell: bash
+        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+
+      # Setting AZURE_CLIENT_ID (to the test identity's client id) is what makes
+      # cargo-bench-history take its self-minting OIDC path. AZURE_TEST_CLIENT_ID was
+      # placed in the job env by the previous step, so it is readable here.
+      - name: Select the self-minting OIDC credential
+        shell: bash
+        run: echo "AZURE_CLIENT_ID=$AZURE_TEST_CLIENT_ID" >> "$GITHUB_ENV"
+
+      # The tool self-mints regardless of this login; it exists only so the test
+      # harness's `az`-based container cleanup has a session to use.
+      - name: Sign in to Azure (for harness container cleanup only)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run real-Azure storage tests via the self-minting OIDC credential
+        run: just test-azure
+
+      - name: Delete leaked test containers
+        if: always()
+        shell: pwsh
+        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
+        # which the load step above put into the job env. Each test already deletes its
+        # own container when it finishes, so this backstop only needs to sweep containers
+        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
+        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
+        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
+        # leak is older than the cutoff and gets swept here or on a later run.
+        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
+
+  # Releases Codecov's coverage notifications once every coverage upload for this
+  # commit has landed.
+  #
+  # Coverage data arrives from several jobs: one upload per platform from the
+  # `test-x64` matrix, plus a conditional `azure`-flagged upload from `test-azurite`
+  # when cargo-bench-history is affected. The per-commit upload count is therefore
+  # variable. codecov.yml sets `codecov.notify.manual_trigger: true`, so Codecov posts
+  # NO coverage status or PR comment until this job runs the CLI `send-notifications`
+  # command - which it does only after every coverage-producing job has finished. That
+  # way Codecov computes the status from the complete set of uploads instead of
+  # reporting a misleadingly low figure off a partial set (see codecov.yml for the
+  # full rationale and why this is preferred over a hardcoded `after_n_builds`).
+  #
+  # It depends on `test-x64` and `test-azurite` (the only coverage producers;
+  # `test-azure` / `test-azure-gh` upload none). The `!cancelled()` status function lets
+  # it run even when `test-azurite` is skipped - without a status function a skipped
+  # dependency would skip this job too. It releases notifications only when every expected
+  # upload actually landed: `test-x64` must have succeeded, and `test-azurite` must have
+  # either succeeded (its azure upload landed) or been skipped (cargo-bench-history not
+  # affected, so no azure upload was expected). If `test-x64` failed, or `test-azurite`
+  # ran and failed, an expected upload is missing and the build is already red - so we do
+  # NOT release a status off an incomplete set, which would post the very "coverage
+  # decreased" result this gate exists to prevent. A `skip_all` run uploads no coverage at
+  # all, so `test-x64` is skipped and this job does not run - and so does a run whose scope
+  # holds no instrumented code, where `test-x64` succeeds but produces no report to upload.
+  #
+  # Like the upload jobs, this runs for fork PRs too: the token is empty there and the
+  # action falls back to tokenless notification (this is a public repository), so
+  # external-contributor PRs get the same gated, complete-data coverage status.
+  coverage-notify:
+    needs: [test-x64, test-azurite]
+    if: >-
+      !cancelled()
+      && needs.test-x64.result == 'success'
+      && needs.test-x64.outputs.coverage_report == 'true'
+      && (needs.test-azurite.result == 'success' || needs.test-azurite.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Release Codecov coverage notifications
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          run_command: send-notifications
+          fail_ci_if_error: true
+
+  # Fan-in for merge-blocking Standard validation jobs. GitHub's required-checks field is a string
+  # match on this job's name, so matrix legs that never ran cannot be listed there.
+  # Succeeds when every dependency succeeded, or skipped if that job is allowed to skip;
+  # fails on failure, cancelled, or any other result. Advisory jobs (`coverage-notify`)
+  # and `alert` stay off this list. When adding a merge-blocking job, add it here - never
+  # to the GitHub ruleset. Unconditional gates also go on MUST_SUCCEED_JOBS below.
+  required-checks:
+    # Matrix names never become independent ruleset targets.
+    # Ref: .github/workflows/implementation.md#merge-blocking-result.
+    name: required-checks
+    if: always()
+    needs:
+      - changes
+      - delta
+      - test-scripts
+      - validate-scripts
+      - validate-workflows
+      - validate-versions
+      - semver-checks
+      - format-check
+      - default-features-check
+      - check-external-types
+      - clippy-dev
+      - test-x64
+      - test-docs
+      - docs
+      - clippy-release
+      - build-release
+      - check-frozen
+      - run-examples
+      - test-azurite
+      - test-azure
+      - test-azure-gh
+    runs-on: ubuntu-latest
+    steps:
+      # No setup-environment: this job only classifies `needs` results. Installing the
+      # toolchain after every Standard validation run would add work for no benefit. PowerShell is
+      # preinstalled on ubuntu-latest; the module comes from the checkout.
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Evaluate merge-blocking jobs
+        shell: pwsh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          MUST_SUCCEED_JOBS: changes delta validate-versions semver-checks
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/build/RequiredChecks.psm1 -Force
+          $mustSucceed = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $mustSucceed
+
+  # File a GitHub issue whenever any job above fails on a push to `main`, so a push-to-main
+  # failure is tracked rather than lost. PR runs surface a failure as the red check and need
+  # no issue - and this workflow now leans more heavily on push-to-main as the backstop for
+  # the shallow checks pruned from PR validation (macOS doctests/docs, clippy-release),
+  # so a green PR does not imply those passed.
+  #
+  # A fresh issue is filed per failing run - no dedup, no auto-close - mirroring the release
+  # workflow's per-run alert: each failure is investigated and closed individually, and a
+  # later green run does not touch prior issues. `failure()` fires only on a real failure, so
+  # a fully-green (or skipped-only) run files nothing. `needs` lists every merge-blocking and
+  # advisory job directly, so a failure in any of them reaches this gate. `required-checks` is
+  # deliberately NOT among them: it converts a cancelled dependency into a failure, so
+  # depending on it would turn a cancelled push-to-main run into a filed issue about a failure
+  # that never happened. `alert` also stays off the fan-in's own `needs:` - it files issues,
+  # it is not a merge gate.
+  alert:
+    # Ref: .github/workflows/design.md#failure-alerting.
+    needs:
+      - changes
+      - delta
+      - test-scripts
+      - validate-scripts
+      - validate-workflows
+      - validate-versions
+      - semver-checks
+      - format-check
+      - default-features-check
+      - check-external-types
+      - clippy-dev
+      - test-x64
+      - test-docs
+      - docs
+      - clippy-release
+      - build-release
+      - check-frozen
+      - run-examples
+      - test-azurite
+      - test-azure
+      - test-azure-gh
+      - coverage-notify
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open failure issue for this run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # Ensure the shared label exists (idempotent) so `gh issue create` cannot fail on a
+          # missing label.
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh label create ci-failure --color B60205 --description "CI workflow failure" --force *> $null
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $body = @"
+          The Standard validation workflow failed on a push to ``main``.
+
+          Push-to-``main`` validation is the backstop for the checks pruned from PR validation
+          (macOS doctest/docs runs and ``clippy-release``), so this failure may be
+          in a check a PR never ran.
+
+          Failed run: $env:RUN_URL
+          "@
+          gh issue create --label ci-failure --title "Standard validation workflow failed (run $env:RUN_ID)" --body $body

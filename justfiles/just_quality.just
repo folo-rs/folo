@@ -27,13 +27,11 @@ coverage-measure:
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
     #
-    # We enumerate `--lib --bins --tests --examples` instead of using `--all-targets`
-    # because `--all-targets` would also pull in `--benches`. Bench targets are deliberately
-    # kept out of the coverage pass: they are slow and coverage of benchmark code is not
-    # meaningful. The benches are exercised separately (a "does it still build and run"
-    # smoke check) through the `test-benches` recipe, which runs them via `cargo test
-    # --benches`.
-    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --lib --bins --tests --examples --no-report --all-features --locked
+    # --tests selects library, binary and integration tests without requiring a library target;
+    # --examples additionally tests the examples. Do not use --all-targets: benchmark targets
+    # belong to the separate test-benches smoke pass, not coverage measurement.
+    # Ref: docs/build-and-tooling.md#coverage-target-selection.
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --tests --examples --no-report --all-features --locked
 
 # This tool needs a different way to specify the package.
 coverage-package := if package == "" { "" } else { "-p " + replace(package, " ", " -p ") }
@@ -87,7 +85,7 @@ validate-workflows:
 # Validates that every publishable binary crate declares the `[package.metadata.binstall]` block
 # the release workflow relies on, so a binary crate can never ship without installable prebuilt
 # binaries (see scripts/release/BinstallValidation.psm1 and docs/release-automation.md). Fast and
-# repo-wide (not package-scoped); folded into the same CI job as the other script checks.
+# repo-wide (not package-scoped); runs with unconditional CI release validation.
 [group('quality')]
 [script]
 validate-binstall:
@@ -114,31 +112,9 @@ validate-scripts:
     $PSNativeCommandUseErrorActionPreference = $true
 
     $root = "{{justfile_directory()}}"
-    Import-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Force
-
-    $results = @(Invoke-ScriptAnalyzer `
-            -Path (Join-Path $root 'scripts') `
-            -Recurse `
-            -Settings (Join-Path $root 'PSScriptAnalyzerSettings.psd1') `
-            -CustomRulePath (Join-Path $root 'scripts/analyzer/FoloAnalyzerRules.psm1') `
-            -IncludeDefaultRules)
-
-    if ($results.Count -gt 0) {
-        foreach ($finding in $results) {
-            $scriptName = [string]$finding.ScriptName
-            if ($scriptName.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $relative = $scriptName.Substring($root.Length).TrimStart('\', '/')
-            } else {
-                $relative = $scriptName
-            }
-            Write-Host ("{0}:{1} [{2}] {3}: {4}" -f $relative, $finding.Line, $finding.Severity, $finding.RuleName, $finding.Message)
-        }
-        $issueNoun = if ($results.Count -eq 1) { 'issue' } else { 'issues' }
-        $issuePronoun = if ($results.Count -eq 1) { 'it' } else { 'them' }
-        throw "PSScriptAnalyzer reported $($results.Count) $issueNoun. Fix $issuePronoun (or add a justified SuppressMessageAttribute) so the tree stays clean."
-    }
-
-    Write-Host "PSScriptAnalyzer: no issues in scripts/."
+    Import-Module (Join-Path $root 'scripts\build\ScriptAnalysis.psm1') -Force
+    Invoke-WorkspaceScriptAnalysis -RepositoryRoot $root -AnalyzerVersion $env:PSSCRIPTANALYZER_VERSION `
+        -DiagnosticsDirectory (Join-Path $root 'target\script-analysis')
 
 [group('quality')]
 hack:
@@ -251,9 +227,9 @@ careful FILTER="":
 # Separate file because it is a giant script.
 import 'just_quality_mutants.just'
 
-# Full validation of primary factors, as you would do in a build pipeline before a release.
-# Skips some potentially very lengthy validation, which you can run separately via `validate-extra`.
-# We assume this is executed on Windows, and will also perform the full validation on Linux.
+# Run shallow validation on Windows and Linux, plus release-version readiness.
+# Explicit deep checks use validate-deep-local; optional checks use validate-extra.
+# Ref: .github/workflows/design.md#shallow-and-deep-validation.
 [group('quality')]
 validate: validate-local validate-linux validate-versions
 
@@ -262,10 +238,8 @@ validate: validate-local validate-linux validate-versions
 validate-linux:
     wsl -e bash -l -c "just package='{{ package }}' validate-local"
 
-# Full validation of primary factors, as you would do in a build pipeline before a release.
-# Includes package-scoped mutation testing as its final (and by far slowest) step, since
-# uncaught mutations are a very common cause of CI failures - we catch them before pushing.
-# Performs validation on the current platform, whatever that may be.
+# Run shallow validation on the current platform independently of scheduling authorization.
+# Ref: .github/workflows/design.md#shallow-and-deep-validation.
 [group('quality')]
 validate-local:
     just package="{{ package }}" format-check
@@ -279,16 +253,23 @@ validate-local:
     just package="{{ package }}" test-docs
     just package="{{ package }}" docs
     just package="{{ package }}" docs-default-features
-    just package="{{ package }}" miri
     just package="{{ package }}" machete
     just package="{{ package }}" default-features-check
     just package="{{ package }}" check-external-types
     just package="{{ package }}" check release
     just package="{{ package }}" clippy release
     just package="{{ package }}" build release
-    just package="{{ package }}" mutants
 
-# Validation of extra factors that take potentially too long to run in regular validation.
+# Run explicit deep checks without rerunning shallow checks.
+# Ref: .github/workflows/design.md#shallow-and-deep-validation.
+[group('quality')]
+validate-deep-local:
+    just package="{{ package }}" miri
+    just package="{{ package }}" mutants
+    just package="{{ package }}" miri-harder
+    just package="{{ package }}" careful
+
+# Run optional examples and feature combinations on Windows and Linux.
 [group('quality')]
 validate-extra: validate-extra-local validate-extra-linux
 
@@ -297,11 +278,10 @@ validate-extra: validate-extra-local validate-extra-linux
 validate-extra-linux:
     wsl -e bash -l -c "just package='{{ package }}' validate-extra-local"
 
-# Validation of extra factors that take potentially too long to run in regular validation.
-# Mutation testing is intentionally not here - it runs as part of `validate-local`.
-# Performs validation on the current platform, whatever that may be.
+# Run optional examples and feature combinations on the current platform.
+# Deep checks belong to validate-deep-local.
+# Ref: .github/workflows/design.md#shallow-and-deep-validation.
 [group('quality')]
 validate-extra-local:
     just package="{{ package }}" run-examples
     just package="{{ package }}" hack
-    just package="{{ package }}" careful

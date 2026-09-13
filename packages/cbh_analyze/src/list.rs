@@ -903,6 +903,7 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::testing::{store_run as store, two_commit_history};
     use crate::{
         InvalidBlessingError, InvalidStoredUtf8Error, ListAllUnsupportedError,
         NoOutputSelectedError, UnresolvedRefError,
@@ -1015,11 +1016,6 @@ mod tests {
 
     fn clean_key(commit: &str) -> String {
         format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
-    }
-
-    fn store(storage: &MemoryStorage, key: &str, set: &Run) {
-        let json = set.to_json().unwrap();
-        block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
     fn linux_set() -> DiscriminantSet {
@@ -1195,7 +1191,7 @@ mod tests {
             options,
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap();
@@ -1219,7 +1215,7 @@ mod tests {
             &options,
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap();
@@ -1247,7 +1243,7 @@ mod tests {
             &options,
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap();
@@ -1259,7 +1255,10 @@ mod tests {
     #[test]
     fn list_counts_runs_series_and_commits_per_set() {
         let storage = MemoryStorage::new();
-        for index in 0..3 {
+        // Miri retains distinct chronological commits; native coverage also distinguishes
+        // the run count from the metric count.
+        let run_count = if cfg!(miri) { 2 } else { 3 };
+        for index in 0..run_count {
             let commit = format!("c{index}");
             store(
                 &storage,
@@ -1272,21 +1271,24 @@ mod tests {
         let report = list_json(&storage, &git, &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
 
-        assert_eq!(parsed["totals"]["runs"], 3);
+        assert_eq!(parsed["totals"]["runs"], run_count);
         assert_eq!(parsed["totals"]["series"], 2, "two metrics -> two series");
         assert_eq!(parsed["totals"]["discriminant_sets"], 1);
 
         let sets = parsed["sets"].as_array().unwrap();
         assert_eq!(sets.len(), 1);
-        assert_eq!(sets[0]["runs"], 3);
+        assert_eq!(sets[0]["runs"], run_count);
         assert_eq!(sets[0]["series"], 2);
         assert_eq!(sets[0]["engine"], "callgrind");
 
         let commits = sets[0]["commits"].as_array().unwrap();
-        assert_eq!(commits.len(), 3, "three distinct commits");
+        assert_eq!(commits.len(), usize::try_from(run_count).unwrap());
         // Oldest-first by topology.
         assert_eq!(commits[0]["commit"], "c0");
-        assert_eq!(commits[2]["commit"], "c2");
+        assert_eq!(
+            commits.last().unwrap()["commit"],
+            format!("c{}", run_count - 1)
+        );
         assert_eq!(commits[0]["clean"], 1);
         assert_eq!(commits[0]["dirty"], 0);
     }
@@ -1393,7 +1395,7 @@ mod tests {
             &options(),
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap_err();
@@ -1453,7 +1455,7 @@ mod tests {
             &opts,
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap_err();
@@ -1530,7 +1532,7 @@ mod tests {
             &opts,
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap_err();
@@ -1622,8 +1624,8 @@ mod tests {
     }
 
     fn store_bless(storage: &MemoryStorage, key: &str, record: &BlessingRecord) {
-        let json = record.to_json().unwrap();
-        block_on(storage.put(key, json.as_bytes())).unwrap();
+        let json = serde_json::to_vec(record).unwrap();
+        block_on(storage.put(key, &json)).unwrap();
     }
 
     #[test]
@@ -1729,7 +1731,7 @@ mod tests {
             &opts,
             &auto(),
             Timestamp::from_second(0).unwrap(),
-            &RecordingReporter::new(),
+            &RecordingReporter::quiet(),
             &spawner(),
         ))
         .unwrap_err()
@@ -1792,14 +1794,9 @@ mod tests {
     #[test]
     fn list_blessings_all_rolls_up_the_latest_blessing_per_benchmark() {
         let storage = MemoryStorage::new();
-        for index in 0..4 {
-            let commit = format!("c{index}");
-            store(
-                &storage,
-                &clean_key(&commit),
-                &two_metric_set(index, &commit),
-            );
-        }
+        // Distinct metrics share one benchmark-level blessing; repeated runs add no
+        // further series for the roll-up to deduplicate.
+        store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
         // A blessing at c2 (mid-history) accepting the benchmark family.
         let record = BlessingRecord::new(
             "c2".to_owned(),
@@ -1808,7 +1805,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c2", 100), &record);
-        let git = linear_git();
+        let git = two_commit_history("c2", "c3");
 
         let opts = ListOptions {
             subject: ListSubject::Blessings,
@@ -1833,14 +1830,7 @@ mod tests {
         // roll-up must emit one entry: the dedup `seen.insert` guard keeps a first
         // occurrence rather than dropping it.
         let storage = MemoryStorage::new();
-        for index in 0..4 {
-            let commit = format!("c{index}");
-            store(
-                &storage,
-                &clean_key(&commit),
-                &single_metric_set(index, &commit),
-            );
-        }
+        store(&storage, &clean_key("c3"), &single_metric_set(3, "c3"));
         let record = BlessingRecord::new(
             "c2".to_owned(),
             Timestamp::from_second(100).unwrap(),
@@ -1848,7 +1838,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         store_bless(&storage, &bless_key("c2", 100), &record);
-        let git = linear_git();
+        let git = two_commit_history("c2", "c3");
 
         let opts = ListOptions {
             subject: ListSubject::Blessings,
@@ -1868,14 +1858,7 @@ mod tests {
         // The window roll-up over clean runs with no blessing records skips every
         // series and renders the empty-window message in text form.
         let storage = MemoryStorage::new();
-        for index in 0..3 {
-            let commit = format!("c{index}");
-            store(
-                &storage,
-                &clean_key(&commit),
-                &two_metric_set(index, &commit),
-            );
-        }
+        store(&storage, &clean_key("c3"), &two_metric_set(3, "c3"));
         let git = linear_git();
 
         let opts = ListOptions {
@@ -1895,14 +1878,7 @@ mod tests {
         // Two distinct benchmarks blessed in the same window roll up to two entries,
         // exercising the stable (set, benchmark, commit) ordering.
         let storage = MemoryStorage::new();
-        for index in 0..3 {
-            let commit = format!("c{index}");
-            store(
-                &storage,
-                &clean_key(&commit),
-                &two_benchmark_set(index, &commit),
-            );
-        }
+        store(&storage, &clean_key("c3"), &two_benchmark_set(3, "c3"));
         let record = BlessingRecord::new(
             "c1".to_owned(),
             Timestamp::from_second(100).unwrap(),

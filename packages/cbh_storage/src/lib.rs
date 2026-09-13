@@ -37,6 +37,8 @@ mod local;
 mod memory;
 mod pending;
 mod port;
+#[cfg(any(test, feature = "private-test-util"))]
+mod test_container;
 
 pub use azure::AzureBlobStorage;
 pub use caching::CachingStorage;
@@ -63,3 +65,5 @@ pub use local::LocalStorage;
 pub use memory::MemoryStorage;
 pub(crate) use pending::PendingInvalidation;
 pub use port::Storage;
+#[cfg(any(test, feature = "private-test-util"))]
+pub use test_container::unique_test_container;

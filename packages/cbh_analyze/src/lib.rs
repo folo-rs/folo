@@ -48,6 +48,9 @@ mod report;
 mod selection;
 mod window;
 
+#[cfg(test)]
+mod testing;
+
 pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub use cbh_render::AnalysisOutcome;

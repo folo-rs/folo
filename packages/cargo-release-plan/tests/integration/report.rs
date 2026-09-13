@@ -1,36 +1,29 @@
 //! Report and check output: the JSON document and the failure renderings.
 
-use std::fs;
-
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{check, report_json, seeded_package};
 
-/// A version-group member must pin its siblings exactly.
-///
-/// The group exists because the members are one package split for Cargo's sake, so a compatible
-/// requirement would let a consumer resolve two members never released together.
+/// A compatible edge remains valid inside a transitively derived group.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn check_rejects_a_compatible_requirement_between_group_members() {
-    let fixture = group_fixture("1.1.0");
-    fixture.commit("seed");
-    let base = fixture.sha("HEAD");
-
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(!passed, "{message}");
-    assert!(message.contains("pin each other exactly"), "{message}");
-    assert!(message.contains("=1.1.0"), "{message}");
-}
-
-/// The same workspace passes once the sibling requirement is exact.
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn check_accepts_an_exact_requirement_between_group_members() {
-    let fixture = group_fixture("=1.1.0");
+fn check_accepts_a_compatible_requirement_within_a_transitive_group() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "gamma", "1.1.0", "");
+    write_package(
+        &fixture,
+        "beta",
+        "1.1.0",
+        "\n[dependencies]\ngamma = { path = \"../gamma\", version = \"=1.1.0\" }\n",
+    );
+    write_package(
+        &fixture,
+        "alpha",
+        "1.1.0",
+        "\n[dependencies]\nbeta = { path = \"../beta\", version = \"=1.1.0\" }\ngamma = { path = \"../gamma\", version = \"1.1.0\" }\n",
+    );
     fixture.commit("seed");
     let base = fixture.sha("HEAD");
 
@@ -39,14 +32,31 @@ fn check_accepts_an_exact_requirement_between_group_members() {
     assert!(passed, "{message}");
 }
 
+/// A stale exact pin still forms a group and is reported as version drift.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn check_reports_a_stale_exact_pin_without_losing_its_group() {
+    let fixture = group_fixture("=1.0.0");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(
+        message.contains("does not name the version it declares"),
+        "{message}"
+    );
+    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
+    assert_eq!(
+        report.pointer("/groups/lib/members"),
+        Some(&json!(["lib", "lib_impl"]))
+    );
+}
+
 /// A workspace whose `lib` requires its group sibling `lib_impl` with the given requirement.
 fn group_fixture(requirement: &str) -> Fixture {
-    let fixture = Fixture::new(
-        r#"
-[workspace.metadata.release-plan.groups]
-lib = ["lib", "lib_impl"]
-"#,
-    );
+    let fixture = Fixture::new("");
     write_package(&fixture, "lib_impl", "1.1.0", "");
     write_package(
         &fixture,
@@ -93,29 +103,6 @@ helper = { path = "../helper", version = "1.0.0" }
     assert!(message.contains("1.1.0"), "{message}");
 }
 
-/// The same workspace passes once the requirement names the declared version.
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn check_accepts_a_requirement_naming_the_declared_version() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "helper", "1.1.0", "");
-    write_package(
-        &fixture,
-        "demo",
-        "0.1.0",
-        r#"
-[dependencies]
-helper = { path = "../helper", version = "1.1.0" }
-"#,
-    );
-    fixture.commit("seed");
-    let base = fixture.sha("HEAD");
-
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(passed, "{message}");
-}
-
 /// A package exposing a dependency that breaks must break as well.
 ///
 /// `demo` re-exports `helper` types, declared through its allow-list, so `helper` moving to an
@@ -135,24 +122,6 @@ fn check_rejects_a_public_dependency_breaking_alone() {
     assert!(
         message.contains("must release a breaking change of its own"),
         "{message}"
-    );
-}
-
-/// The same move passes once the dependent breaks too.
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn check_accepts_a_public_dependency_breaking_together_with_its_dependent() {
-    let fixture = public_dependency_fixture("1.0.0", "0.1.0");
-    let base = fixture.sha("HEAD");
-
-    // 0.1.0 -> 0.2.0 is incompatible on a 0.x line, so `demo` breaks as well.
-    write_public_dependency_packages(&fixture, "2.0.0", "0.2.0");
-
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(
-        passed,
-        "a dependent breaking alongside its public dependency is accepted: {message}"
     );
 }
 
@@ -213,23 +182,73 @@ fn github_format_emits_workflow_annotations() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn report_records_group_verdicts() {
-    let fixture = Fixture::new(
-        r#"
-[workspace.metadata.release-plan.groups]
-g = ["alpha", "beta"]
-"#,
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "alpha",
+        "0.1.0",
+        "\n[dependencies]\nbeta = { path = \"../beta\", version = \"=0.1.0\" }\n",
     );
-    write_package(&fixture, "alpha", "0.1.0", "");
     write_package(&fixture, "beta", "0.1.0", "");
     fixture.commit("seed");
     let base = fixture.sha("HEAD");
 
     let report = report_json(&fixture, &base);
 
-    assert!(report.contains("\"consistent\": true"), "{report}");
-    assert!(report.contains("\"alpha\""), "{report}");
-    assert!(report.contains("\"beta\""), "{report}");
-    assert!(report.contains("\"version\": \"0.1.0\""), "{report}");
+    let report: Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report.get("schema_version"), Some(&json!(4)));
+    assert_eq!(
+        report.pointer("/groups/alpha"),
+        Some(&json!({
+            "members": ["alpha", "beta"],
+            "consistent": true,
+            "version": "0.1.0"
+        }))
+    );
+    assert_eq!(report.get("non_publishable_packages"), Some(&json!([])));
+}
+
+/// A helper-only group is represented entirely by version-target records.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn report_records_an_all_non_publishable_group() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "z-helper", "0.1.0", "\npublish = false\n");
+    write_package(
+        &fixture,
+        "a-helper",
+        "0.1.0",
+        "\npublish = false\n\n[dependencies]\nz-helper = { path = \"../z-helper\", version = \"=0.1.0\" }\n",
+    );
+    fixture.commit("helper group");
+    let base = fixture.sha("HEAD");
+
+    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
+
+    assert_eq!(report.get("packages"), Some(&json!([])));
+    assert_eq!(
+        report.get("non_publishable_packages"),
+        Some(&json!([
+            {
+                "name": "a-helper",
+                "declared_version": "0.1.0",
+                "group": "a-helper"
+            },
+            {
+                "name": "z-helper",
+                "declared_version": "0.1.0",
+                "group": "a-helper"
+            }
+        ]))
+    );
+    assert_eq!(
+        report.pointer("/groups/a-helper"),
+        Some(&json!({
+            "members": ["a-helper", "z-helper"],
+            "consistent": true,
+            "version": "0.1.0"
+        }))
+    );
 }
 
 /// Explicit wildcard requirements survive packaging and remain report relationships.
@@ -285,9 +304,9 @@ fn report_replaces_the_diffs_of_an_earlier_run() {
     fixture.commit("seed");
     let base = fixture.sha("HEAD");
     let out_dir = fixture.path().join("out");
-    report_json(&fixture, &base);
+    fixture.write("out/report.json", "previous completion marker");
+    fixture.write("out/diffs/stale.diff", "leftover");
     let stale = out_dir.join("diffs").join("stale.diff");
-    fs::write(&stale, "leftover").unwrap();
 
     report_json(&fixture, &base);
 
@@ -307,9 +326,8 @@ fn a_failed_rerun_does_not_leave_the_previous_report_marker() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     let out_dir = fixture.path().join("out");
-    report_json(&fixture, &base);
-    fs::remove_dir_all(out_dir.join("diffs")).unwrap();
-    fs::write(out_dir.join("diffs"), "blocks directory creation").unwrap();
+    fixture.write("out/report.json", "previous completion marker");
+    fixture.write("out/diffs", "blocks directory creation");
 
     let result = run(&RunInput::Report {
         out_dir: out_dir.clone(),

@@ -35,7 +35,12 @@ fn main() -> ExitCode {
 
     match run(&cli.into_input()) {
         Ok(outcome) => match outcome {
-            RunOutcome::Report { message }
+            RunOutcome::ArtifactQuery { message }
+            | RunOutcome::Propose { message }
+            | RunOutcome::Prepare { message }
+            | RunOutcome::Preview { message }
+            | RunOutcome::VerifyPreview { message }
+            | RunOutcome::Report { message }
             | RunOutcome::Expand { message }
             | RunOutcome::Apply { message } => {
                 if !message.is_empty() {

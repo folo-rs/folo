@@ -161,21 +161,20 @@ test FILTER="":
     }
     cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
-# Run the PowerShell test suites for the standalone scripts under scripts/ (currently the
-# release-automation module, scripts/release/ReleaseAutomation.psm1). Uses Pester 5, installed by
-# `just install-tools`. The suites run real `cargo metadata` and file I/O against fixtures and
-# mock the tools that would touch crates.io / GitHub for real (`release-plz`, `gh`). Discovers
-# every *.Tests.ps1 under scripts/. See scripts/release/ReleaseAutomation.Tests.ps1.
+# Runs all script suites locally, or the union of space-separated script domains selected by CI.
+# Invalid explicit selections fail instead of producing a successful empty Pester run.
+# Ref: .github/workflows/implementation.md#non-cargo-change-planning.
 [group('testing')]
 [script]
-test-scripts:
+test-scripts DOMAINS='':
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module Pester -MinimumVersion 5.0 -Force
+    Import-Module ./scripts/build/ValidationPlan.psm1 -Force
     $config = New-PesterConfiguration
-    $config.Run.Path = 'scripts'
+    $config.Run.Path = @(Get-ScriptTestPath -Domains "{{DOMAINS}}")
     $config.Run.Exit = $true
     $config.Output.Verbosity = 'Detailed'
     Invoke-Pester -Configuration $config
@@ -298,8 +297,9 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_
 # and stops it again when the tests finish - even on failure. BENCH_HISTORY_REQUIRE_AZURITE
 # is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
 # the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
-# naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
-# tests); the `*_in_real_azure` tests it also matches self-skip without ENABLE_AZURE.
+# naming convention in both the storage partition and the CLI integration suite;
+# the `*_in_real_azure` tests it also matches self-skip without ENABLE_AZURE.
+# Ref: packages/cbh_storage/docs/implementation.md for shared container isolation.
 [group('testing')]
 [script]
 test-azurite:
@@ -378,7 +378,7 @@ test-azurite:
         $env:AZURITE_BLOB_ENDPOINT = "https://${blobHost}:${blobPort}/devstoreaccount1"
         $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
-        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
+        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history -p cbh_storage --locked --no-fail-fast azure azurite
     } finally {
         if ($startedByUs) {
             Write-Host "Stopping the Azurite emulator we started."
@@ -525,12 +525,15 @@ run-examples:
     Write-Host "Running $($targets.Count) $exampleWord (timeout ${timeoutSeconds}s each)"
     Write-Host ""
 
+    # Children inherit Cargo's resolved output directory instead of performing dependency discovery
+    # inside each example's runtime budget. Ref: docs/build-and-tooling.md#example-execution.
+    Initialize-ExampleEnvironment
+
     # Pre-compile each package's examples up front so first-time compilation does not eat into the
     # per-example execution timeout (on slow CI runners a cold compile can exceed it). A package
     # whose examples fail to build is recorded and its examples skipped, so one broken package does
     # not mask the others' results. Each affected example is recorded as its own failure so the
     # summary's total, successful and failed counts stay consistent (total = successful + failed).
-    $env:IS_TESTING = "1"
     $buildFailed = @{}
     foreach ($pkg in ($targets | ForEach-Object { $_.Package } | Sort-Object -Unique)) {
         Write-Host "Building examples for package '$pkg'..." -ForegroundColor DarkGray
@@ -549,7 +552,6 @@ run-examples:
     # is the process exit code, which Invoke-ExampleRun peels off the captured output.
     $cargoRunner = {
         param($pkg, $exampleName)
-        $env:IS_TESTING = "1"
         & cargo run --package $pkg --example $exampleName --all-features --locked 2>&1
         return $LASTEXITCODE
     }
@@ -575,6 +577,10 @@ run-examples:
             }
             "Timeout" {
                 Write-Host "  TIMEOUT: '$($target.Example)' in package '$($target.Package)' after ${timeoutSeconds}s" -ForegroundColor Red
+                if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
+                    Write-Host "Partial output:" -ForegroundColor Yellow
+                    Write-Host $result.Output -ForegroundColor DarkYellow
+                }
                 $failures += "$($target.Package)::$($target.Example) (timeout)"
             }
             "Exception" {

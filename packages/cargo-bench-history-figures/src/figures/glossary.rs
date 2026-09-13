@@ -95,15 +95,23 @@ fn chapter_title(chapter: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
 
     #[test]
     fn every_term_appears_in_the_table() {
         let markdown = table();
+        let phrases: BTreeSet<&str> = markdown
+            .lines()
+            .skip(2)
+            .filter_map(|line| line.split('|').nth(1))
+            .map(str::trim)
+            .collect();
 
         for term in TERMS {
             assert!(
-                markdown.contains(term.phrase),
+                phrases.contains(term.phrase),
                 "'{}' is missing from the glossary table",
                 term.phrase
             );
@@ -144,17 +152,40 @@ mod tests {
     #[test]
     fn a_chapter_table_carries_the_glossary_definition() {
         let assets = chapter_terms();
+        // Index each row once instead of repeatedly searching complete chapter tables.
+        let definitions: BTreeMap<_, _> = assets
+            .iter()
+            .map(|asset| {
+                let rows: BTreeMap<_, _> = asset
+                    .content
+                    .lines()
+                    .skip(2)
+                    .map(|line| {
+                        let mut cells = line.split('|').skip(1).map(str::trim);
+                        let phrase = cells
+                            .next()
+                            .unwrap()
+                            .strip_prefix("**")
+                            .unwrap()
+                            .strip_suffix("**")
+                            .unwrap();
+                        (phrase, cells.next().unwrap())
+                    })
+                    .collect();
+                (asset.path.as_str(), rows)
+            })
+            .collect();
 
         for term in TERMS {
             let stem = term.chapter.strip_suffix(".md").unwrap_or(term.chapter);
             let expected = format!("terms-{stem}.md");
-            let asset = assets
-                .iter()
-                .find(|asset| asset.path == expected)
+            let chapter = definitions
+                .get(expected.as_str())
                 .unwrap_or_else(|| panic!("no terms table for {}", term.chapter));
 
-            assert!(
-                asset.content.contains(term.definition),
+            assert_eq!(
+                chapter.get(term.phrase).copied(),
+                Some(term.definition),
                 "'{}' is defined differently in {}",
                 term.phrase,
                 expected
@@ -164,6 +195,11 @@ mod tests {
 
     #[test]
     fn a_chapter_table_holds_only_its_own_terms() {
+        let chapters: BTreeMap<&str, &str> = TERMS
+            .iter()
+            .map(|term| (term.phrase, term.chapter))
+            .collect();
+
         for asset in chapter_terms() {
             let stem = asset
                 .path
@@ -172,13 +208,20 @@ mod tests {
                 .expect("chapter tables are named after their chapter");
             let chapter = format!("{stem}.md");
 
-            for term in TERMS.iter().filter(|term| term.chapter != chapter) {
-                assert!(
-                    !asset.content.contains(&format!("**{}**", term.phrase)),
-                    "{} lists '{}', which belongs to {}",
+            for line in asset.content.lines().skip(2) {
+                let phrase = line
+                    .split('|')
+                    .nth(1)
+                    .map(str::trim)
+                    .and_then(|phrase| phrase.strip_prefix("**"))
+                    .and_then(|phrase| phrase.strip_suffix("**"))
+                    .expect("a chapter table row names a bold glossary term");
+                assert_eq!(
+                    chapters.get(phrase).copied(),
+                    Some(chapter.as_str()),
+                    "{} lists a term belonging to another chapter: {}",
                     asset.path,
-                    term.phrase,
-                    term.chapter
+                    phrase
                 );
             }
         }

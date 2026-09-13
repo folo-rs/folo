@@ -279,11 +279,15 @@ mod tests {
         reason = "the faker value core stores exact metric values, so comparisons are exact"
     )]
 
+    use std::future::{Future, ready};
     use std::io;
     use std::num::NonZero;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
+    use cargo_bench_history_faker::callgrind_summary;
+    use cbh_diag::RecordingReporter;
+    use cbh_engines::testing::CALLGRIND_MINIMAL;
     use cbh_engines::{Harvest, RawOperationFile, RawSummary};
     use cbh_git::{FakeGitHistory, parse_git_info};
     use cbh_probe::{HardwareProfile, RustcInfo, resolve_machine_key};
@@ -328,16 +332,16 @@ mod tests {
     }
 
     impl EnvironmentProbe for FakeProbe {
-        async fn git(&self) -> io::Result<GitInfo> {
-            Ok(self.git.clone())
+        fn git(&self) -> impl Future<Output = io::Result<GitInfo>> {
+            ready(Ok(self.git.clone()))
         }
 
-        async fn toolchain(&self) -> io::Result<RustcInfo> {
-            Ok(self.rustc.clone())
+        fn toolchain(&self) -> impl Future<Output = io::Result<RustcInfo>> {
+            ready(Ok(self.rustc.clone()))
         }
 
-        async fn hardware(&self) -> HardwareProfile {
-            self.hardware.clone()
+        fn hardware(&self) -> impl Future<Output = HardwareProfile> {
+            ready(self.hardware.clone())
         }
     }
 
@@ -357,36 +361,28 @@ mod tests {
     }
 
     impl BenchOutputSource for FakeOutput {
-        async fn collect(
+        fn collect(
             &self,
             engine: Engine,
             _since: Option<SystemTime>,
             _reporter: &dyn Reporter,
-        ) -> io::Result<Harvest> {
-            Ok(match engine {
+        ) -> impl Future<Output = io::Result<Harvest>> {
+            ready(Ok(match engine {
                 Engine::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
                 Engine::Criterion => Harvest::Criterion(Vec::new()),
                 Engine::AllocTracker => Harvest::AllocTracker(Vec::new()),
                 Engine::AllTheTime => Harvest::AllTheTime(self.time.clone()),
-            })
+            }))
         }
     }
 
-    /// A single-case Callgrind harvest built from the published faker value core, so
-    /// the test exercises the real faker-to-parser path an external repository uses.
+    /// A minimal harvest for import's identity and storage decisions. The
+    /// producer-to-import round trip supplies real faker output explicitly.
     fn callgrind_output() -> FakeOutput {
         FakeOutput {
             callgrind: vec![RawSummary {
                 path: PathBuf::from("a/summary.json"),
-                content: cargo_bench_history_faker::callgrind_summary(
-                    "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now",
-                    "timestamp_capture_std_now",
-                    None,
-                    Some("/mnt/c/Source/folo/packages/fast_time"),
-                    36,
-                    4,
-                    2,
-                ),
+                content: CALLGRIND_MINIMAL.to_owned(),
             }],
             ..FakeOutput::default()
         }
@@ -420,7 +416,7 @@ mod tests {
             .unwrap();
         let clock = Clock::new_frozen_at(now);
         let env = |_name: &str| None::<String>;
-        let reporter = StderrReporter::new(false);
+        let reporter = RecordingReporter::quiet();
         let store = FinalizeDeps {
             storage: Some(storage),
             project_id: "folo",
@@ -458,9 +454,18 @@ mod tests {
     #[test]
     fn import_stores_the_harvested_run_under_the_probed_identity() {
         let storage = MemoryStorage::new();
+        // Preserve the producer-to-parser-to-storage contract without making
+        // every orchestration scenario construct the producer's full document.
+        let output = FakeOutput {
+            callgrind: vec![RawSummary {
+                path: PathBuf::from("a/summary.json"),
+                content: callgrind_summary("m", "f", None, Some("/pkg"), 36, 4, 2),
+            }],
+            ..FakeOutput::default()
+        };
         let outcome = run_import(
             &ImportOptions::default(),
-            &callgrind_output(),
+            &output,
             &FakeProbe::new(),
             &FakeGitHistory::new(),
             &storage,
@@ -651,35 +656,39 @@ mod tests {
     }
 
     #[test]
-    fn either_dedup_flag_alone_still_imports() {
+    fn overwrite_alone_still_imports() {
+        assert_dedup_flag_imports(&ImportOptions {
+            overwrite: true,
+            ..ImportOptions::default()
+        });
+    }
+
+    #[test]
+    fn skip_existing_alone_still_imports() {
+        assert_dedup_flag_imports(&ImportOptions {
+            skip_existing: true,
+            ..ImportOptions::default()
+        });
+    }
+
+    fn assert_dedup_flag_imports(options: &ImportOptions) {
         // Only one of the mutually exclusive flags set is a valid import: the guard
         // must inspect both operands, so overwrite-only and skip-existing-only each
         // store the single harvested run against an empty backend rather than being
         // mistaken for the both-set combination.
-        for options in [
-            ImportOptions {
-                overwrite: true,
-                ..ImportOptions::default()
-            },
-            ImportOptions {
-                skip_existing: true,
-                ..ImportOptions::default()
-            },
-        ] {
-            let storage = MemoryStorage::new();
-            let outcome = run_import(
-                &options,
-                &callgrind_output(),
-                &FakeProbe::new(),
-                &FakeGitHistory::new(),
-                &storage,
-            )
-            .unwrap();
-            let RunOutcome::Completed { message } = outcome else {
-                panic!("expected completion, got {outcome:?}");
-            };
-            assert!(message.contains("Stored 1"), "{message}");
-        }
+        let storage = MemoryStorage::new();
+        let outcome = run_import(
+            options,
+            &callgrind_output(),
+            &FakeProbe::new(),
+            &FakeGitHistory::new(),
+            &storage,
+        )
+        .unwrap();
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion, got {outcome:?}");
+        };
+        assert!(message.contains("Stored 1"), "{message}");
     }
 
     #[test]

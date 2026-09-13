@@ -6,11 +6,10 @@ $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
 # Pester suite for ReleaseAutomation.psm1. Where it is safe on fixtures, the tests drive the
-# real external tool: Get-PublishableBinaryCrate runs an actual `cargo metadata` against a
-# fixture workspace, and New-ReleasePlzConfig / Set-GitHubOutput perform real file I/O (so
-# encoding and line endings are asserted on the bytes on disk). The tools that would touch
-# crates.io / GitHub for real -- `release-plz` and `gh` -- are isolated behind seams the tests
-# mock in the module's scope.
+# real external tools: workspace discovery runs actual `cargo metadata` and Git queries against
+# a fixture workspace, and Set-GitHubOutput performs real file I/O. The tools that would touch
+# crates.io / GitHub for real -- `release-plz` and `gh` -- are isolated behind functions the
+# tests mock in the module's scope.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
@@ -18,7 +17,221 @@ BeforeAll {
     $script:FixtureDir = Join-Path $PSScriptRoot 'fixtures'
     $script:MetadataManifest = Join-Path $script:FixtureDir 'metadata-workspace/Cargo.toml'
     $script:MultiBinaryManifest = Join-Path $script:FixtureDir 'multi-binary-workspace/Cargo.toml'
-    $script:SampleToml = Join-Path $script:FixtureDir 'release-plz.sample.toml'
+}
+
+Describe 'Get-TrackedWorkspaceMember (real cargo metadata and Git on a fixture workspace)' {
+    BeforeAll {
+        $script:WorkspaceMembers = Get-TrackedWorkspaceMember `
+            -ManifestPath $script:MetadataManifest
+    }
+
+    It 'includes tracked publishable and non-publishable workspace packages' {
+        $script:WorkspaceMembers.Name | Should -Contain 'pub-lib'
+        $script:WorkspaceMembers.Name | Should -Contain 'nopub-bin'
+    }
+
+    It 'reports publication eligibility without filtering helpers out' {
+        ($script:WorkspaceMembers | Where-Object Name -EQ 'pub-lib').Publishable |
+            Should -BeTrue
+        ($script:WorkspaceMembers | Where-Object Name -EQ 'nopub-bin').Publishable |
+            Should -BeFalse
+    }
+
+    It 'returns members in package-name order' {
+        @($script:WorkspaceMembers.Name) |
+            Should -Be @($script:WorkspaceMembers.Name | Sort-Object)
+    }
+
+    It 'propagates a fatal Git tracking failure with its diagnostic' {
+        $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $workspaceRoot = Split-Path -Parent $script:MetadataManifest
+        $workspacePrefix =
+            [IO.Path]::GetRelativePath($repositoryRoot, $workspaceRoot).Replace('\', '/') + '/'
+        Mock git -ModuleName ReleaseAutomation {
+            if ($args -contains '--show-toplevel') {
+                $global:LASTEXITCODE = 0
+                $repositoryRoot
+            } elseif ($args -contains '--show-prefix') {
+                $global:LASTEXITCODE = 0
+                $workspacePrefix
+            } else {
+                $global:LASTEXITCODE = 128
+                'fatal: fixture repository is unavailable'
+            }
+        }
+
+        {
+            Get-TrackedWorkspaceMember -ManifestPath $script:MetadataManifest
+        } | Should -Throw '*exit code 128*fatal: fixture repository is unavailable*'
+    }
+
+    It 'treats the documented Git no-match exit as untracked' {
+        $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $workspaceRoot = Split-Path -Parent $script:MetadataManifest
+        $workspacePrefix =
+            [IO.Path]::GetRelativePath($repositoryRoot, $workspaceRoot).Replace('\', '/') + '/'
+        Mock git -ModuleName ReleaseAutomation {
+            if ($args -contains '--show-toplevel') {
+                $global:LASTEXITCODE = 0
+                $repositoryRoot
+            } elseif ($args -contains '--show-prefix') {
+                $global:LASTEXITCODE = 0
+                $workspacePrefix
+            } else {
+                $global:LASTEXITCODE = 1
+                'error: pathspec did not match any file(s) known to git'
+            }
+        }
+
+        @(
+            Get-TrackedWorkspaceMember -ManifestPath $script:MetadataManifest
+        ).Count | Should -Be 0
+    }
+
+    It 'propagates a Git repository-root resolution failure with its diagnostic' {
+        Mock git -ModuleName ReleaseAutomation {
+            $global:LASTEXITCODE = 128
+            'fatal: not a git repository'
+        }
+
+        {
+            Get-TrackedWorkspaceMember -ManifestPath $script:MetadataManifest
+        } | Should -Throw '*git rev-parse*exit code 128*fatal: not a git repository*'
+    }
+
+    It 'propagates a Git workspace-prefix resolution failure with its diagnostic' {
+        $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        Mock git -ModuleName ReleaseAutomation {
+            if ($args -contains '--show-toplevel') {
+                $global:LASTEXITCODE = 0
+                $repositoryRoot
+            } else {
+                $global:LASTEXITCODE = 128
+                'fatal: workspace prefix is unavailable'
+            }
+        }
+
+        {
+            Get-TrackedWorkspaceMember -ManifestPath $script:MetadataManifest
+        } | Should -Throw '*workspace prefix*exit code 128*fatal: workspace prefix is unavailable*'
+    }
+
+    It 'rebases Cargo member paths through an independently spelled Git workspace prefix' {
+        $pathRoot = [IO.Path]::GetPathRoot((Get-Location).Path)
+        $cargoRoot = Join-Path $pathRoot 'cargo-root-spelling'
+        $workspaceRoot = Join-Path (Join-Path $cargoRoot 'Nested') 'Workspace'
+        $memberManifest = Join-Path (Join-Path $workspaceRoot 'Member') 'Cargo.toml'
+        $siblingManifest =
+            Join-Path (Join-Path $cargoRoot 'Sibling') 'Cargo.toml'
+        $gitRoot = Join-Path $pathRoot 'independent-git-root-spelling'
+        $metadataJson = [ordered]@{
+            workspace_root    = $workspaceRoot
+            workspace_members = @('member-id', 'sibling-id')
+            packages          = @(
+                [ordered]@{
+                    id            = 'member-id'
+                    name          = 'member'
+                    version       = '1.0.0'
+                    manifest_path = $memberManifest
+                    publish       = $null
+                    targets       = @()
+                    metadata      = @{}
+                }
+                [ordered]@{
+                    id            = 'sibling-id'
+                    name          = 'sibling-helper'
+                    version       = '1.0.0'
+                    manifest_path = $siblingManifest
+                    publish       = @()
+                    targets       = @()
+                    metadata      = @{}
+                }
+            )
+        } | ConvertTo-Json -Depth 5
+        $queriedPath = [System.Collections.Generic.List[string]]::new()
+        Mock cargo -ModuleName ReleaseAutomation {
+            $metadataJson
+        }
+        Mock Test-PathCaseInsensitive -ModuleName ReleaseAutomation {
+            $true
+        }
+        Mock git -ModuleName ReleaseAutomation {
+            if ($args -contains '--show-toplevel') {
+                $global:LASTEXITCODE = 0
+                $gitRoot
+            } elseif ($args -contains '--show-prefix') {
+                $global:LASTEXITCODE = 0
+                'Repository/Nested/Workspace/'
+            } else {
+                $queriedPath.Add([string] $args[-1])
+                $global:LASTEXITCODE = 0
+                [string] $args[-1]
+            }
+        }
+
+        $members = @(Get-TrackedWorkspaceMember -ManifestPath 'ignored-by-mocked-cargo')
+
+        $members.Name | Should -Be @('member', 'sibling-helper')
+        $queriedPath | Should -Be @(
+            ':(icase,literal)Repository/Nested/Workspace/Member/Cargo.toml'
+            ':(icase,literal)Repository/Sibling/Cargo.toml'
+        )
+    }
+
+    It 'tracks a literal-named sibling member elsewhere in the same repository' {
+        $repository = Join-Path $TestDrive 'nested-workspace-repository'
+        $workspace = Join-Path $repository 'workspace'
+        $member = Join-Path $workspace 'member'
+        # Brackets have pathspec meaning unless Git is explicitly placed in literal mode.
+        $sibling = Join-Path $repository 'helper[alignment]'
+        New-Item -ItemType Directory -Path @(
+            (Join-Path $member 'src'),
+            (Join-Path $sibling 'src')
+        ) -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $workspace 'Cargo.toml') -Value @'
+[workspace]
+members = ["member", "../helper[alignment]"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+'@
+        Set-Content -LiteralPath (Join-Path $member 'Cargo.toml') -Value @'
+[package]
+name = "publishable-member"
+version.workspace = true
+edition = "2021"
+'@
+        Set-Content -LiteralPath (Join-Path $member 'src/lib.rs') -Value ''
+        Set-Content -LiteralPath (Join-Path $sibling 'Cargo.toml') -Value @'
+[package]
+name = "alignment-helper"
+version.workspace = true
+edition = "2021"
+publish = false
+workspace = "../workspace"
+'@
+        Set-Content -LiteralPath (Join-Path $sibling 'src/lib.rs') -Value ''
+# Repository fixtures do not depend on user identity, signing, or background maintenance
+# configuration from the machine running the tests.
+$gitConfig = @(
+    '-c', 'user.email=release-automation-tests@example.invalid',
+    '-c', 'user.name=Release Automation Tests',
+    '-c', 'commit.gpgsign=false',
+    '-c', 'gc.auto=0',
+    '-C', $repository
+)
+& git @gitConfig init --quiet
+& git @gitConfig add -- .
+
+$members = Get-TrackedWorkspaceMember `
+            -ManifestPath (Join-Path $workspace 'Cargo.toml')
+
+        $members.Name | Should -Contain 'publishable-member'
+        $members.Name | Should -Contain 'alignment-helper'
+        ($members | Where-Object Name -EQ 'alignment-helper').Tracked | Should -BeTrue
+        ($members | Where-Object Name -EQ 'alignment-helper').Publishable | Should -BeFalse
+    }
 }
 
 Describe 'Get-PublishableBinaryCrate (real cargo metadata on a fixture workspace)' {
@@ -65,6 +278,17 @@ Describe 'Get-PublishableBinaryCrate (real cargo metadata on a fixture workspace
     It 'rejects a publishable package with several binary targets' {
         { Get-PublishableBinaryCrate -ManifestPath $script:MultiBinaryManifest } | Should -Throw
     }
+
+    It 'does not add Git tracking to binary publication discovery' {
+        Mock git -ModuleName ReleaseAutomation {
+            throw 'binary publication discovery must not query Git tracking'
+        }
+
+        $crate = Get-PublishableBinaryCrate -ManifestPath $script:MetadataManifest
+
+        $crate.Name | Should -Contain 'pub-bin'
+        Should -Invoke git -ModuleName ReleaseAutomation -Times 0 -Exactly
+    }
 }
 
 Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
@@ -101,102 +325,6 @@ Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
     }
 }
 
-Describe 'Add-GitReleaseEnableFlag (pure line-based injection)' {
-    BeforeAll {
-        $script:SourceLines = [System.IO.File]::ReadAllText($script:SampleToml) -split "`r?`n"
-    }
-
-    It 'inserts the flag immediately after the crate name line, inside its block' {
-        $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName 'demo-tool'
-        $nameIndex = [array]::IndexOf($result, 'name = "demo-tool"')
-        $result[$nameIndex + 1] | Should -Be 'git_release_enable = true'
-    }
-
-    It 'preserves other keys already in the block' {
-        $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName 'demo-tool'
-        $result | Should -Contain 'changelog_update = false'
-    }
-
-    It 'matches the crate name exactly so a name-prefix sibling is untouched' {
-        $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName 'demo-tool'
-        $coreIndex = [array]::IndexOf($result, 'name = "demo-tool-core"')
-        $result[$coreIndex + 1] | Should -Be 'changelog_update = false'
-    }
-
-    It 'appends a new [[package]] block for a crate with no existing entry' {
-        $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName 'pub-bin'
-        $nameIndex = [array]::IndexOf($result, 'name = "pub-bin"')
-        $nameIndex | Should -BeGreaterThan -1
-        $result[$nameIndex - 1] | Should -Be '[[package]]'
-        $result[$nameIndex + 1] | Should -Be 'git_release_enable = true'
-    }
-
-    It 'is idempotent: a second pass does not duplicate the flag' {
-        $once = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName 'demo-tool'
-        $twice = Add-GitReleaseEnableFlag -Line $once -CrateName 'demo-tool'
-        @($twice | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 1
-    }
-
-    It 'forces an existing git_release_enable = false to true' {
-        $lines = @(
-            '[[package]]'
-            'name = "demo-tool"'
-            'git_release_enable = false'
-            'changelog_update = false'
-        )
-        $result = Add-GitReleaseEnableFlag -Line $lines -CrateName 'demo-tool'
-        $result | Should -Contain 'git_release_enable = true'
-        $result | Should -Not -Contain 'git_release_enable = false'
-        # Replaced in place, not duplicated, and the sibling key is preserved.
-        @($result | Where-Object { $_ -match '^git_release_enable' }).Count | Should -Be 1
-        $result | Should -Contain 'changelog_update = false'
-    }
-
-    It 'enables every requested crate in one pass' {
-        $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName @('demo-tool', 'pub-bin')
-        @($result | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 2
-    }
-}
-
-Describe 'New-ReleasePlzConfig (real file write)' {
-    BeforeEach {
-        $script:OutPath = Join-Path $TestDrive ("rp-" + [guid]::NewGuid() + ".toml")
-    }
-
-    AfterEach {
-        if (Test-Path $script:OutPath) { Remove-Item $script:OutPath -Force }
-    }
-
-    It 'writes UTF-8 without a byte-order mark' {
-        New-ReleasePlzConfig -SourcePath $script:SampleToml -OutputPath $script:OutPath -CrateName 'demo-tool'
-        $bytes = [System.IO.File]::ReadAllBytes($script:OutPath)
-        # A UTF-8 BOM is EF BB BF.
-        ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -BeFalse
-    }
-
-    It 'writes LF line endings with no carriage returns' {
-        New-ReleasePlzConfig -SourcePath $script:SampleToml -OutputPath $script:OutPath -CrateName 'demo-tool'
-        $bytes = [System.IO.File]::ReadAllBytes($script:OutPath)
-        ($bytes -contains 0x0D) | Should -BeFalse
-    }
-
-    It 'ends with a single trailing newline' {
-        New-ReleasePlzConfig -SourcePath $script:SampleToml -OutputPath $script:OutPath -CrateName 'demo-tool'
-        $text = [System.IO.File]::ReadAllText($script:OutPath)
-        $text.EndsWith("`n") | Should -BeTrue
-        $text.EndsWith("`n`n") | Should -BeFalse
-    }
-
-    It 'injects the flag for the requested crates' {
-        New-ReleasePlzConfig -SourcePath $script:SampleToml -OutputPath $script:OutPath -CrateName @('demo-tool', 'pub-bin')
-        $lines = [System.IO.File]::ReadAllText($script:OutPath) -split "`n"
-        $demoIndex = [array]::IndexOf($lines, 'name = "demo-tool"')
-        $lines[$demoIndex + 1] | Should -Be 'git_release_enable = true'
-        $pubIndex = [array]::IndexOf($lines, 'name = "pub-bin"')
-        $lines[$pubIndex + 1] | Should -Be 'git_release_enable = true'
-    }
-}
-
 Describe 'Get-PublishableCrate (real cargo metadata on a fixture workspace)' {
     BeforeAll {
         $script:AllCrates = Get-PublishableCrate -ManifestPath $script:MetadataManifest
@@ -216,6 +344,17 @@ Describe 'Get-PublishableCrate (real cargo metadata on a fixture workspace)' {
     It 'returns crates sorted by name with versions' {
         $script:AllCrates.Name | Should -Be @('demo-tool', 'demo-tool-core', 'pub-bin', 'pub-lib', 'win-tool')
         ($script:AllCrates | Where-Object Name -EQ 'demo-tool').Version | Should -Be '2.3.4'
+    }
+
+    It 'does not add Git tracking to workspace publication discovery' {
+        Mock git -ModuleName ReleaseAutomation {
+            throw 'publication discovery must not query Git tracking'
+        }
+
+        $crate = Get-PublishableCrate -ManifestPath $script:MetadataManifest
+
+        $crate.Name | Should -Contain 'pub-lib'
+        Should -Invoke git -ModuleName ReleaseAutomation -Times 0 -Exactly
     }
 }
 
@@ -318,110 +457,6 @@ Describe 'Get-ReleaseTarget' {
     It 'builds Apple Silicon but not Intel macOS' {
         $script:Targets.Triple | Should -Contain 'aarch64-apple-darwin'
         $script:Targets.Triple | Should -Not -Contain 'x86_64-apple-darwin'
-    }
-}
-
-Describe 'New-MissingBinaryRelease' {
-    BeforeEach {
-        Mock Get-BinaryReleaseAsset -ModuleName ReleaseAutomation {
-            if ($Tag -eq 'present-v1.0.0') { @('existing-asset') } else { $null }
-        }
-        Mock gh -ModuleName ReleaseAutomation {}
-    }
-
-    It 'creates a missing release at the requested version anchor' {
-        $crate = [pscustomobject]@{ Name = 'missing'; Version = '2.0.0' }
-        New-MissingBinaryRelease -Crate $crate -TargetCommitByName @{ missing = 'abc123' }
-
-        Should -Invoke gh -ModuleName ReleaseAutomation -Times 1 -Exactly -ParameterFilter {
-            $args[0] -eq 'release' -and
-            $args[1] -eq 'create' -and
-            $args[2] -eq 'missing-v2.0.0' -and
-            $args[3] -eq '--target' -and
-            $args[4] -eq 'abc123'
-        }
-    }
-
-    It 'does not recreate an existing release' {
-        $crate = [pscustomobject]@{ Name = 'present'; Version = '1.0.0' }
-        New-MissingBinaryRelease -Crate $crate -TargetCommitByName @{}
-
-        Should -Invoke gh -ModuleName ReleaseAutomation -Times 0 -Exactly
-    }
-
-    It 'does not recreate an existing empty release' {
-        Mock Get-BinaryReleaseAsset -ModuleName ReleaseAutomation {
-            return , @()
-        }
-        $crate = [pscustomobject]@{ Name = 'empty'; Version = '1.0.0' }
-        New-MissingBinaryRelease -Crate $crate -TargetCommitByName @{}
-
-        Should -Invoke gh -ModuleName ReleaseAutomation -Times 0 -Exactly
-    }
-
-    It 'rejects a missing version-anchor commit before creating a release' {
-        $crate = [pscustomobject]@{ Name = 'missing'; Version = '2.0.0' }
-        { New-MissingBinaryRelease -Crate $crate -TargetCommitByName @{} } | Should -Throw
-
-        Should -Invoke gh -ModuleName ReleaseAutomation -Times 0 -Exactly
-    }
-}
-
-Describe 'Invoke-BinaryReleaseReconciliation' {
-    BeforeEach {
-        Mock Get-BinaryReleaseAsset -ModuleName ReleaseAutomation { $null }
-        Mock gh -ModuleName ReleaseAutomation {}
-    }
-
-    It 'creates a missing release at the package version anchor' {
-        $cargo = {
-            param([string[]] $Argument)
-
-            $outDirIndex = [array]::IndexOf($Argument, '--out-dir')
-            $report = [ordered]@{
-                schema_version = 2
-                head           = 'current'
-                packages       = @(
-                    [ordered]@{
-                        name             = 'missing'
-                        declared_version = '2.0.0'
-                        status           = 'unchanged'
-                        anchor           = [ordered]@{
-                            commit  = 'version-anchor'
-                            version = '2.0.0'
-                        }
-                        changed          = @()
-                        dependencies     = @()
-                    }
-                )
-                groups         = [ordered]@{}
-            }
-            $report |
-                ConvertTo-Json -Depth 5 |
-                Set-Content -LiteralPath (Join-Path $Argument[$outDirIndex + 1] 'report.json')
-            $global:LASTEXITCODE = 0
-        }
-        $crate = [pscustomobject]@{ Name = 'missing'; Version = '2.0.0' }
-
-        Invoke-BinaryReleaseReconciliation -Crate $crate -Base 'current' -Cargo $cargo
-
-        Should -Invoke gh -ModuleName ReleaseAutomation -Times 1 -Exactly -ParameterFilter {
-            $args[3] -eq '--target' -and $args[4] -eq 'version-anchor'
-        }
-    }
-
-    It 'rejects a missing checked-out commit before invoking cargo' {
-        $calls = [System.Collections.Generic.List[object]]::new()
-        $cargo = {
-            param([string[]] $Argument)
-            $calls.Add($Argument)
-        }
-        $crate = [pscustomobject]@{ Name = 'missing'; Version = '2.0.0' }
-
-        { Invoke-BinaryReleaseReconciliation -Crate $crate -Base '' -Cargo $cargo } |
-            Should -Throw
-
-        $calls.Count | Should -Be 0
     }
 }
 
@@ -700,7 +735,13 @@ Describe 'ConvertTo-MatrixJson' {
 }
 
 Describe 'Invoke-ReleasePublish (mocked release-plz)' {
-    It 'invokes release-plz once with the composed config on success' {
+    BeforeEach {
+        # These warnings describe injected fixture failures, so assert their calls rather than
+        # printing them as unexamined validation warnings.
+        Mock Write-Warning -ModuleName Retry {}
+    }
+
+    It 'invokes release-plz once with the registry-only config on success' {
         $configPath = Join-Path $TestDrive 'ci.toml'
         Mock release-plz -ModuleName ReleaseAutomation { $global:LASTEXITCODE = 0 }
         Invoke-ReleasePublish -ConfigPath $configPath -Attempt 3 -DelaySeconds 0
@@ -715,15 +756,21 @@ Describe 'Invoke-ReleasePublish (mocked release-plz)' {
             $script:attempts++
             $global:LASTEXITCODE = if ($script:attempts -lt 2) { 1 } else { 0 }
         }
-        Invoke-ReleasePublish -ConfigPath $configPath -Attempt 3 -DelaySeconds 0
+        Invoke-ReleasePublish -ConfigPath $configPath -Attempt 3 -DelaySeconds 0 `
+            -WarningAction SilentlyContinue
+        Should -Invoke Write-Warning -ModuleName Retry -Times 1 -Exactly
         Should -Invoke release-plz -ModuleName ReleaseAutomation -Times 2 -Exactly
     }
 
     It 'throws after every attempt fails' {
         $configPath = Join-Path $TestDrive 'ci.toml'
         Mock release-plz -ModuleName ReleaseAutomation { $global:LASTEXITCODE = 1 }
-        { Invoke-ReleasePublish -ConfigPath $configPath -Attempt 3 -DelaySeconds 0 } | Should -Throw
+        {
+            Invoke-ReleasePublish -ConfigPath $configPath -Attempt 3 -DelaySeconds 0 `
+                -WarningAction SilentlyContinue
+        } | Should -Throw
         Should -Invoke release-plz -ModuleName ReleaseAutomation -Times 3 -Exactly
+        Should -Invoke Write-Warning -ModuleName Retry -Times 2 -Exactly
     }
 }
 

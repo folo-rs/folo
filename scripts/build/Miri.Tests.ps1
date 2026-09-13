@@ -1,4 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 # Pester suite for Miri.psm1. Get-MiriSeedRange is pure, so the seed arithmetic is checked
 # directly: the unsharded full range, an even split, the remainder-absorbing final shard, and the
@@ -16,6 +19,10 @@ Describe 'Get-MiriSeedRange' {
 
     It 'honours a custom total seed budget for the full range' {
         Get-MiriSeedRange -Spec '' -TotalSeeds 32 | Should -Be '..32'
+    }
+
+    It 'keeps the full seed budget in a single explicit shard' {
+        Get-MiriSeedRange -Spec '1/1' | Should -Be '0..64'
     }
 
     It 'splits evenly when the count divides the total' {

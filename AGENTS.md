@@ -17,6 +17,12 @@ directly:
 
 * **Zero warnings allowed.** Fix all warnings that validation generates. Never
   silence a warning without a `reason` field justifying it.
+* **ARM64 is best-effort, minimally supported.** ARM64 validation may be skipped
+  without separate approval when the change should logically work on that target,
+  especially when the same logic passes on other platforms. Record the reasoning
+  rather than claiming an executed pass, and do not block work solely on missing
+  ARM64 validation. Follow the
+  [platform support policy](docs/build-and-tooling.md#platform-support-and-validation).
 * **Keep the house in order.** Do not only focus on the immediate task at hand
   but also consider how it affects the codebase around it. If the change you
   are working on affords more simplicity, better organization or greater reuse,
@@ -26,8 +32,30 @@ directly:
   thing to one instance of a problem in a file, check for other instances. You
   must solve the entire class of problems at once, not expect each instance to
   be pointed out to you in instructions.
+* **Evaluate review feedback, do not implement it reflexively.** Automated review
+  comments can be incorrect or have a low signal-to-noise ratio. Establish the
+  concrete defect or useful improvement before acting, and weigh that benefit
+  against the added complexity, maintenance burden and cognitive overhead.
+  Decline suggestions whose costs exceed their value and explain why; a reviewer
+  requesting a change does not by itself justify it. Tests that merely assert
+  the presence of copied wording are not behavioral coverage. Follow
+  [docs/testing.md](docs/testing.md#test-behavior-not-checked-in-wording).
+* **Treat automation as maintained code.** Prefer nonpublished Rust utilities for
+  automation logic; use PowerShell when Rust execution is impractical in the
+  invoking environment. Every script must explain its purpose, callers and
+  workflow role in inline comments. Explain non-obvious decisions and link
+  design-bearing workflow steps to the relevant documentation chapter. Follow
+  [docs/build-and-tooling.md](docs/build-and-tooling.md#automation-language-and-boundaries).
 * **Do not execute `just gh-release`** — it performs real crates.io publishes and is
   a CI-only entry point (driven by the release workflow); never run it manually.
+* **Make version decisions reviewable in the PR.** Run `increment-versions` without a
+  separate approval gate; human review of the complete PR is the approval step.
+  Keep a **Version/release plan** section current with every expanded-plan package/group,
+  previous and proposed versions, change levels, and substantive reasons, including
+  dependent/group movements; explicitly state when there are no released-content or
+  version changes. Keep `[Copilot speaking]` first in agent-authored PR bodies.
+  Follow [docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section) and
+  [docs/release-versioning.md](docs/release-versioning.md#on-a-pull-request).
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
@@ -51,13 +79,13 @@ directly:
 ### [docs/build-and-tooling.md](docs/build-and-tooling.md)
 
 Day-to-day mechanics: `just` commands, building, testing, validation, the
-Windows + WSL multiplatform workflow, PowerShell scripting, and rules for
-`*.just` recipes.
+Windows + WSL multiplatform workflow, Rust automation utilities, justified
+PowerShell boundaries, script documentation and rules for `*.just` recipes.
 
 **Open this when**: running any build/test/lint/docs command; validating a
-change; writing or editing a `[script]` block in a justfile; searching the
-workspace; running a command on some "other" operating system from the one you
-are on.
+change; writing automation logic, a script or a `[script]` block in a justfile;
+searching the workspace; running a command on some "other" operating system
+from the one you are on.
 
 ### [docs/cargo-delta.md](docs/cargo-delta.md)
 
@@ -178,12 +206,14 @@ The full testing playbook: panic/error assertions, the ban on real-time delays
 and on `parking_lot`, watchdogs, the threshold-based-mutation anti-pattern,
 Miri compatibility, multithreaded synchronization tests, `static_assertions`
 for trait contracts, mutation-testing skip criteria, UI tests, and coverage
-exclusion.
+exclusion. Follow its Miri workload budget: shrink tests that take more than
+10 seconds, preserve representative interpreter coverage, and justify native-only
+scale tests rather than raising the runner deadline.
 
 **Open this when**: writing or modifying a test (unit, integration, doctest);
-hitting a hang, Miri failure, or uncaught mutation; asserting that a panic or
-error occurs; marking code as not-relevant-for-coverage; discovering a flaky
-test.
+hitting a hang, slow Miri test, Miri failure, or uncaught mutation; asserting that
+a panic or error occurs; marking code as not-relevant-for-coverage; discovering a
+flaky test.
 
 ### [docs/benchmarks.md](docs/benchmarks.md)
 
@@ -298,10 +328,18 @@ dev-dependencies for tests or benches that need internal surface.
 
 ### [docs/git-workflow.md](docs/git-workflow.md)
 
-Conventions for PRs: using `--body-file` with `gh pr create`, and replying to
-and resolving review comment threads.
+Conventions for PRs: version/release-plan presentation, using `--body-file` with
+`gh pr create`, and replying to and resolving review comment threads.
 
 **Open this when**: creating a pull request; addressing review comments.
+
+### [docs/scheduled-validation.md](docs/scheduled-validation.md)
+
+Scheduled checks and personal App remediation, including setup, recovery, and
+the ready-PR lifecycle.
+
+**Open this when**: working on scheduled checks, personal App remediation,
+ready-PR lifecycle, or setup and recovery for that workflow.
 
 ### [docs/release-versioning.md](docs/release-versioning.md)
 

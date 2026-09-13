@@ -4,11 +4,13 @@
 //! user settings.
 
 use std::fs;
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 
 use tempfile::TempDir;
+
+use crate::harness::seeded_package;
 
 /// A temporary Git repository that is also a Cargo workspace.
 pub(crate) struct Fixture {
@@ -20,7 +22,7 @@ impl Fixture {
     /// Creates the repository and writes the workspace manifest.
     ///
     /// `extra` is appended to the root manifest, so a caller can add tables such
-    /// as `[workspace.metadata.release-plan.groups]` or `[workspace.package]`.
+    /// as `[workspace.dependencies]` or `[workspace.package]`.
     pub(crate) fn new(extra: &str) -> Self {
         let fixture = Self::empty("Cargo.toml");
         fixture.write_workspace(extra);
@@ -38,11 +40,26 @@ impl Fixture {
     }
 
     fn empty(manifest_path: &str) -> Self {
-        let dir = TempDir::new().unwrap();
-        let manifest_path = dir.path().join(manifest_path);
-        let fixture = Self { dir, manifest_path };
-        fixture.git(&["init", "-b", "main"]);
+        let mut fixture = Self::from_template(&BASE_TEMPLATE);
+        fixture.manifest_path = fixture.path().join(manifest_path);
         fixture
+    }
+
+    /// Copies an immutable, harness-owned template into an independent repository.
+    ///
+    /// Copy the objects and index, not hard links or alternates: changing or dropping
+    /// one fixture must not affect another. Only ordinary files and directories
+    /// belong in templates; tests create symlinks and special index states afterward.
+    pub(crate) fn from_template(template: &Self) -> Self {
+        let dir = TempDir::new().unwrap();
+        copy_directory(template.path(), dir.path());
+        let manifest_path = dir.path().join(
+            template
+                .manifest_path
+                .strip_prefix(template.path())
+                .unwrap(),
+        );
+        Self { dir, manifest_path }
     }
 
     /// Rewrites the root manifest, replacing the tables `new` appended.
@@ -100,6 +117,9 @@ resolver = "2"
     }
 
     pub(crate) fn commit(&self, message: &str) {
+        // These fixtures commit actual work-tree changes. Unlike empty-tree
+        // history builders, fast-import would bypass clean filters and fail to
+        // preserve the index and mode semantics the integration suite exercises.
         self.git(&["add", "-A"]);
         self.git(&["commit", "-m", message]);
     }
@@ -110,6 +130,7 @@ resolver = "2"
     /// outside the workspace and a registry lookup would make tests non-hermetic.
     pub(crate) fn cargo(&self, args: &[&str]) -> String {
         let output = Command::new("cargo")
+            .current_dir(self.path())
             .args(args)
             .arg("--manifest-path")
             .arg(self.manifest())
@@ -128,6 +149,46 @@ resolver = "2"
     }
 }
 
+/// An initialized, unborn repository reused only as an immutable copy source.
+///
+/// Git startup is expensive on Windows, so a test process initializes once.
+/// The static owner keeps the source alive for every copy. Process-per-test
+/// runners only amortize this initialization across fixtures within one test.
+static BASE_TEMPLATE: LazyLock<Fixture> = LazyLock::new(|| {
+    let dir = TempDir::new().unwrap();
+    let manifest_path = dir.path().join("Cargo.toml");
+    let fixture = Fixture { dir, manifest_path };
+    // An empty template prevents host-installed hooks and sample files from
+    // entering the fixture, and keeps the tree copied per test small.
+    fixture.git(&["init", "-b", "main", "--template="]);
+    let config_path = fixture.path().join(".git/config");
+    let config = fs::read_to_string(&config_path).unwrap();
+    // These repositories are disposable; durable object flushes and automatic
+    // maintenance add cost without protecting any persistent test data. Store
+    // the settings locally so Git invoked by the application inherits them too.
+    fs::write(
+        config_path,
+        format!("{config}\n[core]\nfsync = none\n[gc]\nauto = 0\n[maintenance]\nauto = false\n"),
+    )
+    .unwrap();
+    fixture
+});
+
+fn copy_directory(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let destination = destination.join(entry.file_name());
+        let file_type = entry.file_type().unwrap();
+        if file_type.is_dir() {
+            copy_directory(&entry.path(), &destination);
+        } else {
+            assert!(file_type.is_file());
+            fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+}
+
 /// Git settings pinned for every invocation.
 ///
 /// No test may inherit host or user configuration: an unset identity, a signing
@@ -143,68 +204,44 @@ const HERMETIC_CONFIG: &[&str] = &[
     "-c",
     "gc.auto=0",
     "-c",
+    "maintenance.auto=false",
+    "-c",
+    "core.fsync=none",
+    "-c",
     "core.autocrlf=false",
 ];
 
-/// A Git command that keeps its empty global configuration file alive.
+/// A real, empty global configuration shared by commands in this test process.
 ///
 /// Git for Windows on ARM64 rejects the `NUL` device as a configuration path, so
-/// every command receives a real empty file instead of a platform-specific null
-/// device. The owning temporary directory removes the file after the command is
-/// dropped.
-pub(crate) struct HermeticGit {
-    command: Command,
-    _global_config_dir: TempDir,
-}
-
-impl HermeticGit {
-    fn new() -> Self {
-        let global_config_dir = TempDir::new().unwrap();
-        let global_config = global_config_dir.path().join("config");
-        fs::write(&global_config, "").unwrap();
-
-        let mut command = Command::new("git");
-        command
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", global_config)
-            .env_remove("GIT_CONFIG")
-            .env_remove("GIT_CONFIG_COUNT")
-            .env_remove("GIT_CONFIG_PARAMETERS");
-        command.args(HERMETIC_CONFIG);
-
-        Self {
-            command,
-            _global_config_dir: global_config_dir,
-        }
-    }
-}
-
-impl Deref for HermeticGit {
-    type Target = Command;
-
-    fn deref(&self) -> &Self::Target {
-        &self.command
-    }
-}
-
-impl DerefMut for HermeticGit {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.command
-    }
-}
+/// commands cannot use a null device. The static owner keeps this immutable file
+/// alive without allocating a directory and writing a file for every Git command.
+static GLOBAL_CONFIG: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("config"), "").unwrap();
+    dir
+});
 
 /// A `git` command carrying the pinned configuration and no working directory.
 ///
 /// `Fixture::git` runs inside an existing fixture; a test that creates a
 /// repository somewhere else, such as a clone, needs the same settings without
 /// one.
-pub(crate) fn hermetic_git() -> HermeticGit {
-    HermeticGit::new()
+pub(crate) fn hermetic_git() -> Command {
+    let mut command = Command::new("git");
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", GLOBAL_CONFIG.path().join("config"))
+        .env_remove("GIT_CONFIG")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS");
+    command.args(HERMETIC_CONFIG);
+    command
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
 #[test]
-fn hermetic_git_ignores_the_users_global_configuration() {
+fn hermetic_fixtures_preserve_isolation_and_git_semantics() {
     let home = tempfile::tempdir().unwrap();
     fs::write(
         home.path().join(".gitconfig"),
@@ -219,6 +256,89 @@ fn hermetic_git_ignores_the_users_global_configuration() {
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+
+    let command = hermetic_git();
+    let global_config = command
+        .get_envs()
+        .find(|(name, _)| *name == "GIT_CONFIG_GLOBAL")
+        .unwrap()
+        .1
+        .unwrap();
+    assert!(Path::new(global_config).is_file());
+    assert!(fs::read(global_config).unwrap().is_empty());
+    assert_eq!(
+        hermetic_git()
+            .get_envs()
+            .find(|(name, _)| *name == "GIT_CONFIG_GLOBAL")
+            .unwrap()
+            .1
+            .unwrap(),
+        global_config
+    );
+
+    let empty = Fixture::new("");
+    assert_eq!(
+        empty.git(&["symbolic-ref", "HEAD"]).trim(),
+        "refs/heads/main"
+    );
+    assert!(
+        hermetic_git()
+            .arg("-C")
+            .arg(empty.path())
+            .args(["rev-parse", "--verify", "HEAD"])
+            .output()
+            .unwrap()
+            .status
+            .code()
+            .is_some_and(|code| code != 0)
+    );
+    assert_eq!(
+        empty.git(&["config", "--local", "core.fsync"]).trim(),
+        "none"
+    );
+    assert_eq!(empty.git(&["config", "--local", "gc.auto"]).trim(), "0");
+    assert_eq!(
+        empty.git(&["config", "--local", "maintenance.auto"]).trim(),
+        "false"
+    );
+
+    let first = seeded_package();
+    let second = seeded_package();
+    assert_ne!(first.path(), second.path());
+    let seed = second.sha("HEAD");
+    assert_eq!(first.sha("HEAD"), seed);
+    assert!(second.git(&["status", "--porcelain"]).is_empty());
+
+    // An actual clean filter must still run when the ordinary commit helper
+    // stages content. Git itself is available on every supported test host.
+    first.git(&["config", "filter.fixture.clean", "git hash-object --stdin"]);
+    first.write(".gitattributes", "filtered.txt filter=fixture\n");
+    first.write("filtered.txt", "unfiltered fixture bytes\n");
+    first.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
+    // Use the index as the mode authority on every host, including filesystems
+    // without an executable permission bit. Staging must retain that mode.
+    first.git(&["config", "core.fileMode", "false"]);
+    first.git(&["update-index", "--chmod=+x", "packages/demo/src/lib.rs"]);
+    first.commit("isolated filtered change");
+    assert_ne!(first.sha("HEAD"), seed);
+    assert_ne!(
+        first.git(&["show", "HEAD:filtered.txt"]),
+        first.read("filtered.txt")
+    );
+    assert!(
+        first
+            .git(&["ls-tree", "HEAD", "packages/demo/src/lib.rs"])
+            .starts_with("100755 ")
+    );
+    drop(first);
+
+    assert_eq!(second.sha("HEAD"), seed);
+    assert_eq!(second.read("packages/demo/src/lib.rs"), "pub fn f() {}\n");
+    assert!(!second.path().join("filtered.txt").exists());
+    assert!(second.git(&["status", "--porcelain"]).is_empty());
+    let third = seeded_package();
+    assert_eq!(third.sha("HEAD"), seed);
+    assert!(third.git(&["status", "--porcelain"]).is_empty());
 }
 
 /// Writes a package whose only target is an executable.

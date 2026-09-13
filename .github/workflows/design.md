@@ -5,66 +5,143 @@ the tenets behind them, and how the pieces relate. Per-job mechanics live in inl
 YAML comments and in the `just` recipes the steps call; this document stays high-level.
 Ownership of the release-validation pipeline is in [implementation.md](implementation.md).
 
+## Scheduled validation
+
+The [scheduled validation contract](../../docs/scheduled-validation.md) separates
+check execution, failure triage and repair. Each handoff is an ordinary GitHub issue
+that a human or Local Copilot App agent can understand and act on.
+
+The **Deep validation** workflow runs the full suite against merged `main` on its
+schedule, or when started manually on `main`. It is not triggered by PRs or forks.
+Its failure-reporting job files a readable **Scheduled validation failed on &lt;date&gt;**
+issue when planning or checks fail. A triager investigates all reported
+failures and creates or updates separate problem issues. The report closes when its
+failures have been accounted for; the problem issues stay open until resolved.
+
+Problem grouping follows the cause or independently actionable symptom, not job
+boundaries or log fingerprints. Infrastructure failures are problems too; checks
+blocked by a failed prerequisite are not themselves evidence of source defects.
+Existing human-filed issues can serve as the problem issues.
+
+GitHub assignees, labels, comments and linked PRs record ownership and progress.
+There is no off-GitHub coordination store or encoded issue protocol. Claims are
+ordinary collaboration, with explicit release or handoff rather than time-based
+takeover. Personally operated Local App automations perform triage and repair;
+GitHub-hosted workflows do not invoke AI. Final approval and merge remain human.
+
+### Shallow and deep validation
+
+**Standard validation** runs the ordinary shallow PR, push and merge-queue checks.
+**Deep validation** runs the full deep suite at the main commit selected by its event.
+Deep validation covers ordinary Miri, many-seed Miri, mutation testing and careful checks.
+It also runs feature-powerset compilation (`hack`), unused-dependency checks (`machete`)
+and ARM64 tests and benchmark smoke checks (`test-arm`). These lower-yield checks run
+nightly or on manual dispatch rather than on every push.
+Planning, check jobs and failure reporting belong to that same workflow.
+The local entry points have fixed meanings: `validate-local` is shallow and
+`validate-deep-local` is deep. Repair authors run relevant local deep checks against the
+reviewed commit and link their results for human review. Repair PRs use the same
+required checks and version validation as other PRs, without a special merge gate.
+
+Local and scheduled deep validation share the same Just recipes. Scheduling chooses
+scope and captures diagnostics; it does not implement different checker commands or
+pass/fail rules. Necessary check behavior belongs in the shared recipes.
+
+Many-seed Miri jobs use the canonical recipe name, `miri-harder`, in their job names.
+Each selected package runs its full seed budget in one shard by default. Additional
+shards are reserved for packages approaching the job timeout; scheduled validation
+does not need extra horizontal scaling solely to shorten already-small jobs.
+
+Nightly runs execute the entire deep suite even on unchanged source. Build caches
+remain ordinary performance aids, not receipts used to skip validation. Hosted
+execution and reporting do not depend on the availability of a Local App.
+
+### Failure diagnostics
+
+Checker findings and execution failures make the Actions job and workflow fail.
+Independent matrix jobs continue so one failed shard does not cancel the others.
+Readable reports include useful diagnostics, source and direct job links; full logs
+and tool artifacts supplement rather than replace the explanation. Setup failures
+are reported even when no checker artifact exists.
+Successful runs and cancellation without a failed job do not create failure issues.
+Generated diagnostics remain separate from source inputs, including while a checker
+copies the source tree for isolated execution. Partial logs remain available after
+interruption, and genuine checker failures retain their status and artifacts.
+
+An empty mutation shard is explicitly reported as no work, not a passing baseline.
+The shared mutation recipe runs cargo-mutants' baseline for nonempty shards.
+Missing output is not proof of an empty shard. Reproduction instructions preserve
+known invocation scope; interleaved Miri output does not justify inventing a failing
+test or seed. An unexplained intermittent failure is not resolved by a green retry.
+
+Repair branches follow the same validation and benchmark conditions as other
+same-repository branches. Ordinary repository/event conditions apply; branch names
+do not select permissions or opt out of jobs.
+
 ## Job granularity and gating
 
-Validation runs each `just` command as its own parallel job rather than one combined
+Standard validation runs each `just` command as its own parallel job rather than one combined
 `validate-local` step. Parallelism gives faster feedback and pinpoints failures by check
-name instead of burying them in a monolithic log. Expensive jobs gate behind cheaper
-equivalents so a fast failure short-circuits slow work — for example, Miri and mutation
-testing only start once the dev Clippy pass and the base test pass have already succeeded,
-since there is nothing to interpret or mutate in code that does not compile or whose tests
-already fail. Clippy stands in for a bare `cargo check` here: Clippy compiles the code as a
+name instead of burying them in a monolithic log. The local recipes define the local
+check suites, while workflow jobs own execution cadence, platform selection,
+prerequisites and evidence capture. Clippy stands in for a bare `cargo check` here: Clippy compiles the code as a
 prerequisite to linting it, so a standalone `check` job would only re-prove what a green
 Clippy already guarantees.
 
 ## Selective validation
 
-Most jobs are package-scoped and skip packages a change does not touch: a `delta` job
-computes the affected set and downstream jobs consult it, so a one-package PR does not
-rebuild the workspace. The complement of this pattern is the rule that a job whose inputs
-are **not** Cargo packages — the workflow files themselves, or the standalone PowerShell
-under `scripts/` — must run unconditionally. Delta analysis reports "nothing affected" for
-such a change, so gating those jobs on it would leave the change validated by nothing.
-Release-plan generation (`validate-versions`) is in that class: it compares every
-publishable package's released content to that package's version anchor. Gating it on
-delta's changed-package set would skip a package that already needed an increment.
+Package-scoped jobs consume Cargo dependency impact, so a one-package PR does not rebuild
+the workspace. Non-Cargo checks have independent change domains: workflow lint consumes
+workflow and lint-tooling inputs, script analysis consumes scripts and analyzer inputs, and
+script tests consume their owning automation domains and shared dependencies. A change that
+touches only tooling must still receive the relevant checks even when Cargo selects nothing.
+
+Script tests run the union of selected domains, including integration tests for affected
+native helpers. Domain selection includes fixtures, configuration and shared consumers, not
+just the file containing a test. Shared validation machinery changes exercise every tooling
+check. Ordinary Rust source changes do not by themselves select unrelated tooling checks.
+
+Selection covers the complete pull request or merge-queue candidate, including deleted and
+renamed inputs. An unavailable change set is an error, not an empty selection. Pushes to
+`main` run the full set as a backstop. The workflow itself always starts, so required-check
+reporting does not depend on GitHub's workflow-level path filters.
+
+Release-plan generation (`validate-versions`) remains unconditional: it compares every
+publishable package's released content to that package's version anchor, not just to the PR
+base. Live binstall metadata validation accompanies it because Cargo target discovery can
+change release obligations without a manifest edit.
 
 ## Platform strategy
 
 Test passes are organised as an x86_64/ARM64 pair. The x64 pass carries coverage
 instrumentation (which needs a nightly-only toolchain component), while the ARM pass
 doubles as the MSRV pass and exists to exercise architecture-gated code that x86_64 runners
-never compile. macOS is Apple Silicon, so it rides the ARM pass. Miri follows the same
-shape: it is an architecture-agnostic interpreter, so a second ARM run earns its keep only
-by subjecting ARM-gated paths to Miri's UB detection. Platform-agnostic checks (formatting,
-workflow validation, script tests) run on a single Linux runner because their result cannot
+never compile. The x64 pass runs in Standard validation; the ARM pass runs in Deep
+validation. macOS is Apple Silicon, so it rides the ARM pass. Scheduled Miri
+coverage includes architecture-gated paths as declared by its manifest. Platform-agnostic checks
+(formatting, workflow validation, script tests) run on a single Linux runner because their result cannot
 vary by platform.
 
-Not every check earns its place on every pull request. The full matrix runs on each push to
-`main`, but pull-request validation prunes the rarely-informative legs to cut runner cost,
-leaning on push-to-`main` as the backstop for what it drops. PRs run the test and docs
-suites only on the x86_64 Windows and Linux runners: the whole ARM pass (which carries the
-MSRV *test* run) and the macOS legs of the test and docs jobs wait for `main`, because
-architecture- and OS-gated behaviour rarely diverges on a PR and re-running the
-platform-independent test and doc suites on macOS almost never is informative. The base Miri
-pass runs on Windows only for a PR — being an architecture-agnostic interpreter, its Linux
-and ARM re-runs are a `main`-only sanity net over cfg-gated paths — and the release-profile
-Clippy pass and the `careful` run are skipped entirely on PRs. The many-seeds Miri passes are
-the exception to that pruning: gated by *package* rather than by event, they run on Linux —
-on a PR as much as on `main` — whenever their specific package is touched, because their
-worth is catching seed-dependent UB in that code, not covering a platform. The
-compile-oriented passes (dev Clippy, release build, frozen-minimum check, feature `hack`)
+Not every shallow check earns its place on every pull request. The
+full shallow matrix runs on each push to `main`, but pull-request validation prunes the rarely-informative
+legs to cut runner cost, leaning on push-to-`main` as the backstop for what it drops. PRs run the
+test and docs suites only on the x86_64 Windows and Linux runners. The macOS doctest and
+docs jobs wait for a push to `main`, because re-running these platform-independent
+suites on macOS is rarely informative.
+The release-profile Clippy pass is also main-only. The
+compile-oriented passes (dev Clippy, release build, frozen-minimum check)
 deliberately keep their macOS leg on PRs, because a cheap macOS cross-compile still catches
 macOS-specific build breaks that the pruned runtime passes would not. MSRV *compilation*
 therefore stays covered on every PR by `check-frozen`, which compiles all targets on the
 MSRV toolchain against the frozen minimum-version lockfile even though the ARM MSRV test
-pass is `main`-only. Because a push to `main` is the first place the pruned checks can fail,
+pass runs in Deep validation. Because a push to `main` is the first place Standard
+validation's pruned checks can fail,
 that event — unlike a PR — files a tracking issue (see Failure alerting).
 
-The event split is expressed two ways: a job whose every leg is pruned on a PR (the ARM test
-and Miri passes, `clippy-release`, `careful`) carries a whole-job `github.event_name ==
+The event split is expressed two ways: a job whose every leg is pruned on a PR
+(`clippy-release`) carries a whole-job `github.event_name ==
 'push'` guard, while a job that keeps some legs on a PR (macOS-dropping test/docs, the
-Ubuntu-dropping `miri-x64`) selects its platform list with a `fromJSON` conditional matrix
+platform-specific compilation jobs) selects its platform list with a `fromJSON` conditional matrix
 keyed on the same event. Both reduce to "the full set on push, the pruned set on a PR".
 A `merge_group` (merge queue) run uses that same pruned set: those guards are false for
 anything that is not `push`. Do not rewrite them as `!= 'pull_request'`, or a queue entry
@@ -104,10 +181,10 @@ layer with an identical public facade, and nothing public is `target_arch`-gated
 Commit-driven and PR-driven workflows cancel superseded runs, keyed on the ref, so pushing
 a new commit abandons the outdated run. That supersession only fires when a *new commit*
 arrives on the branch, so closing or merging a PR — which pushes nothing to the PR branch —
-would otherwise leave its in-flight Validation run to burn to completion. A dedicated
+would otherwise leave its in-flight Standard validation run to burn to completion. A dedicated
 companion workflow closes that gap: it triggers on the PR-close event and joins the target
-workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Validation
-workflow and the PR benchmark-history workflow pair with such a close companion. Validation's
+workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Standard validation
+workflow and the PR benchmark-history workflow pair with such a close companion. Standard validation's
 group (`github.head_ref || github.ref`) already distinguishes merge-queue entries: `head_ref`
 is empty there and `github.ref` is the unique queue ref. The close companion stays
 pull-request-only. The exception
@@ -122,11 +199,19 @@ nightly and that tip's own collection cancel each other.
 
 ## Thin steps
 
-Workflow steps stay thin. Non-trivial logic lives in PowerShell `[script]` `just` recipes
-the steps call, so it runs and is debugged locally instead of only by pushing to `main`.
-Logic worth unit-testing goes one level deeper into a module under `scripts/` covered by a
-Pester suite. Every `run:` step uses `pwsh`; the `setup-environment` composite is the sole
-Bash holdout because it bootstraps PowerShell itself.
+Workflow steps stay thin so their logic can be exercised locally. Nonpublished Rust utilities
+own structured parsing and policy logic wherever the calling environment can execute Rust.
+PowerShell handles boundaries where that is impractical, including toolchain bootstrap and
+native App coordination without a prepared Rust environment. Thin `just` recipes expose the
+commands; reusable PowerShell orchestration belongs in Pester-tested modules under `scripts/`.
+The [automation language guidance](../../docs/build-and-tooling.md#automation-language-and-boundaries)
+defines that boundary.
+
+Steps implementing a design obligation explain the reason beside the step or cohesive step group
+and link to its owning design or implementation heading. This keeps authority, ordering and
+failure-handling decisions visible without duplicating their full rationale. Every `run:` step
+uses `pwsh`; the `setup-environment` composite is the sole Bash exception because it bootstraps
+PowerShell itself.
 
 ## Pull-request version readiness
 
@@ -161,11 +246,11 @@ A change level rests on released evidence rather than on the version a manifest 
 A package's own released-content diff, the workspace values it inherits, the locked dependencies
 an executable releases, and the decisions taken for its dependencies all participate, and any
 package-metadata change establishes at least `patch`. A version group whose members disagree is
-realigned mechanically and needs no change level of its own: normally onto the highest version its
-members declare, so nothing is published for a change it did not make, but by a patch increment of
-the whole group where that alignment would rewrite a requirement inside a member that otherwise
-kept an already-published version. A package the release baseline has never published takes the
-first-publication path rather than an increment. The [`increment-versions`
+realigned mechanically and needs no change level of its own. Every tracked member contributes to
+the highest version and receives the resolved version, including members with publication
+disabled. Released-content protection applies only to publishable members: alignment advances
+the whole group when retaining an already-published version would rewrite one of those members.
+Only publishable packages can take the first-publication path. The [`increment-versions`
 skill](../skills/increment-versions/SKILL.md) carries out this policy and owns the procedure,
 and [`docs/release-versioning.md`](../../docs/release-versioning.md) is the chapter that
 governs it.
@@ -173,11 +258,12 @@ governs it.
 Two consequences of a package's manifest are checked directly rather than left to that review.
 Every requirement on another workspace package names the exact version its target declares, so a
 released manifest describes the combination the workspace built rather than a range it never
-resolved; between members of one version group the requirement is an exact `=` pin, because those
-members are one package split for Cargo's sake and must never be resolved at differing versions.
-Incrementing a package therefore also increments its in-workspace dependents, whose manifests the
-rewrite changes. And a package whose public API exposes another workspace package must release a
-breaking change whenever that package does, because an incompatible release changes the identity
+resolved. Exact `=major.minor.patch` requirements between workspace members declare version-group
+edges. Their undirected connected components determine the groups, so not every dependency within
+a group must be exact. Incrementing a package therefore also increments its in-workspace
+dependents whose manifests the rewrite changes. And a package whose public API exposes another
+workspace package must release a breaking change whenever that package does, because an
+incompatible release changes the identity
 of the exposed types for consumers. Which dependencies are public is read from the
 `allowed_external_types` allow-list that the external-types check already verifies, so this rests
 on a declaration the repository maintains rather than on a second inference of the public API.
@@ -187,21 +273,23 @@ corrected by editing the requirement.
 
 ## Required checks fan-in
 
-Validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
+Standard validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
 required-checks field is a string match on that name: it cannot express "this matrix
 job, but only the legs that actually ran", and it cannot see a check that was skipped
 rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
 false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay on
 Expected — Waiting for status to be reported forever if they are listed as required.
 
-A ruleset that requires merge-blocking Validation therefore lists only this fan-in. The
-job is `if: always()`, `needs:` every merge-blocking job in Validation (including
+A ruleset that requires merge-blocking Standard validation therefore lists only this fan-in. The
+job is `if: always()`, `needs:` every merge-blocking job in Standard validation (including
 `validate-versions` and `semver-checks`), succeeds when every dependency reports `success` or an
 allowed `skipped`, and fails on `failure`, `cancelled`, or any other result.
-Unconditional gates may not skip. Advisory jobs stay off that list. `alert` stays off it
+Unconditional gates may not skip. Change-selected tooling jobs must succeed when selected;
+only an explicit no-work plan permits them to skip. Missing plans or dependencies fail the
+fan-in. Advisory jobs stay off that list. `alert` stays off it
 — it files issues on a failed push to `main`, it is not a merge gate.
 
-When a new merge-blocking job is added to Validation it is added to this `needs:` list; it
+When a new merge-blocking job is added to Standard validation it is added to this `needs:` list; it
 is never added to the GitHub ruleset. Unconditional gates are also named in the fan-in's
 must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
 required through this fan-in.
@@ -301,6 +389,20 @@ production managed identity, kept entirely separate from the throwaway account t
 use, so the long-lived data store never depends on test infrastructure. Collection is
 append-only and idempotent, which is what makes a re-run safe and lets a read-through cache
 of the bulk history persist between runs.
+
+Collection excludes the slow, special-purpose `benchmarks` package and the deprecated
+`infinity_pool` package. `infinity_pool` is retained for legacy use, not ongoing performance
+development, so measuring it would consume CI time and regression-triage effort without
+supporting active maintenance goals. Main collection, re-collection and nightly backfill use the same
+package exclusion list; PR collection removes those packages from its affected set before
+deciding whether there is anything to measure. Deprecation does not require deleting a
+package's benchmark suite.
+
+Analysis considers only benchmark identities measured at the queried context commit. Once
+an excluded package is absent there, its stored historical series are dropped before
+detection, so old regressions do not remain in current reports. Those measurements remain
+available when explicitly querying a historical context where they were collected; neither
+blessing nor deleting stored history is part of a collection exclusion.
 
 Collection stamps every engine's results with the runner's **own auto-detected hardware
 fingerprint**, with no fixed key override. The GitHub-hosted pool is heterogeneous, so a
@@ -515,7 +617,7 @@ intervention. The nightly backfill is deliberately outside this scheme and files
 Nightly history backfill). A release failure is a discrete event tied to one publish attempt, so it
 opens a *per-run* issue (identified by the failing run) that stays open until a human
 investigates; each failed release is tracked individually rather than folded into a
-rolling issue. A push-to-`main` Validation failure follows the same per-run shape as the
+rolling issue. A push-to-`main` Standard validation failure follows the same per-run shape as the
 release alert — a fresh `ci-failure` issue per failing run, no dedup and no auto-close —
 because it now backstops the checks pruned from PR validation, so each such failure warrants
 individual triage. It fires *only* on push to `main`: a PR failure is already self-evident as
@@ -525,12 +627,58 @@ file nothing.
 
 ## Release automation
 
-Publishing changed crates to crates.io and attaching cargo-binstall prebuilt binaries is
-fully automated after the single manual version-bump step. Its full design — single-workflow
-structure, crates.io Trusted Publishing, dynamic derivation of which crates receive GitHub
-releases, repair of a missing release after a manual or partial publish, and self-healing
-reconciliation of incomplete archive/checksum pairs —
+Merging reviewed version increments to main publishes their packages to crates.io and
+reconciles GitHub tags, binary releases and cargo-binstall archives. The operational flow
 lives in [`docs/release-automation.md`](../../docs/release-automation.md).
+
+### Release-equivalent snapshots
+
+A package's version anchor identifies the main commit that introduced its version. It
+remains the comparison baseline for version validation, not a mandatory release-tag target.
+A release tag identifies an immutable main snapshot containing the package's released
+content at that version. A later main commit is equally valid when the package version
+and its release-relevant content remain unchanged.
+
+This follows from the merge gate: released-content changes require a version increment.
+Equivalence uses the same package-content model as that gate, including inherited manifest
+values and an installable binary's locked dependency closure. It does not require identical
+unrelated workspace files, workflow files or build environments, and does not promise
+byte-identical rebuilt binaries. A crate already on crates.io is never republished;
+its recorded source commit can differ from the equivalent snapshot chosen for its
+GitHub release and prebuilt binaries.
+
+GitHub can require workflow-write authority when creating a tag at a historical commit
+whose workflow files differ from main. Actions' ambient token cannot receive that
+permission. Requiring every tag to point at its version anchor would therefore make
+unattended recovery depend on a permission the workflow does not possess. Selecting a
+verified current-main snapshot preserves package identity without adding credentials or
+blocking unrelated merges.
+
+### Publication and recovery
+
+Registry publication and GitHub publication have separate owners. Release-plz publishes
+crates through Trusted Publishing but creates neither tags nor GitHub releases. A shared
+reconciler handles both ordinary GitHub publication and recovery after a partial or manual
+registry publish. Libraries receive tags; publishable binary packages also receive GitHub
+releases and prebuilt assets. Discovery remains package-driven rather than a hardcoded list.
+
+The reconciler freezes the package/version requests from the successful registry
+publication's source snapshot. Before creating missing tags, it fetches main, pins its
+commit, and verifies a clean disposable checkout with the release validator. Every requested
+package must still be publishable at exactly the requested version. A version string alone
+does not authorize content that fails the release invariant.
+
+Writes use the verified commit ID, never an unchecked moving `main` reference. If tag
+creation fails and main has advanced, a bounded retry selects and verifies a fresh snapshot.
+An unchanged main, failed verification or exhausted retry budget surfaces an error.
+Advancement to a different package version is not permission to relabel that version:
+automatic recovery of a superseded version is not guaranteed.
+
+Existing tags are authoritative and are never moved or overwritten. A missing binary release
+is attached to its existing tag, without asking GitHub to choose another target.
+Binary build jobs receive the tag's resolved commit ID separately from the release name,
+so source checkout remains pinned while assets are uploaded to the correct versioned release.
+Partial successes survive a retry; reconciliation creates only what remains missing.
 
 ## Cache warmup
 

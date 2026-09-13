@@ -5,9 +5,10 @@
 Do not add `git2`, `gix`, or any other Git library. All Git access is
 `std::process::Command` spawning `git`; the rationale and its trade-off are in
 [docs/implementation.md](docs/implementation.md), "Subprocess boundaries".
-Classification may also spawn `cargo metadata --no-deps` (and
-`cargo package --list` / `cargo update` for verify-packaging and apply). Do not
-contact crates.io and do not compile as part of classification.
+Classification may also spawn `cargo metadata --no-deps`; verify-packaging may
+spawn `cargo package --list`. Keep full resolution in explicit preparation and
+preview, using `cargo update --offline --workspace`, never in report, check, or
+application. Do not contact crates.io and do not compile as part of classification.
 
 ## Integration tests must be hermetic Git
 
@@ -23,6 +24,12 @@ Use the helper in `tests/integration/fixture.rs`. Do not add real-time delays.
 The integration suite is one test binary, `tests/integration/`, split into a
 topic module per area of behavior over the shared `harness`. Add a new case to
 the module that matches its subject rather than growing a single file.
+
+Keep field and decision matrices in the owning module's unit tests. Do not build
+a prepared/previewed workspace merely to test a validator or an output format.
+Reuse one classification report for assertions about the same unchanged state.
+Keep real Git/Cargo tests for boundary behavior; see
+[test boundaries](docs/implementation.md#test-boundaries).
 
 ## Modules own subjects, not categories
 
@@ -44,14 +51,19 @@ tests (packaging rules, group verdicts, plan expansion, inherited-value
 comparison, anchor resolution over a synthetic timeline) must keep running
 under Miri.
 
-## Version groups live in the workspace manifest
+## Version groups come from exact dependencies
 
-Group membership is `[workspace.metadata.release-plan.groups]` in the repo-root
-`Cargo.toml`. `release-plz.toml` does not declare version groups. When adding a
-grouped crate, update that table. See `docs/release-versioning.md`.
+Every Git-tracked workspace member participates in version grouping, including
+`publish = false` helpers. A valid exact local dependency
+`=major.minor.patch` creates an undirected edge; connected components with more
+than one member are groups. Preserve raw manifest syntax through validation
+because Cargo metadata normalizes away distinctions the contract rejects. Keep
+release classification publishable-only and keep the broader Cargo-visible
+member set for dependent requirement rewrites. See `docs/design.md`, "Version
+groups", and `docs/implementation.md`, "Workspace snapshots".
 
 ## Release-process ownership
 
-`docs/release-versioning.md`, `docs/git-workflow.md`, `RELEASING.md`, Validation
-workflows, and `just gh-release` own the surrounding release process. Do not
+`docs/release-versioning.md`, `docs/git-workflow.md`, `RELEASING.md`, Standard
+validation, and `just gh-release` own the surrounding release process. Do not
 change them from this package.

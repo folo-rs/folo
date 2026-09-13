@@ -43,14 +43,17 @@ version.
 The question is not whether files in a package directory changed. It is whether
 the content Cargo would publish changed. Package rules, inherited manifest
 values, executable bits, manifest-named resources, package boundaries, and
-binary and example lockfile closures therefore participate where they affect
-the artifact.
+installable binary lockfile closures therefore participate where they affect
+the consumer's build. Physical inclusion of a lockfile alone does not make its
+contents release-relevant.
 
 ### Evidence and judgement stay separate
 
 The tool determines whether an increment is required and records the evidence.
-It does not infer API compatibility or choose an increment level. A maintainer or
-automation with knowledge of the package's promises makes that judgement.
+It does not infer API compatibility. A maintainer or automation with knowledge of
+the package's promises chooses semantic increment levels. Proposal generation
+completes their mechanical version effects from captured evidence. Resolution
+preview exposes additional dependency-resolution effects before application.
 
 ### Consumer contracts
 
@@ -107,12 +110,8 @@ Two consequences follow, and the tool enforces both:
 
 * An intra-workspace requirement names the exact version its target declares.
   A requirement that merely admits the target's version lets a consumer resolve
-  a combination the workspace never built. Between members of one version group
-  the requirement is additionally an exact `=` pin, because those members are
-  one package split for Cargo's sake and a compatible requirement would let a
-  consumer resolve two of them at versions never released together. This covers
-  every edge that survives packaging, development edges included; a path-only
-  dependency escapes packaging and is not assessed at all.
+  a combination the workspace never built. A path-only development dependency
+  escapes packaging and is not assessed by this release rule.
 * A package whose public dependency releases a semver-incompatible version
   must release one as well. Such a release changes the identity of the exposed
   types, so a consumer holding the older dependency can no longer hand its
@@ -135,6 +134,20 @@ Plan targets, version direction, and group expansion are validated before any
 manifest is written. Files are then edited structurally so comments and layout
 survive.
 
+### Resolution precedes application
+
+Dependency resolution is explicit preparation, not part of classification or
+application. The intended offline workspace refresh precedes semantic assessment.
+Prospective version and requirement changes are resolved before application as well:
+resolving unchanged manifests alone cannot predict their effects.
+
+The proposal settles version groups, requirement propagation, and binary
+dependency-closure effects internally. It retains adequate existing increments
+instead of repeatedly increasing a package at each resolution pass. The captured
+state includes resolved file contents and the inputs they depend on. Application
+uses that state without a late dependency refresh or unlisted version targets.
+Changed inputs require fresh preparation and assessment.
+
 ## Commands
 
 ### Produce evidence for versioning decisions with `report`
@@ -154,8 +167,8 @@ it does not propagate a release decision.
 
 `check` is intended for a merge gate. It fails while any package needs an
 increment, a version group disagrees with itself, an intra-workspace
-requirement does not name the version its target declares, a version-group
-member does not pin its siblings exactly, or a package that exposes a public
+requirement does not name the version its target declares, an exact
+intra-workspace requirement is malformed, or a package that exposes a public
 dependency stays compatible while that dependency releases a breaking change.
 It points the maintainer to the `increment-versions` skill that prepares a plan.
 
@@ -181,30 +194,55 @@ A **proposed plan** is what a planner writes. Its entries may name a version
 group, or a single member of one, and leave resolution to reach the rest, so what
 it names is a starting point rather than the full set it moves.
 
-An **expanded plan** is what `expand` writes. It names every package whose
+An **expanded plan** names every package whose
 version the plan sets and records the version each will carry. Both halves
-matter: the first makes the reviewed set complete with respect to the release
+matter: the first makes the documented set complete with respect to the release
 decision, and the second makes it stable, since an increment level would be
 resolved again against whatever the manifests say when the document is applied.
 Resolving an expanded plan must therefore reproduce it exactly.
 
 Applying a plan also rewrites the requirements that dependents declare on the
-packages it moves, which edits manifests the document does not name. Those
-dependents take no version from the plan, so naming them would claim a release
-they are not making. Their safety is a separate rule: a dependent that would
-keep an already-published version while its manifest is rewritten needs a
-change level of its own, and `check` rejects the result if one is missed.
+packages it moves. A dependent whose existing pending increment is sufficient
+need not receive another one. A dependent that would otherwise keep an
+already-published version needs its own release decision before application.
 
-Approval is not a third stage. The expanded plan a caller approves is applied
-unchanged, so the reviewed document and the applied document are the same bytes,
-rather than one being a rendering of the other.
+The expanded plan is applied unchanged, so the documented package/version set
+and applied document are the same artifact. Review and approval policy belong
+to the caller, not the tool.
 
-### Preview a decision with `expand`
+### Plan from captured evidence
+
+`analysis-order`, `semver-targets`, and `propose` operate entirely on report
+artifacts. Their answers do not depend on a checkout, a registry, or installed
+compatibility tools.
+
+Semantic assessment is dependency-first. Every publishable package appears in an
+analysis batch, with mutually dependent packages assessed together. Version groups
+do not create artificial dependency cycles, and non-publishable members do not
+receive semantic assessments.
+
+Compatibility target selection follows consumer contracts. A changed package
+selects the public contracts in its version group rather than demanding a
+comparison of private implementation APIs. Packages without changed released
+content do not independently select a comparison.
+
+Proposal generation consumes explicit `breaking`, `nonbreaking`, or `patch`
+decisions. It retains adequate pending version increases, aligns version groups
+without regression, and propagates required dependent releases. Public dependency
+breaks use the same compatibility rule as the release gate. Requirements rewritten
+by the proposal cannot leave a dependent at an already-published version.
+These mechanical requirements do not replace semantic judgement.
+
+The proposal is based on the report's declared versions and release anchors.
+Preview remains responsible for resolving prospective manifests and lockfiles;
+its additional evidence can require a fresh semantic decision.
+
+### Expand version choices with `expand`
 
 `expand --plan <plan.json> --out <expanded.json>` resolves a proposed plan's
 version groups and increment levels into one explicit entry per package. A
 proposed plan may omit version-group members that `apply` will update; `expand`
-writes the explicit package/version set for review.
+writes the explicit package/version set without resolving dependencies.
 
 That set is the packages whose versions move. Applying it also rewrites
 requirements inside their dependents, which the document does not name because
@@ -212,22 +250,59 @@ the plan gives them no version.
 
 An expanded plan records its stage, which binds it to the package set it names:
 applying it after a version group gained a member fails rather than quietly
-editing a package that was never reviewed. Recovering from that means expanding
-the proposal again and reviewing the wider set. A proposed plan keeps the
-opposite behavior, since naming a group and letting resolution reach its members
-is how such a plan is written.
+editing an unlisted package. Recovering from that means refreshing the planning
+inputs and expanding the proposal again to document the wider set. A proposed
+plan keeps the opposite behavior, since naming a group and letting resolution
+reach its members is how such a plan is written.
+
+Structural expansion alone is not a complete resolved artifact. A release
+proposal must also account for the actual lockfile effects of those versions.
+
+Input-preserving expansion rejects destinations that alias the proposal and leaves
+an existing destination unchanged if expansion fails. Callers can request this
+behavior without giving up the general command's supported in-place expansion.
+
+### Inspect an expanded plan
+
+`inspect-plan` validates an expansion against the selected workspace and provides
+publication-eligible target names and any retained compatibility manifest.
+Non-publishable alignment targets remain part of validation but not publication.
+Requiring resolved evidence applies the same captured-state checks as a dry-run
+application. Inspection performs no writes or registry queries; external callers
+own publication availability checks.
+
+### Prepare evidence and preview resolution
+
+Preparation performs the workflow's intended offline workspace resolution before
+collecting released-content evidence. It does not request blanket third-party
+upgrades. The report and compatibility assessment used for semantic decisions
+describe that prepared state.
+
+Preview applies candidate versions and requirement rewrites in a disposable
+workspace and resolves there under the same offline policy. It classifies the
+prospective tree against the fixed release baseline and expands release effects
+until versions and resolution agree. Transitive binary lockfile effects and
+re-selection among already-locked dependency versions therefore appear before
+application, not as a request for a second versioning pass.
+
+Automatically required releases are visible in the final proposal and its
+evidence. They establish minimum release requirements, not a claim of semantic
+compatibility: the caller assesses newly exposed dependency changes and raises
+levels when the package's contract requires it, then previews again before
+applying the stable proposal.
 
 ### Carry out a decision with `apply`
 
-`apply --plan <plan.json>` turns approved version choices into manifest edits,
-and accepts a plan of either stage. A proposed plan is created after reading the
-report: the maintainer or the `increment-versions` skill records a `patch`,
-`minor`, or `major` level (or an exact target version) for each selected package
-or version group, using the JSON format documented in the package README.
+`apply --plan <plan.json>` applies an expanded plan using the resolved
+state captured by preview. It validates the input
+snapshot and target set before installing the captured manifest and lockfile
+contents. It does not run dependency resolution. An already-applied resolved
+plan is an idempotent no-op; a partially changed or stale input is not treated as
+the captured state. `--dry-run` reports what would change without writing.
 
-The command resolves groups, calculates target versions, updates package versions
-and affected intra-workspace requirements, and refreshes the workspace lockfile.
-`--dry-run` reports what would change without writing.
+Proposed plans support a separate low-level manifest-only application. That path
+does not resolve or install lockfiles and is not the complete release workflow.
+The guided release workflow accepts only the resolved expanded artifact.
 
 ### Between report and apply
 
@@ -237,11 +312,14 @@ dependencies, and workspace relationships needed for that judgement. It does
 not compile code, compare API surfaces, or infer compatibility from a textual
 diff.
 
-After a person or an agent records the choices in a plan, `apply` owns the
-mechanical consequences. It expands version groups, derives new versions,
-rewrites requirements that must follow, and refreshes the lockfile.
+After a person or an agent records the choices in a plan, preview accounts for
+the mechanical consequences. It expands version groups, derives new versions,
+rewrites requirements that must follow, and resolves the lockfile before the
+complete result is applied. Post-application verification confirms that result;
+it is not a routine source of additional lockfile-only release decisions.
 
-All commands use the workspace selected by `--manifest-path`. `report` and
+Workspace commands use the workspace selected by `--manifest-path`. Artifact-only
+planning commands instead use their supplied reports and decisions. `report` and
 `check` accept `--base` to name the shared release baseline.
 
 ## The release baseline
@@ -359,21 +437,33 @@ not constrain consumers of a library-only package: those consumers resolve the
 library in their own dependency graph. Its dependency changes are therefore not
 released content for this purpose.
 
-A **lockfile-bearing target** is a binary or example target for which the
-package's recorded dependency resolution is operationally relevant. Such a
-target releases its package-specific dependency closure.
+An installable binary target makes its package's recorded dependency resolution
+release-relevant, including when that package also contains a library. Examples,
+benchmarks, tests, and build scripts do not qualify, even when they are executable
+or physically included in an archive.
 
 The package-specific closure is compared rather than the workspace lockfile's
-bytes, so unrelated dependency movement does not affect every lockfile-bearing
+bytes, so unrelated dependency movement does not affect every binary
 package. Entries are identified by name, version, and source. The root package
 is selected by its name and declared version, and excluded from its own closure
 so incrementing it does not create another change.
 
+The closure covers installation dependencies, including normal and build
+dependencies across target platforms. Development-only dependency edges of
+workspace members do not participate, either at the binary root or through a
+transitive workspace dependency.
+
+Dependency identity includes its source, so a same-named development dependency
+from another source does not enter an installation closure. Workspace patches,
+registry configuration, and Cargo-supported legacy dependency tables participate.
+If source identity cannot be reconstructed without guessing, assessment stops
+instead of reporting the dependency as unchanged or irrelevant.
+
 Target shape is resolved independently at the anchor and in the work tree. An
-endpoint with a lockfile-bearing target requires a workspace lockfile that
+endpoint with an installable binary target requires a workspace lockfile that
 resolves the package at the version declared there. An endpoint without one
 contributes an empty closure and requires no lockfile. This makes adding the
-first binary or example compare an empty anchor closure with the current
+first binary compare an empty anchor closure with the current
 resolution, while removing the last one compares the historical resolution with
 an empty work-tree closure. If a required closure cannot be reconstructed, the
 assessment stops rather than treating unknown released content as unchanged. A
@@ -412,15 +502,36 @@ requirement and public-dependency rules fail it independently of status.
 
 ## Version groups
 
-Members of a version group share a declared version. If one member needs an
-increment, the plan expands to every member. The target starts from the highest
-declared member version and applies the highest chosen increment level. Entries
-that expand to the same group must all use increment levels or all use one
-matching exact version.
+Every Git-tracked Cargo workspace member is a **version target**, including a
+member that cannot be published. An exact dependency declaration between two
+version targets states that their versions move together. Version groups are
+the connected components formed by those declarations, in either dependency
+direction, and contain at least two members. A group's key is its
+lexicographically smallest member.
 
-`expand` exposes that resolution as a document so a caller can present the
-complete set of affected packages before approving a plan that omits packages
-`apply` will update.
+All normal, build, and development declarations participate, including optional
+and target-specific declarations. An inherited declaration uses the effective
+workspace dependency. A dependency alias follows the package identity it names,
+and a local path must resolve to that workspace member. Registry dependencies,
+outside or excluded paths, versionless paths, and unused workspace dependency
+entries do not form groups.
+
+The accepted exact form is one `=major.minor.patch` comparator, with
+insignificant whitespace allowed. A partial exact version, a prerelease or build
+suffix, or a compound requirement containing an exact comparator is a manifest
+error. A well-formed exact requirement whose version is stale still forms its
+group: `check` reports the stale requirement and `apply` can repair it.
+
+If one publishable member needs an increment, the plan expands to every version
+target in its group. A plan may also target a non-publishable member directly,
+and helper-only groups can be aligned without publishing anything. The target
+starts from the highest declared member version, including non-publishable and
+new members, and applies the highest chosen increment level. Entries that expand
+to the same group must all use increment levels or all use one matching exact
+version.
+
+`expand` exposes that resolution as a document so a caller can present and apply
+the complete package/version set rather than leave group members implicit.
 
 An inconsistent group is a check failure in its own right, independent of any
 content change. A plan entry naming any member resolves it, and expansion is
@@ -430,18 +541,21 @@ carries that highest version as an exact target instead moves lagging members up
 to it and leaves the leading member unchanged. The lagging members then become
 pending release because their declared versions advanced.
 
-Members not yet published by the baseline are exempt from the consistency check,
-which lets a new package join a group before its first release. Group
-configuration may contain only publishable workspace packages and cannot use a
-package's name for a group that excludes that package.
+Members absent from the baseline are exempt from the consistency check, which
+lets a new package join a group before its first release. This exemption does
+not remove the member from alignment or from the version base. A member that
+exists on the baseline with publication disabled is not absent.
 
-Groups are declared under `[workspace.metadata.release-plan.groups]`.
+The obsolete `[workspace.metadata.release-plan.groups]` key is rejected. Group
+membership is declared only by exact workspace dependency requirements.
 
 ## Report artifacts
 
-`report.json` is the complete machine-readable assessment. It records every
-publishable package, its status and anchor, the reasons it changed, its
-dependencies and dependents, and group consistency.
+`report.json` is the complete machine-readable assessment. Its `packages` array
+records every publishable package, its status and anchor, the reasons it changed,
+and its dependencies and dependents. Its `non_publishable_packages` array
+records each remaining version target's name, declared version, and group.
+Group records cover the union of both arrays and report complete consistency.
 
 Per-package patch files are a readable supplement for file changes. They cover
 every package whose released files differ from its anchor, including one whose

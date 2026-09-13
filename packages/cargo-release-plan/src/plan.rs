@@ -9,15 +9,16 @@ use std::str::FromStr;
 
 use ohno::AppError;
 use semver::Version;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::groups::Groups;
+use crate::resolved::ResolvedState;
 use crate::verbose::Verbose;
 use crate::{
     ConflictingPlanIncrementKindError, ConflictingPlanVersionError, ExpandedPlanDriftError,
-    InvalidVersionError, PlanIncrementSpecError, PlanVersionRegressionError,
-    UnknownIncrementLevelError, UnknownPlanTargetError, UnresolvedExpandedPlanError,
-    UnsupportedPlanSchemaError, VersionOverflowError, quote_path,
+    InvalidVersionError, NonPlainGroupVersionError, PlanIncrementSpecError,
+    PlanVersionRegressionError, UnknownIncrementLevelError, UnknownPlanTargetError,
+    UnresolvedExpandedPlanError, UnsupportedPlanSchemaError, VersionOverflowError, quote_path,
 };
 
 /// Shared plan and report schema revision.
@@ -26,22 +27,17 @@ use crate::{
 /// path-layout changes increment this constant. Contract: package README
 /// "Plan and report schema".
 ///
-/// A field whose absence changes how a document is interpreted counts as
-/// incompatible even though older readers simply ignore it. Revision 2 added
-/// the plan's stage flag and the report's public-dependency marking: a reader
-/// that ignores the first treats an expanded plan as a proposal and expands it
-/// again, which is the widening the flag exists to prevent, and one that
-/// ignores the second silently omits breaking-change propagation. Both
-/// producers compare this revision for equality, so a mismatch in either
-/// direction fails loudly instead.
-pub(crate) const SCHEMA_VERSION: u32 = 2;
+/// The resolved-state revision distinguishes read-only group expansion from
+/// captured previews; only a captured preview is an applicable expanded plan.
+/// Command and JSON incompatibilities require breaking release grading even
+/// when comparison of the public Rust API finds no incompatible signatures.
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 
 /// On-disk plan file.
 ///
-/// This is the wire shape both `expand` and `apply` read. It is deliberately one
-/// shape for both planning stages, so an expansion can be applied directly, and
-/// [`PlanFile::stage`] recovers which stage a given document belongs to.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+/// Expansion and preview share explicit package/version decisions. Preview also
+/// attaches the captured state required to apply those decisions.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct PlanFile {
     pub(crate) schema_version: u32,
     /// Set by `expand`, absent in a hand-written plan.
@@ -51,9 +47,19 @@ pub(crate) struct PlanFile {
     #[serde(default)]
     expanded: bool,
     pub(crate) increments: Vec<PlanIncrement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resolved: Option<ResolvedState>,
 }
 
 impl PlanFile {
+    /// Rejects an unsupported protocol before workspace discovery or mutation.
+    pub(crate) fn validate_schema(&self) -> Result<(), AppError> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(UnsupportedPlanSchemaError::new(self.schema_version).into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn stage(&self) -> PlanStage {
         if self.expanded {
             PlanStage::Expanded
@@ -62,12 +68,12 @@ impl PlanFile {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn new(stage: PlanStage, increments: Vec<PlanIncrement>) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             expanded: matches!(stage, PlanStage::Expanded),
             increments,
+            resolved: None,
         }
     }
 
@@ -77,6 +83,7 @@ impl PlanFile {
             schema_version,
             expanded: false,
             increments: Vec::new(),
+            resolved: None,
         }
     }
 }
@@ -85,8 +92,8 @@ impl PlanFile {
 ///
 /// The two stages carry different guarantees about the packages a document
 /// names, so resolving one is not the same operation as resolving the other.
-/// Approval is not a third stage: the expansion a caller approves is applied
-/// byte for byte, so the reviewed document and the applied document are one.
+/// The additional captured state distinguishes a fully resolved preview from
+/// read-only group expansion without introducing an implicit resolver operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlanStage {
     /// A planner's input, which may name a version group or a single member of
@@ -96,16 +103,13 @@ pub(crate) enum PlanStage {
     Proposed,
     /// The document `expand` writes, which names every package whose version
     /// the plan sets and records the version each will carry. Both halves
-    /// matter: the first makes the reviewed set complete with respect to the
+    /// matter: the first makes the captured set complete with respect to the
     /// release decision, and the second makes it stable, since a
     /// level would be re-resolved against whatever the manifests say when the
     /// document is applied. Resolving one must therefore reproduce it exactly.
     ///
-    /// Applying it also rewrites requirements inside the dependents of the
-    /// packages it moves. Those take no version from the plan, so they are not
-    /// named here; a dependent that would keep an already-published version
-    /// while its manifest changes needs a decision of its own, which `check`
-    /// demands.
+    /// Preview adds the captured manifest and lockfile effects needed for application.
+    /// Group expansion alone is not sufficient evidence for applying this stage.
     Expanded,
 }
 
@@ -121,7 +125,7 @@ pub(crate) struct ResolvedVersions {
 
 /// Resolves `plan` into the version each package it reaches will carry.
 ///
-/// `publishable` maps every package a plan may target to the version its
+/// `target_versions` maps every package a plan may target to the version its
 /// manifest declares today. A package outside it is not a valid plan target, and
 /// the highest version among a group's members in it is the increment base.
 ///
@@ -130,12 +134,10 @@ pub(crate) struct ResolvedVersions {
 pub(crate) fn resolve_plan(
     plan: &PlanFile,
     groups: &Groups,
-    publishable: &BTreeMap<String, Version>,
+    target_versions: &BTreeMap<String, Version>,
     verbose: Verbose,
 ) -> Result<ResolvedVersions, AppError> {
-    if plan.schema_version != SCHEMA_VERSION {
-        return Err(UnsupportedPlanSchemaError::new(plan.schema_version).into());
-    }
+    plan.validate_schema()?;
 
     // An expanded plan claims two things: that it records the version each package takes, and
     // that it names every package the plan reaches. The first is a property of the document
@@ -156,7 +158,7 @@ pub(crate) fn resolve_plan(
     let mut decisions: BTreeMap<String, IncrementSpec> = BTreeMap::new();
 
     for increment in &plan.increments {
-        let targets = resolve_targets(&increment.name, groups, publishable)?;
+        let targets = resolve_targets(&increment.name, groups, target_versions)?;
         let spec = increment.spec()?;
         verbose.note(|| {
             format!(
@@ -188,14 +190,14 @@ pub(crate) fn resolve_plan(
 
     let mut packages = BTreeMap::new();
     for (key, decision) in decisions {
-        let members = members_for_key(&key, groups, publishable);
+        let members = members_for_key(&key, groups, target_versions);
         let highest = members
             .iter()
-            .filter_map(|member| publishable.get(member))
+            .filter_map(|member| target_versions.get(member))
             .max()
             .cloned()
             .expect(
-                "every decision key comes from a target that resolved to at least one publishable member, and every publishable member has a declared version",
+                "every decision key comes from a tracked target, and every target has a declared version",
             );
         let new_version = match &decision {
             IncrementSpec::Version(version) => {
@@ -208,6 +210,11 @@ pub(crate) fn resolve_plan(
                     return Err(
                         PlanVersionRegressionError::new(&key, version.clone(), highest).into(),
                     );
+                }
+                if !groups.members(&key).is_empty()
+                    && (!version.pre.is_empty() || !version.build.is_empty())
+                {
+                    return Err(NonPlainGroupVersionError::new(&key, version.clone()).into());
                 }
                 version.clone()
             }
@@ -235,10 +242,10 @@ pub(crate) fn resolve_plan(
         // resolution find the rest is how such a plan is written.
         PlanStage::Proposed => {}
         // An expansion names every package it reaches, and that set is what a
-        // caller reviewed and what the publication check ran over. Resolution
-        // reads the group configuration as it stands now, so a member added to a
-        // group after the document was written would otherwise be picked up
-        // here, widening the reviewed set without anyone seeing it.
+        // plan records and what the publication check ran over. Resolution
+        // reads the derived group as it stands now, so a member newly connected
+        // after the document was written would otherwise be picked up
+        // here, widening the recorded set without a new complete plan.
         PlanStage::Expanded => {
             let named: BTreeSet<&str> = plan
                 .increments
@@ -260,12 +267,12 @@ pub(crate) fn resolve_plan(
 }
 
 /// One increment entry as stored in plan JSON.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct PlanIncrement {
     pub(crate) name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) level: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) version: Option<String>,
 }
 
@@ -366,28 +373,10 @@ impl IncrementSpec {
 fn resolve_targets(
     name: &str,
     groups: &Groups,
-    publishable: &BTreeMap<String, Version>,
+    target_versions: &BTreeMap<String, Version>,
 ) -> Result<Vec<String>, AppError> {
-    let group_members = groups.members(name);
-    if !group_members.is_empty() {
-        let targets: Vec<String> = group_members
-            .iter()
-            .filter(|member| publishable.contains_key(*member))
-            .cloned()
-            .collect();
-        if targets.is_empty() {
-            // Silently dropping the entry would report success while applying
-            // nothing, which reads as an accepted plan that had no effect.
-            return Err(UnknownPlanTargetError::new(name).into());
-        }
-        return Ok(targets);
-    }
-    if publishable.contains_key(name) {
-        return Ok(groups
-            .closure(name)
-            .into_iter()
-            .filter(|member| publishable.contains_key(member))
-            .collect());
+    if target_versions.contains_key(name) {
+        return Ok(groups.closure(name));
     }
     Err(UnknownPlanTargetError::new(name).into())
 }
@@ -402,21 +391,17 @@ fn decision_keys(targets: &[String], groups: &Groups) -> BTreeSet<String> {
 fn members_for_key(
     key: &str,
     groups: &Groups,
-    publishable: &BTreeMap<String, Version>,
+    target_versions: &BTreeMap<String, Version>,
 ) -> Vec<String> {
     let group_members = groups.members(key);
     if group_members.is_empty() {
-        if publishable.contains_key(key) {
+        if target_versions.contains_key(key) {
             vec![key.to_string()]
         } else {
             Vec::new()
         }
     } else {
-        group_members
-            .iter()
-            .filter(|member| publishable.contains_key(*member))
-            .cloned()
-            .collect()
+        group_members.to_vec()
     }
 }
 
@@ -459,11 +444,10 @@ mod tests {
     }
 
     fn nm_groups() -> Groups {
-        Groups::from_members(BTreeMap::from([(
-            "nm".to_string(),
-            vec!["nm".to_string(), "nm_impl".to_string()],
-        )]))
-        .unwrap()
+        Groups::from_edges(
+            ["nm", "nm_impl"].map(str::to_string),
+            [("nm".to_string(), "nm_impl".to_string())],
+        )
     }
 
     fn current() -> BTreeMap<String, Version> {
@@ -503,9 +487,9 @@ mod tests {
 
     /// An expanded plan is rejected once its group gained a member.
     ///
-    /// The expanded document is the approved set, so reaching a package it does
-    /// not name means the group configuration moved underneath it. Applying it
-    /// would edit a package nobody reviewed and that the publication check never
+    /// The expanded document records the complete set, so reaching a package it does
+    /// not name means the derived group moved underneath it. Applying it
+    /// would edit a package the plan did not record and that the publication check never
     /// saw.
     #[test]
     fn an_expanded_plan_rejects_a_member_added_after_it_was_written() {
@@ -574,8 +558,8 @@ mod tests {
     /// An expanded plan carrying a level is rejected.
     ///
     /// A level is resolved against the manifests as they stand when it is
-    /// applied, so an expanded plan carrying one would let the same approved
-    /// document apply a version other than the reviewed one.
+    /// applied, so an expanded plan carrying one would let the same captured
+    /// document apply a version other than the recorded one.
     #[test]
     fn an_expanded_plan_rejects_an_unresolved_increment_level() {
         let plan = PlanFile::new(
@@ -638,11 +622,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_schema() {
-        // Arbitrary revision distinct from the supported schema.
-        let plan = PlanFile::with_schema_version(9);
-        let error = resolve_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
-        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+    fn rejects_older_and_future_schemas() {
+        for schema_version in [3, 5] {
+            let plan = PlanFile::with_schema_version(schema_version);
+            let error =
+                resolve_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
+            assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+        }
     }
 
     #[test]
@@ -686,6 +672,25 @@ mod tests {
             }],
         );
         let expanded = resolve_plan(&plan, &nm_groups(), &versions, Verbose::new(false)).unwrap();
+        assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.51")));
+        assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.51")));
+    }
+
+    #[test]
+    fn incrementing_a_non_plain_highest_version_produces_a_higher_plain_version() {
+        let mut versions = current();
+        versions.insert("nm_impl".to_string(), v("0.1.50-alpha.1"));
+        let plan = PlanFile::new(
+            PlanStage::Proposed,
+            vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: Some("patch".to_string()),
+                version: None,
+            }],
+        );
+
+        let expanded = resolve_plan(&plan, &nm_groups(), &versions, Verbose::new(false)).unwrap();
+
         assert_eq!(expanded.packages.get("nm"), Some(&v("0.1.51")));
         assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.51")));
     }
@@ -846,18 +851,35 @@ mod tests {
     }
 
     #[test]
-    fn group_without_publishable_members_is_rejected() {
-        let publishable = BTreeMap::from([("events".to_string(), v("0.2.0"))]);
+    fn a_helper_only_group_can_be_targeted() {
+        let targets = BTreeMap::from([
+            ("nm".to_string(), v("0.1.0")),
+            ("nm_impl".to_string(), v("0.1.0")),
+        ]);
         let plan = PlanFile::new(
             PlanStage::Proposed,
             vec![PlanIncrement {
-                name: "nm".to_string(),
+                name: "nm_impl".to_string(),
                 level: Some("patch".to_string()),
                 version: None,
             }],
         );
-        let error =
-            resolve_plan(&plan, &nm_groups(), &publishable, Verbose::new(false)).unwrap_err();
-        assert!(error.find_source::<UnknownPlanTargetError>().is_some());
+        let resolved = resolve_plan(&plan, &nm_groups(), &targets, Verbose::new(false)).unwrap();
+        assert_eq!(resolved.packages.get("nm"), Some(&v("0.1.1")));
+        assert_eq!(resolved.packages.get("nm_impl"), Some(&v("0.1.1")));
+    }
+
+    #[test]
+    fn an_explicit_non_plain_group_target_is_rejected() {
+        let plan = PlanFile::new(
+            PlanStage::Proposed,
+            vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: None,
+                version: Some("0.2.0-alpha.1".to_string()),
+            }],
+        );
+        let error = resolve_plan(&plan, &nm_groups(), &current(), Verbose::new(false)).unwrap_err();
+        assert!(error.find_source::<NonPlainGroupVersionError>().is_some());
     }
 }

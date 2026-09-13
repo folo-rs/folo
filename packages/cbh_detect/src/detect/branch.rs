@@ -1394,7 +1394,17 @@ mod tests {
 
     #[test]
     fn supported_history_lengths_report_strict_range_excursions() {
-        for base_commits in [10, 20, 40, 64, 128] {
+        // Miri covers both complete-window and selector/reference evaluation. The native
+        // matrix additionally checks scaling up to the supported comparison-window cap.
+        let lengths: &[usize] = if cfg!(miri) {
+            &[
+                noise_gates::MIN_SERIES_POINTS,
+                noise_gates::MIN_BRANCH_REGIME_SELECTION_COMMITS,
+            ]
+        } else {
+            &[10, 20, 40, 64, 128]
+        };
+        for &base_commits in lengths {
             let one = series("length", "m1", &vec![100.0; base_commits], 130.0);
             let detection = find_changes(std::slice::from_ref(&one), &context(base_commits));
             assert_eq!(
@@ -1421,12 +1431,15 @@ mod tests {
     #[test]
     #[cfg(feature = "private-test-util")]
     fn spawned_branch_evaluation_matches_the_serial_result() {
+        // Worker recombination needs judged series, not regime-selection searches.
+        const BASE_COMMITS: usize = noise_gates::MIN_SERIES_POINTS;
+
         let batch: Arc<[Series]> = Arc::from([
-            series("regression", "m1", &[100.0; 20], 130.0),
-            series("quiet", "m1", &[100.0; 20], 100.0),
-            series("improvement", "m1", &[200.0; 20], 100.0),
+            series("regression", "m1", &[100.0; BASE_COMMITS], 130.0),
+            series("quiet", "m1", &[100.0; BASE_COMMITS], 100.0),
+            series("improvement", "m1", &[200.0; BASE_COMMITS], 100.0),
         ]);
-        let context = context(20);
+        let context = context(BASE_COMMITS);
         let serial = find_changes(&batch, &context);
         let spawned = block_on(find_changes_spawned(
             Arc::clone(&batch),
@@ -1580,8 +1593,9 @@ mod tests {
 
     #[test]
     fn latest_supported_regime_excludes_the_older_level() {
-        let mut base = vec![200.0; 20];
-        base.extend(std::iter::repeat_n(100.0, 20));
+        // Each alternating lane keeps a minimum-sized regime on both sides of the step.
+        let mut base = vec![200.0; 10];
+        base.extend(std::iter::repeat_n(100.0, 10));
         let one = series("regimes", "m1", &base, 200.0);
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
 
@@ -1595,18 +1609,19 @@ mod tests {
             .expect("branch findings carry range evidence");
         assert_eq!(branch.reference_min, 100.0);
         assert_eq!(branch.reference_max, 100.0);
-        assert_eq!(branch.current_regime_start.as_deref(), Some("c20"));
+        assert_eq!(branch.current_regime_start.as_deref(), Some("c10"));
         assert!(branch.matches_previous_regime);
         assert_eq!(
             detection.branch_trace.series[0].current_regime_start,
-            Some(20)
+            Some(10)
         );
     }
 
     #[test]
     fn an_excursion_beyond_both_current_and_previous_regimes_is_not_a_return() {
-        let mut base = vec![200.0; 20];
-        base.extend(std::iter::repeat_n(100.0, 20));
+        // Minimum-sized selector regimes suffice to identify the preceding level.
+        let mut base = vec![200.0; 10];
+        base.extend(std::iter::repeat_n(100.0, 10));
         let one = series("new-excursion", "m1", &base, 230.0);
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
         let branch = detection.findings[0]
@@ -1619,9 +1634,10 @@ mod tests {
 
     #[test]
     fn an_ambiguous_reference_observation_is_not_previous_regime_evidence() {
-        let mut base = vec![200.0; 20];
-        base[19] = 150.0;
-        base.extend(std::iter::repeat_n(100.0, 20));
+        // The reference immediately before the minimum-sized new regime is ambiguous.
+        let mut base = vec![200.0; 10];
+        base[9] = 150.0;
+        base.extend(std::iter::repeat_n(100.0, 10));
         let one = series("ambiguous-reference", "m1", &base, 150.0);
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
         let branch = detection.findings[0]
@@ -1707,8 +1723,9 @@ mod tests {
 
     #[test]
     fn a_statistical_split_below_the_practical_floor_does_not_move_the_regime() {
-        let mut base = vec![10_000.0; 20];
-        base.extend(std::iter::repeat_n(10_200.0, 20));
+        // A minimum-sized pair of selector regimes already establishes a statistical split.
+        let mut base = vec![10_000.0; 10];
+        base.extend(std::iter::repeat_n(10_200.0, 10));
         let one = series("impractical-split", "m1", &base, 11_000.0);
         let selection = select_regime(&one);
 
@@ -1717,6 +1734,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "multiple supported boundaries require repeated selection-adjusted calibration"
+    )]
     fn the_newest_of_several_supported_boundaries_becomes_the_comparison_regime() {
         // Three supported steps. The search finds the middle one first and reaches the
         // outer two by recursing into both of its sides, so the boundaries must still come
@@ -1734,6 +1755,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "a weak central split hiding an earlier regime requires a large permutation orbit"
+    )]
     fn an_unsupported_split_does_not_hide_an_earlier_supported_one() {
         // The 100 -> 100.5 step is statistically real but far below the practical floor,
         // and it sits closer to the middle than the large 90 -> 100 step, so the strongest
@@ -1758,6 +1783,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "a weak central split hiding a later regime requires repeated permutation searches"
+    )]
     fn an_unsupported_split_does_not_prevent_searching_for_a_later_supported_one() {
         let mut base = vec![100.0; 20];
         base.extend(std::iter::repeat_n(104.0, 20));
@@ -1831,7 +1860,8 @@ mod tests {
 
     #[test]
     fn a_recent_step_too_short_to_establish_is_unjudged() {
-        let mut base = vec![100.0; 36];
+        // The shortest searchable base retains two trailing selector observations.
+        let mut base = vec![100.0; 16];
         base.extend(std::iter::repeat_n(200.0, 4));
         let one = series("unresolved", "m1", &base, 220.0);
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
@@ -1910,9 +1940,8 @@ mod tests {
 
     #[test]
     fn a_smooth_base_drift_is_not_mistaken_for_an_unresolved_step() {
-        let base: Vec<f64> = (0_u32..40)
-            .map(|index| 100.0 + f64::from(index) / 2.0)
-            .collect();
+        // A shortest searchable base still spans a practically large, smooth drift.
+        let base: Vec<f64> = (0_u32..20).map(|index| 100.0 + f64::from(index)).collect();
         let one = series("drift", "m1", &base, 140.0);
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
 
@@ -2011,10 +2040,11 @@ mod tests {
 
     #[test]
     fn equality_with_either_observed_range_edge_is_quiet() {
+        // Range-edge equality needs a judged base, not a regime-selection search.
         let base = [100.0, 200.0]
             .into_iter()
             .cycle()
-            .take(20)
+            .take(noise_gates::MIN_SERIES_POINTS)
             .collect::<Vec<_>>();
         for tip in [100.0, 200.0] {
             let one = series("edge", "m1", &base, tip);
@@ -2365,7 +2395,8 @@ mod tests {
 
     #[test]
     fn comparisons_are_partitioned_by_discriminant_set() {
-        let base = vec![100.0; 20];
+        // Partitioning is independent of base-window scale.
+        let base = vec![100.0; noise_gates::MIN_SERIES_POINTS];
         let series = [
             series("linux", "m1", &base, 130.0),
             series("mac", "m2", &base, 140.0),
@@ -2402,8 +2433,8 @@ mod tests {
 
     #[test]
     fn nonconsecutive_shared_candidates_form_one_larger_family() {
-        let mut left = series("left", "m1", &[100.0; 14], 130.0);
-        let mut right = series("right", "m1", &[100.0; 14], 130.0);
+        let mut left = series("left", "m1", &[], 130.0);
+        let mut right = series("right", "m1", &[], 130.0);
         replace_reference_commits(&mut left, &[11, 31, 51, 91, 111, 131, 171], 200);
         replace_reference_commits(&mut right, &[11, 51, 71, 91, 131, 151, 171], 200);
 
@@ -2416,21 +2447,27 @@ mod tests {
 
     #[test]
     fn family_members_must_contain_every_seed_commit() {
-        let mut first = series("first", "m1", &[100.0; 10], 130.0);
-        let mut second = series("second", "m1", &[100.0; 10], 130.0);
+        let mut first = series("first", "m1", &[], 130.0);
+        let mut second = series("second", "m1", &[], 130.0);
         replace_reference_commits(&mut first, &[1, 3, 5, 7, 9], 20);
         replace_reference_commits(&mut second, &[1, 3, 5, 7, 11], 20);
         let batch = [first, second];
-        let entries: Vec<PreparedEntry> = batch
-            .iter()
-            .enumerate()
-            .map(|(index, one)| prepare_series(index, one, &context(20), &mut GateLog::disabled()))
-            .collect();
-        let family = select_family(&batch, &entries, &[0, 1])
-            .expect("each series independently provides a complete candidate family");
+        let family = selected_test_family(&batch, &context(20));
 
         assert_eq!(family.member_indices, vec![1]);
         assert_eq!(family.candidate_commits, vec![1, 3, 5, 7, 11]);
+    }
+
+    /// Exercises rectangular-family selection without scoring unrelated historical turns.
+    fn selected_test_family(batch: &[Series], context: &AnalysisContext) -> HistoricalFamily {
+        let entries: Vec<PreparedEntry> = batch
+            .iter()
+            .enumerate()
+            .map(|(index, one)| prepare_series(index, one, context, &mut GateLog::disabled()))
+            .collect();
+        let indices: Vec<_> = (0..batch.len()).collect();
+        select_family(batch, &entries, &indices)
+            .expect("each series independently provides a complete candidate family")
     }
 
     #[test]
@@ -2440,34 +2477,33 @@ mod tests {
 
     #[test]
     fn three_way_shared_candidates_form_a_larger_family() {
-        let mut first = series("first", "m1", &[100.0; 20], 100.0);
-        let mut second = series("second", "m1", &[100.0; 20], 100.0);
-        let mut third = series("third", "m1", &[100.0; 20], 100.0);
+        // The reference helper builds the complete base window; do not build one to discard.
+        let mut first = series("first", "m1", &[], 100.0);
+        let mut second = series("second", "m1", &[], 100.0);
+        let mut third = series("third", "m1", &[], 100.0);
         replace_reference_commits(&mut first, &[10, 15, 20, 30, 35, 40, 50], 200);
         replace_reference_commits(&mut second, &[10, 15, 20, 30, 40, 45, 50], 200);
         replace_reference_commits(&mut third, &[10, 20, 30, 35, 40, 45, 50], 200);
 
-        let detection = find_changes(&[first, second, third], &context(200));
-        let comparison = &detection.branch_comparisons[0];
+        let family = selected_test_family(&[first, second, third], &context(200));
 
-        assert_eq!(comparison.series, 3);
-        assert_eq!(comparison.evaluated_base_commits, 5);
+        assert_eq!(family.member_indices, vec![0, 1, 2]);
+        assert_eq!(family.candidate_commits, vec![10, 20, 30, 40, 50]);
     }
 
     #[test]
     fn three_way_shared_candidates_can_exceed_the_minimum_family() {
-        let mut first = series("first-wide", "m1", &[100.0; 20], 100.0);
-        let mut second = series("second-wide", "m1", &[100.0; 20], 100.0);
-        let mut third = series("third-wide", "m1", &[100.0; 20], 100.0);
+        let mut first = series("first-wide", "m1", &[], 100.0);
+        let mut second = series("second-wide", "m1", &[], 100.0);
+        let mut third = series("third-wide", "m1", &[], 100.0);
         replace_reference_commits(&mut first, &[10, 15, 20, 30, 35, 40, 50, 60], 200);
         replace_reference_commits(&mut second, &[10, 15, 20, 30, 40, 45, 50, 60], 200);
         replace_reference_commits(&mut third, &[10, 20, 30, 35, 40, 45, 50, 60], 200);
 
-        let detection = find_changes(&[first, second, third], &context(200));
-        let comparison = &detection.branch_comparisons[0];
+        let family = selected_test_family(&[first, second, third], &context(200));
 
-        assert_eq!(comparison.series, 3);
-        assert_eq!(comparison.evaluated_base_commits, 6);
+        assert_eq!(family.member_indices, vec![0, 1, 2]);
+        assert_eq!(family.candidate_commits, vec![10, 20, 30, 40, 50, 60]);
     }
 
     #[test]

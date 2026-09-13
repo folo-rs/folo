@@ -1,6 +1,7 @@
 // Classification of publishable packages against their anchors.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
@@ -9,7 +10,7 @@ use std::{fs, io, str};
 use ohno::AppError;
 use semver::Version;
 use serde::ser::SerializeStruct;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, Presence, TimelineEntry, resolve_anchor};
@@ -17,11 +18,12 @@ use crate::diff::{FileVersion, file_diff, mode_change_diff};
 use crate::git::{DefaultBase, GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
-use crate::lockfile::{Closure, ClosureChange, Lockfile, closure_changes};
+use crate::lockfile::{Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes};
 use crate::manifest::{
-    DEFAULT_README_FILES, PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers,
-    is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
-    parse_workspace_members, to_git_separators,
+    DEFAULT_README_FILES, PackageIdentity, PackageManifest, PathCase, WorkspaceInherit,
+    WorkspaceMembers, cargo_config_paths, collect_registry_indices, installation_error,
+    installation_patches, is_workspace_excluded, is_workspace_member, parse_document,
+    parse_package_manifest, parse_workspace_members, path_package_identity, to_git_separators,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree};
 use crate::packaging::{PackagingRules, relativize};
@@ -256,7 +258,7 @@ enum Verdict {
 }
 
 /// Classification status of one publishable package.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PackageStatus {
     PendingRelease,
@@ -264,12 +266,35 @@ pub(crate) enum PackageStatus {
     Unchanged,
 }
 
+impl PackageStatus {
+    /// Derives the status shared by classification and report validation.
+    ///
+    /// Missing anchors have no comparison evidence; anchored versions must not regress.
+    pub(crate) fn from_evidence(
+        declared: &Version,
+        anchor: Option<&Version>,
+        has_changes: bool,
+    ) -> Option<Self> {
+        match anchor {
+            None if has_changes => None,
+            None => Some(Self::PendingRelease),
+            Some(anchor) => match declared.cmp(anchor) {
+                Ordering::Less => None,
+                Ordering::Greater => Some(Self::PendingRelease),
+                Ordering::Equal if has_changes => Some(Self::NeedsIncrement),
+                Ordering::Equal => Some(Self::Unchanged),
+            },
+        }
+    }
+}
+
 /// A released-content, inherited-value or locked-dependency change.
 ///
 /// Serialized as the report.json object with `path`/`change`, `field`, or
 /// `dependency`/`change`, plus `source`, so callers keep a stable JSON shape
 /// without optional nulls.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(tag = "source", rename_all = "kebab-case")]
 pub(crate) enum ChangedItem {
     Package { path: String, change: String },
     Inherited { field: String },
@@ -307,7 +332,7 @@ impl Serialize for ChangedItem {
 }
 
 /// Insertion/deletion counts for one package in `report.json`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct DiffStat {
     pub(crate) files: usize,
     pub(crate) insertions: usize,
@@ -315,7 +340,7 @@ pub(crate) struct DiffStat {
 }
 
 /// Anchor identity as serialized in `report.json`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AnchorJson {
     pub(crate) commit: String,
     pub(crate) version: String,
@@ -363,7 +388,10 @@ pub(crate) fn classify(
         )
     });
 
-    let mut cache = SnapshotCache::new(&work_tree.workspace_root);
+    let mut cache = SnapshotCache::new(
+        &work_tree.workspace_root,
+        work_tree.installation.registries.clone(),
+    );
     let base_snapshot = cache.snapshot(&git, &base_sha)?;
     let work_root_path = work_tree.workspace_root.join("Cargo.toml");
     let work_root_doc = parse_document(
@@ -374,15 +402,16 @@ pub(crate) fn classify(
 
     let commits = git.first_parent_manifest_commits(&base_sha)?;
     let mut classes = Vec::new();
-    let mut exempt = HashSet::new();
-    let mut versions = BTreeMap::new();
+    let versions = work_tree.target_versions();
+    let exempt: HashSet<String> = work_tree
+        .version_targets
+        .iter()
+        .filter(|target| is_new_on_base(&base_snapshot, &target.name))
+        .map(|target| target.name.clone())
+        .collect();
     let mut lockfiles = LockfileCache::default();
 
     for package in &work_tree.packages {
-        versions.insert(
-            package.manifest.name.clone(),
-            package.manifest.version.clone(),
-        );
         let class = classify_one(
             package,
             &work_tree,
@@ -395,9 +424,6 @@ pub(crate) fn classify(
             &mut lockfiles,
             verbose,
         )?;
-        if is_new_on_base(&base_snapshot, &package.manifest.name) {
-            exempt.insert(package.manifest.name.clone());
-        }
         classes.push(class);
     }
 
@@ -411,8 +437,9 @@ pub(crate) fn classify(
             .collect();
         verbose.note(|| {
             format!(
-                "version group {}: members [{}]; consistent={} (members the baseline does not \
-             carry are exempt from matching declared versions)",
+                "version group {} is derived from exact workspace dependencies: members [{}]; \
+                 consistent={} (members absent from the baseline are exempt from matching \
+                 declared versions but remain version targets)",
                 quote_path(name),
                 members.join(", "),
                 verdict.is_consistent()
@@ -555,11 +582,12 @@ fn classify_one(
             anchor_pkg,
             package,
             &anchor.commit,
+            &anchor_snapshot.installation,
         )? {
             verbose.note(|| {
                 format!(
                     "{shown}: the locked identity of {} is {} between the anchor and the work \
-                     tree, and this package has a binary or example target at one or both \
+                     tree, and this package has an installable binary target at one or both \
                      endpoints, so the dependency is released content",
                     quote_path(&dependency),
                     change.as_str()
@@ -587,20 +615,24 @@ fn classify_one(
     }
 
     let version_increased = package.manifest.version > anchor.version;
-    let verdict = if version_increased {
-        Verdict::PendingRelease {
+    let status = PackageStatus::from_evidence(
+        &package.manifest.version,
+        Some(&anchor.version),
+        !changed.is_empty(),
+    )
+    .expect("the anchor is present and version regression was rejected");
+    let verdict = match status {
+        PackageStatus::PendingRelease => Verdict::PendingRelease {
             anchor,
             changed,
             patch,
-        }
-    } else if changed.is_empty() {
-        Verdict::Unchanged { anchor }
-    } else {
-        Verdict::NeedsIncrement {
+        },
+        PackageStatus::Unchanged => Verdict::Unchanged { anchor },
+        PackageStatus::NeedsIncrement => Verdict::NeedsIncrement {
             anchor,
             changed,
             patch,
-        }
+        },
     };
     let class = PackageClass {
         name: name.clone(),
@@ -1315,7 +1347,7 @@ struct HistoricalPackage {
     resources: BTreeMap<String, String>,
     /// Whether Cargo picks this package's README by probing its directory.
     auto_readme: bool,
-    /// Whether Cargo ships this package's resolved dependency closure.
+    /// Whether an installable binary makes this endpoint's closure relevant.
     has_lockfile_target: bool,
 }
 
@@ -1330,20 +1362,23 @@ struct CommitSnapshot {
     /// here". Ref: docs/implementation.md, "Anchor and change set".
     unpublished: BTreeSet<String>,
     root_doc: DocumentMut,
+    installation: InstallationGraph,
 }
 
 /// Cache of [`CommitSnapshot`] values so a first-parent walk does not re-parse.
 struct SnapshotCache {
     inner: HashMap<String, Rc<CommitSnapshot>>,
     case: PathCase,
+    registries: BTreeMap<String, String>,
 }
 
 impl SnapshotCache {
     /// Probes the work tree once; every snapshot matches members the same way.
-    fn new(workspace_root: &Path) -> Self {
+    fn new(workspace_root: &Path, registries: BTreeMap<String, String>) -> Self {
         Self {
             inner: HashMap::new(),
             case: PathCase::probe(workspace_root),
+            registries,
         }
     }
 
@@ -1356,13 +1391,18 @@ impl SnapshotCache {
         if let Some(existing) = self.inner.get(commit) {
             return Ok(Rc::clone(existing));
         }
-        let built = Rc::new(load_snapshot(git, commit, self.case)?);
+        let built = Rc::new(load_snapshot(git, commit, self.case, &self.registries)?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
 }
 
-fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSnapshot, AppError> {
+fn load_snapshot(
+    git: &GitRepo,
+    commit: &str,
+    case: PathCase,
+    registries: &BTreeMap<String, String>,
+) -> Result<CommitSnapshot, AppError> {
     let root_rel = root_manifest_rel(git);
     // History before the workspace existed has no root manifest. An empty
     // `[workspace]` reproduces that state exactly: no members, so every current
@@ -1401,10 +1441,21 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
     let member_dirs = resolve_members(&mut manifests, &members)?;
     let mut packages = BTreeMap::new();
     let mut unpublished = BTreeSet::new();
+    let mut installation = InstallationGraph::default();
+    let mut path_identities = BTreeMap::new();
     for member_dir in &member_dirs {
         let Some(parsed) = manifests.manifest(member_dir)? else {
             continue;
         };
+        installation.insert(
+            parsed.name.clone(),
+            parsed.version.clone(),
+            parsed.installation_dependencies.clone(),
+        );
+        path_identities.insert(
+            join_git_rel(&parsed.directory, MANIFEST_FILE_NAME),
+            Some(parsed.identity()),
+        );
         if !parsed.publish {
             unpublished.insert(parsed.name.clone());
             continue;
@@ -1426,11 +1477,96 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
             },
         );
     }
+    if packages.values().any(|package| package.has_lockfile_target) {
+        match historical_registries(git, commit, registries, &tree_paths) {
+            Ok(registries) => installation.registries = registries,
+            Err(error) => installation.registry_error = Some(installation_error(error)),
+        }
+        installation.patches = installation_patches(&root_doc);
+        resolve_historical_installation_paths(
+            &mut installation,
+            path_identities,
+            git,
+            commit,
+            &tree_paths,
+            case,
+        );
+    }
     Ok(CommitSnapshot {
         packages,
         unpublished,
         root_doc,
+        installation,
     })
+}
+
+fn resolve_historical_installation_paths(
+    installation: &mut InstallationGraph,
+    mut identities: BTreeMap<String, Option<PackageIdentity>>,
+    git: &GitRepo,
+    commit: &str,
+    tree_paths: &[String],
+    case: PathCase,
+) {
+    let mut documents = BTreeMap::<String, Option<DocumentMut>>::new();
+    installation.resolve_paths(|reference| {
+        let Some(directory) = reference.directory(git.root(), git.prefix(), "") else {
+            return Ok(None);
+        };
+        let path = join_git_rel(&directory, MANIFEST_FILE_NAME);
+        if let Some((_, identity)) = identities
+            .iter()
+            .find(|(candidate, _)| case.same_path(candidate, &path))
+        {
+            return Ok(identity.clone());
+        }
+        let identity = path_package_identity(&path, case, |path| {
+            let Some(path) = tree_paths
+                .iter()
+                .find(|candidate| case.same_path(candidate, path))
+            else {
+                return Ok(None);
+            };
+            if let Some(document) = documents.get(path) {
+                return Ok(document.clone());
+            }
+            let document = git
+                .show_file(commit, path)?
+                .map(|content| parse_document(Path::new(path), &content))
+                .transpose()?;
+            documents.insert(path.clone(), document.clone());
+            Ok(document)
+        })?;
+        identities.insert(path, identity.clone());
+        Ok(identity)
+    });
+}
+
+/// Reconstructs tracked registry configuration over Cargo's ambient configuration.
+///
+/// Cargo loads ancestor configurations from outermost to innermost and prefers
+/// the extensionless filename when both names exist in the same directory.
+fn historical_registries(
+    git: &GitRepo,
+    commit: &str,
+    ambient: &BTreeMap<String, String>,
+    tree_paths: &[String],
+) -> Result<BTreeMap<String, String>, AppError> {
+    let mut registries = ambient.clone();
+    for candidates in cargo_config_paths(git.prefix()) {
+        for path in candidates {
+            if !tree_paths.contains(&path) {
+                continue;
+            }
+            let Some(content) = git.show_file(commit, &path)? else {
+                continue;
+            };
+            let doc = parse_document(Path::new(&path), &content)?;
+            collect_registry_indices(&doc, &mut registries);
+            break;
+        }
+    }
+    Ok(registries)
 }
 
 /// Supplies historical member manifests to membership resolution.
@@ -1584,11 +1720,11 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
     Some(segments.join("/"))
 }
 
-/// Parsed lockfiles shared by lockfile-bearing package classifications.
+/// Parsed lockfiles shared by binary package classifications.
 ///
 /// The work-tree endpoint is common to every package, while packages that share
 /// an anchor commit also share its historical endpoint. Retaining both avoids
-/// reparsing workspace-sized lockfiles for every lockfile-bearing package.
+/// reparsing workspace-sized lockfiles for every binary package.
 /// Ref: docs/implementation.md, "Lockfile closures".
 #[derive(Debug, Default)]
 struct LockfileCache {
@@ -1650,10 +1786,14 @@ impl LockfileCache {
 
 /// Dependencies whose locked identity changed between the anchor and the work tree.
 ///
-/// Each endpoint that has a binary or example target must have a lockfile that
+/// Each endpoint that has an installable binary target must have a lockfile that
 /// resolves the package at its corresponding declared version. An endpoint without
-/// either target releases no closure and therefore contributes an empty closure.
+/// that target releases no closure and therefore contributes an empty closure.
 /// Ref: docs/design.md, "Relevant lockfile closures".
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each endpoint supplies its target, lockfile and installation declarations"
+)]
 fn lockfile_closure_changes(
     cache: &mut LockfileCache,
     git: &GitRepo,
@@ -1662,14 +1802,20 @@ fn lockfile_closure_changes(
     anchor_package: &HistoricalPackage,
     work_package: &WorkPackage,
     anchor_commit: &str,
+    anchor_installation: &InstallationGraph,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
     let anchor = if anchor_package.has_lockfile_target {
         let lockfile = cache.anchor(git, name, anchor_commit, &git_path)?;
-        let Some(closure) = lockfile.closure(name, &anchor_package.version.to_string()) else {
+        let Some(closure) = lockfile.closure(
+            name,
+            &anchor_package.version.to_string(),
+            anchor_installation,
+        )?
+        else {
             return Err(LockfileClosureUnavailableError::new(
                 name,
-                "the anchor Cargo.lock does not resolve the package at its declared version",
+                "the anchor Cargo.lock does not identify an installation closure at the declared version and configured sources",
             )
             .into());
         };
@@ -1679,11 +1825,15 @@ fn lockfile_closure_changes(
     };
     let work = if work_package.has_lockfile_target {
         let lockfile = cache.work(work_tree, name, &git_path)?;
-        let Some(closure) = lockfile.closure(name, &work_package.manifest.version.to_string())
+        let Some(closure) = lockfile.closure(
+            name,
+            &work_package.manifest.version.to_string(),
+            &work_tree.installation,
+        )?
         else {
             return Err(LockfileClosureUnavailableError::new(
                 name,
-                "the work-tree Cargo.lock does not resolve the package at its declared version; refresh Cargo.lock",
+                "the work-tree Cargo.lock does not identify an installation closure at the declared version and configured sources; refresh Cargo.lock",
             )
             .into());
         };
@@ -1818,6 +1968,52 @@ mod tests {
 
     use super::*;
     use crate::inherited::InheritedKeys;
+    use crate::manifest::{InstallationDependencies, TargetDiscovery};
+
+    #[test]
+    fn status_requires_consistent_anchor_version_and_change_evidence() {
+        let anchor = Version::new(1, 0, 0);
+        for (declared, previous, changed, expected) in [
+            (
+                Version::new(1, 0, 0),
+                None,
+                false,
+                Some(PackageStatus::PendingRelease),
+            ),
+            (Version::new(1, 0, 0), None, true, None),
+            (
+                Version::new(1, 0, 0),
+                Some(&anchor),
+                false,
+                Some(PackageStatus::Unchanged),
+            ),
+            (
+                Version::new(1, 0, 0),
+                Some(&anchor),
+                true,
+                Some(PackageStatus::NeedsIncrement),
+            ),
+            (
+                Version::new(1, 0, 1),
+                Some(&anchor),
+                false,
+                Some(PackageStatus::PendingRelease),
+            ),
+            (
+                Version::new(1, 0, 1),
+                Some(&anchor),
+                true,
+                Some(PackageStatus::PendingRelease),
+            ),
+            (Version::new(0, 9, 0), Some(&anchor), false, None),
+            (Version::new(0, 9, 0), Some(&anchor), true, None),
+        ] {
+            assert_eq!(
+                PackageStatus::from_evidence(&declared, previous, changed),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn workspace_relative_dir_rebases_onto_the_workspace_root() {
@@ -1846,6 +2042,7 @@ mod tests {
             packages: BTreeMap::new(),
             unpublished: BTreeSet::new(),
             root_doc: DocumentMut::new(),
+            installation: InstallationGraph::default(),
         };
         base.packages.insert(
             "released".to_string(),
@@ -2090,7 +2287,7 @@ mod tests {
     /// of its default names that the end being examined holds.
     #[test]
     fn a_detected_readme_outranks_the_packaging_rules() {
-        let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+        let rules = PackagingRules::new(Some(&["/src/".to_string()]), None).unwrap();
         let resources = BTreeMap::new();
         let paths = vec![
             "packages/a/src/lib.rs".to_string(),
@@ -2132,7 +2329,7 @@ mod tests {
     /// the spelling exactly there would report such a package as having released nothing.
     #[test]
     fn a_detected_readme_follows_the_probed_case_rules() {
-        let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+        let rules = PackagingRules::new(Some(&["/src/".to_string()]), None).unwrap();
         let resources = BTreeMap::new();
         let paths = vec![
             "packages/a/src/lib.rs".to_string(),
@@ -2197,16 +2394,15 @@ mod tests {
         );
     }
 
-    /// A deleted path no longer shapes the released content.
+    /// A deleted default README is no longer detected.
     ///
     /// Git still lists a tracked file the work tree has deleted, but Cargo packages what is on
-    /// disk: a nested manifest that is gone no longer stops packing, and a deleted default README
-    /// is no longer detected.
+    /// disk, so README detection must use the paths that remain present.
     #[test]
-    fn a_deleted_path_no_longer_shapes_the_released_content() {
+    fn a_deleted_readme_is_no_longer_detected() {
         let resources = BTreeMap::new();
         // `include` omits the README, so only detection can bring it in.
-        let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+        let rules = PackagingRules::new(Some(&["/src/".to_string()]), None).unwrap();
         let side = PackageSide {
             dir: "packages/a",
             rules: &rules,
@@ -2227,7 +2423,12 @@ mod tests {
             !released_from_paths(&tracked, &present, &side).contains_key("README.md"),
             "a README the work tree deleted is not"
         );
+    }
 
+    /// A deleted nested manifest no longer stops packing its directory.
+    #[test]
+    fn a_deleted_nested_manifest_no_longer_limits_released_content() {
+        let resources = BTreeMap::new();
         let rules = PackagingRules::default();
         let side = PackageSide {
             dir: "packages/a",
@@ -2321,10 +2522,11 @@ mod tests {
             publish: true,
             path_dependencies: Vec::new(),
             inherited_path_dependencies: Vec::new(),
+            installation_dependencies: InstallationDependencies::default(),
             resource_paths: local.iter().map(|path| (*path).to_string()).collect(),
             inherited_resource_paths: inherited.iter().map(|path| (*path).to_string()).collect(),
             auto_readme: false,
-            targets: crate::manifest::TargetDiscovery::default(),
+            targets: TargetDiscovery::default(),
         }
     }
 
@@ -2436,31 +2638,30 @@ mod tests {
     fn resolve_members_follows_path_dependencies() {
         let root = Path::new("Cargo.toml");
         let members = parse_workspace_members(
-            "[workspace]\nmembers = [\"packages/a\"]\nexclude = [\"packages/c\"]\n",
+            "[workspace]\nmembers = [\"a\"]\nexclude = [\"c\"]\n",
             root,
             PathCase::Sensitive,
         )
         .unwrap();
-        let mut manifests = FakeManifests::new(&[
-            (
-                "packages/a",
-                "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nb = { path = \"../b\" }\n\n[dev-dependencies]\nc = { path = \"../c\" }\n",
-            ),
-            (
-                "packages/b",
-                "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
-            ),
-            (
-                "packages/c",
-                "[package]\nname = \"c\"\nversion = \"0.1.0\"\n",
-            ),
-        ]);
+        // Traversal consumes parsed models. Seed the package identities from one small document;
+        // dependency-table parsing and aggregation have their own manifest tests.
+        let mut manifests =
+            FakeManifests::new(&[("a", "[package]\nname = \"a\"\nversion = \"0.1.0\"\n")]);
+        let package = manifests.manifests.get("a").unwrap().clone();
+        for name in ["b", "c"] {
+            let mut package = package.clone();
+            package.name = name.to_string();
+            package.directory = name.to_string();
+            manifests.manifests.insert(name.to_string(), package);
+        }
+        manifests.manifests.get_mut("a").unwrap().path_dependencies =
+            vec!["../b".to_string(), "../c".to_string()];
         let resolved = resolve_members(&mut manifests, &members).unwrap();
         // `b` is reachable only as a path dependency; `c` is excluded even though
         // a member depends on it.
         assert_eq!(
             resolved.into_iter().collect::<Vec<_>>(),
-            vec!["packages/a".to_string(), "packages/b".to_string()]
+            vec!["a".to_string(), "b".to_string()]
         );
     }
 

@@ -74,6 +74,22 @@ Validation:
     * `Tasks: Run Test Task`
 1. Execute `just validate-local` in terminal.
 
+# Scheduled deep validation and Local App remediation
+
+The [scheduled-validation chapter](docs/scheduled-validation.md) describes nightly
+deep checks, readable failure reports, issue triage and repair PR follow-up.
+Humans and Local App agents use the same GitHub issues, claims and linked PRs.
+Setup is reproducible from `.github\prompts\setup-scheduled-remediation.prompt.md`;
+entries remain disabled until explicitly enabled by the operator.
+
+`just validate-local` always runs shallow validation.
+`just package="foo bar" validate-deep-local` always runs deep validation on the
+current platform. PR/push workflows stay shallow, while scheduled workflows own
+recurring deep checks. Repair authors link relevant deep-check results for review.
+The ordinary `just test-scripts` and `just validate-scripts` commands cover the
+workflow helpers. The App uses supported native operations and no local
+coordination database. See the chapter for setup and GitHub issue handoffs.
+
 # Testing Azure functionality
 
 The `cargo-bench-history` package has an Azure Blob storage backend. Its tests are

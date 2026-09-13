@@ -152,6 +152,7 @@ async fn write_report<W: OutputWriter>(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod fake {
     use std::collections::HashMap;
+    use std::future::{Future, ready};
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -180,12 +181,12 @@ mod fake {
     }
 
     impl OutputWriter for MemoryOutputWriter {
-        async fn write(&self, path: &Path, contents: &str) -> io::Result<()> {
+        fn write(&self, path: &Path, contents: &str) -> impl Future<Output = io::Result<()>> {
             self.files
                 .lock()
                 .unwrap()
                 .insert(path.to_path_buf(), contents.to_owned());
-            Ok(())
+            ready(Ok(()))
         }
     }
 
@@ -195,8 +196,8 @@ mod fake {
     pub(crate) struct FailingOutputWriter;
 
     impl OutputWriter for FailingOutputWriter {
-        async fn write(&self, _path: &Path, _contents: &str) -> io::Result<()> {
-            Err(io::Error::other("write refused"))
+        fn write(&self, _path: &Path, _contents: &str) -> impl Future<Output = io::Result<()>> {
+            ready(Err(io::Error::other("write refused")))
         }
     }
 }

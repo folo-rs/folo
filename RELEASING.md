@@ -3,6 +3,10 @@
 Publishing to crates.io and shipping `cargo-binstall` prebuilt binaries is automated
 by `.github/workflows/release.yml` on every push to `main`. Pull requests that change
 released content carry the version increments; merge publishes those versions.
+The `increment-versions` skill decides and applies the plan without a separate
+approval request. Human review of the complete PR, including its current
+**Version/release plan** section, is the approval step; see
+[docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section).
 See [docs/release-versioning.md](docs/release-versioning.md) for how versions are
 decided and [docs/release-automation.md](docs/release-automation.md) for the publish
 design.
@@ -24,16 +28,28 @@ so a brand-new crate's first version must be published manually:
 1. `cargo publish -p <crate>` (with a crates.io token login).
 1. Configure Trusted Publishing for the crate on crates.io (owner `folo-rs`, repo
    `folo`, workflow `release.yml`).
-1. Re-run `release.yml`. For a binary crate, the workflow creates the missing tag
-   and GitHub release at the package's version anchor before uploading its prebuilt binaries.
+1. Re-run `release.yml`. The workflow creates missing package tags at verified
+   release-equivalent main snapshots. For a binary crate it also creates the GitHub
+   release and uploads prebuilt binaries. The requested package version must still
+   be present at the selected snapshot; existing tags are never moved.
    Subsequent releases then go through `release.yml` automatically.
 
 The `increment-versions` skill runs `just check-never-published` as an early,
-workspace-wide advisory. Before applying an approved plan,
-`just check-increment-published` fails unless every package the plan reaches has
-already reached crates.io. That gate cannot verify Trusted Publisher
-configuration or the release-workflow follow-up, so complete those remaining
-steps explicitly before retrying the increment.
+workspace-wide advisory. Before applying a resolved plan,
+`just check-increment-published` fails unless every **publishable** package the
+plan reaches has already reached crates.io. Version-alignment targets with
+publication disabled do not require a first-publication handoff. The gate cannot
+verify Trusted Publisher configuration or the release-workflow follow-up, so
+complete those remaining steps explicitly before retrying the increment.
+The skill only reports this maintainer handoff; it does not perform a manual
+first publication or an emergency publish.
+
+The skill prepares offline dependency resolution and previews prospective version
+and requirement rewrites before application. The resolved plan includes the complete
+release set and resolved lockfile. Application uses those captured files without
+a late update; changed inputs require fresh preparation. Library-only lockfile
+changes do not require releases, but their version rewrites still require a
+consistent lockfile.
 
 ## Emergency manual publish
 
@@ -50,7 +66,7 @@ repository admin and are prerequisites of the process above:
 * `main` is protected.
 * The merge queue is enabled on `main`.
 * The ruleset requires only the status check named `required-checks`.
-* Individual Validation matrix job names are not required — a skipped leg never
+* Individual Standard validation matrix job names are not required — a skipped leg never
   posts a check and would block the queue forever.
 
 `cargo-release-plan` also needs a one-time first `cargo publish` (and Trusted
