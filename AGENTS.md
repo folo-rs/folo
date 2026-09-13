@@ -17,6 +17,12 @@ directly:
 
 * **Zero warnings allowed.** Fix all warnings that validation generates. Never
   silence a warning without a `reason` field justifying it.
+* **ARM64 is best-effort, minimally supported.** ARM64 validation may be skipped
+  without separate approval when the change should logically work on that target,
+  especially when the same logic passes on other platforms. Record the reasoning
+  rather than claiming an executed pass, and do not block work solely on missing
+  ARM64 validation. Follow the
+  [platform support policy](docs/build-and-tooling.md#platform-support-and-validation).
 * **Keep the house in order.** Do not only focus on the immediate task at hand
   but also consider how it affects the codebase around it. If the change you
   are working on affords more simplicity, better organization or greater reuse,

@@ -147,6 +147,25 @@ standard validation on both Windows and Linux, execute:
 1. `just validate-local`
 2. `wsl -e bash -l -c "just validate-local"`
 
+### Platform support and validation
+
+ARM64 is a nice-to-have, minimally supported target. Its validation is best-effort:
+authors may skip ARM64 builds, tests and deep checks without separate approval when
+the change should logically work on ARM64. Passing checks of the same logic on
+other platforms are especially useful evidence. This also applies to scheduled
+repairs when the correction addresses the same shared failure on ARM64.
+
+For review and readiness decisions, expected ARM64 success is sufficient in these
+cases. Record the skipped scope and the reasoning, not an executed pass. Missing
+ARM64 hardware, toolchains or local validation alone does not require installation,
+delay the PR or warrant `needs-human`.
+
+Base the expectation on the affected code, not just a green result elsewhere.
+Architecture-specific behavior or an unexplained ARM64 failure needs investigation
+before assuming the change works. Existing scheduled ARM64 checks remain useful
+best-effort coverage; this policy does not change their commands or reporting, turn
+observed failures into passes, or bypass required CI checks.
+
 ## Automation language and boundaries
 
 Prefer **nonpublished Rust utilities** for automation logic, especially structured
