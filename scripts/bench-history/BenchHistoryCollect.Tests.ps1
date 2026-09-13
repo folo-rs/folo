@@ -5,21 +5,41 @@
 # run: each case asserts the exact argument vector the step would hand the tool.
 #
 # The nightly backfill's rolling date window is proven the same way: `git` is isolated behind the
-# module's Invoke-GitCapture seam and mocked here in the module's scope, so the window resolution
-# (including the quiet-fortnight fallback and the nothing-eligible exit) is exercised against
+# module's Invoke-GitCapture boundary and mocked here in the module's scope, so the window resolution
+# (including the quiet-window fallback and the nothing-eligible exit) is exercised against
 # canned `rev-list` output rather than a real repository, whose history would change under the
 # suite. The scope-identity case is what keeps a backfilled point measured exactly like a pushed
 # one.
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+$VerbosePreference = 'Continue'
+
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'BenchHistoryCollect.psm1') -Force
+
+    # Fixture policy tests configuration consumption, not the repository's current choices.
+    # Unsorted exclusions expose reordering or truncation; distinct windows expose swapped inputs.
+    $script:OriginalConfiguration = InModuleScope BenchHistoryCollect {
+        $original = @{
+            ExcludedPackages = $script:ExcludedPackages
+            BackfillQuarantine = $script:BackfillQuarantine
+            BackfillHorizon = $script:BackfillHorizon
+        }
+        $script:ExcludedPackages = @('excluded-z', 'excluded-a', 'excluded-m')
+        $script:BackfillQuarantine = '2 days ago'
+        $script:BackfillHorizon = '7 days ago'
+        $original
+    }
 
     # Flags shared by both modes; asserted as a slice so a case only spells out what makes it
     # distinct (the subcommand, its positionals, and the append/overwrite tail).
     $script:Scope = @(
         '--workspace',
-        '--exclude', 'benchmarks',
-        '--exclude', 'infinity_pool',
+        '--exclude', 'excluded-z',
+        '--exclude', 'excluded-a',
+        '--exclude', 'excluded-m',
         '--all-features',
         '--best-of', '3',
         '--verbose'
@@ -27,10 +47,19 @@ BeforeAll {
 
     # The canned `git rev-list` output the mocked window queries return: the range end is the newest
     # first-parent commit outside the quarantine and the range start the oldest one inside the
-    # 14-day horizon, with one more commit between them. Full 40-character object ids, as git prints
+    # configured horizon, with one more commit between them. Full 40-character object ids, as git prints
     # them.
     $script:WindowEnd = 'a' * 40
     $script:WindowStart = 'c' * 40
+}
+
+AfterAll {
+    InModuleScope BenchHistoryCollect -Parameters @{ Configuration = $script:OriginalConfiguration } {
+        param($Configuration)
+        $script:ExcludedPackages = $Configuration.ExcludedPackages
+        $script:BackfillQuarantine = $Configuration.BackfillQuarantine
+        $script:BackfillHorizon = $Configuration.BackfillHorizon
+    }
 }
 
 Describe 'Get-BenchHistoryCollectCommand' {
@@ -107,12 +136,12 @@ Describe 'Get-BenchHistoryCollectCommand' {
     Context 'package scoping (PR workflow)' {
         It 'collects only retained packages after the PR delta filter' {
             $packages = @(Select-BenchmarkablePackage -Package @(
-                    'infinity_pool', 'nm', 'benchmarks', 'many_cpus'))
+                    'excluded-m', 'retained-z', 'excluded-z', 'retained-a', 'excluded-a'))
             $result = Get-BenchHistoryCollectCommand -Package $packages
             $result | Should -Be @(
                 'collect',
-                '--package', 'nm',
-                '--package', 'many_cpus',
+                '--package', 'retained-z',
+                '--package', 'retained-a',
                 '--all-features',
                 '--best-of', '3',
                 '--verbose',
@@ -204,7 +233,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         It 'quarantines the range end from the push-triggered collection' {
             Get-BenchHistoryBackfillCommand | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
-                ($args -contains '-1') -and ($args -contains '--before=24 hours ago') -and
+                ($args -contains '-1') -and ($args -contains '--before=2 days ago') -and
                 ($args -contains 'HEAD')
             }
         }
@@ -214,7 +243,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
             # end, which resolving from the end is what guarantees.
             Get-BenchHistoryBackfillCommand | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
-                ($args -contains '--since=14 days ago') -and ($args -contains ('a' * 40)) -and
+                ($args -contains '--since=7 days ago') -and ($args -contains ('a' * 40)) -and
                 ($args -notcontains 'HEAD')
             }
         }
@@ -227,7 +256,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         }
     }
 
-    Context 'a quiet fortnight (the range end predates the horizon)' {
+    Context 'a quiet window (the range end predates the horizon)' {
         BeforeEach {
             Mock git -ModuleName BenchHistoryCollect {
                 $global:LASTEXITCODE = 0
@@ -284,7 +313,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         It 'still bounds the range start by the horizon' {
             Get-BenchHistoryBackfillCommand -ToCommitId 'abc1234' | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
-                ($args -contains '--since=14 days ago') -and ($args -contains 'abc1234')
+                ($args -contains '--since=7 days ago') -and ($args -contains 'abc1234')
             }
         }
 
@@ -325,15 +354,16 @@ Describe 'Get-BenchHistoryBackfillCommand' {
 }
 
 Describe 'Select-BenchmarkablePackage' {
-    It 'drops both excluded packages' {
-        Select-BenchmarkablePackage -Package @('nm', 'benchmarks', 'infinity_pool', 'many_cpus') |
-            Should -Be @('nm', 'many_cpus')
+    It 'drops configured packages wherever they occur' {
+        Select-BenchmarkablePackage -Package @(
+            'excluded-a', 'retained-z', 'excluded-m', 'retained-a', 'excluded-z') |
+            Should -Be @('retained-z', 'retained-a')
     }
 
     It 'leaves no PR collection scope when only excluded packages changed' -ForEach @(
-        @{ Packages = @('benchmarks') }
-        @{ Packages = @('infinity_pool') }
-        @{ Packages = @('benchmarks', 'infinity_pool') }
+        @{ Packages = @('excluded-z') }
+        @{ Packages = @('excluded-m') }
+        @{ Packages = @('excluded-a', 'excluded-z', 'excluded-m') }
     ) {
         @(Select-BenchmarkablePackage -Package $Packages).Count | Should -Be 0
     }
@@ -342,14 +372,51 @@ Describe 'Select-BenchmarkablePackage' {
         @(Select-BenchmarkablePackage -Package @()).Count | Should -Be 0
     }
 
-    It 'preserves order and leaves other packages untouched' {
-        Select-BenchmarkablePackage -Package @('many_cpus', 'nm', 'events') |
-            Should -Be @('many_cpus', 'nm', 'events')
+    It 'preserves retained order and duplicates' {
+        Select-BenchmarkablePackage -Package @(
+            'retained-z', 'excluded-a', 'retained-a', 'retained-z') |
+            Should -Be @('retained-z', 'retained-a', 'retained-z')
     }
 
     It 'matches excluded names exactly and case-sensitively' {
         Select-BenchmarkablePackage -Package @(
-            'Benchmarks', 'Infinity_pool', 'infinity_pool_extra', 'nm') |
-            Should -Be @('Benchmarks', 'Infinity_pool', 'infinity_pool_extra', 'nm')
+            'Excluded-z', 'excluded-z-extra', 'prefix-excluded-z', 'excluded-z', 'retained') |
+            Should -BeExactly @('Excluded-z', 'excluded-z-extra', 'prefix-excluded-z', 'retained')
+    }
+}
+
+Describe 'Exclusion configuration' {
+    It 'honors <Name> exclusions in workspace and PR selection' -ForEach @(
+        @{
+            Name = 'empty'
+            Exclusions = @()
+            WorkspaceArguments = @('--workspace')
+            Retained = @('alternate', 'excluded-z', 'retained')
+        }
+        @{
+            Name = 'replacement'
+            Exclusions = @('alternate')
+            WorkspaceArguments = @('--workspace', '--exclude', 'alternate')
+            Retained = @('excluded-z', 'retained')
+        }
+    ) {
+        InModuleScope BenchHistoryCollect -Parameters @{
+            Exclusions = $Exclusions
+            WorkspaceArguments = $WorkspaceArguments
+            Retained = $Retained
+        } {
+            param($Exclusions, $WorkspaceArguments, $Retained)
+            $previous = $script:ExcludedPackages
+            try {
+                $script:ExcludedPackages = $Exclusions
+                Get-BenchHistoryCollectCommand | Should -Be (
+                    @('collect') + $WorkspaceArguments +
+                    @('--all-features', '--best-of', '3', '--verbose', '--skip-existing'))
+                Select-BenchmarkablePackage -Package @('alternate', 'excluded-z', 'retained') |
+                    Should -Be $Retained
+            } finally {
+                $script:ExcludedPackages = $previous
+            }
+        }
     }
 }
