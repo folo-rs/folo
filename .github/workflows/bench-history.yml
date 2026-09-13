@@ -2,8 +2,8 @@ name: Benchmark history
 
 # Per-commit collection of the workspace's benchmark results into the long-lived Azure
 # history store (account folohistory, baked into .cargo/bench_history.toml; see also
-# infra/azure-bench-history-prod/). Each push to `main` benchmarks the whole workspace with all
-# Cargo features enabled EXCEPT the slow, special-purpose `benchmarks` package, on the x86_64 Linux
+# infra/azure-bench-history-prod/). Each push to `main` benchmarks the workspace's maintained scope
+# (design.md#benchmark-history) with all Cargo features enabled, on the x86_64 Linux
 # and Windows runners, and appends the results keyed by the pushed commit. Over time this builds the
 # performance history that `cargo-bench-history analyze` reads to spot regressions.
 #

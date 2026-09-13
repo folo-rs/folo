@@ -390,6 +390,20 @@ use, so the long-lived data store never depends on test infrastructure. Collecti
 append-only and idempotent, which is what makes a re-run safe and lets a read-through cache
 of the bulk history persist between runs.
 
+Collection excludes the slow, special-purpose `benchmarks` package and the deprecated
+`infinity_pool` package. `infinity_pool` is retained for legacy use, not ongoing performance
+development, so measuring it would consume CI time and regression-triage effort without
+supporting active maintenance goals. Main collection, re-collection and nightly backfill use the same
+package exclusion list; PR collection removes those packages from its affected set before
+deciding whether there is anything to measure. Deprecation does not require deleting a
+package's benchmark suite.
+
+Analysis considers only benchmark identities measured at the queried context commit. Once
+an excluded package is absent there, its stored historical series are dropped before
+detection, so old regressions do not remain in current reports. Those measurements remain
+available when explicitly querying a historical context where they were collected; neither
+blessing nor deleting stored history is part of a collection exclusion.
+
 Collection stamps every engine's results with the runner's **own auto-detected hardware
 fingerprint**, with no fixed key override. The GitHub-hosted pool is heterogeneous, so a
 single shared key would blend genuinely different machines into one jittery series;
