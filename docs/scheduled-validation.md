@@ -132,10 +132,18 @@ It prints a unique result directory under the system temporary directory. An exp
 `-OutputDirectory` must be empty and outside the source checkout, keeping live logs
 and mutation artifacts out of source copies. Retain the directory for diagnostics.
 
-The main-only hosted workflow is not PR-head validation evidence. If a required
-platform is unavailable locally, disclose the missing scope and add `needs-human`
-for the needed decision. Human review may resolve that limitation; it is not a
-successful check. Do not introduce hosted scope selection to bypass it.
+The main-only hosted workflow is not PR-head validation evidence. Apply the
+[platform support policy](build-and-tooling.md#platform-support-and-validation):
+ARM64 validation is best-effort and may be skipped without separate approval when
+the repair should logically work there, especially when the same corrected logic
+passes on other platforms. Record the skipped scope and rationale, not an executed
+pass. Missing ARM64 validation alone does not warrant `needs-human` or prevent a
+ready-for-review handoff.
+
+If a required platform outside that exception is unavailable locally, disclose the
+missing scope and add `needs-human` for the needed decision. Human review may
+resolve that limitation; it is not a successful check. Do not introduce hosted
+scope selection to bypass it.
 
 ## Triage
 

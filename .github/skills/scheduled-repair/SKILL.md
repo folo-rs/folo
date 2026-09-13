@@ -49,12 +49,13 @@ caught mutations, zero matched mutants is not a successful replay, and skip
 changes need the established justification. Do not fabricate production behavior
 or a source patch to improve a score.
 
-Use existing local tooling, including WSL when appropriate. If the environment or
-diagnostics are insufficient, disclose the limitation and add `needs-human` for
-the required action. Do not silently turn missing tools, expired logs or an
-unexplained passing retry into resolution. An infrastructure fix can resolve the
-issue without a PR when the cause, recovery and applicable successful rerun are
-explained on GitHub.
+Use existing local tooling, including WSL when appropriate. Apply the
+[platform support policy](../../../docs/build-and-tooling.md#platform-support-and-validation)
+before treating unavailable validation as a blocker. If necessary evidence remains
+unavailable, disclose the limitation and add `needs-human` for the required action.
+Do not silently turn missing tools, expired logs or an unexplained passing retry
+into resolution. An infrastructure fix can resolve the issue without a PR when
+the cause, recovery and applicable successful rerun are explained on GitHub.
 
 # Stage 3: Validate and publish an ordinary PR
 
@@ -75,9 +76,17 @@ just package="{{PACKAGES}}" validate-deep-local
 
 Use targeted recipes when only particular deep checks are relevant. Inspect the
 results and address failures; a nonzero exit is not successful validation. Use
-native tools or the same commands in WSL for Linux checks. If a required platform
-is unavailable, disclose the missing scope on the issue and PR with `needs-human`.
-Human review may resolve that limitation; do not describe it as a passed check.
+native tools or the same commands in WSL for Linux checks. ARM64 is best-effort and
+minimally supported: skip its validation without separate approval when the repair
+should logically work there, especially when the same logic passes on other
+platforms. Record the skipped scope and rationale rather than an executed pass.
+Missing ARM64 validation alone does not warrant `needs-human` or block readiness.
+If this owner applied `needs-human` solely for that limitation, explain the
+disposition and remove the label while preserving separate unresolved blockers.
+
+If a required platform outside that exception is unavailable, disclose the missing
+scope on the issue and PR with `needs-human`. Human review may resolve that
+limitation; do not describe it as a passed check.
 The main-only hosted **Deep validation** workflow is not PR-head validation
 evidence. Do not add hosted selection or a replacement workflow to work around an
 unavailable local platform.
