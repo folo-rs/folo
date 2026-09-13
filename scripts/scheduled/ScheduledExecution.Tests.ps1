@@ -37,7 +37,7 @@ Describe 'Shared recipe invocation' {
 
     It 'runs the existing <recipe> recipe with the matrix scope' -ForEach @(
         @{ id = 'miri-ubuntu-latest'; recipe = 'miri'; packages = @('example', 'another'); shard = '' },
-        @{ id = 'miri-many-events-2'; recipe = 'miri-harder'; packages = @('events'); shard = '2/2' },
+        @{ id = 'miri-harder-events-1'; recipe = 'miri-harder'; packages = @('events'); shard = '1/1' },
         @{ id = 'mutants-windows-latest-2'; recipe = 'mutants'; packages = @('example'); shard = '2/8' },
         @{ id = 'careful-windows-latest'; recipe = 'careful'; packages = @(); shard = '' }
     ) {
@@ -57,6 +57,18 @@ Describe 'Shared recipe invocation' {
         $summary | Should -Match "just .*'$recipe'"
         $summary | Should -Match $sourceSha
         $summary | Should -Match 'Final result: PASSED'
+    }
+
+    It 'forwards a non-default per-package Miri shard to Just' {
+        $check = @(Get-ScheduledCheck | Where-Object id -EQ 'miri-harder-events-1')[0]
+        $check.id = 'miri-harder-events-2'
+        $check.shard = '2/2'
+        Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $output -SourceSha $sourceSha |
+            Should -Be 0
+        $invocation = Get-Content -LiteralPath $env:SCHEDULED_CAPTURE_PATH -Raw | ConvertFrom-Json
+        $invocation.recipe | Should -Be 'miri-harder'
+        $invocation.package | Should -Be 'events'
+        $invocation.shard | Should -Be '2/2'
     }
 
     It 'preserves recipe failure <_> and includes its output' -ForEach @(1, 2, 3, 4) {

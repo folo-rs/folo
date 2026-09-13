@@ -223,6 +223,9 @@ preservation does not turn failed validation green.
 The Just recipes own toolchain selection, test runners, helper preparation and
 configuration. Ordinary Miri therefore uses nextest and its `default-miri` profile
 in both development and CI. The many-seed recipe computes its own shard range.
+The catalog retains per-package shard counts for `miri-harder`, with every current
+package using `1/1` to cover the full seed range on one runner. Job identifiers
+follow `miri-harder-<package>-<shard-index>` so names match the invoked recipe.
 `just mutants` runs cargo-mutants with its native unmutated baseline and accepts an
 output directory for collecting artifacts. There is no scheduled-only Cargo
 argument builder, target enumeration or mutation verdict derived from result files.
