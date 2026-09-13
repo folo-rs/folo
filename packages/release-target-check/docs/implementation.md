@@ -47,9 +47,27 @@ Real Git fixtures cover clean and concealed index state, corrupt or unavailable
 history, and ownership failures. Native temporary directories avoid cross-filesystem
 overhead when the checkout is mounted into another operating system. A Unix symlink
 loop provides a deterministic filesystem lookup failure without racing a deletion
-or relying on runner privilege. End-to-end tests continue to execute real Cargo
-and the real release checker. These boundary tests supplement that path rather
-than replacing it.
+or relying on runner privilege. Git-only cases use minimal tracked inputs rather
+than Cargo workspaces. Integration fixtures write their isolated Git configuration
+directly rather than starting a process for each setting.
+
+End-to-end tests execute real Cargo and the real release checker to cover their
+composition: read-only verification, candidate-relative baselines, release-checker
+rejection and lockfile policy. Representative argument, cleanliness, first-parent
+history and package identity failures verify executable wiring; their case matrices
+belong to unit tests rather than repeated executable invocations. The inherited-value
+case verifies checker rejection without duplicating its released-source matrix.
+Missing-lockfile rejection starts from an otherwise release-equivalent binary
+snapshot, so another release violation cannot satisfy the assertion.
+
+Non-Windows runs retain ordinary parallel scheduling. On Windows, nextest serializes
+this package's tests in one group: both repository unit tests and integration tests
+issue real Git/Cargo queries, and their overlap under coverage can exhaust the
+watchdog budget. Serializing only the integration binary still allows its first
+test to contend with Git-heavy unit tests. Reducing fixture work remains necessary
+for both contended and uncontended execution; scheduling isolation does not replace
+it. All tests retain the shared last-chance watchdog without extending its deadline
+or adding retries.
 
 ## Release policy reuse
 

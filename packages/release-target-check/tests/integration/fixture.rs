@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 /// Owns a small repository and isolated Git configuration for executable-boundary tests.
 pub(crate) struct Fixture {
-    directory: TempDir,
+    _directory: TempDir,
     root: PathBuf,
 }
 
@@ -15,25 +15,26 @@ impl Fixture {
         // Use an owned native temporary directory: Git-heavy fixtures on a Windows checkout
         // mounted into WSL otherwise pay cross-filesystem overhead for every subprocess.
         let directory = TempDir::new().unwrap();
-        fs::write(directory.path().join("global-config"), "").unwrap();
+        // Write configuration once instead of launching Git for each setting. Child Git
+        // processes inherit this file, including those started by Cargo and the verifier.
+        fs::write(
+            directory.path().join("global-config"),
+            "[user]\nname = Release Target Test\nemail = release-target@example.invalid\n\
+             [commit]\ngpgsign = false\n[tag]\ngpgsign = false\n\
+             [gc]\nauto = 0\n[core]\nautocrlf = false\n",
+        )
+        .unwrap();
         let root = directory.path().join("repository");
         fs::create_dir_all(&root).unwrap();
-        let fixture = Self { directory, root };
+        let fixture = Self {
+            _directory: directory,
+            root,
+        };
         fixture.git(&["init", "-b", "main", "--object-format=sha1"]);
-        for (name, value) in [
-            ("user.name", "Release Target Test"),
-            ("user.email", "release-target@example.invalid"),
-            ("commit.gpgsign", "false"),
-            ("tag.gpgsign", "false"),
-            ("gc.auto", "0"),
-            ("core.autocrlf", "false"),
-        ] {
-            fixture.git(&["config", name, value]);
-        }
         fixture.write(".gitignore", "target/\n");
         fixture.write(".github/workflows/release.yml", "name: fixture\n");
         fixture.write_workspace("MIT");
-        fixture.write_package("1.0.0", true);
+        fixture.write_package("1.0.0");
         fixture.write("packages/widget/src/lib.rs", "pub fn value() -> u8 { 1 }\n");
         fixture.commit("initial release");
         fixture
@@ -54,12 +55,12 @@ impl Fixture {
         );
     }
 
-    pub(crate) fn write_package(&self, version: &str, publish: bool) {
+    pub(crate) fn write_package(&self, version: &str) {
         self.write(
             "packages/widget/Cargo.toml",
             &format!(
                 "[package]\nname = \"widget\"\nversion = \"{version}\"\nedition = \"2021\"\n\
-                 license.workspace = true\npublish = {publish}\ninclude = [\"src/**\"]\n"
+                 license.workspace = true\ninclude = [\"src/**\"]\n"
             ),
         );
         self.write(
@@ -86,7 +87,11 @@ impl Fixture {
 
     pub(crate) fn git(&self, arguments: &[&str]) -> String {
         let output = self.command("git").args(arguments).output().unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         String::from_utf8(output.stdout).unwrap()
     }
 
@@ -111,10 +116,8 @@ impl Fixture {
         command
             .current_dir(&self.root)
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env(
-                "GIT_CONFIG_GLOBAL",
-                self.directory.path().join("global-config"),
-            )
+            // Relative to the child's working directory, avoiding Windows verbatim paths.
+            .env("GIT_CONFIG_GLOBAL", Path::new("..").join("global-config"))
             .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
             .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
             .env("CARGO_NET_OFFLINE", "true");

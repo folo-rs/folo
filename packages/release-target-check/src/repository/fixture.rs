@@ -14,7 +14,7 @@ pub(crate) fn fixture() -> (TempDir, Repository) {
     let root = directory.path().join("repository");
     fs::create_dir_all(&root).unwrap();
     fs::write(directory.path().join("global-config"), "").unwrap();
-    command(&root, &["init", "-b", "main"]);
+    command(&root, &["init", "-b", "main", "--object-format=sha1"]);
     fs::write(root.join("Cargo.toml"), "tracked input").unwrap();
     command(&root, &["add", "-A"]);
     command(&root, &["commit", "-m", "initial"]);
@@ -33,6 +33,8 @@ pub(crate) fn command(root: &Path, arguments: &[&str]) -> String {
             "-c",
             "commit.gpgsign=false",
             "-c",
+            "tag.gpgsign=false",
+            "-c",
             "gc.auto=0",
             "-c",
             "core.autocrlf=false",
@@ -43,8 +45,12 @@ pub(crate) fn command(root: &Path, arguments: &[&str]) -> String {
         // Resolve from the child working directory instead of passing Windows verbatim-path
         // syntax through Git's configuration-file environment variable.
         .env("GIT_CONFIG_GLOBAL", Path::new("..").join("global-config"))
+        .env_remove("GIT_CONFIG")
         .env_remove("GIT_CONFIG_COUNT")
         .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         // Fixed timestamps keep fixture history independent of the wall clock.
         .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
