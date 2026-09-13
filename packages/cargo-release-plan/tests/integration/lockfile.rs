@@ -66,7 +66,7 @@ fn locked_workspace() -> Fixture {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
+fn a_moved_dependency_changes_the_binary_but_not_its_library_dependency() {
     let fixture = locked_workspace();
     let base = fixture.sha("HEAD");
 
@@ -77,20 +77,6 @@ fn a_moved_dependency_needs_an_increment_for_a_binary_package() {
     assert!(!passed, "{message}");
     assert!(message.contains("tool: needs-increment"), "{message}");
     assert!(message.contains("widget"), "{message}");
-}
-
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn a_moved_dependency_leaves_a_library_package_unchanged() {
-    // `helper` publishes no binary target, so consumers do not use
-    // the package archive's lockfile to resolve it.
-    let fixture = locked_workspace();
-    let base = fixture.sha("HEAD");
-
-    write_lockfile(&fixture, "1.0.1");
-    fixture.commit("update the locked widget");
-
-    let (_, message) = check(&fixture, &base);
     assert!(!message.contains("helper: needs-increment"), "{message}");
 }
 
@@ -250,8 +236,6 @@ fn an_unrelated_anchor_lockfile_does_not_create_a_library_closure() {
     fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
     fixture.commit("add binary");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
     assert_lockfile_change(&fixture, &base, "added");
 }
 
@@ -270,74 +254,30 @@ fn removing_the_last_binary_needs_no_work_tree_lockfile() {
     fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
     fixture.commit("replace binary with library");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
     assert_lockfile_change(&fixture, &base, "deleted");
-}
-
-/// Executable examples are not installed applications, even when published.
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn a_moved_dependency_does_not_increment_a_library_with_an_example() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "tool", "0.1.0", INSTALLATION_DEPENDENCIES);
-    fixture.write("packages/tool/examples/demo.rs", "fn main() {}\n");
-    write_package(&fixture, "helper", "0.1.0", "");
-    write_lockfile(&fixture, "1.0.0");
-    fixture.commit("seed example");
-    let base = fixture.sha("HEAD");
-
-    write_lockfile(&fixture, "1.0.1");
-    fixture.commit("update the locked widget");
-
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(passed, "{message}");
-    assert_no_lockfile_changes(&fixture, &base);
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
 #[test]
 fn library_auxiliary_targets_never_require_or_compare_a_lockfile() {
     let fixture = Fixture::new("");
-    for (name, selection, explicit) in [
-        ("implicit", "", false),
-        ("implicit-excluded", "include = [\"src/**\"]\n", false),
-        ("explicit", "", true),
-        ("explicit-excluded", "include = [\"src/**\"]\n", true),
-    ] {
-        let target = if explicit {
-            "autoexamples = false\n[[example]]\nname = \"demo\"\n\
-             path = \"custom/demo.rs\"\ncrate-type = [\"bin\"]\n"
-        } else {
-            ""
-        };
-        write_package(
-            &fixture,
-            name,
-            "0.1.0",
-            &format!("{selection}{target}\n[dependencies]\nwidget = \"1\"\n"),
-        );
-        let example = if explicit {
-            "custom/demo.rs"
-        } else {
-            "examples/demo/main.rs"
-        };
-        fixture.write(&format!("packages/{name}/{example}"), "fn main() {}\n");
-    }
     write_package(
         &fixture,
-        "auxiliary",
+        "tool",
         "0.1.0",
         "build = \"custom/build.rs\"\n\
+         [[example]]\nname = \"explicit\"\npath = \"custom/example.rs\"\ncrate-type = [\"bin\"]\n\
          [[bench]]\nname = \"timing\"\npath = \"custom/timing.rs\"\nharness = false\n\
-         [[test]]\nname = \"test\"\npath = \"custom/test.rs\"\nharness = false\n",
+         [[test]]\nname = \"test\"\npath = \"custom/test.rs\"\nharness = false\n\
+         [dependencies]\nwidget = \"1\"\n",
     );
-    for target in ["build", "timing", "test"] {
+    for target in ["build", "example", "timing", "test"] {
         fixture.write(
-            &format!("packages/auxiliary/custom/{target}.rs"),
+            &format!("packages/tool/custom/{target}.rs"),
             "fn main() {}\n",
         );
     }
+    fixture.write("packages/tool/examples/implicit/main.rs", "fn main() {}\n");
     fixture.commit("seed libraries and auxiliary targets without a lockfile");
     let base = fixture.sha("HEAD");
 
@@ -349,8 +289,6 @@ fn library_auxiliary_targets_never_require_or_compare_a_lockfile() {
     fixture.commit("record a lockfile");
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("change only resolution");
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     assert_no_lockfile_changes(&fixture, &base);
 
     // Even unreadable resolution is irrelevant when no installed binary exists.
@@ -459,56 +397,6 @@ fn disabled_autobins_ignores_conventional_binary_files() {
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
 #[test]
-fn binary_declaration_and_discovery_controls_are_endpoint_specific() {
-    for explicit in [false, true] {
-        let fixture = Fixture::new("");
-        let disabled = format!("autobins = false\n{INSTALLATION_DEPENDENCIES}");
-        let enabled = if explicit {
-            format!(
-                "autobins = false\n[[bin]]\nname = \"custom\"\npath = \"custom/main.rs\"\n\
-                 {INSTALLATION_DEPENDENCIES}"
-            )
-        } else {
-            format!("autobins = true\n{INSTALLATION_DEPENDENCIES}")
-        };
-        write_package(&fixture, "tool", "0.1.0", &disabled);
-        write_package(&fixture, "helper", "0.1.0", "");
-        let target = if explicit {
-            "custom/main.rs"
-        } else {
-            "src/main.rs"
-        };
-        fixture.write(&format!("packages/tool/{target}"), "fn main() {}\n");
-        fixture.write("packages/tool/examples/demo.rs", "fn main() {}\n");
-        fixture.commit("seed a library with a disabled binary and an example");
-        let library = fixture.sha("HEAD");
-
-        write_package(&fixture, "tool", "0.1.0", &enabled);
-        write_lockfile(&fixture, "1.0.0");
-        fixture.commit("enable the binary");
-        assert_lockfile_change(&fixture, &library, "added");
-
-        // A version change makes the binary-bearing commit the next anchor.
-        write_package(&fixture, "tool", "0.1.1", &enabled);
-        fixture.write(
-            "Cargo.lock",
-            &fixture.read("Cargo.lock").replace(
-                "name = \"tool\"\nversion = \"0.1.0\"",
-                "name = \"tool\"\nversion = \"0.1.1\"",
-            ),
-        );
-        fixture.commit("anchor the binary release");
-        let binary = fixture.sha("HEAD");
-
-        write_package(&fixture, "tool", "0.1.1", &disabled);
-        fs::remove_file(fixture.path().join("Cargo.lock")).unwrap();
-        fixture.commit("disable the binary while retaining the example");
-        assert_lockfile_change(&fixture, &binary, "deleted");
-    }
-}
-
-#[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
-#[test]
 fn installation_closures_exclude_root_and_transitive_workspace_development_dependencies() {
     let fixture = Fixture::new(
         "[workspace.dependencies]\n\
@@ -583,36 +471,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fixture.write("Cargo.lock", &development);
     fixture.commit("change development-only resolution");
 
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     assert_no_lockfile_changes(&fixture, &base);
     assert_eq!(fixture.read("Cargo.lock"), development);
 
-    for dependency in ["root-builder", "transitive-builder", "installed-leaf"] {
-        fixture.write(
-            "Cargo.lock",
-            &development.replace(
-                &format!("name = \"{dependency}\"\nversion = \"1.0.0\""),
-                &format!("name = \"{dependency}\"\nversion = \"1.0.1\""),
-            ),
-        );
-        let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
-        let tool = report
-            .get("packages")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
-            .unwrap();
-        assert_eq!(
-            tool.get("status").and_then(Value::as_str),
-            Some("needs-increment")
-        );
-        assert_eq!(
-            tool.get("changed").unwrap(),
-            &json!([{"source": "lockfile", "dependency": dependency, "change": "modified"}])
-        );
-    }
+    let installed = ["installed-leaf", "root-builder", "transitive-builder"];
+    let updated = installed
+        .iter()
+        .fold(development.clone(), |lockfile, name| {
+            move_locked_package(&lockfile, name)
+        });
+    fixture.write("Cargo.lock", &updated);
+    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
+    let tool = report
+        .get("packages")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
+        .unwrap();
+    assert_eq!(tool.get("status").unwrap(), "needs-increment");
+    let expected: Vec<_> = installed
+        .map(|dependency| json!({"source": "lockfile", "dependency": dependency, "change": "modified"}))
+        .into();
+    assert_eq!(tool.get("changed").unwrap(), &json!(expected));
 
     // The declarations belong to each endpoint, not to the entire comparison.
     // Reclassifying a helper edge alone changes the installation without touching
@@ -654,9 +535,6 @@ fn a_moved_dependency_needs_an_increment_for_an_auto_discovered_binary() {
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("update the locked widget");
 
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("tool: needs-increment"), "{message}");
     assert_lockfile_change(&fixture, &base, "modified");
 }
 
@@ -852,8 +730,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         let base = fixture.sha("HEAD");
 
         fixture.write("Cargo.lock", &move_locked_package(lockfile, dev_leaf));
-        let (passed, message) = check(&fixture, &base);
-        assert!(passed, "{message}");
         assert_no_lockfile_changes(&fixture, &base);
 
         fixture.write("Cargo.lock", &move_locked_package(lockfile, installed_leaf));
@@ -1327,8 +1203,6 @@ source = "git+https://example.invalid/foo.git?branch=development#bbbb"
         let base = fixture.sha("HEAD");
 
         fixture.write("Cargo.lock", &lockfile.replace("#bbbb", "#cccc"));
-        let (passed, message) = check(&fixture, &base);
-        assert!(passed, "{message}");
         assert_no_lockfile_changes(&fixture, &base);
 
         fixture.write("Cargo.lock", &lockfile.replace("#aaaa", "#dddd"));
@@ -1382,8 +1256,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let base = fixture.sha("HEAD");
 
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     assert_no_lockfile_changes(&fixture, &base);
 
     fixture.write(
@@ -1445,8 +1317,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let base = fixture.sha("HEAD");
 
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     assert_no_lockfile_changes(&fixture, &base);
 
     fixture.write(
@@ -1508,8 +1378,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let base = fixture.sha("HEAD");
 
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     assert_no_lockfile_changes(&fixture, &base);
 
     fixture.write(
@@ -1632,8 +1500,6 @@ fn legacy_build_tables_are_installed_and_legacy_development_tables_are_not() {
             move_locked_package(&lockfile, name)
         });
     fixture.write("Cargo.lock", &development);
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     assert_no_lockfile_changes(&fixture, &base);
 
     for builder in ["root-builder", "target-builder"] {
@@ -1655,15 +1521,15 @@ fn assert_lockfile_change(fixture: &Fixture, base: &str, change: &str) {
 
 fn assert_dependency_change(fixture: &Fixture, base: &str, dependency: &str, change: &str) {
     let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
-    let changed = report
+    let package = report
         .get("packages")
         .and_then(Value::as_array)
         .unwrap()
         .iter()
         .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
-        .and_then(|package| package.get("changed"))
-        .and_then(Value::as_array)
         .unwrap();
+    assert_eq!(package.get("status").unwrap(), "needs-increment");
+    let changed = package.get("changed").and_then(Value::as_array).unwrap();
 
     assert!(
         changed.contains(&json!({
@@ -1678,6 +1544,15 @@ fn assert_dependency_change(fixture: &Fixture, base: &str, dependency: &str, cha
 fn assert_no_lockfile_changes(fixture: &Fixture, base: &str) {
     let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
     for package in report.get("packages").and_then(Value::as_array).unwrap() {
+        if package
+            .get("changed")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
+            assert_eq!(package.get("status").unwrap(), "unchanged");
+        }
         assert!(
             package
                 .get("changed")

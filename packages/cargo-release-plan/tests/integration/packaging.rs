@@ -135,11 +135,9 @@ fn an_untracked_manifest_resource_is_advisory_only() {
     let base = fixture.sha("HEAD");
     fixture.write("README.md", "shared\n");
 
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(passed, "{message}");
     // Advisory, but still worth naming: it is content Cargo would pack.
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"unchanged\""));
     assert!(report.contains("README.md"), "{report}");
 }
 
@@ -157,10 +155,8 @@ fn an_untracked_auto_detected_readme_is_advisory_even_when_the_rules_exclude_it(
     let base = fixture.sha("HEAD");
     fixture.write("packages/demo/README.md", "docs\n");
 
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"unchanged\""));
     assert!(report.contains("README.md"), "{report}");
 }
 
@@ -175,10 +171,8 @@ fn a_higher_priority_untracked_readme_outranks_a_tracked_fallback() {
     let base = fixture.sha("HEAD");
     fixture.write("packages/demo/README.md", "preferred\n");
 
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"unchanged\""));
     assert!(report.contains("README.md"), "{report}");
 }
 

@@ -4,12 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cargo_release_plan::{RunInput, run};
+use cargo_release_plan::{RunInput, RunOutcome, run};
 use ohno::AppError;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, report_json, resolved_plan};
+use crate::harness::{check, resolved_plan};
 
 fn evidence_manifest(plan: &Path) -> PathBuf {
     let plan: Value = serde_json::from_slice(&fs::read(plan).unwrap()).unwrap();
@@ -37,14 +37,21 @@ fn verify(plan: &Path, manifest: &Path) -> Result<(), AppError> {
     miri,
     ignore = "spawns Git and offline Cargo against retained workspaces"
 )]
-fn final_compatibility_workspace_has_candidate_versions_and_resolution() {
+fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     let fixture = Fixture::new("");
     write_package(&fixture, "core", "0.1.0", "");
     write_package(
         &fixture,
         "tool",
         "0.1.0",
-        "\n[dependencies]\ncore = { path = \"../core\", version = \"0.1.0\" }\n",
+        "\n[package.metadata.cargo_check_external_types]\nallowed_external_types = [\"core::*\"]\n\
+         [dependencies]\ncore = { path = \"../core\", version = \"0.1.0\" }\n",
+    );
+    write_package(
+        &fixture,
+        "helper",
+        "0.1.0",
+        "\npublish = false\n[dependencies]\ncore = { path = \"../core\", version = \"=0.1.0\" }\n",
     );
     fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
     fixture.cargo(&["generate-lockfile", "--offline"]);
@@ -56,6 +63,16 @@ fn final_compatibility_workspace_has_candidate_versions_and_resolution() {
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let candidate = evidence_manifest(&plan);
     let root = candidate.parent().unwrap();
+    assert!(
+        fs::read_to_string(root.join("packages/tool/Cargo.toml"))
+            .unwrap()
+            .contains("0.2.0")
+    );
+    assert!(
+        fs::read_to_string(root.join("packages/helper/Cargo.toml"))
+            .unwrap()
+            .contains("=0.2.0")
+    );
     assert_eq!(root, fixture.path().join("preview/workspace"));
     assert!(
         fs::read_to_string(root.join("packages/core/Cargo.toml"))
@@ -88,29 +105,45 @@ fn final_compatibility_workspace_has_candidate_versions_and_resolution() {
         String::from_utf8_lossy(&output.stderr)
     );
     verify(&plan, &candidate).unwrap();
-    verify(&plan, &fixture.manifest()).unwrap_err();
     assert_eq!(fs::read(root.join("Cargo.lock")).unwrap(), expected_lock);
+    let inspection = RunInput::InspectPlan {
+        plan: plan.clone(),
+        require_resolved: true,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    };
+    let RunOutcome::ArtifactQuery { message } = run(&inspection).unwrap() else {
+        panic!()
+    };
+    let result: Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        result.get("publication_targets").unwrap(),
+        &json!(["core", "tool"])
+    );
+    assert_eq!(
+        Path::new(
+            result
+                .get("evidence_manifest_path")
+                .unwrap()
+                .as_str()
+                .unwrap()
+        ),
+        candidate
+    );
+    let original: Value = serde_json::from_slice(&fs::read(&plan).unwrap()).unwrap();
+    let mut edited = original.clone();
+    *edited
+        .pointer_mut("/resolved/evidence_manifest_path")
+        .unwrap() = json!(fixture.manifest());
+    fs::write(&plan, serde_json::to_vec(&edited).unwrap()).unwrap();
+    run(&inspection).unwrap_err();
+    fs::write(&plan, serde_json::to_vec(&original).unwrap()).unwrap();
 
-    fs::write(root.join("Cargo.lock"), fixture.read("Cargo.lock")).unwrap();
-    verify(&plan, &candidate).unwrap_err();
-    fs::write(root.join("Cargo.lock"), &expected_lock).unwrap();
     let source = root.join("packages/core/src/lib.rs");
     let original_source = fs::read(&source).unwrap();
     fs::write(&source, "pub fn changed_after_evidence() {}\n").unwrap();
-    verify(&plan, &candidate).unwrap_err();
+    run(&inspection).unwrap_err();
     fs::write(&source, &original_source).unwrap();
-    let candidate_member = root.join("packages/core/Cargo.toml");
-    let original_manifest = fs::read(&candidate_member).unwrap();
-    fs::write(
-        &candidate_member,
-        String::from_utf8(original_manifest.clone())
-            .unwrap()
-            .replace("0.2.0", "0.3.0"),
-    )
-    .unwrap();
-    verify(&plan, &candidate).unwrap_err();
-    fs::write(&candidate_member, original_manifest).unwrap();
-    verify(&plan, &candidate).unwrap();
 
     let live_source = fixture.read("packages/core/src/lib.rs");
     fixture.write(
@@ -119,7 +152,29 @@ fn final_compatibility_workspace_has_candidate_versions_and_resolution() {
     );
     verify(&plan, &candidate).unwrap_err();
     fixture.write("packages/core/src/lib.rs", &live_source);
-    verify(&plan, &candidate).unwrap();
+
+    let manifest = fixture.read("packages/core/Cargo.toml");
+    let lockfile = fixture.read("Cargo.lock");
+    let mut edited = original.clone();
+    // The invalid artifact follows legitimate writes, exercising validation-before-installation.
+    edited
+        .pointer_mut("/resolved/files")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":"packages/core/src/lib.rs","contents":"unplanned source"}));
+    fs::write(&plan, serde_json::to_vec(&edited).unwrap()).unwrap();
+    run(&RunInput::Apply {
+        plan: plan.clone(),
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap_err();
+    assert_eq!(fixture.read("packages/core/Cargo.toml"), manifest);
+    assert_eq!(fixture.read("Cargo.lock"), lockfile);
+    assert_eq!(fixture.read("packages/core/src/lib.rs"), live_source);
+    fs::write(&plan, serde_json::to_vec(&original).unwrap()).unwrap();
 
     // Application depends on the original snapshot and captured bytes, not the retained tree.
     fs::remove_dir_all(root).unwrap();
@@ -131,98 +186,4 @@ fn final_compatibility_workspace_has_candidate_versions_and_resolution() {
     })
     .unwrap();
     assert!(check(&fixture, "HEAD").0);
-}
-
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "spawns Git and offline Cargo against retained workspaces"
-)]
-fn repreview_replaces_owned_evidence_and_rejects_an_unowned_directory() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "library", "0.1.0", "");
-    fixture.commit("released workspace");
-    fixture.write(
-        "proposal.json",
-        r#"{"schema_version":4,"increments":[{"name":"library","level":"patch"}]}"#,
-    );
-    let proposal = fixture.path().join("proposal.json");
-    let plan = resolved_plan(&fixture, &proposal);
-    let candidate = evidence_manifest(&plan);
-    let marker = candidate.parent().unwrap().join("old-evidence");
-    fs::write(&marker, "").unwrap();
-    let plan = resolved_plan(&fixture, &proposal);
-    assert!(!marker.exists());
-    verify(&plan, &evidence_manifest(&plan)).unwrap();
-
-    let marker = candidate
-        .parent()
-        .unwrap()
-        .join(".git/cargo-release-plan-preview");
-    fs::remove_file(marker).unwrap();
-    let retained_source = candidate
-        .parent()
-        .unwrap()
-        .join("packages/library/src/lib.rs");
-    let retained_bytes = fs::read(&retained_source).unwrap();
-    run(&RunInput::Preview {
-        plan: proposal,
-        prepared: fixture.path().join("prepared/prepared.json"),
-        output: fixture.path().join("preview"),
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert_eq!(fs::read(retained_source).unwrap(), retained_bytes);
-    assert!(!plan.exists());
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "captures real Git and Cargo workspace inputs")]
-fn local_source_inputs_invalidate_evidence_without_becoming_release_reasons() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "library", "0.1.0", "");
-    fixture.write(".gitignore", "packages/library/src/generated.rs\n");
-    fixture.commit("released library");
-    let inputs = [
-        "packages/library/src/untracked.rs",
-        "packages/library/src/generated.rs",
-    ];
-    for path in inputs {
-        fixture.write(path, "pub fn local_input() {}\n");
-    }
-    let report: Value = serde_json::from_str(&report_json(&fixture, "HEAD")).unwrap();
-    assert_eq!(
-        report
-            .get("packages")
-            .unwrap()
-            .get(0)
-            .unwrap()
-            .get("status")
-            .unwrap(),
-        "unchanged"
-    );
-    fixture.write(
-        "proposal.json",
-        r#"{"schema_version":4,"increments":[{"name":"library","level":"patch"}]}"#,
-    );
-    let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
-    let candidate = evidence_manifest(&plan);
-    for path in inputs {
-        fixture.write(path, "pub fn changed_local_input() {}\n");
-        verify(&plan, &candidate).unwrap_err();
-        let report: Value = serde_json::from_str(&report_json(&fixture, "HEAD")).unwrap();
-        assert_eq!(
-            report
-                .get("packages")
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .get("status")
-                .unwrap(),
-            "unchanged"
-        );
-        fixture.write(path, "pub fn local_input() {}\n");
-        verify(&plan, &candidate).unwrap();
-    }
 }

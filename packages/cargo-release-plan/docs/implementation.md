@@ -71,6 +71,30 @@ directories to cover successful output capture and nonzero exits. Tests that nee
 repository state create it explicitly in temporary fixtures; integration tests
 share a hermetic fixture. The source tree's Git metadata is never a test prerequisite.
 
+### Test boundaries
+
+Pure decision and validation tests own the combinations of versions, dependency
+forms, captured-state differences, and artifact selections. They use small inputs
+without acquiring repository state or resolving a Cargo workspace. Orchestration
+tests inject acquisition at its existing boundary so they exercise production
+ordering, including rejection before writes and completion-marker invalidation,
+without rebuilding a successful preview for every failure case.
+
+Integration tests establish the real Git, Cargo, filesystem, and executable
+connections: history and index semantics, manifest discovery, offline resolution,
+captured-workspace identity, and a complete CLI release-plan round trip. A test
+classifies each unchanged workspace state only once where the resulting report
+can establish all its assertions. Output-format combinations belong to renderer
+tests, not additional repository classifications. Structural expansion tests stop
+at the expanded artifact; only preview tests acquire resolved evidence.
+
+Fixtures remain independently mutable. Immutable Git initialization and empty
+global configuration can be shared within a test process, while commits still
+use Git's normal index and filtering behavior. Process-local reuse must not be
+assumed to span nextest's separate test processes. Both native and mutation runs
+exercise the same behavioral suite; runtime reductions do not rely on a relaxed
+deadline or mutation-only test exclusions.
+
 ## Workspace snapshots
 
 `cargo metadata --no-deps` supplies candidate current members and normalized

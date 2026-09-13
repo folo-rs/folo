@@ -8,7 +8,6 @@ use cargo_release_plan::{RunInput, RunOutcome, run};
 use serde_json::Value;
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, resolved_plan};
 
 #[test]
 #[cfg_attr(miri, ignore = "expands plans in a real workspace")]
@@ -124,10 +123,10 @@ fn utf8_bom_is_accepted_by_expansion_and_application() {
     );
 }
 
-/// Read-only expansion names group effects; preview completes dependency effects before apply.
+/// Read-only expansion names group effects without resolving dependent releases.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn expand_names_moved_packages_while_apply_also_rewrites_their_dependents() {
+fn expansion_names_only_packages_whose_versions_move() {
     let fixture = Fixture::new("");
     write_package(&fixture, "helper", "1.0.0", "");
     write_package(
@@ -170,27 +169,18 @@ helper = { path = "../helper", version = "1.0.0" }
         .collect();
     assert_eq!(named, vec!["helper"]);
 
-    run(&RunInput::Apply {
-        plan: resolved_plan(&fixture, &expanded_path),
-        manifest_path: fixture.manifest(),
-        dry_run: false,
-        verbose: false,
-    })
-    .unwrap();
-
-    // Preview includes the dependent's requirement rewrite and its corresponding release.
     let manifest = fixture.read("packages/app/Cargo.toml");
-    assert!(manifest.contains("version = \"1.0.1\""), "{manifest}");
+    assert!(manifest.contains("version = \"1.0.0\""), "{manifest}");
+    assert!(!fixture.path().join("Cargo.lock").exists());
 }
 
-/// Expansion names every group member and produces an applicable result.
+/// Expansion names every group member without installing an unresolved plan.
 ///
-/// An expanded plan and the apply operation that consumes it cannot disagree
-/// about which packages a decision reaches.
+/// Structural expansion cannot authorize application without captured resolution.
 /// Ref: docs/design.md, "Version groups".
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn expand_names_every_group_member_and_the_result_applies() {
+fn expansion_names_every_group_member_but_requires_preview_before_application() {
     let fixture = Fixture::new(
         r#"
 [workspace.dependencies]
@@ -209,7 +199,6 @@ shell_impl = { workspace = true }
     write_package(&fixture, "shell_impl", "0.1.0", "");
     write_package(&fixture, "loner", "1.2.3", "");
     fixture.commit("grouped packages");
-    let base = fixture.sha("HEAD");
 
     let plan_path = fixture.path().join("plan.json");
     fs::write(
@@ -252,22 +241,19 @@ shell_impl = { workspace = true }
     assert!(increments.iter().all(|entry| entry.get("level").is_none()));
 
     run(&RunInput::Apply {
-        plan: resolved_plan(&fixture, &expanded_path),
+        plan: expanded_path,
         dry_run: false,
         manifest_path: fixture.manifest(),
         verbose: false,
     })
-    .unwrap();
+    .unwrap_err();
 
     let impl_manifest =
         fs::read_to_string(fixture.path().join("packages/shell_impl/Cargo.toml")).unwrap();
-    assert!(impl_manifest.contains("version = \"0.1.1\""));
+    assert!(impl_manifest.contains("version = \"0.1.0\""));
     let root = fs::read_to_string(fixture.manifest()).unwrap();
-    assert!(root.contains("version = \"=0.1.1\""));
-
-    fixture.commit("apply expanded plan");
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
+    assert!(root.contains("version = \"=0.1.0\""));
+    assert!(!fixture.path().join("Cargo.lock").exists());
 }
 
 /// A helper can directly target and align a group that publishes no package.
@@ -312,141 +298,9 @@ fn a_helper_directly_targets_an_all_non_publishable_group() {
         vec![("a-helper", "0.1.1"), ("z-helper", "0.1.1")]
     );
 
-    run(&RunInput::Apply {
-        plan: resolved_plan(&fixture, &expanded_path),
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-
     for helper in ["a-helper", "z-helper"] {
         let manifest = fixture.read(&format!("packages/{helper}/Cargo.toml"));
-        assert!(manifest.contains("version = \"0.1.1\""), "{manifest}");
-    }
-}
-
-/// A group that gains an earlier-sorting helper after resolution is rejected.
-///
-/// The expanded document is what resolution captured and what the publication
-/// check ran over, so `apply` must not quietly reach a package it does not name.
-/// Expansion resolves entries through the current exact dependency graph, which
-/// is where a membership change between the two commands would otherwise widen
-/// the captured set and change its derived key.
-/// Ref: docs/design.md, "Version groups".
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn apply_rejects_an_expanded_plan_whose_group_gained_a_member() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "shell", "0.1.0", "");
-    write_package(&fixture, "aaa-helper", "0.1.0", "\npublish = false\n");
-    fixture.commit("grouped packages");
-
-    let plan_path = fixture.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        r#"{ "schema_version": 4, "increments": [{ "name": "shell", "level": "patch" }] }"#,
-    )
-    .unwrap();
-    let expanded_path = fixture.path().join("expanded.json");
-    run(&RunInput::Expand {
-        preserve_input: false,
-        plan: plan_path.clone(),
-        out: expanded_path.clone(),
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-
-    // The expanded document names only the member the group held when it was
-    // written.
-    let expanded: Value =
-        serde_json::from_str(&fs::read_to_string(&expanded_path).unwrap()).unwrap();
-    assert_eq!(expanded.get("expanded"), Some(&Value::Bool(true)));
-    let names: Vec<&str> = expanded
-        .get("increments")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .map(|entry| entry.get("name").and_then(Value::as_str).unwrap())
-        .collect();
-    assert_eq!(names, vec!["shell"]);
-    let resolved = resolved_plan(&fixture, &expanded_path);
-    run(&RunInput::Apply {
-        plan: resolved.clone(),
-        dry_run: true,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-    let original_helper = fixture.read("packages/aaa-helper/Cargo.toml");
-
-    // An exact dependency connects an earlier-sorting helper between resolution and application.
-    fixture.write(
-        "packages/aaa-helper/Cargo.toml",
-        r#"[package]
-name = "aaa-helper"
-version = "0.1.0"
-edition = "2021"
-publish = false
-
-[dependencies]
-shell = { path = "../shell", version = "=0.1.0" }
-"#,
-    );
-
-    let shell = fixture.read("packages/shell/Cargo.toml");
-    let helper = fixture.read("packages/aaa-helper/Cargo.toml");
-    let lockfile = fixture.read("Cargo.lock");
-    run(&RunInput::Apply {
-        plan: resolved.clone(),
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap_err();
-
-    // Nothing was written: the rejection precedes every manifest edit.
-    assert_eq!(fixture.read("packages/shell/Cargo.toml"), shell);
-    assert_eq!(fixture.read("packages/aaa-helper/Cargo.toml"), helper);
-    assert_eq!(fixture.read("Cargo.lock"), lockfile);
-
-    // Restoring precisely the captured inputs restores acceptance of the same plan.
-    fixture.write("packages/aaa-helper/Cargo.toml", &original_helper);
-    run(&RunInput::Apply {
-        plan: resolved,
-        dry_run: true,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-    fixture.write("packages/aaa-helper/Cargo.toml", &helper);
-
-    // The changed graph is valid; only fresh resolution may include its additional member.
-    let fresh = resolved_plan(&fixture, &plan_path);
-    let expanded: Value = serde_json::from_slice(&fs::read(&fresh).unwrap()).unwrap();
-    let names: Vec<_> = expanded
-        .get("increments")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| entry.get("name").unwrap().as_str().unwrap())
-        .collect();
-    assert_eq!(names, ["aaa-helper", "shell"]);
-    run(&RunInput::Apply {
-        plan: fresh,
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-    for member in ["shell", "aaa-helper"] {
-        assert!(
-            fixture
-                .read(&format!("packages/{member}/Cargo.toml"))
-                .contains("0.1.1")
-        );
+        assert!(manifest.contains("version = \"0.1.0\""), "{manifest}");
     }
 }
 
@@ -508,10 +362,6 @@ fn a_patch_increment_level_realigns_an_inconsistent_group() {
     );
     write_package(&fixture, "shell_impl", "0.2.0", "");
     fixture.commit("drifted group");
-    let base = fixture.sha("HEAD");
-
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "a drifted group must fail the check: {message}");
 
     let plan_path = fixture.path().join("plan.json");
     fs::write(
@@ -539,18 +389,6 @@ fn a_patch_increment_level_realigns_an_inconsistent_group() {
         expanded_versions(increments),
         vec![("shell", "0.2.1"), ("shell_impl", "0.2.1")]
     );
-
-    run(&RunInput::Apply {
-        plan: resolved_plan(&fixture, &expanded_path),
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-    fixture.commit("realign group");
-
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
 }
 
 /// An exact target equal to the group's highest version aligns lagging members.
@@ -571,7 +409,6 @@ fn an_exact_target_aligns_a_group_without_advancing_its_leader() {
     );
     write_package(&fixture, "shell_impl", "1.1.0", "");
     fixture.commit("drifted group");
-    let base = fixture.sha("HEAD");
 
     let plan_path = fixture.path().join("plan.json");
     fs::write(
@@ -599,23 +436,6 @@ fn an_exact_target_aligns_a_group_without_advancing_its_leader() {
         expanded_versions(increments),
         vec![("shell", "1.1.0"), ("shell_impl", "1.1.0")]
     );
-
-    run(&RunInput::Apply {
-        plan: resolved_plan(&fixture, &expanded_path),
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-
-    let leader = fs::read_to_string(fixture.path().join("packages/shell_impl/Cargo.toml")).unwrap();
-    assert!(leader.contains("version = \"1.1.0\""), "{leader}");
-    let laggard = fs::read_to_string(fixture.path().join("packages/shell/Cargo.toml")).unwrap();
-    assert!(laggard.contains("version = \"1.1.0\""), "{laggard}");
-
-    fixture.commit("align group");
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
 }
 
 fn expanded_versions(increments: &[Value]) -> Vec<(&str, &str)> {

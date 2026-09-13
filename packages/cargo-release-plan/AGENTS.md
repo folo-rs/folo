@@ -25,6 +25,12 @@ The integration suite is one test binary, `tests/integration/`, split into a
 topic module per area of behavior over the shared `harness`. Add a new case to
 the module that matches its subject rather than growing a single file.
 
+Keep field and decision matrices in the owning module's unit tests. Do not build
+a prepared/previewed workspace merely to test a validator or an output format.
+Reuse one classification report for assertions about the same unchanged state.
+Keep real Git/Cargo tests for boundary behavior; see
+[test boundaries](docs/implementation.md#test-boundaries).
+
 ## Modules own subjects, not categories
 
 Put a new type, constant, or helper in the module that owns its subject, and
