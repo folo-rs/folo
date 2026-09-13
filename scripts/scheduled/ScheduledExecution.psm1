@@ -19,6 +19,14 @@ function Invoke-ScheduledCheck {
         [Parameter(Mandatory)][string] $SourceSha
     )
 
+    # Results are not source inputs: cargo-mutants copies even gitignored files and cannot
+    # read the live capture streams on Windows. Ref: .github/workflows/implementation.md#deep-execution.
+    $SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
+    $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+    $relativeOutput = [IO.Path]::GetRelativePath($SourceRoot, $OutputDirectory)
+    if (-not [IO.Path]::IsPathRooted($relativeOutput) -and $relativeOutput -notmatch '^\.\.(?:[\\/]|$)') {
+        throw 'Check output must be outside the source directory so diagnostics cannot enter source copies.'
+    }
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
     if (@(Get-ChildItem -LiteralPath $OutputDirectory -Force).Count -ne 0) {
         throw 'Check output must be an empty directory so a rerun cannot reuse stale results.'

@@ -64,6 +64,9 @@ Readable reports include useful diagnostics, source and direct job links; full l
 and tool artifacts supplement rather than replace the explanation. Setup failures
 are reported even when no checker artifact exists.
 Successful runs and cancellation without a failed job do not create failure issues.
+Generated diagnostics remain separate from source inputs, including while a checker
+copies the source tree for isolated execution. Partial logs remain available after
+interruption, and genuine checker failures retain their status and artifacts.
 
 An empty mutation shard is explicitly reported as no work, not a passing baseline.
 The shared mutation recipe runs cargo-mutants' baseline for nonempty shards.
