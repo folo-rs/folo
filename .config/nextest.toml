@@ -18,19 +18,19 @@ slow-timeout = { period = "10s", terminate-after = 6, grace-period = "0s" }
 # enough to hit the last-chance watchdog, so they share one execution slot.
 [test-groups]
 dure-windows-conpty = { max-threads = 1 }
-# Even minimal release-checker fixtures issue many real Git/Cargo queries. Keep their
-# Windows executable-boundary tests from contending with one another; unit tests
-# remain parallel. See packages/release-target-check/docs/implementation.md.
-release-target-check-integration = { max-threads = 1 }
+# Both unit and integration fixtures issue real Git/Cargo queries. They share one
+# Windows slot so the first integration test cannot overlap Git-heavy unit tests
+# under coverage. See packages/release-target-check/docs/implementation.md.
+release-target-check-windows = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(dure) & binary(windows)'
 test-group = 'dure-windows-conpty'
 
 [[profile.default.overrides]]
-filter = 'package(release-target-check) & binary(integration)'
+filter = 'package(release-target-check)'
 platform = 'cfg(windows)'
-test-group = 'release-target-check-integration'
+test-group = 'release-target-check-windows'
 
 # The one true end-to-end test (packages/cargo-bench-history/tests/cbh_real_engine.rs) runs a
 # real `cargo bench` in an isolated throwaway fixture that must resolve `criterion` from

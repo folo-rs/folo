@@ -60,13 +60,14 @@ case verifies checker rejection without duplicating its released-source matrix.
 Missing-lockfile rejection starts from an otherwise release-equivalent binary
 snapshot, so another release violation cannot satisfy the assertion.
 
-Unit tests and non-Windows runs retain ordinary parallel scheduling. On Windows,
-nextest serializes only the executable-boundary integration binary: even minimal
-checker fixtures issue many real Git/Cargo queries, and concurrent processes consume
-most of the watchdog budget. Reducing fixture work remains necessary for both
-contended and uncontended execution; scheduling isolation does not replace it.
-All tests retain the shared last-chance watchdog without extending its deadline or
-adding retries.
+Non-Windows runs retain ordinary parallel scheduling. On Windows, nextest serializes
+this package's tests in one group: both repository unit tests and integration tests
+issue real Git/Cargo queries, and their overlap under coverage can exhaust the
+watchdog budget. Serializing only the integration binary still allows its first
+test to contend with Git-heavy unit tests. Reducing fixture work remains necessary
+for both contended and uncontended execution; scheduling isolation does not replace
+it. All tests retain the shared last-chance watchdog without extending its deadline
+or adding retries.
 
 ## Release policy reuse
 
