@@ -27,10 +27,13 @@ status or timeout authorizes takeover. Missing or conflicting ownership requires
 an explicit handoff before work. Account for unpublished changes when replacing
 an executor; never discard someone else's work.
 
-`needs-human` blocks work until the recorded requirement is satisfied. Retain the
-claim and explain what is needed. On continuation, inspect the existing PR and
-current branch/head, previous resolutions and human changes; do not reset or
-force-push unexpected work.
+`needs-human` blocks work until the recorded requirement is satisfied or evidence
+or an explicit human correction establishes that it was not a blocker. If this
+owner applied the label solely for routine waiting, correct the discussion and
+remove the mistaken label; preserve any separate unresolved human requirement.
+This correction is not permission to waive checks. Retain the claim. On
+continuation, inspect the existing PR and current branch/head, previous
+resolutions and human changes; do not reset or force-push unexpected work.
 
 # Stage 2: Confirm and repair the actual problem
 
@@ -102,11 +105,30 @@ validation still apply.
 
 # Stage 4: Follow checks, review and conflicts
 
+Queued, pending and in-progress checks or automated reviews are normal ongoing
+work, not failures or human-action blockers. Queue age, a runner not yet being
+assigned, absent steps/logs before execution, or other queued repository runs do
+not establish an outage. Do not add `needs-human`, request a check waiver, or end
+requested foreground follow-up on that basis.
+
+Keep following the same PR in the foreground while execution or automated review
+is pending. Wait between status reads rather than busy-polling; foreground waits
+do not require a per-PR automation or hidden watcher. Recheck the current head
+after pushes and refresh reviews as well as checks. Passing checks alone do not
+finish follow-up while an automated review is still pending.
+
 Read all current-head check failures, relevant deep failures, conflicts with main,
 top-level comments, review summaries and inline threads. Include low-confidence
 agent feedback when valid. Check earlier discussion and commits for already
 addressed findings. Fix straightforward problems and preserve human changes;
 request a human decision before design changes or unsafe ambiguity.
+
+Reserve `needs-human` for a concrete impediment requiring a specific human action,
+such as an explicit approval requirement or a diagnosed permission/configuration
+failure outside the worker's authority. Record the evidence, required action and
+why the worker cannot proceed. A delay alone is not that evidence. A failed check
+or review run needs diagnosis and an authorized recovery where possible, not
+automatic escalation or an assumption that the repair passed.
 
 Follow the repository's normal communication policy. Every authored post starts
 with `[Copilot speaking]`. Respond to agent-authored feedback and to the original
@@ -117,17 +139,25 @@ agent-empowered account for an agent comment.
 
 After pushing a fix for an authorized inline thread, use
 `reply_and_resolve_review_thread` to reply in that thread and resolve it. Do not
-substitute a disconnected top-level comment. Record blockers and needed decisions
-on the issue with `needs-human`; keep ownership unless explicitly releasing it.
-Do not claim readiness while required checks or relevant deep verification fail.
+substitute a disconnected top-level comment. Record evidenced human blockers and
+needed decisions on the issue with `needs-human`; keep ownership unless
+explicitly releasing it. Do not claim readiness while required checks, relevant
+deep verification or automated review remain pending, or failures and actionable
+feedback remain unresolved.
 
 # Stage 5: Leave a reviewable handoff
 
-When ready, state that the PR awaits human review/approval/merge, with links and
-any limitations. Post only substantive progress; put decision diagnostics in a
-collapsible section of a summary. A session becoming idle is not completion.
-Repository-level `scheduled-intake` supplies future follow-up; do not start a timer
-or hidden watcher.
+After current-head checks and automated review have concluded and actionable
+findings are addressed, state that the PR awaits human review/approval/merge,
+with links and any limitations. A genuine human blocker instead needs its
+specific unresolved action, not a ready claim. Post only substantive progress;
+put decision diagnostics in a collapsible section of a summary.
+
+A session becoming idle is not completion. If foreground work is interrupted,
+leave a pending handoff that retains ownership and the next check/review action;
+do not convert unfinished waiting into `needs-human`. Repository-level
+`scheduled-intake` supplies future follow-up without replacing the requested
+foreground work; do not start a timer or hidden watcher.
 
 A merged linked PR closes the issue through ordinary GitHub behavior. A PR closed
 without merging does not resolve the issue: explain the disposition and explicitly

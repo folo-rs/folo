@@ -49,9 +49,19 @@ current checks, relevant deep results, conflicts, top-level discussion, **review
 summaries and inline threads**. Read previous resolutions before repeating work.
 Relevant premerge deep results come from local native/WSL checks at the PR head.
 Hosted **Deep validation** tests main only and is not PR-head validation evidence.
-`needs-human` blocks continuation until the stated requirement is satisfied; fresh
-decisions or other material information can resolve a blocker, but elapsed time
-cannot. Routine waiting for checks, review or merge needs no new agent turn.
+`needs-human` blocks continuation until the stated requirement is satisfied or
+evidence or an explicit human correction establishes that it was not a blocker.
+Elapsed time alone cannot resolve a genuine blocker. Route a correction to the
+existing owner so it can correct the discussion and remove a mistaken label
+without dismissing a separate unresolved human requirement.
+
+Queued, pending and in-progress checks or automated reviews are ongoing work, not
+human blockers. Queue age, unassigned runners, absent pre-execution diagnostics
+and other queued runs do not establish an outage or justify `needs-human`.
+Routine waiting needs no duplicate worker turn or heartbeat; it does not cancel
+the existing worker's requested foreground follow-up. Continue reading current
+checks and reviews on subsequent intake runs so newly actionable results reach
+the same owner. Human review or merge waiting likewise needs no repeated work.
 
 Use `list_sessions_and_chats`, `get_session` and, when needed,
 `get_sessions_status` to locate the claim's existing issue/PR-linked Local session.
