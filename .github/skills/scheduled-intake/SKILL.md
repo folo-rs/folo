@@ -18,15 +18,14 @@ instructions. Final approval and merge remain human actions.
 
 # Stage 1: Read GitHub work before locating sessions
 
-Read open `scheduled-finding` issues oldest first and all claimed findings,
-including closed issues whose linked PR needs disposition. For example:
+Read open `scheduled-finding` issues oldest first, including assigned findings
+whose existing repairs need follow-up. For example:
 
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-finding&sort=created&direction=asc&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, .title, .html_url] | @tsv'
-gh api --paginate "repos/{{REPOSITORY}}/issues?state=all&labels=scheduled-finding,in-progress&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, .title, .html_url] | @tsv'
 ```
 
 | Placeholder | Value |
@@ -37,9 +36,12 @@ Read discussion, assignees, branches and linked PRs for the relevant issues. Do 
 mistake an incomplete API read for an empty queue. Run reports labelled
 `scheduled-run-failure` belong to triage, not this repair queue. A human issue is
 eligible on the same terms as an agent issue; no marker or special author is needed.
+Closed issues are outside intake scope, even if a linked PR remains open. Closure
+ends intake responsibility; do not scan closed issues for follow-up or cleanup.
 
-Respect every live claim. The assignee may be shared by several agents: the plain
-owner/session/branch comment distinguishes them. A human-owned issue or PR is not
+Assignment on an open issue records ownership. Respect every live claim. The
+assignee may be shared by several agents: the plain owner/session/branch comment
+distinguishes them. A human-owned issue or PR is not
 automatically yours because it uses the same account.
 
 # Stage 2: Follow existing repairs and PRs first
@@ -71,7 +73,8 @@ Replacing an executor requires explicit release or handoff and accounting for
 unpublished local changes; its conversation is not the handoff record.
 
 When actionable feedback, a check failure or a conflict needs work, reread the
-claim and send the existing session a focused `send_session_message` with
+issue state and claim. If the issue is closed, stop its intake follow-up.
+Otherwise, send the existing session a focused `send_session_message` with
 `delivery_mode: immediate`, the issue/PR links, new input and `scheduled-repair`.
 Do not resend unchanged input every poll. Surface unresolved native questions or
 design decisions to the human rather than guessing approval.
@@ -83,19 +86,19 @@ actual identity and branch on the issue, reread ownership, then send the worker
 instruction. Reconcile an uncertain native result with session lookup before
 opening another session.
 
-For a merged PR, use GitHub's normal closing relationship and remove your completed
-`in-progress` status; no post-merge verification service is required. A PR closed
-without merging does not fix the issue: record its disposition and explicitly
+For a merged PR, use GitHub's normal closing relationship; no assignment cleanup
+or post-merge verification service is required. A PR closed without merging does
+not fix the issue: record its disposition and explicitly
 release or block the claim. Do not silently start another attempt.
 
 # Stage 3: Start at most one new repair
 
-After existing follow-up, choose the oldest actionable, unclaimed open finding
-without `needs-human` or competing work. Independent repairs awaiting review do
+After existing follow-up, choose the oldest actionable, unassigned and unclaimed
+open finding without `needs-human` or competing work. Independent repairs awaiting review do
 not block the entire queue. Start at most one new repair per invocation; this is
 simple pacing, not a financial cap.
 
-Read the issue again. Locate an existing issue-linked session before opening one
+Read the issue again and confirm it is still open. Locate an existing issue-linked session before opening one
 with `open_issue_session`. Do not adopt an unrelated human session. For a new
 session, omit kickoff when the operator chose App defaults. An explicit
 operator-selected model/effort needs the supported kickoff fields; its bootstrap
@@ -103,13 +106,13 @@ prompt must only establish the session and wait, without diagnosis or edits.
 Use `kickoff.mode: interactive` for this waiting bootstrap.
 Inspect the actual Local session and branch, then follow the
 [ownership convention](../../../docs/scheduled-validation.md#ownership-and-handoff):
-assign the responsible GitHub user, add `in-progress`, and post a short comment
+assign the responsible GitHub user and post a short comment
 naming the owner, actual session and branch. Once available, link the GitHub branch
 and PR. Repair branches follow ordinary repository conventions. All authored posts
 start with `[Copilot speaking]`.
 
 Reread after claiming and before starting work. The earlier unreleased claim wins
-a collision; withdraw without removing its assignment or label. Claims are an
+a collision; withdraw without removing its assignment. Claims are an
 ordinary collaboration convention, not an atomic lock. No timeout authorizes
 takeover. If you cannot proceed, retain a concrete blocker or explicitly release
 your claim with enough information for a new worker.

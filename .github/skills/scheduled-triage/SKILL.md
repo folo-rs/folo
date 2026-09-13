@@ -37,10 +37,10 @@ Process reports sequentially; do not launch parallel triagers.
 
 Before working, read the report's discussion, assignees and linked PRs. Follow the
 [ownership convention](../../../docs/scheduled-validation.md#ownership-and-handoff):
-assign the responsible GitHub user, add `in-progress`, and post a short claim naming
+assign the responsible GitHub user and post a short claim naming
 the owner and actual App session. Reread after posting and before analysis. The
 earlier unreleased claim wins a collision; withdraw without removing the winner's
-assignment or label. An idle or unavailable session never authorizes takeover.
+assignment. An idle or unavailable session never authorizes takeover.
 Locate a retained claim's existing session with `list_sessions_and_chats` and
 `get_session`. If this is that session, continue below. If another session is
 still working, exit rather than starting a second triager.
@@ -103,9 +103,9 @@ section. Follow repository communication policy; every authored post begins with
 
 Close the run report only after every failure is accounted for and the referenced
 issues contain the handoff information. Closing the report means triage is
-complete, not that the problems are fixed. Remove your completed `in-progress`
-status without disturbing another owner. Missing decisive logs or uncertainty
-that prevents accounting keeps the report open with a concrete blocker and, when
+complete, not that the problems are fixed. Closure needs no assignment cleanup.
+Missing decisive logs or uncertainty that prevents accounting keeps the report
+open with a concrete blocker and, when
 human action is needed, `needs-human`. Retain ownership or explicitly release it
 with a handoff; do not post periodic heartbeat comments.
 
