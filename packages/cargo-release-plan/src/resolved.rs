@@ -101,6 +101,10 @@ impl Inputs {
         final_digest: &str,
     ) -> Result<(), AppError> {
         let current = Self::capture(manifest, Some(&self.base)).map_err(StaleInputs::caused_by)?;
+        self.compare_candidate(&current, final_digest)
+    }
+
+    fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
         if current.manifest != self.manifest
             || current.head != self.head
             || current.base != self.base
@@ -121,6 +125,10 @@ impl Inputs {
     ) -> Result<bool, AppError> {
         let current =
             Self::capture(manifest, Some(&self.base_revision)).map_err(StaleInputs::caused_by)?;
+        self.compare(&current, final_digest)
+    }
+
+    fn compare(&self, current: &Self, final_digest: Option<&str>) -> Result<bool, AppError> {
         if current.root != self.root
             || current.manifest != self.manifest
             || current.head != self.head
@@ -245,6 +253,25 @@ impl ResolvedState {
         }
         self.inputs.verify_candidate(&manifest, &self.final_digest)
     }
+
+    fn validate_artifacts(
+        &self,
+        versions: &BTreeMap<String, String>,
+        allowed: &BTreeSet<PathBuf>,
+    ) -> Result<(), AppError> {
+        if *versions != self.versions {
+            return Err(ResolutionRequired::new().into());
+        }
+        if self.files.iter().any(|file| !allowed.contains(&file.path)) {
+            return Err(ResolutionRequired::new().into());
+        }
+        // final_digest owns captured-path membership and uniqueness; this layer additionally
+        // restricts writes to the current workspace's member manifests and lockfile.
+        if self.inputs.final_digest(&self.files)? != self.final_digest {
+            return Err(ResolutionRequired::new().into());
+        }
+        Ok(())
+    }
 }
 
 /// Exact UTF-8 bytes of one resolved manifest or workspace lockfile.
@@ -301,9 +328,6 @@ pub(crate) fn apply_resolved(
         .iter()
         .map(|(name, version)| (name.clone(), version.to_string()))
         .collect();
-    if versions != state.versions {
-        return Err(ResolutionRequired::new().into());
-    }
     let allowed: BTreeSet<PathBuf> = work_tree
         .member_manifests
         .iter()
@@ -311,18 +335,7 @@ pub(crate) fn apply_resolved(
         .chain([&work_tree.workspace_root.join("Cargo.lock")])
         .map(|path| relative(state.inputs.root(), path))
         .collect::<Result<_, _>>()?;
-    let mut seen = BTreeSet::new();
-    for file in &state.files {
-        if !allowed.contains(&file.path)
-            || !state.inputs.paths.contains(&file.path)
-            || !seen.insert(&file.path)
-        {
-            return Err(ResolutionRequired::new().into());
-        }
-    }
-    if state.inputs.final_digest(&state.files)? != state.final_digest {
-        return Err(ResolutionRequired::new().into());
-    }
+    state.validate_artifacts(&versions, &allowed)?;
     if already_applied {
         return Ok("Resolved state is already applied; no files changed.".to_owned());
     }
@@ -497,9 +510,358 @@ struct WrongEvidenceWorkspace;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use tempfile::tempdir;
+    use std::process::Command;
+    use std::sync::LazyLock;
+
+    use serde_json::{Value, json};
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
+    use crate::classify::{PackageStatus, classify};
+    use crate::prospective::Prospective;
+
+    // A real empty file supports Git for Windows on ARM64, unlike the NUL device.
+    // Keep it outside fixtures so it cannot enter their captured or committed inputs.
+    static GIT_CONFIG: LazyLock<TempDir> = LazyLock::new(|| {
+        let directory = tempdir().unwrap();
+        fs::write(directory.path().join("config"), "").unwrap();
+        directory
+    });
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        // Capture fixtures need real index/history semantics, but no resolver or preview.
+        let output = Command::new("git")
+            .current_dir(root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", GIT_CONFIG.path().join("config"))
+            .env_remove("GIT_CONFIG")
+            .env_remove("GIT_CONFIG_COUNT")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .env("GIT_TEMPLATE_DIR", "")
+            .args([
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "gc.auto=0",
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "init.templateDir=",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    fn capture_fixture(manifest: &str) -> TempDir {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(manifest);
+        let package = path.parent().unwrap();
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::write(
+            &path,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n",
+        )
+        .unwrap();
+        fs::write(package.join("src/lib.rs"), "pub fn released() {}\n").unwrap();
+        fs::write(directory.path().join(".gitignore"), "**/src/generated.rs\n").unwrap();
+        fs::create_dir_all(directory.path().join(".cargo")).unwrap();
+        fs::write(
+            directory.path().join(".cargo/config.toml"),
+            "[term]\nquiet = true\n",
+        )
+        .unwrap();
+        git(directory.path(), &["init", "--quiet"]);
+        git(directory.path(), &["add", "."]);
+        git(
+            directory.path(),
+            &["commit", "--quiet", "-m", "released fixture"],
+        );
+        directory
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "captures a real Git and Cargo workspace without resolution"
+    )]
+    fn capture_includes_local_sources_without_turning_them_into_release_reasons() {
+        let directory = capture_fixture("Cargo.toml");
+        let manifest = directory.path().join("Cargo.toml");
+        let sources = ["src/untracked.rs", "src/generated.rs"];
+        for source in sources {
+            fs::write(directory.path().join(source), "pub fn local() {}\n").unwrap();
+        }
+        let inputs = Inputs::capture(&manifest, Some("HEAD")).unwrap();
+        for source in sources {
+            assert!(inputs.paths.contains(Path::new(source)));
+            assert!(!inputs.index.contains(source));
+            fs::write(directory.path().join(source), "pub fn changed() {}\n").unwrap();
+            let error = inputs.verify(&manifest, None).unwrap_err();
+            assert!(error.find_source::<StaleInputs>().is_some());
+            fs::write(directory.path().join(source), "pub fn local() {}\n").unwrap();
+        }
+        let classification = classify(&manifest, Some("HEAD"), Verbose::new(false)).unwrap();
+        assert_eq!(
+            classification.packages.first().unwrap().status(),
+            PackageStatus::Unchanged
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "captures a nested Git and Cargo workspace without resolution"
+    )]
+    fn nested_capture_records_ancestor_configuration_and_the_default_base() {
+        let directory = capture_fixture("rust/Cargo.toml");
+        let head = git(directory.path(), &["rev-parse", "HEAD"]);
+        git(
+            directory.path(),
+            &["update-ref", "refs/remotes/origin/main", head.trim()],
+        );
+        let inputs = Inputs::capture(&directory.path().join("rust/Cargo.toml"), None).unwrap();
+        assert_eq!(inputs.manifest, Path::new("rust/Cargo.toml"));
+        assert_eq!(inputs.base, head.trim());
+        assert!(inputs.paths.contains(Path::new(".cargo/config.toml")));
+        assert!(inputs.paths.contains(Path::new("rust/.cargo/config.toml")));
+        assert!(inputs.paths.contains(Path::new("rust/Cargo.lock")));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reserves an owned prospective directory")]
+    fn occupied_prospective_directory_is_preserved_before_reading_the_source_repository() {
+        let directory = tempdir().unwrap();
+        let occupied = directory.path().join(".prospective");
+        fs::create_dir_all(&occupied).unwrap();
+        let marker = occupied.join("keep");
+        fs::write(&marker, "another owner").unwrap();
+        let error = Prospective::new(directory.path(), &inputs()).err().unwrap();
+        assert!(error.find_source::<WriteFileError>().is_some());
+        assert_eq!(fs::read_to_string(marker).unwrap(), "another owner");
+    }
+
+    fn inputs() -> Inputs {
+        Inputs {
+            root: PathBuf::from("repository"),
+            manifest: PathBuf::from("Cargo.toml"),
+            head: "head".to_owned(),
+            base: "base".to_owned(),
+            base_revision: "main".to_owned(),
+            index: "index".to_owned(),
+            paths: ["Cargo.toml", "Cargo.lock", "src/lib.rs"]
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+            digest: "initial".to_owned(),
+        }
+    }
+
+    #[test]
+    fn captured_identity_fields_are_required_for_initial_and_final_states() {
+        let inputs = inputs();
+        let original = serde_json::to_value(&inputs).unwrap();
+        for (field, value) in [
+            ("root", json!("another-repository")),
+            ("manifest", json!("member/Cargo.toml")),
+            ("head", json!("another-head")),
+            ("base", json!("another-base")),
+            ("index", json!("another-index")),
+            ("paths", json!(["Cargo.toml"])),
+        ] {
+            let mut changed = original.clone();
+            *changed.get_mut(field).unwrap() = value;
+            let current: Inputs = serde_json::from_value(changed).unwrap();
+            let error = inputs.compare(&current, Some("final")).unwrap_err();
+            assert!(error.find_source::<StaleInputs>().is_some());
+            if field != "root" {
+                let error = inputs.compare_candidate(&current, "initial").unwrap_err();
+                assert!(error.find_source::<StaleInputs>().is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn live_inputs_accept_only_initial_or_complete_final_bytes() {
+        let inputs = inputs();
+        assert!(!inputs.compare(&inputs, None).unwrap());
+        assert!(!inputs.compare(&inputs, Some("initial")).unwrap());
+        let mut current = inputs.clone();
+        current.digest = "final".to_owned();
+        assert!(inputs.compare(&current, Some("final")).unwrap());
+        for final_digest in [None, Some("different-final")] {
+            let error = inputs.compare(&current, final_digest).unwrap_err();
+            assert!(error.find_source::<StaleInputs>().is_some());
+        }
+        // The revision spelling is acquisition input; only its resolved commit is identity.
+        current.base_revision = "another-ref-to-the-same-commit".to_owned();
+        assert!(inputs.compare(&current, Some("final")).unwrap());
+        // Final bytes do not bypass the identity guard exercised field-by-field above.
+        current.head = "another-head".to_owned();
+        let error = inputs.compare(&current, Some("final")).unwrap_err();
+        assert!(error.find_source::<StaleInputs>().is_some());
+    }
+
+    #[test]
+    fn relocated_candidates_require_final_bytes_but_not_live_root_or_revision_spelling() {
+        let inputs = inputs();
+        let mut candidate = inputs.clone();
+        candidate.root = PathBuf::from("retained-workspace");
+        candidate.base_revision.clone_from(&inputs.base);
+        let error = inputs.compare_candidate(&candidate, "final").unwrap_err();
+        assert!(error.find_source::<StaleInputs>().is_some());
+        candidate.digest = "final".to_owned();
+        inputs.compare_candidate(&candidate, "final").unwrap();
+    }
+
+    #[test]
+    fn resolved_metadata_requires_the_expanded_current_schema_before_acquisition() {
+        let state = ResolvedState {
+            inputs: inputs(),
+            files: Vec::new(),
+            final_digest: "final".to_owned(),
+            versions: BTreeMap::new(),
+            evidence_manifest_path: "candidate/Cargo.toml".into(),
+        };
+        for (stage, schema) in [
+            (PlanStage::Proposed, SCHEMA_VERSION),
+            (PlanStage::Expanded, SCHEMA_VERSION + 1),
+        ] {
+            let mut plan = PlanFile::new(stage, Vec::new());
+            plan.schema_version = schema;
+            plan.resolved = Some(state.clone());
+            let error = apply_resolved(
+                &plan,
+                Path::new("absent/Cargo.toml"),
+                false,
+                Verbose::new(false),
+            )
+            .unwrap_err();
+            assert!(error.find_source::<ResolutionRequired>().is_some());
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "canonicalizes owned manifest paths")]
+    fn evidence_must_name_the_recorded_candidate_and_never_the_live_workspace() {
+        let directory = tempdir().unwrap();
+        let live = directory.path().join("Cargo.toml");
+        let candidate = directory.path().join("candidate.toml");
+        let other = directory.path().join("other.toml");
+        for path in [&live, &candidate, &other] {
+            fs::write(path, "").unwrap();
+        }
+        let mut inputs = inputs();
+        inputs.root = directory.path().to_owned();
+        let mut state = ResolvedState {
+            inputs,
+            files: Vec::new(),
+            final_digest: "final".to_owned(),
+            versions: BTreeMap::new(),
+            evidence_manifest_path: candidate,
+        };
+        let error = state.verify_candidate(&other).unwrap_err();
+        assert!(error.find_source::<WrongEvidenceWorkspace>().is_some());
+        state.evidence_manifest_path = live.clone();
+        let error = state.verify_candidate(&live).unwrap_err();
+        assert!(error.find_source::<WrongEvidenceWorkspace>().is_some());
+        let error = state
+            .verify_candidate(&directory.path().join("absent.toml"))
+            .unwrap_err();
+        assert!(error.find_source::<ReadFileError>().is_some());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads owned files and invokes Git hashing")]
+    fn resolved_artifacts_require_exact_versions_membership_and_complete_final_bytes() {
+        let directory = tempdir().unwrap();
+        let mut inputs = inputs();
+        inputs.root = directory.path().to_owned();
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        fs::write(directory.path().join("src/lib.rs"), "source").unwrap();
+        fs::write(directory.path().join("Cargo.toml"), "old manifest").unwrap();
+        fs::write(directory.path().join("Cargo.lock"), "old lockfile").unwrap();
+        let files = vec![
+            Artifact {
+                path: "Cargo.toml".into(),
+                contents: "new manifest".to_owned(),
+            },
+            Artifact {
+                path: "Cargo.lock".into(),
+                contents: "new lockfile".to_owned(),
+            },
+        ];
+        let versions = BTreeMap::from([("demo".to_owned(), "0.1.1".to_owned())]);
+        let allowed = BTreeSet::from([PathBuf::from("Cargo.toml"), PathBuf::from("Cargo.lock")]);
+        let state = ResolvedState {
+            final_digest: inputs.final_digest(&files).unwrap(),
+            inputs,
+            files,
+            versions: versions.clone(),
+            evidence_manifest_path: "not-read/Cargo.toml".into(),
+        };
+        state.validate_artifacts(&versions, &allowed).unwrap();
+        let original = serde_json::to_value(&state).unwrap();
+        let original_files = original.get("files").unwrap().as_array().unwrap();
+        let mut duplicate = original_files.clone();
+        duplicate.push(original_files.first().unwrap().clone());
+        let mut missing = original_files.clone();
+        missing.pop().unwrap();
+        let mut changed_bytes = original_files.clone();
+        *changed_bytes
+            .first_mut()
+            .unwrap()
+            .get_mut("contents")
+            .unwrap() = json!("other manifest");
+        let mut source = original_files.clone();
+        source.push(json!({"path":"src/lib.rs","contents":"unplanned source"}));
+        let mut outside = original_files.clone();
+        outside.push(json!({"path":"../Cargo.toml","contents":"outside"}));
+        for (field, value) in [
+            ("versions", json!({"demo":"9.0.0"})),
+            ("final_digest", json!("wrong digest")),
+            ("files", json!(duplicate)),
+            ("files", json!(missing)),
+            ("files", json!(changed_bytes)),
+            ("files", json!(source)),
+            ("files", json!(outside)),
+        ] {
+            let mut changed: Value = original.clone();
+            *changed.get_mut(field).unwrap() = value;
+            let changed: ResolvedState = serde_json::from_value(changed).unwrap();
+            let error = changed.validate_artifacts(&versions, &allowed).unwrap_err();
+            assert!(error.find_source::<ResolutionRequired>().is_some());
+        }
+        let mut uncaptured = state.clone();
+        uncaptured.inputs.paths.remove(Path::new("Cargo.lock"));
+        let error = uncaptured
+            .validate_artifacts(&versions, &allowed)
+            .unwrap_err();
+        assert!(error.find_source::<ResolutionRequired>().is_some());
+        let mut unowned = allowed;
+        unowned.remove(Path::new("Cargo.lock"));
+        let error = state.validate_artifacts(&versions, &unowned).unwrap_err();
+        assert!(error.find_source::<ResolutionRequired>().is_some());
+
+        // Once the live bytes already match, an empty resolved write set is complete.
+        for file in &state.files {
+            fs::write(state.inputs.root.join(&file.path), &file.contents).unwrap();
+        }
+        let state = ResolvedState {
+            files: Vec::new(),
+            versions: BTreeMap::new(),
+            ..state
+        };
+        state
+            .validate_artifacts(&BTreeMap::new(), &BTreeSet::new())
+            .unwrap();
+    }
 
     #[test]
     fn fields_use_fixed_width_little_endian_lengths() {

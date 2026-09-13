@@ -1,6 +1,6 @@
 // Explicit offline preparation and proposal-specific fixed-point resolution.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, absolute};
 
@@ -12,10 +12,11 @@ use crate::WriteFileError;
 use crate::apply::compute_edits;
 use crate::artifact_path::{resolve_path, same_path};
 use crate::check::{CheckFormat, releases_breaking_change, run_check};
-use crate::classify::{ChangedItem, Classification, PackageStatus, classify};
+use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify};
 use crate::command::hash_bytes;
+use crate::groups::GroupVerdict;
 use crate::manifest::requirement_names_version;
-use crate::metadata::load_tracked_work_tree;
+use crate::metadata::{WorkTree, load_tracked_work_tree};
 use crate::plan::{
     IncrementLevel, PlanFile, PlanIncrement, PlanStage, ResolvedVersions, SCHEMA_VERSION,
     increment_version, resolve_plan,
@@ -81,21 +82,9 @@ pub(crate) fn run_preview(
     verbose: Verbose,
 ) -> Result<String, AppError> {
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
-    let marker = output.join("plan.json");
-    let inputs = [plan, prepared, manifest];
-    for input in inputs {
-        if same_path(input, &marker)? {
-            return Err(OutputInputCollision::new().into());
-        }
-    }
-    // The completion marker belongs to this invocation from its first fallible input read.
-    // A failed standalone rerun must not leave an earlier resolved plan looking current.
-    remove_marker(&marker)?;
-    guard_output_inputs(&output, &inputs)?;
-    let prepared: Prepared = read_json(prepared)?;
-    prepared.inputs.verify(manifest, None)?;
-    let plan: PlanFile = read_json(plan)?;
-    plan.validate_schema()?;
+    let (prepared, plan) = preview_inputs(plan, prepared, &output, manifest, |inputs| {
+        inputs.verify(manifest, None).map(|_| ())
+    })?;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
     let initial = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
     let mut resolved = resolve_plan(
@@ -104,7 +93,7 @@ pub(crate) fn run_preview(
         &initial.work_tree.target_versions(),
         verbose,
     )?;
-    require_semantic_decisions(&initial, &resolved)?;
+    require_semantic_decisions(&initial.packages, &resolved)?;
 
     // Each pass must either add a version consequence or change the resolved artifact.
     // Remember actual states, rather than imposing an arbitrary iteration deadline.
@@ -122,7 +111,12 @@ pub(crate) fn run_preview(
         let classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
         let files = prospective.artifacts(&prepared.inputs)?;
         let mut expanded = resolved.clone();
-        add_consequences(&classification, &mut expanded)?;
+        add_consequences(
+            &classification.packages,
+            &classification.groups,
+            &classification.work_tree,
+            &mut expanded,
+        )?;
         if expanded == resolved && files == previous_files {
             let (passed, message, _) = run_check(
                 Some(&prepared.inputs.base),
@@ -163,6 +157,31 @@ pub(crate) fn run_preview(
     }
 }
 
+fn preview_inputs(
+    plan: &Path,
+    prepared: &Path,
+    output: &Path,
+    manifest: &Path,
+    verify: impl FnOnce(&Inputs) -> Result<(), AppError>,
+) -> Result<(Prepared, PlanFile), AppError> {
+    let marker = output.join("plan.json");
+    let inputs = [plan, prepared, manifest];
+    for input in inputs {
+        if same_path(input, &marker)? {
+            return Err(OutputInputCollision::new().into());
+        }
+    }
+    // The completion marker belongs to this invocation from its first fallible input read.
+    // A failed standalone rerun must not leave an earlier resolved plan looking current.
+    remove_marker(&marker)?;
+    guard_output_inputs(output, &inputs)?;
+    let prepared: Prepared = read_json(prepared)?;
+    verify(&prepared.inputs)?;
+    let plan: PlanFile = read_json(plan)?;
+    plan.validate_schema()?;
+    Ok((prepared, plan))
+}
+
 fn validate_preparation_files(
     root: &Path,
     lockfile: &Path,
@@ -198,10 +217,10 @@ fn record_state(
 }
 
 fn require_semantic_decisions(
-    initial: &Classification,
+    packages: &[PackageClass],
     resolved: &ResolvedVersions,
 ) -> Result<(), AppError> {
-    for package in &initial.packages {
+    for package in packages {
         if package.status() != PackageStatus::NeedsIncrement
             || package
                 .changed()
@@ -222,20 +241,22 @@ fn require_semantic_decisions(
 }
 
 fn add_consequences(
-    classification: &Classification,
+    packages: &[PackageClass],
+    groups: &BTreeMap<String, GroupVerdict>,
+    work_tree: &WorkTree,
     resolved: &mut ResolvedVersions,
 ) -> Result<(), AppError> {
-    let versions = classification.work_tree.target_versions();
-    for (name, group) in &classification.groups {
+    let versions = work_tree.target_versions();
+    for (name, group) in groups {
         if !group.is_consistent() {
-            raise(classification, resolved, name, group.version());
+            raise(work_tree, resolved, name, group.version());
         }
     }
-    for package in &classification.packages {
+    for package in packages {
         if package.status() == PackageStatus::NeedsIncrement {
             let anchor = package.anchor().expect("needs-increment has an anchor");
             raise(
-                classification,
+                work_tree,
                 resolved,
                 &package.name,
                 &increment_version(&anchor.version, IncrementLevel::Patch)?,
@@ -247,7 +268,7 @@ fn add_consequences(
             };
             if !requirement_names_version(&dependency.req, version) {
                 // Explicitly retaining the target version also schedules its requirement rewrites.
-                raise(classification, resolved, &dependency.name, version);
+                raise(work_tree, resolved, &dependency.name, version);
             }
             if !dependency.public || releases_breaking_change(package) {
                 continue;
@@ -255,8 +276,7 @@ fn add_consequences(
             let Some(anchor) = package.anchor() else {
                 continue;
             };
-            if classification
-                .packages
+            if packages
                 .iter()
                 .any(|target| target.name == dependency.name && releases_breaking_change(target))
             {
@@ -266,7 +286,7 @@ fn add_consequences(
                     IncrementLevel::Major
                 };
                 raise(
-                    classification,
+                    work_tree,
                     resolved,
                     &package.name,
                     &increment_version(&anchor.version, level)?,
@@ -274,29 +294,24 @@ fn add_consequences(
             }
         }
     }
-    for dependency in &classification.work_tree.exact_dependencies {
+    for dependency in &work_tree.exact_dependencies {
         if let Some(version) = versions.get(&dependency.target)
             && !requirement_names_version(&dependency.requirement, version)
         {
-            raise(classification, resolved, &dependency.target, version);
+            raise(work_tree, resolved, &dependency.target, version);
         }
     }
     Ok(())
 }
 
-fn raise(
-    classification: &Classification,
-    resolved: &mut ResolvedVersions,
-    target: &str,
-    minimum: &Version,
-) {
-    let groups = &classification.work_tree.groups;
+fn raise(work_tree: &WorkTree, resolved: &mut ResolvedVersions, target: &str, minimum: &Version) {
+    let groups = &work_tree.groups;
     let group = groups.group_of(target).unwrap_or(target);
     let mut members = groups.members(group).to_vec();
     if members.is_empty() {
         members.push(target.to_owned());
     }
-    let versions = classification.work_tree.target_versions();
+    let versions = work_tree.target_versions();
     let version = members
         .iter()
         .filter_map(|name| resolved.packages.get(name).or_else(|| versions.get(name)))
@@ -381,11 +396,454 @@ struct ResolutionCycle;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::cell::Cell;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
 
+    use serde_json::{Value, json};
     use tempfile::tempdir;
 
     use super::*;
+    use crate::ParsePlanError;
+    use crate::anchor::Anchor;
+    use crate::groups::Groups;
+    use crate::lockfile::InstallationGraph;
+    use crate::metadata::{DepKind, ReportedDep, VersionTarget};
+    use crate::resolved::StaleInputs;
+
+    fn work_tree(packages: &[PackageClass]) -> WorkTree {
+        WorkTree {
+            workspace_root: PathBuf::new(),
+            packages: Vec::new(),
+            version_targets: packages
+                .iter()
+                .map(|package| VersionTarget {
+                    name: package.name.clone(),
+                    version: package.declared_version.clone(),
+                    manifest_path: package.manifest_path.clone(),
+                    publishable: true,
+                })
+                .collect(),
+            exact_dependencies: Vec::new(),
+            member_manifests: Vec::new(),
+            members_by_dir: BTreeMap::new(),
+            groups: Groups::default(),
+            installation: InstallationGraph::default(),
+        }
+    }
+
+    fn package(name: &str, previous: Option<&str>, current: &str) -> PackageClass {
+        let version = Version::parse(current).unwrap();
+        match previous {
+            Some(previous) => {
+                let anchor = Anchor {
+                    commit: "release".to_owned(),
+                    version: Version::parse(previous).unwrap(),
+                };
+                if anchor.version == version {
+                    PackageClass::unchanged(name, version, anchor, PathBuf::new())
+                } else {
+                    PackageClass::pending_release(name, version, anchor, PathBuf::new())
+                }
+            }
+            None => PackageClass::new_package(name, version, PathBuf::new()),
+        }
+    }
+
+    #[test]
+    fn public_dependency_consequences_respect_anchors_and_sufficient_existing_versions() {
+        for (old_core, core, old_facade, facade, public, expected) in [
+            (
+                "0.1.0",
+                "0.2.0",
+                Some("0.1.0"),
+                "0.1.0",
+                true,
+                Some("0.2.0"),
+            ),
+            (
+                "1.0.0",
+                "2.0.0",
+                Some("1.0.0"),
+                "1.0.0",
+                true,
+                Some("2.0.0"),
+            ),
+            ("0.1.0", "0.2.0", Some("0.1.0"), "0.3.0", true, None),
+            ("1.0.0", "2.0.0", None, "1.0.0", true, None),
+            ("0.1.0", "0.2.0", Some("0.1.0"), "0.1.0", false, None),
+            ("0.1.0", "0.1.1", Some("0.1.0"), "0.1.0", true, None),
+        ] {
+            let core_package = package("core", Some(old_core), core);
+            let mut facade_package = package("facade", old_facade, facade);
+            facade_package.dependencies.push(ReportedDep {
+                name: "core".to_owned(),
+                req: core.to_owned(),
+                exact_pin: false,
+                kind: DepKind::Normal,
+                public,
+            });
+            let packages = [core_package, facade_package];
+            let mut resolved = ResolvedVersions {
+                packages: BTreeMap::from([("core".to_owned(), Version::parse(core).unwrap())]),
+            };
+            add_consequences(
+                &packages,
+                &BTreeMap::new(),
+                &work_tree(&packages),
+                &mut resolved,
+            )
+            .unwrap();
+            assert_eq!(
+                resolved.packages.get("facade"),
+                expected
+                    .map(|version| Version::parse(version).unwrap())
+                    .as_ref()
+            );
+            assert_eq!(
+                resolved.packages.get("core").unwrap(),
+                &Version::parse(core).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn group_consequences_align_unpublished_members_without_lowering_planned_versions() {
+        let packages = [
+            package("core", Some("0.1.0"), "0.2.0"),
+            package("helper", Some("0.1.0"), "0.1.0"),
+        ];
+        let mut work_tree = work_tree(&packages);
+        work_tree.version_targets.get_mut(1).unwrap().publishable = false;
+        work_tree.groups = Groups::from_edges(
+            ["core".to_owned(), "helper".to_owned()],
+            [("helper".to_owned(), "core".to_owned())],
+        );
+        let verdict = GroupVerdict::new(
+            work_tree.groups.members("core"),
+            &work_tree.target_versions(),
+            &HashSet::new(),
+        );
+        let groups = BTreeMap::from([("core".to_owned(), verdict)]);
+        let mut resolved = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        add_consequences(&packages[..1], &groups, &work_tree, &mut resolved).unwrap();
+        assert_eq!(
+            resolved.packages,
+            BTreeMap::from([
+                ("core".to_owned(), Version::new(0, 2, 0)),
+                ("helper".to_owned(), Version::new(0, 2, 0)),
+            ])
+        );
+        resolved
+            .packages
+            .insert("helper".to_owned(), Version::new(0, 3, 0));
+        add_consequences(&packages[..1], &groups, &work_tree, &mut resolved).unwrap();
+        assert!(
+            resolved
+                .packages
+                .values()
+                .all(|version| *version == Version::new(0, 3, 0))
+        );
+    }
+
+    #[test]
+    fn semantic_decisions_cover_source_and_inherited_changes_but_not_only_lockfile_changes() {
+        let lockfile = ChangedItem::Lockfile {
+            dependency: "third-party".to_owned(),
+            change: "changed".to_owned(),
+        };
+        for changed in [
+            vec![ChangedItem::Package {
+                path: "src/lib.rs".to_owned(),
+                change: "modified".to_owned(),
+            }],
+            vec![ChangedItem::Inherited {
+                field: "edition".to_owned(),
+            }],
+            vec![
+                lockfile.clone(),
+                ChangedItem::Package {
+                    path: "src/lib.rs".to_owned(),
+                    change: "modified".to_owned(),
+                },
+            ],
+        ] {
+            let package = PackageClass::needs_increment(
+                "demo",
+                Version::new(0, 1, 0),
+                Anchor {
+                    commit: "release".to_owned(),
+                    version: Version::new(0, 1, 0),
+                },
+                changed,
+                PathBuf::new(),
+            );
+            let packages = [package];
+            for version in [None, Some(Version::new(0, 1, 0))] {
+                let resolved = ResolvedVersions {
+                    packages: version
+                        .map(|version| ("demo".to_owned(), version))
+                        .into_iter()
+                        .collect(),
+                };
+                let error = require_semantic_decisions(&packages, &resolved).unwrap_err();
+                assert!(error.find_source::<SemanticDecisionRequired>().is_some());
+            }
+            let resolved = ResolvedVersions {
+                packages: BTreeMap::from([("demo".to_owned(), Version::new(0, 1, 1))]),
+            };
+            require_semantic_decisions(&packages, &resolved).unwrap();
+        }
+        let packages = [
+            PackageClass::needs_increment(
+                "binary",
+                Version::new(0, 1, 0),
+                Anchor {
+                    commit: "release".to_owned(),
+                    version: Version::new(0, 1, 0),
+                },
+                vec![lockfile],
+                PathBuf::new(),
+            ),
+            package("new", None, "1.0.0"),
+            package("unchanged", Some("1.0.0"), "1.0.0"),
+            package("released", Some("1.0.0"), "1.0.1"),
+        ];
+        require_semantic_decisions(
+            &packages,
+            &ResolvedVersions {
+                packages: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+    }
+
+    fn prepared_document() -> String {
+        json!({
+            "schema_version": SCHEMA_VERSION,
+            "inputs": {
+                "root": "repository", "manifest": "Cargo.toml", "head": "head", "base": "base",
+                "base_revision": "main", "index": "index", "paths": ["Cargo.toml"], "digest": "initial"
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "uses owned preview artifact files")]
+    fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker() {
+        let directory = tempdir().unwrap();
+        let output = directory.path();
+        let marker = output.join("plan.json");
+        let prepared = output.join("prepared.json");
+        let proposal = output.join("proposal.json");
+        let manifest = output.join("Cargo.toml");
+        let verified = Cell::new(false);
+        fs::write(&proposal, "{ invalid plan").unwrap();
+        fs::write(&prepared, "{ invalid preparation").unwrap();
+        fs::write(&marker, "previous completion").unwrap();
+        let error = preview_inputs(&proposal, &prepared, output, &manifest, |_| {
+            verified.set(true);
+            Ok(())
+        })
+        .err()
+        .unwrap();
+        assert!(error.find_source::<ParsePlanError>().is_some());
+        assert!(!verified.get());
+        assert!(!marker.exists());
+
+        fs::write(&prepared, prepared_document()).unwrap();
+        fs::write(&marker, "previous completion").unwrap();
+        let error = preview_inputs(&proposal, &prepared, output, &manifest, |_| {
+            assert!(!marker.exists());
+            verified.set(true);
+            Err(StaleInputs::new().into())
+        })
+        .err()
+        .unwrap();
+        // Staleness wins over the malformed proposal, preserving input acquisition order.
+        assert!(error.find_source::<StaleInputs>().is_some());
+        assert!(verified.get());
+        assert!(!marker.exists());
+
+        fs::write(&marker, "previous completion").unwrap();
+        let error = preview_inputs(&proposal, &prepared, output, &manifest, |inputs| {
+            assert!(!marker.exists());
+            assert_eq!(inputs.head, "head");
+            Ok(())
+        })
+        .err()
+        .unwrap();
+        assert!(error.find_source::<ParsePlanError>().is_some());
+        assert!(!marker.exists());
+
+        fs::write(&proposal, r#"{"schema_version":4,"increments":[]}"#).unwrap();
+        let (_, plan) =
+            preview_inputs(&proposal, &prepared, output, &manifest, |_| Ok(())).unwrap();
+        assert!(plan.increments.is_empty());
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "checks owned filesystem output aliases")]
+    fn preview_collisions_preserve_inputs_and_never_acquire_repository_state() {
+        let directory = tempdir().unwrap();
+        let output = directory.path().join("preview");
+        fs::create_dir_all(&output).unwrap();
+        for relative in [
+            "plan.json",
+            "report.json",
+            "report.json.tmp",
+            "diffs/proposal.json",
+            "workspace/proposal.json",
+            ".prospective/proposal.json",
+        ] {
+            let input = output.join(relative);
+            fs::create_dir_all(input.parent().unwrap()).unwrap();
+            fs::write(&input, "input document").unwrap();
+            for position in 0..3 {
+                let unrelated = directory.path().join("unrelated");
+                let mut inputs = [&unrelated, &unrelated, &unrelated];
+                *inputs.get_mut(position).unwrap() = &input;
+                let error = preview_inputs(inputs[0], inputs[1], &output, inputs[2], |_| {
+                    panic!("input collisions must be rejected before repository acquisition")
+                })
+                .err()
+                .unwrap();
+                assert!(error.find_source::<OutputInputCollision>().is_some());
+                assert_eq!(fs::read_to_string(&input).unwrap(), "input document");
+            }
+        }
+        let input = output.join("plan.json");
+        fs::write(&input, "input document").unwrap();
+        let alias = directory.path().join("missing/../preview");
+        let error = preview_inputs(&input, &input, &alias, &input, |_| {
+            panic!("output aliases must be rejected before repository acquisition")
+        })
+        .err()
+        .unwrap();
+        assert!(error.find_source::<OutputInputCollision>().is_some());
+        assert_eq!(fs::read_to_string(input).unwrap(), "input document");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads an owned prepared artifact")]
+    fn preparation_does_not_accept_alternative_resolution_artifacts() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("prepared.json");
+        let mut prepared: Value = serde_json::from_str(&prepared_document()).unwrap();
+        prepared.as_object_mut().unwrap().insert(
+            "files".to_owned(),
+            json!([{"path":"Cargo.lock","contents":"alternative resolution"}]),
+        );
+        fs::write(&path, prepared.to_string()).unwrap();
+        let error = read_json::<Prepared>(&path).err().unwrap();
+        assert!(error.find_source::<ParsePlanError>().is_some());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "checks an owned preview marker directory")]
+    fn occupied_completion_marker_precedes_input_acquisition() {
+        let directory = tempdir().unwrap();
+        let marker = directory.path().join("plan.json/keep");
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::write(&marker, "not a completion file").unwrap();
+        let absent = directory.path().join("absent");
+        let error = preview_inputs(&absent, &absent, directory.path(), &absent, |_| {
+            panic!("an occupied marker must fail before repository acquisition")
+        })
+        .err()
+        .unwrap();
+        assert!(error.find_source::<WriteFileError>().is_some());
+        assert_eq!(fs::read_to_string(marker).unwrap(), "not a completion file");
+    }
+
+    #[test]
+    fn requirement_rewrites_schedule_only_the_dependent_for_a_release() {
+        let core = package("core", Some("0.1.0"), "0.1.0");
+        let mut facade = package("facade", Some("0.1.0"), "0.1.0");
+        facade.dependencies.push(ReportedDep {
+            name: "core".to_owned(),
+            req: "0.1".to_owned(),
+            exact_pin: false,
+            kind: DepKind::Normal,
+            public: false,
+        });
+        let initial = [core.clone(), facade];
+        let mut resolved = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        require_semantic_decisions(&initial, &resolved).unwrap();
+        add_consequences(
+            &initial,
+            &BTreeMap::new(),
+            &work_tree(&initial),
+            &mut resolved,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.packages,
+            BTreeMap::from([("core".to_owned(), Version::new(0, 1, 0))])
+        );
+
+        // The next classification observes the requirement edit as released manifest content.
+        let facade = PackageClass::needs_increment(
+            "facade",
+            Version::new(0, 1, 0),
+            Anchor {
+                commit: "release".to_owned(),
+                version: Version::new(0, 1, 0),
+            },
+            vec![ChangedItem::Package {
+                path: "Cargo.toml".to_owned(),
+                change: "modified".to_owned(),
+            }],
+            PathBuf::new(),
+        );
+        let after_rewrite = [core, facade];
+        add_consequences(
+            &after_rewrite,
+            &BTreeMap::new(),
+            &work_tree(&after_rewrite),
+            &mut resolved,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.packages,
+            BTreeMap::from([
+                ("core".to_owned(), Version::new(0, 1, 0)),
+                ("facade".to_owned(), Version::new(0, 1, 1)),
+            ])
+        );
+    }
+
+    #[test]
+    fn sufficient_existing_increments_leave_an_empty_plan_unchanged() {
+        let core = package("core", Some("0.1.0"), "0.1.1");
+        let mut dependent = package("dependent", Some("0.1.0"), "0.1.1");
+        dependent.dependencies.push(ReportedDep {
+            name: "core".to_owned(),
+            req: "0.1.1".to_owned(),
+            exact_pin: false,
+            kind: DepKind::Normal,
+            public: true,
+        });
+        let packages = [core, dependent];
+        let mut resolved = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        require_semantic_decisions(&packages, &resolved).unwrap();
+        add_consequences(
+            &packages,
+            &BTreeMap::new(),
+            &work_tree(&packages),
+            &mut resolved,
+        )
+        .unwrap();
+        assert!(resolved.packages.is_empty());
+    }
 
     #[test]
     fn preparation_accepts_only_the_workspace_lockfile() {

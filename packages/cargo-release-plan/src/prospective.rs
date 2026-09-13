@@ -213,15 +213,26 @@ mod tests {
             owner.to_string_lossy()
         );
 
+        let obsolete = output.join("workspace/old-evidence");
+        fs::write(&obsolete, "previous candidate only").unwrap();
         let prospective = candidate(&directory.path().join("replacement"));
         fs::create_dir_all(prospective.root.join(".git")).unwrap();
         prospective.retain(&output, &owner).unwrap();
+        assert!(!obsolete.exists());
         let prospective = candidate(&directory.path().join("foreign"));
         let error = prospective
             .retain(&output, &directory.path().join("another-owner"))
             .unwrap_err();
         assert!(error.find_source::<EvidenceWorkspaceOccupied>().is_some());
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), "captured manifest");
+
+        fs::remove_file(output.join("workspace").join(EVIDENCE_MARKER)).unwrap();
+        let unmarked = directory.path().join("unmarked");
+        let prospective = candidate(&unmarked);
+        let error = prospective.retain(&output, &owner).unwrap_err();
+        assert!(error.find_source::<EvidenceWorkspaceOccupied>().is_some());
         assert_eq!(fs::read_to_string(manifest).unwrap(), "captured manifest");
+        assert!(!unmarked.exists());
     }
 
     #[test]

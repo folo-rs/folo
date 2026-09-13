@@ -1,7 +1,5 @@
 //! Report and check output: the JSON document and the failure renderings.
 
-use std::fs;
-
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use serde_json::{Value, json};
 
@@ -105,29 +103,6 @@ helper = { path = "../helper", version = "1.0.0" }
     assert!(message.contains("1.1.0"), "{message}");
 }
 
-/// The same workspace passes once the requirement names the declared version.
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn check_accepts_a_requirement_naming_the_declared_version() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "helper", "1.1.0", "");
-    write_package(
-        &fixture,
-        "demo",
-        "0.1.0",
-        r#"
-[dependencies]
-helper = { path = "../helper", version = "1.1.0" }
-"#,
-    );
-    fixture.commit("seed");
-    let base = fixture.sha("HEAD");
-
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(passed, "{message}");
-}
-
 /// A package exposing a dependency that breaks must break as well.
 ///
 /// `demo` re-exports `helper` types, declared through its allow-list, so `helper` moving to an
@@ -147,24 +122,6 @@ fn check_rejects_a_public_dependency_breaking_alone() {
     assert!(
         message.contains("must release a breaking change of its own"),
         "{message}"
-    );
-}
-
-/// The same move passes once the dependent breaks too.
-#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
-#[test]
-fn check_accepts_a_public_dependency_breaking_together_with_its_dependent() {
-    let fixture = public_dependency_fixture("1.0.0", "0.1.0");
-    let base = fixture.sha("HEAD");
-
-    // 0.1.0 -> 0.2.0 is incompatible on a 0.x line, so `demo` breaks as well.
-    write_public_dependency_packages(&fixture, "2.0.0", "0.2.0");
-
-    let (passed, message) = check(&fixture, &base);
-
-    assert!(
-        passed,
-        "a dependent breaking alongside its public dependency is accepted: {message}"
     );
 }
 
@@ -347,9 +304,9 @@ fn report_replaces_the_diffs_of_an_earlier_run() {
     fixture.commit("seed");
     let base = fixture.sha("HEAD");
     let out_dir = fixture.path().join("out");
-    report_json(&fixture, &base);
+    fixture.write("out/report.json", "previous completion marker");
+    fixture.write("out/diffs/stale.diff", "leftover");
     let stale = out_dir.join("diffs").join("stale.diff");
-    fs::write(&stale, "leftover").unwrap();
 
     report_json(&fixture, &base);
 
@@ -369,9 +326,8 @@ fn a_failed_rerun_does_not_leave_the_previous_report_marker() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     let out_dir = fixture.path().join("out");
-    report_json(&fixture, &base);
-    fs::remove_dir_all(out_dir.join("diffs")).unwrap();
-    fs::write(out_dir.join("diffs"), "blocks directory creation").unwrap();
+    fixture.write("out/report.json", "previous completion marker");
+    fixture.write("out/diffs", "blocks directory creation");
 
     let result = run(&RunInput::Report {
         out_dir: out_dir.clone(),

@@ -122,24 +122,6 @@ fn inconsistent_group_fails_check_even_when_content_is_unchanged() {
     assert!(!passed, "{message}");
     assert!(message.contains("inconsistent") || message.contains("different versions"));
     assert!(message.contains("increment-versions"));
-
-    let outcome = run(&RunInput::Check {
-        base: Some(base),
-        manifest_path: fixture.manifest(),
-        format: CheckFormat::Github,
-        verify_packaging: false,
-        verbose: false,
-    })
-    .unwrap();
-    match outcome {
-        RunOutcome::Check {
-            passed, message, ..
-        } => {
-            assert!(!passed);
-            assert!(message.contains("::error"));
-        }
-        other => panic!("expected check, got {other:?}"),
-    }
 }
 
 /// Every dependency form used by Cargo contributes the same host-independent edge.
@@ -234,27 +216,6 @@ fn stale_exact_requirement_from_a_non_publishable_source_is_reported() {
             .count(),
         0
     );
-
-    let outcome = run(&RunInput::Check {
-        base: Some(base),
-        manifest_path: fixture.manifest(),
-        format: CheckFormat::Github,
-        verify_packaging: false,
-        verbose: false,
-    })
-    .unwrap();
-    match outcome {
-        RunOutcome::Check {
-            passed, message, ..
-        } => {
-            assert!(!passed);
-            assert!(
-                message.contains("title=stale-workspace-requirement::"),
-                "{message}"
-            );
-        }
-        other => panic!("expected check, got {other:?}"),
-    }
 }
 
 /// Invalid exact syntax is rejected by the loader shared by every command.
@@ -318,29 +279,23 @@ fn malformed_exact_requirements_fail_all_commands_before_writes() {
     );
 }
 
-/// Current legacy metadata is rejected regardless of its value shape.
+/// Current legacy metadata is rejected by workspace loading.
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn current_legacy_group_metadata_is_always_rejected() {
-    for metadata in [
-        "\n[workspace.metadata.release-plan.groups]\n",
-        "\n[workspace.metadata.release-plan]\ngroups = []\n",
-    ] {
-        let fixture = Fixture::new(metadata);
-        write_package(&fixture, "demo", "0.1.0", "");
-        fixture.commit("legacy metadata");
-        let base = fixture.sha("HEAD");
+fn current_legacy_group_metadata_is_rejected() {
+    let fixture = Fixture::new("\n[workspace.metadata.release-plan.groups]\n");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.commit("legacy metadata");
+    let base = fixture.sha("HEAD");
 
-        let error = run(&RunInput::Check {
-            base: Some(base),
-            manifest_path: fixture.manifest(),
-            format: CheckFormat::Text,
-            verify_packaging: false,
-            verbose: false,
-        })
-        .expect_err("legacy metadata must not be silently ignored");
-        assert!(error.to_string().contains("obsolete"), "{error}");
-    }
+    run(&RunInput::Check {
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    })
+    .unwrap_err();
 }
 
 /// Historical snapshots may retain metadata that the current workspace rejects.

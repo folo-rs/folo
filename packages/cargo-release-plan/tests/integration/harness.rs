@@ -5,17 +5,26 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 
 use crate::fixture::{Fixture, write_package};
 
 pub(crate) fn seeded_package() -> Fixture {
+    Fixture::from_template(&SEEDED_PACKAGE)
+}
+
+/// A known ordinary-file workspace, committed once and only ever copied.
+///
+/// The real Git seed preserves the index and tree modes. Each caller receives
+/// independent files, refs, objects and configuration before changing its state.
+static SEEDED_PACKAGE: LazyLock<Fixture> = LazyLock::new(|| {
     let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");
     fixture.commit("seed");
     fixture
-}
+});
 
 /// Workspace whose declared member contains a second package reached by path.
 ///

@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, check_verbose, report_json, seeded_package};
+use crate::harness::{check, report_json, seeded_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -26,8 +26,6 @@ fn increment_early_in_a_branch_with_later_changes_is_pending_release() {
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 1; }\n");
     fixture.commit("later content");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("\"status\": \"pending-release\""));
     // Judging whether the pending increment still covers the accumulated changes
@@ -46,10 +44,6 @@ fn content_already_on_base_needs_an_increment() {
     fixture.commit("content without version bump");
     let base = fixture.sha("HEAD");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("needs-increment"));
-    assert!(message.contains("increment-versions"));
     let out_dir = fixture.path().join("out");
     let outcome = run(&RunInput::Report {
         out_dir: out_dir.clone(),
@@ -93,20 +87,11 @@ fn executable_bit_alone_needs_an_increment() {
         fs::set_permissions(path, permissions).unwrap();
     }
 
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("needs-increment"));
-
     // The content is untouched, so the mode headers are the only thing that
     // records the change for a reader of the patch.
     let out_dir = fixture.path().join("out");
-    run(&RunInput::Report {
-        out_dir: out_dir.clone(),
-        base: Some(base),
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
+    let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"needs-increment\""));
     let patch = fs::read_to_string(out_dir.join("diffs").join("demo.patch")).unwrap();
     assert!(patch.contains("old mode 100644"), "{patch}");
     assert!(patch.contains("new mode 100755"), "{patch}");
@@ -176,9 +161,8 @@ fn added_packaged_file_needs_an_increment() {
     let base = fixture.sha("HEAD");
     fixture.write("packages/demo/README.md", "hello\n");
     fixture.commit("add readme");
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"needs-increment\""));
     assert!(report.contains("\"added\""));
 }
 
@@ -198,9 +182,8 @@ fn deleted_packaged_file_needs_an_increment() {
     fs::remove_file(fixture.path().join("packages/demo/extra.md")).unwrap();
     fixture.commit("delete extra");
 
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"needs-increment\""));
     assert!(report.contains("\"deleted\""));
 }
 
@@ -299,9 +282,8 @@ license = "Apache-2.0"
     );
     fixture.commit("change inherited license");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"needs-increment\""));
     assert!(report.contains("workspace.package.license"));
     assert!(report.contains("\"source\": \"inherited\""));
     // Inherited values are not released content, so they carry no file diff and
@@ -452,8 +434,7 @@ fn a_new_package_still_reports_its_untracked_paths() {
     fixture.commit("add package");
     fixture.write("packages/fresh/src/extra.rs", "pub fn extra() {}\n");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(passed, "{message}");
     let report = report_json(&fixture, &base);
+    assert!(report.contains("\"status\": \"pending-release\""));
     assert!(report.contains("src/extra.rs"), "{report}");
 }

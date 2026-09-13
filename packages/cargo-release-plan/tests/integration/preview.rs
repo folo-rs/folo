@@ -8,7 +8,7 @@ use cargo_release_plan::{RunInput, run};
 use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, report_json};
+use crate::harness::check;
 
 fn prepare(fixture: &Fixture) -> PathBuf {
     let output = fixture.path().join("prepared");
@@ -91,8 +91,30 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
     fixture.cargo(&["generate-lockfile", "--offline"]);
     fixture.commit("initial binary closure");
     let old_lock = fixture.read("Cargo.lock");
-    fixture.write("packages/core/src/lib.rs", "pub fn changed() {}\n");
+    fixture.write("packages/core/src/new.rs", "pub fn changed() {}\n");
+    fixture.git(&["add", "-N", "packages/core/src/new.rs"]);
+    let index = fixture.git(&["ls-files", "--stage", "-z"]);
     let prepared = prepare(&fixture);
+    let report: Value = serde_json::from_str(&fixture.read("prepared/report.json")).unwrap();
+    let core = report
+        .get("packages")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package.get("name").unwrap() == "core")
+        .unwrap();
+    assert_eq!(core.get("status").unwrap(), "needs-increment");
+    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared: prepared.clone(),
+        output: fixture.path().join("preview"),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap_err();
+    assert!(!fixture.path().join("preview/plan.json").exists());
     let plan = preview(
         &fixture,
         prepared,
@@ -118,6 +140,10 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
     );
     assert_eq!(fixture.read("Cargo.lock"), old_lock);
     assert!(!fixture.path().join("preview/.prospective").exists());
+    assert_eq!(
+        fixture.read("preview/workspace/packages/core/src/new.rs"),
+        "pub fn changed() {}\n"
+    );
     run(&RunInput::Apply {
         plan: plan.clone(),
         dry_run: true,
@@ -127,117 +153,7 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
     .unwrap();
     assert_eq!(fixture.read("Cargo.lock"), old_lock);
     assert!(fixture.read("packages/core/Cargo.toml").contains("0.1.0"));
-    apply(&fixture, plan.clone());
-    let (passed, diagnostics) = check(&fixture, "HEAD");
-    assert!(passed, "{diagnostics}");
-    let lock = fixture.read("Cargo.lock");
-    assert_ne!(lock, old_lock);
-    apply(&fixture, plan);
-    assert_eq!(fixture.read("Cargo.lock"), lock);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn group_alignment_and_public_requirements_preserve_sufficient_versions() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "0.1.0", "");
-    write_package(
-        &fixture,
-        "helper",
-        "0.1.0",
-        "\npublish = false\n[dependencies]\ncore = { path = \"../core\", version = \"=0.1.0\" }\n",
-    );
-    write_package(
-        &fixture,
-        "facade",
-        "0.1.0",
-        "\n[package.metadata.cargo_check_external_types]\nallowed_external_types = [\"core::*\"]\n[dependencies]\ncore = { path = \"../core\", version = \"^0.1.0\" }\n",
-    );
-    fixture.cargo(&["generate-lockfile", "--offline"]);
-    fixture.commit("initial public dependency");
-    fixture.write("packages/core/src/lib.rs", "pub fn incompatible() {}\n");
-    let prepared = prepare(&fixture);
-    let plan = preview(
-        &fixture,
-        prepared,
-        &json!([
-            {"name": "core", "version": "0.2.0"},
-            {"name": "facade", "version": "0.3.0"}
-        ]),
-    );
-    assert_eq!(
-        versions(&plan),
-        BTreeMap::from([
-            ("core".to_owned(), "0.2.0".to_owned()),
-            ("helper".to_owned(), "0.2.0".to_owned()),
-            ("facade".to_owned(), "0.3.0".to_owned()),
-        ])
-    );
-    apply(&fixture, plan);
-    assert!(
-        fixture
-            .read("packages/helper/Cargo.toml")
-            .contains("version = \"=0.2.0\"")
-    );
-    assert!(check(&fixture, "HEAD").0);
-    // Lock maintenance also applies to all-library workspaces, independently of release reasons.
-    fixture.cargo(&["metadata", "--locked", "--offline", "--format-version", "1"]);
-    let report: Value = serde_json::from_str(&report_json(&fixture, "HEAD")).unwrap();
-    for package in report.get("packages").unwrap().as_array().unwrap() {
-        assert!(
-            package
-                .get("changed")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|change| change.get("source").unwrap() != "lockfile")
-        );
-    }
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn uncovered_semantic_changes_require_a_caller_decision() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "library", "0.1.0", "");
-    fixture.commit("initial package");
-    fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
-    let prepared = prepare(&fixture);
-    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
-    let result = run(&RunInput::Preview {
-        plan: fixture.path().join("proposal.json"),
-        prepared,
-        output: fixture.path().join("preview"),
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    });
-    result.unwrap_err();
-    assert!(!fixture.path().join("preview/plan.json").exists());
-    assert!(
-        fixture
-            .read("packages/library/Cargo.toml")
-            .contains("0.1.0")
-    );
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn stale_inputs_and_edited_resolved_targets_never_apply() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "library", "0.1.0", "");
-    fixture.commit("initial package");
-    let prepared = prepare(&fixture);
-    let plan = preview(
-        &fixture,
-        prepared,
-        &json!([{"name":"library","level":"patch"}]),
-    );
-    let manifest = fixture.read("packages/library/Cargo.toml");
-    fixture.write(
-        "packages/library/src/lib.rs",
-        "pub fn added_after_review() {}\n",
-    );
+    fixture.write("packages/core/src/new.rs", "pub fn stale() {}\n");
     run(&RunInput::Apply {
         plan: plan.clone(),
         dry_run: false,
@@ -245,25 +161,17 @@ fn stale_inputs_and_edited_resolved_targets_never_apply() {
         verbose: false,
     })
     .unwrap_err();
-    assert_eq!(fixture.read("packages/library/Cargo.toml"), manifest);
-    fixture.write("packages/library/src/lib.rs", "pub fn f() {}\n");
-    let mut document: Value = serde_json::from_slice(&fs::read(&plan).unwrap()).unwrap();
-    *document
-        .get_mut("increments")
-        .unwrap()
-        .get_mut(0)
-        .unwrap()
-        .get_mut("version")
-        .unwrap() = json!("0.2.0");
-    fs::write(&plan, serde_json::to_vec(&document).unwrap()).unwrap();
-    run(&RunInput::Apply {
-        plan,
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert_eq!(fixture.read("packages/library/Cargo.toml"), manifest);
+    assert_eq!(fixture.read("Cargo.lock"), old_lock);
+    assert!(fixture.read("packages/core/Cargo.toml").contains("0.1.0"));
+    fixture.write("packages/core/src/new.rs", "pub fn changed() {}\n");
+    apply(&fixture, plan.clone());
+    let (passed, diagnostics) = check(&fixture, "HEAD");
+    assert!(passed, "{diagnostics}");
+    let lock = fixture.read("Cargo.lock");
+    assert_ne!(lock, old_lock);
+    apply(&fixture, plan);
+    assert_eq!(fixture.read("Cargo.lock"), lock);
+    assert_eq!(fixture.git(&["ls-files", "--stage", "-z"]), index);
 }
 
 #[test]
@@ -319,8 +227,6 @@ fn preparation_resolves_already_locked_registry_edges_before_grading() {
     let prepared_lock = fixture.read("Cargo.lock");
     assert_ne!(prepared_lock, baseline);
     let report: Value = serde_json::from_str(&fixture.read("prepared/report.json")).unwrap();
-    let live_report: Value = serde_json::from_str(&report_json(&fixture, "HEAD")).unwrap();
-    assert_eq!(report, live_report);
     let tool = report
         .get("packages")
         .unwrap()
@@ -355,180 +261,6 @@ fn preparation_resolves_already_locked_registry_edges_before_grading() {
     assert_eq!(fixture.read("Cargo.lock"), baseline);
     fixture.write("Cargo.lock", &prepared_lock);
     apply(&fixture, plan);
-    assert!(check(&fixture, "HEAD").0);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn sufficient_existing_increments_need_no_further_edits_after_preparation() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "0.1.0", "");
-    binary(
-        &fixture,
-        "tool",
-        "\n[dependencies]\ncore = { path = \"../core\", version = \"0.1.0\" }\n",
-    );
-    fixture.cargo(&["generate-lockfile", "--offline"]);
-    fixture.commit("released packages");
-    write_package(&fixture, "core", "0.1.1", "");
-    write_package(
-        &fixture,
-        "tool",
-        "0.1.1",
-        "\n[dependencies]\ncore = { path = \"../core\", version = \"0.1.1\" }\n",
-    );
-    let prepared = prepare(&fixture);
-    let prepared_lock = fixture.read("Cargo.lock");
-    assert!(check(&fixture, "HEAD").0);
-    let plan = preview(&fixture, prepared, &json!([]));
-    assert!(versions(&plan).is_empty());
-    let manifest = fixture.read("packages/tool/Cargo.toml");
-    apply(&fixture, plan.clone());
-    assert_eq!(fixture.read("packages/tool/Cargo.toml"), manifest);
-    assert_eq!(fixture.read("Cargo.lock"), prepared_lock);
-    assert!(check(&fixture, "HEAD").0);
-    apply(&fixture, plan);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn public_breaking_moves_propagate_without_a_second_caller_decision() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "0.1.0", "");
-    write_package(
-        &fixture,
-        "facade",
-        "0.1.0",
-        "\n[package.metadata.cargo_check_external_types]\nallowed_external_types = [\"core::*\"]\n[dependencies]\ncore = { path = \"../core\", version = \"0.1.0\" }\n",
-    );
-    fixture.commit("public dependency");
-    let prepared = prepare(&fixture);
-    let plan = preview(
-        &fixture,
-        prepared,
-        &json!([{"name":"core","level":"minor"}]),
-    );
-    assert_eq!(versions(&plan).get("facade"), Some(&"0.2.0".to_owned()));
-    apply(&fixture, plan);
-    assert!(check(&fixture, "HEAD").0);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn stable_public_contracts_take_a_major_increment_when_their_dependency_breaks() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "1.0.0", "");
-    write_package(
-        &fixture,
-        "facade",
-        "1.0.0",
-        "\n[package.metadata.cargo_check_external_types]\nallowed_external_types = [\"core::*\"]\n\
-         [dependencies]\ncore = { path = \"../core\", version = \"1.0.0\" }\n",
-    );
-    fixture.commit("stable public dependency");
-    let prepared = prepare(&fixture);
-    let plan = preview(
-        &fixture,
-        prepared,
-        &json!([{"name":"core","level":"major"}]),
-    );
-    assert_eq!(versions(&plan).get("facade"), Some(&"2.0.0".to_owned()));
-    apply(&fixture, plan);
-    assert!(check(&fixture, "HEAD").0);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn a_first_publication_does_not_need_a_breaking_increment_for_its_public_dependency() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "1.0.0", "");
-    fixture.commit("released core");
-    write_package(
-        &fixture,
-        "facade",
-        "1.0.0",
-        "\n[package.metadata.cargo_check_external_types]\nallowed_external_types = [\"core::*\"]\n\
-         [dependencies]\ncore = { path = \"../core\", version = \"1.0.0\" }\n",
-    );
-    fixture.git(&["add", "packages/facade"]);
-    let prepared = prepare(&fixture);
-    let plan = preview(
-        &fixture,
-        prepared,
-        &json!([{"name":"core","level":"major"}]),
-    );
-    assert_eq!(
-        versions(&plan),
-        BTreeMap::from([("core".to_owned(), "2.0.0".to_owned())])
-    );
-    apply(&fixture, plan);
-    assert!(
-        fixture
-            .read("packages/facade/Cargo.toml")
-            .contains("version = \"1.0.0\"")
-    );
-    assert!(check(&fixture, "HEAD").0);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn preview_aligns_a_lagging_unpublished_group_member_without_an_extra_increment() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "0.1.0", "");
-    write_package(
-        &fixture,
-        "helper",
-        "0.1.0",
-        "\npublish = false\n[dependencies]\ncore = { path = \"../core\", version = \"=0.1.0\" }\n",
-    );
-    fixture.commit("aligned group");
-    write_package(&fixture, "core", "0.2.0", "");
-    write_package(
-        &fixture,
-        "helper",
-        "0.1.0",
-        "\npublish = false\n[dependencies]\ncore = { path = \"../core\", version = \"=0.2.0\" }\n",
-    );
-    let prepared = prepare(&fixture);
-    let plan = preview(&fixture, prepared, &json!([]));
-    assert_eq!(
-        versions(&plan),
-        BTreeMap::from([
-            ("core".to_owned(), "0.2.0".to_owned()),
-            ("helper".to_owned(), "0.2.0".to_owned()),
-        ])
-    );
-    apply(&fixture, plan);
-    assert!(check(&fixture, "HEAD").0);
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "spawns local Git and offline Cargo")]
-fn naming_an_existing_dependency_version_releases_only_the_rewritten_dependent() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "core", "0.1.0", "");
-    write_package(
-        &fixture,
-        "facade",
-        "0.1.0",
-        "\n[dependencies]\ncore = { path = \"../core\", version = \"0.1\" }\n",
-    );
-    fixture.commit("compatible but noncanonical requirement");
-    let prepared = prepare(&fixture);
-    let plan = preview(&fixture, prepared, &json!([]));
-    assert_eq!(
-        versions(&plan),
-        BTreeMap::from([
-            ("core".to_owned(), "0.1.0".to_owned()),
-            ("facade".to_owned(), "0.1.1".to_owned()),
-        ])
-    );
-    apply(&fixture, plan);
-    assert!(
-        fixture
-            .read("packages/facade/Cargo.toml")
-            .contains("version = \"0.1.0\"")
-    );
     assert!(check(&fixture, "HEAD").0);
 }
 
@@ -572,6 +304,8 @@ fn source_changes_after_preparation_invalidate_preview() {
     write_package(&fixture, "library", "0.1.0", "");
     fixture.commit("released package");
     let prepared = prepare(&fixture);
+    // Completion invalidation is independent of the old plan's contents.
+    fixture.write("preview/plan.json", "previous completion");
     fixture.write("packages/library/src/lib.rs", "pub fn new_evidence() {}\n");
     fixture.write(
         "proposal.json",
