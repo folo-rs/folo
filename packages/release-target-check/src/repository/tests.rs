@@ -65,6 +65,66 @@ fn rejects_dirty_inputs_before_invoking_the_operation() {
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
+fn rejects_staged_and_untracked_inputs() {
+    with_watchdog(|| {
+        let (_directory, repository) = fixture();
+        fs::write(repository.root.join("Cargo.toml"), "staged input").unwrap();
+        command(&repository.root, &["add", "Cargo.toml"]);
+        let error = repository.ensure_clean_head().unwrap_err();
+        assert!(error.find_source::<VerificationError>().is_some());
+
+        fs::write(repository.root.join("Cargo.toml"), "tracked input").unwrap();
+        command(&repository.root, &["add", "Cargo.toml"]);
+        repository.ensure_clean_head().unwrap();
+        fs::write(repository.root.join("untracked-input"), "untracked input").unwrap();
+        let error = repository.ensure_clean_head().unwrap_err();
+        assert!(error.find_source::<VerificationError>().is_some());
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
+fn rejects_index_flags_that_conceal_changes() {
+    with_watchdog(|| {
+        let (_directory, repository) = fixture();
+        for (set, unset) in [
+            ("--assume-unchanged", "--no-assume-unchanged"),
+            ("--skip-worktree", "--no-skip-worktree"),
+        ] {
+            repository.ensure_clean_head().unwrap();
+            command(&repository.root, &["update-index", set, "Cargo.toml"]);
+            fs::write(repository.root.join("Cargo.toml"), "concealed input").unwrap();
+            assert!(command(&repository.root, &["status", "--porcelain"]).is_empty());
+            let error = repository.ensure_clean_head().unwrap_err();
+            assert!(error.find_source::<VerificationError>().is_some());
+            fs::write(repository.root.join("Cargo.toml"), "tracked input").unwrap();
+            command(&repository.root, &["update-index", unset, "Cargo.toml"]);
+        }
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
+fn rejects_noncommit_object_ids_for_either_history_endpoint() {
+    with_watchdog(|| {
+        let (_directory, repository) = fixture();
+        let head = command(&repository.root, &["rev-parse", "HEAD"]);
+        command(
+            &repository.root,
+            &["tag", "-a", "release", "-m", "annotated"],
+        );
+        let tag = command(&repository.root, &["rev-parse", "release"]);
+        let error = repository.ensure_first_parent(tag.trim()).unwrap_err();
+        assert!(error.find_source::<VerificationError>().is_some());
+
+        let tagged = Repository::discover(&repository.root.join("Cargo.toml"), tag.trim()).unwrap();
+        let error = tagged.ensure_first_parent(head.trim()).unwrap_err();
+        assert!(error.find_source::<VerificationError>().is_some());
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
 fn preserves_operation_errors_when_evidence_is_unchanged() {
     with_watchdog(|| {
         let (_directory, repository) = fixture();
