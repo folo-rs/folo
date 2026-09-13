@@ -33,6 +33,20 @@ codecov:
     manual_trigger: true
     wait_for_ci: false
 
+# Fixed targets allow practical coverage gaps without making normal changes fail
+# merely because coverage decreased. The PR comment remains advisory.
+# Ref: docs/build-and-tooling.md#coverage-status-policy.
+coverage:
+  status:
+    project:
+      default:
+        target: 95%
+        threshold: 0%
+    patch:
+      default:
+        target: 95%
+        threshold: 0%
+
 # `cargo-bench-history-figures` is unpublished book-generation infrastructure: it renders the
 # data-pipeline appendix's figures and tables. Its correctness is guaranteed by freshness and
 # completeness tests (the checked-in assets must match regenerated output, every enum's `ALL` is
