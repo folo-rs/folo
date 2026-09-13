@@ -88,6 +88,18 @@ applicable rather than on every polling-session creation.
 We operate under a **zero warnings allowed** requirement - fix all warnings that
 validation generates.
 
+### Coverage status policy
+
+Codecov requires at least 95% coverage for both the overall project and the
+changed lines in a pull request. These are fixed targets, not comparisons against
+the base commit, so a decrease that still meets the target does not fail the check.
+This allows practical coverage gaps while retaining a meaningful coverage floor.
+The PR comment remains advisory and reports coverage changes independently of
+whether the checks pass.
+
+The policy lives in `codecov.yml`. Statuses and comments are posted only after all
+coverage-producing jobs finish, so they reflect the complete set of reports.
+
 ### Coverage target selection
 
 `coverage-measure` uses Cargo's `--tests --examples` selection. `--tests` includes
