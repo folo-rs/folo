@@ -187,12 +187,12 @@ not that its problems are fixed.
 ## Ownership and handoff
 
 `scheduled-run-failure` identifies triage work; `scheduled-finding` identifies the
-repair backlog. `in-progress` records active ownership and `needs-human` records a
-human-action blocker. Issue state and linked PRs supply the remaining lifecycle.
+repair backlog. Assignment on an open issue records ownership, not whether a worker
+is currently executing. `needs-human` records a human-action blocker. Issue state
+and linked PRs supply the remaining lifecycle.
 
 Before working, read current discussion, assignees and linked PRs. Claim the issue
-by assigning the responsible GitHub user, adding `in-progress`, and posting an
-ordinary comment, for example:
+by assigning the responsible GitHub user and posting an ordinary comment, for example:
 
 > [Copilot speaking]
 >
@@ -206,7 +206,7 @@ does not authorize adopting another worker's task.
 
 Reread claims after posting and before work. If claims collide, the earlier
 unreleased claim takes precedence and the other worker withdraws without removing
-the winner's assignment or label. This is a human collaboration convention, not
+the winner's assignment. This is a human collaboration convention, not
 an atomic locking service.
 
 Post substantive progress, blockers, releases and handoffs, not heartbeats. A
@@ -217,15 +217,21 @@ executor. `needs-human` blocks continuation until its stated requirement is
 satisfied or evidence or a human correction establishes that it was not a
 blocker. The owner corrects an unsupported blocker in the discussion and removes
 the mistaken label without dismissing separate unresolved human requirements.
-This does not waive checks. Remove completed ownership status without disturbing
-other workers.
+This does not waive checks. To explicitly release a claim, remove the responsible
+assignee and record the release or handoff in discussion without disturbing other
+workers. Issue closure needs no assignment cleanup; assignees on closed issues do
+not indicate ongoing work.
 
 ## Repair and PR completion
 
 The [scheduled-intake skill](../.github/skills/scheduled-intake/SKILL.md) coordinates
 repairs. It follows existing claimed issues and PRs first, then starts at most one
-new unclaimed repair per invocation. Independent PRs awaiting review do not block
-the entire backlog. The [scheduled-repair skill](../.github/skills/scheduled-repair/SKILL.md)
+new unclaimed repair per invocation. Intake considers only open findings; closure
+ends intake responsibility, including follow-up of linked PRs. Keep the issue open
+while its repair is ongoing. Closing it with an open PR requires an explicit
+disposition of that PR, not continued automatic intake follow-up. Independent PRs
+awaiting review do not block the entire backlog.
+The [scheduled-repair skill](../.github/skills/scheduled-repair/SKILL.md)
 works on one issue in its native issue/PR-linked Local App session.
 
 Confirm the failure, implement the correction and create a normal PR with
