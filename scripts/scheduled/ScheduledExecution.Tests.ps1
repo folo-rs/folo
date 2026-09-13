@@ -59,6 +59,18 @@ Describe 'Shared recipe invocation' {
         $summary | Should -Match 'Final result: PASSED'
     }
 
+    It 'forwards a non-default per-package Miri shard to Just' {
+        $check = @(Get-ScheduledCheck | Where-Object id -EQ 'miri-harder-events-1')[0]
+        $check.id = 'miri-harder-events-2'
+        $check.shard = '2/2'
+        Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $output -SourceSha $sourceSha |
+            Should -Be 0
+        $invocation = Get-Content -LiteralPath $env:SCHEDULED_CAPTURE_PATH -Raw | ConvertFrom-Json
+        $invocation.recipe | Should -Be 'miri-harder'
+        $invocation.package | Should -Be 'events'
+        $invocation.shard | Should -Be '2/2'
+    }
+
     It 'preserves recipe failure <_> and includes its output' -ForEach @(1, 2, 3, 4) {
         $code = $_
         $env:SCHEDULED_TEST_EXIT = [string]$code
