@@ -44,6 +44,13 @@ Pull requests and merge-queue entries use the pruned validation set. Pushes to `
 full set. Queue delta analysis takes the event's base commit so its comparison cannot drift
 from the queued merge candidate.
 
+### Azure emulator coverage
+
+The Azurite coverage job runs both the CLI integration suite and the storage partition's
+adapter tests with a required emulator. Selecting only the CLI package would exercise
+production storage through commands but omit the adapter unit tests, which cover additional
+network paths. The combined selection contributes their coverage to the same Azure upload.
+
 ### Non-Cargo change planning
 
 The `changes` job runs `scripts/build/ValidationPlan.psm1` with Git and preinstalled
