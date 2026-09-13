@@ -26,6 +26,14 @@ directly:
   thing to one instance of a problem in a file, check for other instances. You
   must solve the entire class of problems at once, not expect each instance to
   be pointed out to you in instructions.
+* **Evaluate review feedback, do not implement it reflexively.** Automated review
+  comments can be incorrect or have a low signal-to-noise ratio. Establish the
+  concrete defect or useful improvement before acting, and weigh that benefit
+  against the added complexity, maintenance burden and cognitive overhead.
+  Decline suggestions whose costs exceed their value and explain why; a reviewer
+  requesting a change does not by itself justify it. Tests that merely assert
+  the presence of copied wording are not behavioral coverage. Follow
+  [docs/testing.md](docs/testing.md#test-behavior-not-checked-in-wording).
 * **Treat automation as maintained code.** Prefer nonpublished Rust utilities for
   automation logic; use PowerShell when Rust execution is impractical in the
   invoking environment. Every script must explain its purpose, callers and

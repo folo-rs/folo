@@ -8,6 +8,17 @@ tests.
 The `unwrap()` / `expect()` rule (both test and production sides) lives in
 [`docs/error-handling.md`](error-handling.md).
 
+## Test behavior, not checked-in wording
+
+Do not test that checked-in source, configuration, prompts or documentation contain
+particular literal text. Parsing a static example and comparing its fields with
+copied literals has the same problem: it freezes content without exercising behavior.
+Test execution, transformations and observable outcomes instead. Structural checks
+that validate relationships, such as resolving documentation links or matching job
+dependencies to definitions, remain useful. Assertions on text produced by code
+under test are also valid; the distinction is whether the test exercises behavior,
+not whether its expected result is a string.
+
 ## Testing for panics and errors
 
 It is good to create tests that verify expected panics/errors are returned.

@@ -61,7 +61,7 @@ Unavailable revisions fail. Main pushes explicitly select the full suite.
 Script directories are coarse test domains. The module declares recipe ownership and
 cross-domain consumers, and defaults unfamiliar script/recipe locations to the full suite.
 Setup, shared utility, planner and fan-in changes select every tooling check. Fixtures select
-their owning tests; workflow changes also select the Pester workflow-contract tests. Analyzer
+their owning tests; workflow changes also select Pester dependency-relationship and helper tests. Analyzer
 configuration and script files select static analysis independently of the Pester scope.
 
 The `delta` job combines the path-selected domains with affected native helpers used by
@@ -84,7 +84,7 @@ does not replace declared dependencies.
 `scripts/setup`. It needs neither Rust toolchain setup nor system package installation.
 The workflow invokes `actionlint -color` directly, matching `just validate-workflows` without
 installing Just solely to dispatch that command. Local full setup continues to install these
-same binaries, and the workflow-contract tests keep the command and cache keys aligned.
+same binaries. Keep the command and cache keys aligned when editing these entry points.
 
 ## Release validation
 

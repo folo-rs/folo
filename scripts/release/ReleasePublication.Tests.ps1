@@ -390,21 +390,3 @@ Describe 'Immutable binary build planning' {
         Should -Invoke Get-MissingBinaryMatrix -ModuleName ReleasePublication -Times 0 -Exactly
     }
 }
-
-Describe 'Release workflow ownership' {
-    It 'keeps both release-plz forge operations disabled' {
-        $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' 'release-plz.toml') -Raw
-        $config | Should -Match '(?m)^git_tag_enable = false$'
-        $config | Should -Match '(?m)^git_release_enable = false$'
-        $config | Should -Not -Match '(?m)^git_(tag|release)_enable = true$'
-        $config | Should -Match ([regex]::Escape('git_tag_name = "{{ package }}-v{{ version }}"'))
-    }
-
-    It 'checks out the pinned matrix source and uploads to the versioned tag' {
-        $workflow = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..' '..' '.github' 'workflows' 'release.yml') -Raw
-        $workflow | Should -Match 'ref: \$\{\{ matrix\.source_sha \}\}'
-        $workflow | Should -Match 'ref: refs/tags/\$\{\{ matrix\.tag \}\}'
-        $workflow | Should -Match 'just gh-reconcile-releases'
-        $workflow | Should -Not -Match 'gh-compose-release-config|gh-create-missing-binary-releases'
-    }
-}
