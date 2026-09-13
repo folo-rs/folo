@@ -9,7 +9,9 @@ param(
     [string] $CheckJson = $env:SCHEDULED_CHECK,
     [string] $SourceSha = $env:GITHUB_SHA,
     [string] $SourceRoot = '.',
-    [string] $OutputDirectory = '.scheduled-result'
+    # Local runs retain separate diagnostics outside source; CI supplies its upload location.
+    # Ref: .github/workflows/implementation.md#deep-execution.
+    [string] $OutputDirectory = (Join-Path ([IO.Path]::GetTempPath()) ("folo-scheduled-result-" + [guid]::NewGuid()))
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

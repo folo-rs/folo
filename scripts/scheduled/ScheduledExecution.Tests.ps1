@@ -21,12 +21,13 @@ Describe 'Shared recipe invocation' {
     BeforeEach {
         $script:output = Join-Path $TestDrive ("output space's " + [guid]::NewGuid())
         $script:environment = @{}
-        foreach ($name in @('SCHEDULED_CAPTURE_PATH', 'SCHEDULED_TEST_EXIT', 'SCHEDULED_MUTATION_FIXTURE')) {
+        foreach ($name in @('SCHEDULED_CAPTURE_PATH', 'SCHEDULED_TEST_EXIT', 'SCHEDULED_MUTATION_FIXTURE', 'SCHEDULED_SOURCE_COPY')) {
             $environment[$name] = [Environment]::GetEnvironmentVariable($name)
         }
         $env:SCHEDULED_CAPTURE_PATH = Join-Path $TestDrive 'invocation.json'
         $env:SCHEDULED_TEST_EXIT = '0'
         $env:SCHEDULED_MUTATION_FIXTURE = $null
+        $env:SCHEDULED_SOURCE_COPY = $null
     }
 
     AfterEach {
@@ -107,6 +108,54 @@ Describe 'Shared recipe invocation' {
         Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $output -SourceSha $sourceSha |
             Should -Be 1
         Get-Content -LiteralPath (Join-Path $output 'summary.md') -Raw | Should -Match 'Process start canary'
+    }
+
+    It 'rejects source-local output <RelativePath> before starting capture or creating files' -ForEach @(
+        @{ RelativePath = '.' },
+        @{ RelativePath = '.scheduled-result' },
+        @{ RelativePath = 'child\..\nested\result' }
+    ) {
+        $check = @(Get-ScheduledCheck | Where-Object recipe -EQ 'mutants')[0]
+        $localOutput = Join-Path $recipeRoot $RelativePath
+        $before = @(Get-ChildItem -LiteralPath $recipeRoot -Recurse -Force | ForEach-Object FullName)
+        Mock Invoke-CapturedProcess -ModuleName ScheduledExecution { throw 'Unexpected checker invocation.' }
+        { Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $localOutput -SourceSha $sourceSha } |
+            Should -Throw
+        @(Get-ChildItem -LiteralPath $recipeRoot -Recurse -Force | ForEach-Object FullName) | Should -Be $before
+        Should -Invoke Invoke-CapturedProcess -ModuleName ScheduledExecution -Times 0 -Exactly
+    }
+
+    It 'keeps shard <Shard> diagnostics outside source copying and preserves verdict <Code>' -ForEach @(
+        @{ Shard = '1/8'; Code = 0 }, @{ Shard = '2/8'; Code = 3 },
+        @{ Shard = '3/8'; Code = 0 }, @{ Shard = '4/8'; Code = 3 },
+        @{ Shard = '5/8'; Code = 0 }, @{ Shard = '6/8'; Code = 3 },
+        @{ Shard = '7/8'; Code = 0 }, @{ Shard = '8/8'; Code = 3 }
+    ) {
+        # A sibling sharing the source prefix is outside it, not a forbidden descendant.
+        $output = $recipeRoot + "-results-$([guid]::NewGuid())"
+        $env:SCHEDULED_SOURCE_COPY = Join-Path $TestDrive ("copy-" + [guid]::NewGuid())
+        $env:SCHEDULED_TEST_EXIT = [string]$Code
+        $env:SCHEDULED_MUTATION_FIXTURE = Join-Path $fixtures 'outcomes.json'
+        $check = @(Get-ScheduledCheck | Where-Object recipe -EQ 'mutants')[0]
+        $check.shard = $Shard
+        Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $output -SourceSha $sourceSha |
+            Should -Be $Code
+        $invocation = Get-Content -LiteralPath $env:SCHEDULED_CAPTURE_PATH -Raw | ConvertFrom-Json
+        $invocation.shard | Should -Be $Shard
+        Get-Content -LiteralPath (Join-Path $env:SCHEDULED_SOURCE_COPY 'justfile') -Raw |
+            Should -BeExactly (Get-Content -LiteralPath (Join-Path $recipeRoot 'justfile') -Raw)
+        @(Get-ChildItem -LiteralPath $env:SCHEDULED_SOURCE_COPY -Recurse -Force -Filter 'check.*').Count | Should -Be 0
+        Get-Content -LiteralPath (Join-Path $output 'check.stdout') -Raw | Should -Match 'Source copy finished'
+        Get-Content -LiteralPath (Join-Path $output 'mutants.out\outcomes.json') -Raw |
+            Should -BeExactly (Get-Content -LiteralPath $env:SCHEDULED_MUTATION_FIXTURE -Raw)
+        $summary = Get-Content -LiteralPath (Join-Path $output 'summary.md') -Raw
+        if ($Code -eq 0) {
+            $summary | Should -Match 'Final result: PASSED'
+        } else {
+            Get-Content -LiteralPath (Join-Path $output 'check.stderr') -Raw | Should -Match 'Recipe failure canary'
+            $summary | Should -Match 'Recipe failure canary'
+            $summary | Should -Match 'Final result: FAILED'
+        }
     }
 }
 

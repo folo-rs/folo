@@ -126,6 +126,12 @@ Use the existing [build commands](build-and-tooling.md) at the PR commit:
 platform. Use targeted just recipes for the particular deep checks relevant to a
 repair, and use WSL when Linux execution is required.
 
+To reproduce scheduled capture locally, invoke
+`scripts/scheduled/Invoke-ScheduledCheck.ps1` with the check JSON and tested commit.
+It prints a unique result directory under the system temporary directory. An explicit
+`-OutputDirectory` must be empty and outside the source checkout, keeping live logs
+and mutation artifacts out of source copies. Retain the directory for diagnostics.
+
 The main-only hosted workflow is not PR-head validation evidence. If a required
 platform is unavailable locally, disclose the missing scope and add `needs-human`
 for the needed decision. Human review may resolve that limitation; it is not a
