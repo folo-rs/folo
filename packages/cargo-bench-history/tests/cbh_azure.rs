@@ -44,7 +44,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cargo_bench_history::{
     Cli, Command, Overrides, RunOutcome, StorageOverride, run_with_overrides,
 };
-use cbh_storage::azure_backend_from_parts;
+use cbh_storage::{azure_backend_from_parts, unique_test_container};
 use futures::FutureExt as _;
 use ohno::AppError;
 use serial_test::serial;
@@ -101,14 +101,6 @@ fn azurite_available() -> bool {
         eprintln!("skipping Azurite integration test: no emulator reachable at {endpoint}");
     }
     reachable
-}
-
-/// A fresh, valid container name (lowercase, 3-63 chars) unique to one test.
-fn unique_container() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = jiff::Timestamp::now().as_nanosecond();
-    format!("bh-it-{nanos}-{n}")
 }
 
 /// Escapes a string for embedding in a TOML basic (double-quoted) string.
@@ -300,7 +292,7 @@ where
 {
     let account = real_azure_account().expect("real Azure account is configured");
     let endpoint = real_azure_endpoint(&account);
-    let container = unique_container();
+    let container = unique_test_container();
 
     // Capture a panic so the container is always deleted, then re-raise it.
     let result = panic::AssertUnwindSafe(body(container.clone()))
@@ -801,7 +793,7 @@ async fn collect_stores_results_in_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_collect_stores(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_collect_stores(AzureWorkspace::new_azurite(&unique_test_container())).await;
 }
 
 /// A `collect` + `analyze` round-trip through Azurite.
@@ -816,7 +808,7 @@ async fn collect_then_analyze_round_trips_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_collect_then_analyze(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_collect_then_analyze(AzureWorkspace::new_azurite(&unique_test_container())).await;
 }
 
 /// A multi-commit feature/dirty round-trip through Azurite.
@@ -831,7 +823,7 @@ async fn analyze_feature_and_dirty_round_trip_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_feature_and_dirty(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_feature_and_dirty(AzureWorkspace::new_azurite(&unique_test_container())).await;
 }
 
 /// A read-through cache round-trip through Azurite: cold mirror, warm reuse, and a
@@ -847,7 +839,7 @@ async fn analyze_with_cache_round_trips_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_cache_round_trip(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_cache_round_trip(AzureWorkspace::new_azurite(&unique_test_container())).await;
 }
 
 /// An uncached mutating round-trip through Azurite: `prune` deletes a run directly
@@ -863,7 +855,7 @@ async fn prune_without_cache_round_trips_through_azurite() {
     if !azurite_available() {
         return;
     }
-    scenario_prune_without_cache(AzureWorkspace::new_azurite(&unique_container())).await;
+    scenario_prune_without_cache(AzureWorkspace::new_azurite(&unique_test_container())).await;
 }
 
 /// A stored blob carries `Content-Encoding: gzip`, so a non-SDK reader knows the
@@ -885,7 +877,7 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
         return;
     }
 
-    let container = unique_container();
+    let container = unique_test_container();
     let workspace =
         AzureWorkspace::new_azurite(&container).with_bench(&["--callgrind", FAKER_CALLGRIND]);
     workspace.drive(&["collect"]).await.unwrap();
