@@ -58,9 +58,9 @@ function Get-ValidationPlan {
             Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint, dependency checks and helper tests."
         }
         if ($path -cmatch '^\.github/skills/scheduled-(intake|triage|repair)/' -or
-            $path -ceq '.github/prompts/setup-scheduled-remediation.prompt.md') {
+            $path -cin @('.github/prompts/setup-scheduled-remediation.prompt.md', 'docs/scheduled-validation.md')) {
             $null = $domains.Add('scheduled')
-            Write-Verbose "'$path' documents App triage or repair behavior; selecting documentation-link tests."
+            Write-Verbose "'$path' is an input to documentation-link tests; selecting the scheduled test domain."
         }
 
         if ($path -ceq 'PSScriptAnalyzerSettings.psd1') {

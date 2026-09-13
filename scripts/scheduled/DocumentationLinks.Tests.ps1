@@ -4,8 +4,9 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
-# The scheduled script-test domain verifies that relative links in the App setup
-# documentation resolve to repository files, without running an agent or contacting GitHub.
+# The scheduled script-test domain verifies that relative link paths in the App setup
+# documentation resolve to repository files. Heading fragments are outside this file-existence
+# check, which runs without an agent or GitHub access.
 BeforeAll {
     $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
     $documents = @(
@@ -18,7 +19,7 @@ BeforeAll {
 }
 
 Describe 'Scheduled documentation links' {
-    It 'resolves relative links to existing repository documents' {
+    It 'resolves relative link paths to existing repository files' {
         foreach ($document in $documents) {
             $text = Get-Content -LiteralPath $document -Raw
             foreach ($link in [regex]::Matches($text, '\]\(([^)]+)\)')) {
