@@ -53,14 +53,14 @@ function Get-ValidationPlan {
             $path -cmatch '^\.github/actions/.+\.ya?ml$' -or
             $path -cin @('.github/actionlint.yaml', '.github/actionlint.yml')) {
             $workflows = $true
-            # Pester also asserts the actual workflow contracts, not just script behavior.
+            # Pester checks job dependency relationships and the helpers invoked by workflows.
             $domains.UnionWith([string[]] @('build', 'scheduled'))
-            Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint and workflow-contract tests."
+            Write-Verbose "'$path' is workflow/lint configuration; selecting workflow lint, dependency checks and helper tests."
         }
         if ($path -cmatch '^\.github/skills/scheduled-(intake|triage|repair)/' -or
-            $path -ceq '.github/prompts/setup-scheduled-remediation.prompt.md') {
+            $path -cin @('.github/prompts/setup-scheduled-remediation.prompt.md', 'docs/scheduled-validation.md')) {
             $null = $domains.Add('scheduled')
-            Write-Verbose "'$path' defines App triage or repair behavior; selecting its workflow-contract tests."
+            Write-Verbose "'$path' is an input to documentation-link tests; selecting the scheduled test domain."
         }
 
         if ($path -ceq 'PSScriptAnalyzerSettings.psd1') {

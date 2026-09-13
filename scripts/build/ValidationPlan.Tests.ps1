@@ -38,7 +38,8 @@ Describe 'Non-Cargo change domains' {
         @{ Path = '.github/skills/scheduled-triage/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = '.github/skills/scheduled-intake/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = '.github/skills/scheduled-repair/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
-        @{ Path = '.github/prompts/setup-scheduled-remediation.prompt.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false }
+        @{ Path = '.github/prompts/setup-scheduled-remediation.prompt.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'docs/scheduled-validation.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false }
     ) {
         $plan = Get-ValidationPlan -ChangedPath @($Path)
         $plan.script_domains | Should -Be $Domains
