@@ -117,11 +117,11 @@ Describe 'Shared recipe invocation' {
     ) {
         $check = @(Get-ScheduledCheck | Where-Object recipe -EQ 'mutants')[0]
         $localOutput = Join-Path $recipeRoot $RelativePath
-        $before = @(Get-ChildItem -LiteralPath $recipeRoot -Recurse -Force | ForEach-Object FullName)
+        $before = @(Get-ChildItem -LiteralPath $recipeRoot -Recurse -Force | ForEach-Object FullName | Sort-Object)
         Mock Invoke-CapturedProcess -ModuleName ScheduledExecution { throw 'Unexpected checker invocation.' }
         { Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $localOutput -SourceSha $sourceSha } |
             Should -Throw
-        @(Get-ChildItem -LiteralPath $recipeRoot -Recurse -Force | ForEach-Object FullName) | Should -Be $before
+        @(Get-ChildItem -LiteralPath $recipeRoot -Recurse -Force | ForEach-Object FullName | Sort-Object) | Should -Be $before
         Should -Invoke Invoke-CapturedProcess -ModuleName ScheduledExecution -Times 0 -Exactly
     }
 
