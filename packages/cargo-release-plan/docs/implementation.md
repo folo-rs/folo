@@ -66,6 +66,11 @@ Git failure must be interpreted in process: a path absent from a revision. A
 translated diagnostic would otherwise turn ordinary package creation or deletion
 into an error.
 
+Subprocess unit tests use repository-independent Git operations in disposable
+directories to cover successful output capture and nonzero exits. Tests that need
+repository state create it explicitly through the hermetic integration fixture;
+the source tree's Git metadata is never a test prerequisite.
+
 ## Workspace snapshots
 
 `cargo metadata --no-deps` supplies candidate current members and normalized
