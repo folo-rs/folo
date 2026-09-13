@@ -19,6 +19,7 @@ BeforeAll {
     $script:Scope = @(
         '--workspace',
         '--exclude', 'benchmarks',
+        '--exclude', 'infinity_pool',
         '--all-features',
         '--best-of', '3',
         '--verbose'
@@ -104,6 +105,21 @@ Describe 'Get-BenchHistoryCollectCommand' {
     }
 
     Context 'package scoping (PR workflow)' {
+        It 'collects only retained packages after the PR delta filter' {
+            $packages = @(Select-BenchmarkablePackage -Package @(
+                    'infinity_pool', 'nm', 'benchmarks', 'many_cpus'))
+            $result = Get-BenchHistoryCollectCommand -Package $packages
+            $result | Should -Be @(
+                'collect',
+                '--package', 'nm',
+                '--package', 'many_cpus',
+                '--all-features',
+                '--best-of', '3',
+                '--verbose',
+                '--skip-existing'
+            )
+        }
+
         It 'scopes to the given packages with repeated --package instead of --workspace' {
             $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm', 'many_cpus')
             $result | Should -Be @(
@@ -309,13 +325,17 @@ Describe 'Get-BenchHistoryBackfillCommand' {
 }
 
 Describe 'Select-BenchmarkablePackage' {
-    It 'drops the excluded benchmarks package' {
-        Select-BenchmarkablePackage -Package @('nm', 'benchmarks', 'many_cpus') |
+    It 'drops both excluded packages' {
+        Select-BenchmarkablePackage -Package @('nm', 'benchmarks', 'infinity_pool', 'many_cpus') |
             Should -Be @('nm', 'many_cpus')
     }
 
-    It 'returns an empty array when only benchmarks changed' {
-        @(Select-BenchmarkablePackage -Package @('benchmarks')).Count | Should -Be 0
+    It 'leaves no PR collection scope when only excluded packages changed' -ForEach @(
+        @{ Packages = @('benchmarks') }
+        @{ Packages = @('infinity_pool') }
+        @{ Packages = @('benchmarks', 'infinity_pool') }
+    ) {
+        @(Select-BenchmarkablePackage -Package $Packages).Count | Should -Be 0
     }
 
     It 'returns an empty array for an empty input' {
@@ -327,8 +347,9 @@ Describe 'Select-BenchmarkablePackage' {
             Should -Be @('many_cpus', 'nm', 'events')
     }
 
-    It 'matches the excluded name case-sensitively' {
-        Select-BenchmarkablePackage -Package @('Benchmarks', 'nm') |
-            Should -Be @('Benchmarks', 'nm')
+    It 'matches excluded names exactly and case-sensitively' {
+        Select-BenchmarkablePackage -Package @(
+            'Benchmarks', 'Infinity_pool', 'infinity_pool_extra', 'nm') |
+            Should -Be @('Benchmarks', 'Infinity_pool', 'infinity_pool_extra', 'nm')
     }
 }

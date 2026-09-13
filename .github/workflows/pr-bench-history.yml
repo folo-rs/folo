@@ -40,8 +40,7 @@ env:
 
 jobs:
   # Compute which packages the PR impacts (cargo-delta vs origin/main: the changed packages plus
-  # their dependents), filtered to the benchmarkable set (everything except the slow,
-  # special-purpose `benchmarks` crate). The result
+  # their dependents), filtered to the shared benchmarkable set (design.md#benchmark-history). The result
   # gates the whole workflow: a non-empty set drives collect+analyze, an empty set routes to
   # cleanup. Runs only for same-repo PRs - fork runs cannot federate into Azure (no secrets), so
   # like bench-history.yml's fork gate they are skipped silently; because every downstream job
@@ -80,7 +79,7 @@ jobs:
 
           # The cargo-delta pipeline lives in the Pester-tested Delta module (shared with the local
           # `just delta` recipe and standard-validation.yml so they cannot drift); Select-BenchmarkablePackage
-          # lives in the collection module so the same "drop benchmarks" rule the collect step uses
+          # lives in the collection module so the same exclusion list the collect step uses
           # also decides here whether anything is left to bench. See scripts/build/Delta.psm1 and
           # scripts/bench-history/BenchHistoryCollect.psm1.
           Import-Module ./scripts/build/Delta.psm1 -Force
@@ -89,8 +88,8 @@ jobs:
           # Full history is already present (fetch-depth: 0), so -SkipFetch avoids a redundant fetch;
           # the module analyzes origin/main in a throwaway worktree and cleans up after itself.
           $affected = @(Invoke-CargoDelta -SkipFetch)
-          # Drop the excluded `benchmarks` crate BEFORE shaping the outputs, so `skip_all` reflects
-          # the benchmarkable set: a PR that impacts only `benchmarks` (or nothing) collects nothing
+          # Drop excluded packages BEFORE shaping the outputs, so `skip_all` reflects
+          # the benchmarkable set: a PR that impacts only excluded packages (or nothing) collects nothing
           # and instead has its stale comment (if any) cleaned up.
           $benchmarkable = @(Select-BenchmarkablePackage -Package $affected)
           $output = Get-DeltaOutput -Affected $benchmarkable

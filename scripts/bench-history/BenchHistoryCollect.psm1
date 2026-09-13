@@ -21,11 +21,11 @@
 # commit.
 #
 # Collection scope is orthogonal to the mode: with no explicit package list the whole workspace is
-# benched except the special-purpose `benchmarks` crate (the push-to-main default); the PR workflow
+# benched except the excluded packages (the push-to-main default); the PR workflow
 # instead passes the delta-affected packages so it benches only what the PR impacts. Every selected
 # package is benched with all Cargo features enabled, so Cargo includes targets guarded by
 # `required-features` and builds each package in its all-features configuration.
-# Select-BenchmarkablePackage is the shared helper that drops `benchmarks` from a delta-affected set
+# Select-BenchmarkablePackage is the shared helper that drops exclusions from a delta-affected set
 # before both the scope decision and the "is there anything to bench at all" gate.
 #
 # The nightly backfill (Get-BenchHistoryBackfillCommand) fills gaps in the series belonging to
@@ -38,13 +38,15 @@
 # like a pushed one to be comparable to it.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
-# The one workspace package the benchmark-history collection never benches: it is the slow,
-# special-purpose `benchmarks` crate. The push-to-main workflow excludes it with
-# `--workspace --exclude benchmarks`; the PR workflow scopes to the delta-affected packages, so it
-# must drop this name from that set before collecting (and before deciding whether anything is left
-# to bench at all). Defined once so the exclusion cannot drift between the two paths.
-$script:ExcludedPackage = 'benchmarks'
+# Benchmark-history collection omits the slow, special-purpose `benchmarks` crate and deprecated
+# `infinity_pool`. Main and backfill use Cargo's repeated `--exclude`; PR delta filtering uses the
+# same list before deciding whether anything is left to collect. Analysis drops their historical
+# series when absent at the context commit; no stored measurements need to be deleted or blessed.
+# Ref: .github/workflows/design.md#benchmark-history.
+$script:ExcludedPackages = @('benchmarks', 'infinity_pool')
 
 # The shape of a plausible commit SHA: hex, 7-40 characters. Every commit id this module accepts
 # from a workflow_dispatch input is matched against it, so a typo fails loudly before an expensive
@@ -69,7 +71,7 @@ $script:BackfillHorizon = '14 days ago'
 
 function Select-BenchmarkablePackage {
     # Filters a delta-affected package list down to the ones the benchmark-history workflow actually
-    # collects, i.e. everything except the excluded `benchmarks` crate. The PR workflow's `delta`
+    # collects, i.e. everything except the excluded packages. The PR workflow's `delta`
     # job feeds the result into Get-DeltaOutput, so an empty result is what makes the workflow treat
     # "only non-benchmarkable packages changed" as "nothing to bench" (skip collection, clean up any
     # stale comment). Order-preserving; a case-sensitive match, matching how `cargo`/the tool treat
@@ -82,7 +84,7 @@ function Select-BenchmarkablePackage {
         [string[]] $Package
     )
 
-    return @($Package | Where-Object { $_ -cne $script:ExcludedPackage })
+    return @($Package | Where-Object { $_ -cnotin $script:ExcludedPackages })
 }
 
 function Get-BenchHistoryScopeArgument {
@@ -92,10 +94,10 @@ function Get-BenchHistoryScopeArgument {
     # either subcommand.
     #
     # $Package selects the collection scope. When empty (the push-to-main and nightly-backfill
-    # default), the whole workspace is benched except the excluded `benchmarks` crate (`--workspace
-    # --exclude benchmarks`). When non-empty (the PR workflow, which passes the delta-affected
+    # default), the whole workspace is benched except the excluded packages (`--workspace` with
+    # repeated `--exclude`). When non-empty (the PR workflow, which passes the delta-affected
     # packages), the run is scoped to exactly those packages (`--package <name>` each); the caller is
-    # expected to have already dropped `benchmarks` via Select-BenchmarkablePackage.
+    # expected to have already applied Select-BenchmarkablePackage.
     #
     # `--all-features` ensures Cargo runs benchmark targets guarded by `required-features` and
     # compiles feature-gated code paths into every selected package's benchmarks.
@@ -124,9 +126,10 @@ function Get-BenchHistoryScopeArgument {
         Write-Verbose ("Scoping collection to the delta-affected packages: " +
             ($packages -join ', ') + '.')
     } else {
-        $selection = @('--workspace', '--exclude', $script:ExcludedPackage)
+        $selection = @('--workspace')
+        foreach ($name in $script:ExcludedPackages) { $selection += @('--exclude', $name) }
         Write-Verbose ("No explicit package scope: benching the whole workspace except the " +
-            "'$script:ExcludedPackage' crate.")
+            'excluded packages: ' + ($script:ExcludedPackages -join ', ') + '.')
     }
 
     return $selection + @(

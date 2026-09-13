@@ -5,8 +5,9 @@
 # wrappers over cargo-bench-history and the owning modules under scripts/bench-history/
 # free of local-developer conveniences.
 
-# Collects the whole workspace's benchmark history (excluding the slow, special-purpose
-# `benchmarks` package) with every selected package's Cargo features enabled, so targets guarded by
+# Collects the workspace's benchmark history within the shared package scope defined in
+# BenchHistoryCollect.psm1 (see .github/workflows/design.md#benchmark-history), with every selected
+# package's Cargo features enabled, so targets guarded by
 # `required-features` are included. Results go into the prod Azure store, keyed by the current
 # commit. The machine partition for every engine is the runner's OWN auto-detected hardware
 # fingerprint, NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every
