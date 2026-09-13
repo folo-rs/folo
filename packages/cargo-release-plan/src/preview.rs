@@ -408,7 +408,7 @@ mod tests {
     use crate::anchor::Anchor;
     use crate::groups::Groups;
     use crate::lockfile::InstallationGraph;
-    use crate::metadata::{DepKind, ReportedDep, VersionTarget};
+    use crate::metadata::{DepKind, ExactDependency, ReportedDep, VersionTarget};
     use crate::resolved::StaleInputs;
 
     fn work_tree(packages: &[PackageClass]) -> WorkTree {
@@ -545,6 +545,58 @@ mod tests {
                 .packages
                 .values()
                 .all(|version| *version == Version::new(0, 3, 0))
+        );
+    }
+
+    #[test]
+    fn unpublished_exact_dependencies_schedule_only_needed_requirement_rewrites() {
+        let mut work_tree = work_tree(&[
+            package("core", None, "0.2.0"),
+            package("helper", None, "0.2.0"),
+        ]);
+        for target in &mut work_tree.version_targets {
+            target.publishable = false;
+        }
+        work_tree.groups = Groups::from_edges(
+            ["core".to_owned(), "helper".to_owned()],
+            [("helper".to_owned(), "core".to_owned())],
+        );
+        work_tree.exact_dependencies.push(ExactDependency {
+            source: "helper".to_owned(),
+            target: "core".to_owned(),
+            requirement: "=0.2.0".to_owned(),
+            manifest_path: PathBuf::from("packages/helper/Cargo.toml"),
+            location: "dependencies.core".to_owned(),
+        });
+        let groups = BTreeMap::from([(
+            "core".to_owned(),
+            GroupVerdict::new(
+                work_tree.groups.members("core"),
+                &work_tree.target_versions(),
+                &HashSet::new(),
+            ),
+        )]);
+        let mut resolved = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+
+        // Unpublished members have no release assessments, but their exact requirements
+        // must still be rewritten. Matching requirements must not invent plan entries.
+        add_consequences(&[], &groups, &work_tree, &mut resolved).unwrap();
+        assert!(resolved.packages.is_empty());
+
+        work_tree
+            .exact_dependencies
+            .first_mut()
+            .unwrap()
+            .requirement = "=0.1.0".to_owned();
+        add_consequences(&[], &groups, &work_tree, &mut resolved).unwrap();
+        assert_eq!(
+            resolved.packages,
+            BTreeMap::from([
+                ("core".to_owned(), Version::new(0, 2, 0)),
+                ("helper".to_owned(), Version::new(0, 2, 0)),
+            ])
         );
     }
 
