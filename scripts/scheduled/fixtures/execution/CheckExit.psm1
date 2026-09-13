@@ -19,6 +19,7 @@ function Invoke-ScheduledCheck {
         throw 'The workflow must pass its current checkout and GitHub commit to the checker.'
     }
     Write-Verbose "Fixture $($Check.id) source=$SourceRoot sha=$SourceSha output=$OutputDirectory"
+    @{ output = $OutputDirectory } | ConvertTo-Json | Set-Content -LiteralPath $env:SCHEDULED_CAPTURE_PATH
     return [int]$env:SCHEDULED_TEST_EXIT
 }
 

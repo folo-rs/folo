@@ -126,6 +126,12 @@ Use the existing [build commands](build-and-tooling.md) at the PR commit:
 platform. Use targeted just recipes for the particular deep checks relevant to a
 repair, and use WSL when Linux execution is required.
 
+To reproduce scheduled capture locally, invoke
+`scripts/scheduled/Invoke-ScheduledCheck.ps1` with the check JSON and tested commit.
+It prints a unique result directory under the system temporary directory. An explicit
+`-OutputDirectory` must be empty and outside the source checkout, keeping live logs
+and mutation artifacts out of source copies. Retain the directory for diagnostics.
+
 The main-only hosted workflow is not PR-head validation evidence. If a required
 platform is unavailable locally, disclose the missing scope and add `needs-human`
 for the needed decision. Human review may resolve that limitation; it is not a
@@ -200,7 +206,11 @@ blocked owner retains the claim. Elapsed time, machine downtime or an idle sessi
 does not authorize takeover. The owner or a human maintainer must explicitly
 release or transfer work, accounting for unpublished changes before replacing an
 executor. `needs-human` blocks continuation until its stated requirement is
-satisfied. Remove completed ownership status without disturbing other workers.
+satisfied or evidence or a human correction establishes that it was not a
+blocker. The owner corrects an unsupported blocker in the discussion and removes
+the mistaken label without dismissing separate unresolved human requirements.
+This does not waive checks. Remove completed ownership status without disturbing
+other workers.
 
 ## Repair and PR completion
 
@@ -228,6 +238,22 @@ low-confidence agent comments. Follow repository communication policy, including
 the exception permitting responses to the original user's own human comments.
 Every authored post begins with `[Copilot speaking]`. Request human decisions for
 design changes or unsafe ambiguity; do not call blocked work complete.
+
+Queued, pending and in-progress checks or automated reviews are normal ongoing
+work. Queue age, no assigned runner, absent steps/logs before execution and other
+queued repository runs do not establish an outage or a need for human action.
+The worker continues requested foreground follow-up, waiting between current-head
+check and review reads rather than busy-polling. This requires no per-PR timer,
+automation or hidden watcher. Routine waiting is not a reason to end that work,
+add `needs-human` or request a check waiver.
+
+Human blockers require concrete evidence and a specific action outside the
+worker's authority, such as a required approval or a diagnosed permission failure.
+Diagnose failed execution and pursue authorized recovery before escalating.
+Only hand off as ready for human review/approval/merge after current-head checks
+and automated review have concluded and actionable findings are addressed.
+If foreground execution is interrupted while results are pending, retain
+ownership and the next follow-up action as pending work, not a human blocker.
 
 Repair branches follow ordinary repository conventions. Normal same-repository
 and fork job rules apply; branch names do not grant special treatment.
@@ -264,10 +290,12 @@ The coordinator uses native session lookup and `open_issue_session` or
 existing executor when available. GitHub remains the source of truth; native
 runtime metadata locates the executor, not the work record.
 
-Empty scans exit without posting or preparing Rust/WSL. Waiting for review does
-not trigger repeated work. New decisions or other material information can resume
-blocked work. Follow-up occurs through the repository repair automation, never
-through per-PR timers or hidden watchers.
+Empty scans exit without posting or preparing Rust/WSL. Routine waiting does not
+trigger duplicate worker turns or heartbeat posts and does not cancel an active
+worker's requested foreground follow-up. Subsequent intake runs read current
+checks and reviews and route actionable results to the existing owner. New
+decisions or other material information can resume blocked work. Follow-up uses
+the repository repair automation, never per-PR timers or hidden watchers.
 
 A paused machine leaves the backlog intact. After an explicit handoff, a human
 or another machine can resume from GitHub without copying coordination state.

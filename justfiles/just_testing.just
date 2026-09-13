@@ -297,8 +297,9 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_
 # and stops it again when the tests finish - even on failure. BENCH_HISTORY_REQUIRE_AZURITE
 # is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
 # the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
-# naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
-# tests); the `*_in_real_azure` tests it also matches self-skip without ENABLE_AZURE.
+# naming convention in both the storage partition and the CLI integration suite;
+# the `*_in_real_azure` tests it also matches self-skip without ENABLE_AZURE.
+# Ref: packages/cbh_storage/docs/implementation.md for shared container isolation.
 [group('testing')]
 [script]
 test-azurite:
@@ -377,7 +378,7 @@ test-azurite:
         $env:AZURITE_BLOB_ENDPOINT = "https://${blobHost}:${blobPort}/devstoreaccount1"
         $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
-        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
+        cargo +$env:RUST_MSRV nextest run -p cargo-bench-history -p cbh_storage --locked --no-fail-fast azure azurite
     } finally {
         if ($startedByUs) {
             Write-Host "Stopping the Azurite emulator we started."

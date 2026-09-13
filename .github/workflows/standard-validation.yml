@@ -609,8 +609,15 @@ jobs:
         uses: ./.github/actions/start-azurite
 
       - name: Generate azure coverage on ubuntu-latest
+        shell: pwsh
         run: |
-          just package=cargo-bench-history coverage-measure
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # Exercise adapter unit tests as well as CLI scenarios while the emulator is available.
+          # Ref: .github/workflows/implementation.md#azure-emulator-coverage.
+          just package="cargo-bench-history cbh_storage" coverage-measure
           just coverage-report-ci
 
       - name: Upload coverage to Codecov

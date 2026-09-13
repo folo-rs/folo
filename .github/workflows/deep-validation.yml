@@ -43,6 +43,10 @@ jobs:
     # Mutation work needs its execution allowance plus cold-cache environment setup.
     # Ref: .github/workflows/implementation.md#deep-execution.
     timeout-minutes: 270
+    # Live captures and native artifacts must stay outside mutation source copies.
+    # Capture and always-upload share this path. Ref: implementation.md#deep-execution.
+    env:
+      SCHEDULED_OUTPUT_NAME: scheduled-result
     steps:
       - uses: actions/checkout@v7
         with:
@@ -59,7 +63,7 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          ./scripts/scheduled/Invoke-ScheduledCheck.ps1
+          ./scripts/scheduled/Invoke-ScheduledCheck.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP $env:SCHEDULED_OUTPUT_NAME)
           exit $LASTEXITCODE
       - name: Preserve readable diagnostics
         # Setup failures have job logs but may never reach the summary-writing check.
@@ -68,7 +72,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: scheduled-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
-          path: .scheduled-result
+          path: ${{ runner.temp }}/${{ env.SCHEDULED_OUTPUT_NAME }}
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30

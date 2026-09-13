@@ -44,6 +44,13 @@ Pull requests and merge-queue entries use the pruned validation set. Pushes to `
 full set. Queue delta analysis takes the event's base commit so its comparison cannot drift
 from the queued merge candidate.
 
+### Azure emulator coverage
+
+The Azurite coverage job runs both the CLI integration suite and the storage partition's
+adapter tests with a required emulator. Selecting only the CLI package would exercise
+production storage through commands but omit the adapter unit tests, which cover additional
+network paths. The combined selection contributes their coverage to the same Azure upload.
+
 ### Non-Cargo change planning
 
 The `changes` job runs `scripts/build/ValidationPlan.psm1` with Git and preinstalled
@@ -217,8 +224,17 @@ Each execution leg runs independently with fail-fast disabled. Always-upload ste
 preserve its readable summary and raw diagnostics even after failure. The thin
 capture wrapper records the exact Just command and preserves its exit status.
 Generic process capture owns stream handling and child cleanup, not checker behavior.
-Successful artifact
-preservation does not turn failed validation green.
+The result directory stays outside the source checkout so source-isolating tools cannot
+copy live diagnostic streams or generated artifacts. The wrapper rejects source-local
+output before creating files or starting the recipe. Git ignore rules are not an
+isolation boundary: cargo-mutants can copy ignored files.
+
+The workflow places results under the runner's temporary directory and shares that
+explicit path between execution and always-upload. Local entrypoint invocations default
+to a unique directory under the system temporary directory and print its location;
+callers may supply an empty external output directory. Logs are written directly there,
+so partial diagnostics survive interruption without a final staging/copy step.
+Successful artifact preservation does not turn failed validation green.
 
 The Just recipes own toolchain selection, test runners, helper preparation and
 configuration. Ordinary Miri therefore uses nextest and its `default-miri` profile
