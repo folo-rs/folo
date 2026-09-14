@@ -355,6 +355,10 @@ impl PathCase {
     /// writes nothing and works on a read-only checkout. A directory that cannot
     /// be read, or that holds no entry whose flipped spelling is unambiguous,
     /// yields the stricter answer, which never widens member matching.
+    // Filesystem acquisition forwards to the decision tested for both kinds of
+    // filesystem below. A sensitive host cannot distinguish an always-sensitive
+    // adapter; real-filesystem tests separately verify the installed boundary.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn probe(dir: &Path) -> Self {
         let Ok(entries) = fs::read_dir(dir) else {
             return Self::Sensitive;
@@ -363,21 +367,60 @@ impl PathCase {
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
+        // A dangling link is still a directory entry; its target cannot decide path case.
+        Self::from_directory_entries(&names, |name| fs::symlink_metadata(dir.join(name)).is_ok())
+    }
+
+    fn from_directory_entries(names: &[String], mut exists: impl FnMut(&str) -> bool) -> Self {
         let present: HashSet<&str> = names.iter().map(String::as_str).collect();
-        for name in &names {
+        for name in names {
             let flipped = flip_case(name);
             // An entry that is already present under both spellings proves
             // nothing, and a name without cased characters cannot be flipped.
-            if flipped == *name || present.contains(flipped.as_str()) {
+            if present.contains(flipped.as_str()) {
                 continue;
             }
-            return if dir.join(&flipped).exists() {
+            return if exists(&flipped) {
                 Self::Insensitive
             } else {
                 Self::Sensitive
             };
         }
         Self::Sensitive
+    }
+
+    /// Resolves a requested path to its recorded spelling.
+    pub(crate) fn recorded_path<'a>(self, paths: &'a [String], requested: &str) -> Option<&'a str> {
+        paths
+            .iter()
+            .find(|path| self.same_path(path, requested))
+            .map(String::as_str)
+    }
+
+    /// Whether a Git path names a Cargo manifest under these filesystem rules.
+    pub(crate) fn is_manifest(self, path: &str) -> bool {
+        path.rsplit('/')
+            .next()
+            .is_some_and(|name| self.same_path(name, "Cargo.toml"))
+    }
+
+    /// Relative Git path inside a directory, retaining the recorded suffix spelling.
+    pub(crate) fn relativize<'a>(self, full: &'a str, directory: &str) -> Option<&'a str> {
+        let mut relative = full;
+        while let Some(rest) = relative.strip_prefix("./") {
+            relative = rest;
+        }
+        if directory.is_empty() || directory == "." {
+            return Some(relative);
+        }
+        for component in directory.trim_end_matches('/').split('/') {
+            let (held, rest) = relative.split_once('/')?;
+            if !self.same_path(held, component) {
+                return None;
+            }
+            relative = rest;
+        }
+        Some(relative)
     }
 
     /// Whether two path components name the same path under these case rules.
@@ -1440,6 +1483,9 @@ pub(crate) fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Opt
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     use super::*;
 
     /// A requirement names a version only when it pins exactly that version.
@@ -1931,6 +1977,88 @@ b = { path = "../b" }
             PathCase::Sensitive
         };
         assert_eq!(probed, observed);
+    }
+
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore = "Creates and probes a real dangling symbolic link.")]
+    #[test]
+    fn path_case_probe_observes_dangling_directory_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        symlink("missing-target", directory.path().join("Probe.txt")).unwrap();
+        let observed = match fs::symlink_metadata(directory.path().join("pROBE.TXT")) {
+            Ok(metadata) => {
+                assert!(metadata.file_type().is_symlink());
+                PathCase::Insensitive
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathCase::Sensitive,
+            Err(error) => panic!("filesystem alias probe failed: {error}"),
+        };
+        assert_eq!(PathCase::probe(directory.path()), observed);
+    }
+
+    #[test]
+    fn directory_probe_requires_an_unambiguous_case_alias() {
+        for names in [
+            Vec::new(),
+            vec!["123".to_string()],
+            vec!["a".to_string(), "A".to_string()],
+        ] {
+            assert_eq!(
+                PathCase::from_directory_entries(&names, |_| panic!("no unambiguous probe entry")),
+                PathCase::Sensitive
+            );
+        }
+        let names = ["123", "a", "A", "Probe.txt"].map(str::to_string);
+        for (exists, expected) in [(false, PathCase::Sensitive), (true, PathCase::Insensitive)] {
+            assert_eq!(
+                PathCase::from_directory_entries(&names, |candidate| {
+                    assert_eq!(candidate, "pROBE.TXT");
+                    exists
+                }),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn case_matching_preserves_recorded_components_and_separators() {
+        let paths = ["packages/a/cargo.toml", "packages/A/Cargo.toml"].map(str::to_string);
+        assert_eq!(
+            PathCase::Sensitive.recorded_path(&paths, "PACKAGES/A/CARGO.TOML"),
+            None
+        );
+        assert_eq!(
+            PathCase::Insensitive.recorded_path(&paths, "PACKAGES/A/CARGO.TOML"),
+            Some("packages/a/cargo.toml")
+        );
+        for case in [PathCase::Sensitive, PathCase::Insensitive] {
+            assert!(case.is_manifest("Cargo.toml"));
+            assert!(!case.is_manifest("NotCargo.toml"));
+            assert!(!case.is_manifest("Cargo.toml.bak"));
+            assert!(!case.is_manifest(r"nested\Cargo.toml"));
+            assert_eq!(
+                case.relativize("./packages/a/.hidden", "packages/a"),
+                Some(".hidden")
+            );
+            assert_eq!(case.relativize("packages/a", "packages/a"), None);
+            assert_eq!(case.relativize("packages/ab/file", "packages/a"), None);
+            assert_eq!(case.relativize("file", ""), Some("file"));
+            assert_eq!(case.relativize(".hidden", "."), Some(".hidden"));
+            assert_eq!(
+                case.relativize(r"packages/a/odd\name", "packages/a/"),
+                Some(r"odd\name")
+            );
+        }
+        assert!(!PathCase::Sensitive.is_manifest("packages/a/cargo.toml"));
+        assert!(PathCase::Insensitive.is_manifest("packages/a/cargo.toml"));
+        assert_eq!(
+            PathCase::Sensitive.relativize("packages/a/Src/lib.rs", "PACKAGES/A"),
+            None
+        );
+        assert_eq!(
+            PathCase::Insensitive.relativize("packages/a/Src/lib.rs", "PACKAGES/A"),
+            Some("Src/lib.rs")
+        );
     }
 
     #[cfg_attr(miri, ignore)] // Reads the filesystem, which Miri cannot emulate.

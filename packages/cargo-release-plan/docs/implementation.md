@@ -71,6 +71,11 @@ directories to cover successful output capture and nonzero exits. Tests that nee
 repository state create it explicitly in temporary fixtures; integration tests
 share a hermetic fixture. The source tree's Git metadata is never a test prerequisite.
 
+Cargo subprocess arguments retain the required `Cargo.toml` basename even when
+canonicalized captured inputs record another spelling. This conversion follows
+the containing directory's probed alias behavior; it never redirects a distinct
+manifest on a sensitive filesystem. Git lookups continue to use recorded spelling.
+
 ### Test boundaries
 
 Pure decision and validation tests own the combinations of versions, dependency
@@ -206,10 +211,24 @@ package are flattened to the archive root, matching Cargo's layout. Their
 tracked state is queried explicitly so an untracked external README cannot affect
 a verdict.
 
-Path case is probed once at the workspace root and reused for member matching,
-declared-resource resolution, and default README detection. Git's recorded
-resource spelling is retained for blob and mode lookups. An inconclusive probe
+Path case is probed at the workspace root and reused throughout each current and
+historical snapshot. Relative-path matching compares whole components and retains
+Git's recorded suffix. Historical manifests, configuration and lockfiles resolve
+to recorded tree paths before blob lookup. Implicit path members use recorded
+directory keys, so dependency aliases cannot omit members or introduce duplicate
+membership. The manifest-history pathspec follows the same probed rules.
+
+The read-only filesystem probe forwards directory entries and case-flipped entry
+checks, without following symbolic links, to a pure decision function. Unit tests
+exercise both possible filesystem responses and ambiguous entries independently of the host volume;
+real-filesystem regressions verify the acquisition boundary. An inconclusive probe
 chooses case-sensitive matching, which does not widen the selected content.
+Insensitive historical selection uses a full Git tree listing: Git can record
+files under differently cased directory prefixes that merge in the checkout,
+and `ls-tree` cannot express case-insensitive pathspecs. Final packaging and
+resource matching determine the released files, not the breadth of the listing.
+Cargo's own reserved packaging names and include/exclude patterns retain their
+literal matching semantics.
 
 ### Patch rendering
 

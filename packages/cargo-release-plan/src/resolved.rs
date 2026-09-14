@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{Item, TableLike};
 
 use crate::command::{hash_bytes, run_capture};
-use crate::manifest::{for_each_dependency_table, parse_document};
+use crate::git::os_path;
+use crate::manifest::{PathCase, for_each_dependency_table, parse_document};
 use crate::metadata::load_tracked_work_tree;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
 use crate::verbose::Verbose;
@@ -105,13 +106,17 @@ impl Inputs {
     }
 
     fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
-        if current.manifest != self.manifest
-            || current.head != self.head
-            || current.base != self.base
-            || current.index != self.index
-            || current.paths != self.paths
-            || current.digest != final_digest
-        {
+        if current.head != self.head || current.base != self.base || current.index != self.index {
+            return Err(StaleInputs::new().into());
+        }
+        if current.manifest != self.manifest || current.paths != self.paths {
+            if !same_input_path(&current.root, &self.manifest, &current.manifest)
+                || !same_captured_paths(&current.root, &self.paths, &current.paths)
+                || fingerprint(&current.root, &self.paths, &BTreeMap::new())? != final_digest
+            {
+                return Err(StaleInputs::new().into());
+            }
+        } else if current.digest != final_digest {
             return Err(StaleInputs::new().into());
         }
         Ok(())
@@ -150,15 +155,13 @@ impl Inputs {
     pub(crate) fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let mut seen = BTreeSet::new();
         for file in files {
-            if !self.paths.contains(&file.path)
-                || !matches!(
-                    file.path.file_name().and_then(|name| name.to_str()),
-                    Some("Cargo.toml" | "Cargo.lock")
-                )
-                || !seen.insert(&file.path)
+            if !artifact_path_is_supported(&self.root, &file.path)
+                || !contains_input_path(&self.root, &self.paths, &file.path)
+                || contains_input_path(&self.root, &seen, &file.path)
             {
                 return Err(ResolutionRequired::new().into());
             }
+            seen.insert(file.path.clone());
         }
         let replacements = files
             .iter()
@@ -262,8 +265,12 @@ impl ResolvedState {
         if *versions != self.versions {
             return Err(ResolutionRequired::new().into());
         }
-        if self.files.iter().any(|file| !allowed.contains(&file.path)) {
-            return Err(ResolutionRequired::new().into());
+        for file in &self.files {
+            if !artifact_path_is_supported(self.inputs.root(), &file.path)
+                || !contains_input_path(self.inputs.root(), allowed, &file.path)
+            {
+                return Err(ResolutionRequired::new().into());
+            }
         }
         // final_digest owns captured-path membership and uniqueness; this layer additionally
         // restricts writes to the current workspace's member manifests and lockfile.
@@ -461,8 +468,8 @@ fn fingerprint(
             // Git's executable-file mode records whether any execute bit is present.
             metadata.permissions().mode() & 0o111 != 0
         })));
-        let contents = if let Some(replacement) = replacements.get(relative) {
-            Some(replacement.clone())
+        let contents = if let Some(replacement) = replacement_for(root, relative, replacements) {
+            Some(replacement.to_owned())
         } else if metadata.is_some() {
             Some(fs::read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?)
         } else {
@@ -474,6 +481,100 @@ fn fingerprint(
         }
     }
     hash_bytes(&bytes, root)
+}
+
+fn artifact_path_is_supported(root: &Path, path: &Path) -> bool {
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if matches!(name, "Cargo.toml" | "Cargo.lock") {
+        return true;
+    }
+    if !PathCase::Insensitive.same_path(name, "Cargo.toml")
+        && !PathCase::Insensitive.same_path(name, "Cargo.lock")
+    {
+        return false;
+    }
+    let path = root.join(path);
+    let parent = path
+        .parent()
+        .expect("an artifact filename has a parent under its root");
+    let case = PathCase::probe(parent);
+    case.same_path(name, "Cargo.toml") || case.same_path(name, "Cargo.lock")
+}
+
+fn contains_input_path(root: &Path, paths: &BTreeSet<PathBuf>, requested: &Path) -> bool {
+    paths.contains(requested)
+        || paths
+            .iter()
+            .any(|path| same_input_path(root, path, requested))
+}
+
+/// Each differing component must alias under its actual parent's case rules.
+///
+/// Canonical path strings need not recover recorded case on an insensitive filesystem.
+/// Per-directory probes preserve distinct inputs even when sensitivity varies inside a tree.
+fn same_input_path(root: &Path, left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    if !PathCase::Insensitive.same_path(&os_path(left), &os_path(right)) {
+        return false;
+    }
+    let mut parent = root.to_path_buf();
+    for (left, right) in left.components().zip(right.components()) {
+        if left != right {
+            let (Some(left), Some(right)) = (left.as_os_str().to_str(), right.as_os_str().to_str())
+            else {
+                return false;
+            };
+            if !PathCase::probe(&parent).same_path(left, right) {
+                return false;
+            }
+        }
+        parent.push(left);
+    }
+    true
+}
+
+/// Copying a workspace can materialize a case alias using another captured spelling.
+///
+/// Compare both sets by filesystem identity before fingerprinting the candidate with
+/// the original names, retaining the fingerprint encoding and rejecting new inputs.
+fn same_captured_paths(
+    root: &Path,
+    expected: &BTreeSet<PathBuf>,
+    current: &BTreeSet<PathBuf>,
+) -> bool {
+    [(expected, current), (current, expected)]
+        .into_iter()
+        .all(|(paths, candidates)| {
+            paths
+                .iter()
+                .all(|path| contains_input_path(root, candidates, path))
+        })
+}
+
+fn replacement_for<'a>(
+    root: &Path,
+    path: &Path,
+    replacements: &'a BTreeMap<PathBuf, Vec<u8>>,
+) -> Option<&'a [u8]> {
+    if let Some(contents) = replacements.get(path) {
+        return Some(contents);
+    }
+    for (candidate, contents) in replacements {
+        if same_input_path(root, path, candidate) {
+            return Some(contents);
+        }
+    }
+    None
 }
 
 fn append_field(bytes: &mut Vec<u8>, field: &[u8]) {
@@ -511,6 +612,7 @@ struct WrongEvidenceWorkspace;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::process::Command;
+    use std::slice;
     use std::sync::LazyLock;
 
     use serde_json::{Value, json};
@@ -1008,6 +1110,230 @@ mod tests {
         )
         .unwrap();
         assert_ne!(renamed, replaced);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads filesystem case aliases and invokes Git hashing")]
+    fn fingerprint_replacements_follow_the_actual_case_identity() {
+        let directory = tempdir().unwrap();
+        let original = PathBuf::from("CaseDir/Cargo.toml");
+        let alias = PathBuf::from("casedir/cargo.toml");
+        fs::create_dir_all(directory.path().join("CaseDir")).unwrap();
+        fs::write(directory.path().join(&original), "old").unwrap();
+        let aliases = directory.path().join(&alias).exists();
+        if !aliases {
+            fs::create_dir_all(directory.path().join("casedir")).unwrap();
+            fs::write(directory.path().join(&alias), "distinct").unwrap();
+        }
+        let other = PathBuf::from("other/Cargo.toml");
+        fs::create_dir_all(directory.path().join("other")).unwrap();
+        fs::write(directory.path().join(&other), "unrelated").unwrap();
+        let paths = BTreeSet::from([original.clone(), alias.clone(), other.clone()]);
+        let replacements = BTreeMap::from([(original.clone(), b"new".to_vec())]);
+        let projected = fingerprint(directory.path(), &paths, &replacements).unwrap();
+        fs::write(directory.path().join(original), "new").unwrap();
+        assert_eq!(
+            fingerprint(directory.path(), &paths, &BTreeMap::new()).unwrap(),
+            projected
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join(alias)).unwrap(),
+            if aliases { "new" } else { "distinct" }
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join(other)).unwrap(),
+            "unrelated"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads filesystem case aliases and invokes Git hashing")]
+    fn missing_lockfile_replacements_follow_parent_directory_case_rules() {
+        let directory = tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("CaseDir")).unwrap();
+        fs::write(directory.path().join("CaseDir/Cargo.toml"), "manifest").unwrap();
+        let aliases = directory.path().join("casedir/cargo.toml").exists();
+        if !aliases {
+            fs::create_dir_all(directory.path().join("casedir")).unwrap();
+        }
+        let original = PathBuf::from("CaseDir/Cargo.lock");
+        let alias = PathBuf::from("casedir/cargo.lock");
+        let inputs = Inputs {
+            root: directory.path().to_owned(),
+            paths: BTreeSet::from([original.clone(), alias.clone()]),
+            ..inputs()
+        };
+        let file = Artifact {
+            path: original.clone(),
+            contents: "resolved lockfile".to_owned(),
+        };
+        let projected = inputs.final_digest(slice::from_ref(&file)).unwrap();
+        // An explicit replacement at every alias expresses the same projected write without
+        // involving filesystem-specific permissions assigned when a missing file is created.
+        let mut replacements = BTreeMap::from([(original, file.contents.as_bytes().to_vec())]);
+        if aliases {
+            replacements.insert(alias.clone(), file.contents.as_bytes().to_vec());
+        }
+        assert_eq!(
+            fingerprint(directory.path(), &inputs.paths, &replacements).unwrap(),
+            projected
+        );
+        assert!(!directory.path().join(alias).exists());
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "compares filesystem case identities and invokes Git hashing"
+    )]
+    fn candidate_case_aliases_preserve_captured_membership_and_bytes() {
+        let directory = tempdir().unwrap();
+        let original = PathBuf::from("CaseDir/Cargo.toml");
+        let alias = PathBuf::from("casedir/cargo.toml");
+        fs::create_dir_all(directory.path().join("CaseDir")).unwrap();
+        fs::write(directory.path().join(&original), "final").unwrap();
+        let aliases = directory.path().join(&alias).exists();
+        if !aliases {
+            fs::create_dir_all(directory.path().join("casedir")).unwrap();
+            fs::write(directory.path().join(&alias), "final").unwrap();
+        }
+        let expected = Inputs {
+            root: directory.path().to_owned(),
+            manifest: original.clone(),
+            paths: BTreeSet::from([original.clone()]),
+            ..inputs()
+        };
+        let candidate = Inputs {
+            manifest: alias.clone(),
+            paths: BTreeSet::from([alias.clone()]),
+            ..expected.clone()
+        };
+        let digest = fingerprint(directory.path(), &expected.paths, &BTreeMap::new()).unwrap();
+        let result = expected.compare_candidate(&candidate, &digest);
+        if aliases {
+            result.unwrap();
+            // A copy can collapse captured names without losing any physical source input.
+            let expected = Inputs {
+                paths: BTreeSet::from([original.clone(), alias]),
+                ..expected.clone()
+            };
+            let digest = fingerprint(directory.path(), &expected.paths, &BTreeMap::new()).unwrap();
+            expected.compare_candidate(&candidate, &digest).unwrap();
+        } else {
+            assert!(result.unwrap_err().find_source::<StaleInputs>().is_some());
+        }
+        for paths in [
+            BTreeSet::new(),
+            BTreeSet::from([original.clone(), PathBuf::from("uncaptured.rs")]),
+        ] {
+            let candidate = Inputs {
+                paths,
+                ..candidate.clone()
+            };
+            assert!(
+                expected
+                    .compare_candidate(&candidate, &digest)
+                    .unwrap_err()
+                    .find_source::<StaleInputs>()
+                    .is_some()
+            );
+        }
+        fs::write(directory.path().join(original), "changed").unwrap();
+        assert!(
+            expected
+                .compare_candidate(&candidate, &digest)
+                .unwrap_err()
+                .find_source::<StaleInputs>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "validates filesystem aliases and invokes Git hashing")]
+    fn artifact_case_aliases_require_unique_captured_workspace_targets() {
+        let directory = tempdir().unwrap();
+        let original = PathBuf::from("CaseDir/Cargo.toml");
+        let alias = PathBuf::from("casedir/cargo.toml");
+        fs::create_dir_all(directory.path().join("CaseDir")).unwrap();
+        fs::write(directory.path().join(&original), "old").unwrap();
+        let aliases = directory.path().join(&alias).exists();
+        if !aliases {
+            fs::create_dir_all(directory.path().join("casedir")).unwrap();
+            fs::write(directory.path().join(&alias), "distinct").unwrap();
+        }
+        let inputs = Inputs {
+            root: directory.path().to_owned(),
+            paths: BTreeSet::from([original.clone()]),
+            ..inputs()
+        };
+        let file = Artifact {
+            path: alias,
+            contents: "new".to_owned(),
+        };
+        let result = inputs.final_digest(slice::from_ref(&file));
+        if aliases {
+            let state = ResolvedState {
+                inputs,
+                files: vec![file.clone()],
+                final_digest: result.unwrap(),
+                versions: BTreeMap::new(),
+                evidence_manifest_path: "not-read/Cargo.toml".into(),
+            };
+            let allowed = BTreeSet::from([original.clone()]);
+            state
+                .validate_artifacts(&BTreeMap::new(), &allowed)
+                .unwrap();
+            let error = state
+                .validate_artifacts(&BTreeMap::new(), &BTreeSet::new())
+                .unwrap_err();
+            assert!(error.find_source::<ResolutionRequired>().is_some());
+            let error = state
+                .inputs
+                .final_digest(&[
+                    file,
+                    Artifact {
+                        path: original,
+                        contents: "other".to_owned(),
+                    },
+                ])
+                .unwrap_err();
+            assert!(error.find_source::<ResolutionRequired>().is_some());
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .find_source::<ResolutionRequired>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(
+        miri,
+        ignore = "reads filenames with literal backslashes and invokes Git hashing"
+    )]
+    fn replacement_identity_preserves_literal_backslashes() {
+        let directory = tempdir().unwrap();
+        let literal = PathBuf::from("case\\dir/Cargo.toml");
+        let separated = PathBuf::from("case/dir/Cargo.toml");
+        for path in [&literal, &separated] {
+            fs::create_dir_all(directory.path().join(path).parent().unwrap()).unwrap();
+            fs::write(directory.path().join(path), "old").unwrap();
+        }
+        let paths = BTreeSet::from([literal.clone(), separated.clone()]);
+        let replacements = BTreeMap::from([(literal.clone(), b"new".to_vec())]);
+        let projected = fingerprint(directory.path(), &paths, &replacements).unwrap();
+        fs::write(directory.path().join(literal), "new").unwrap();
+        assert_eq!(
+            fingerprint(directory.path(), &paths, &BTreeMap::new()).unwrap(),
+            projected
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join(separated)).unwrap(),
+            "old"
+        );
     }
 
     #[test]
