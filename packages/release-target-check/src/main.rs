@@ -1,31 +1,9 @@
-//! Verifies candidate source snapshots before release scripts create missing tags.
-//!
-//! This nonpublished controller utility reads a separate, caller-owned worktree;
-//! GitHub operations and publication remain the responsibility of release orchestration.
+//! Binary entry point for release-target-check.
 
-#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
-
-use std::env::args_os;
 use std::process::ExitCode;
 
-use crate::cli::Cli;
-use crate::verify::verify;
+use release_target_check::run;
 
 fn main() -> ExitCode {
-    match Cli::parse(args_os().skip(1)).and_then(|cli| verify(&cli)) {
-        Ok(message) => {
-            println!("{message}");
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::FAILURE
-        }
-    }
+    run()
 }
-
-mod cli;
-mod command;
-mod metadata;
-mod repository;
-mod verify;

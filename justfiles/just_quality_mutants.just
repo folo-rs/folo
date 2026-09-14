@@ -17,16 +17,16 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
     # output paths may contain spaces, apostrophes and dollar signs.
     $careful = $env:CAREFUL -eq 'true'
 
-    # Two mechanisms keep mutation runs fast and meaningful:
+    # .cargo/mutants.toml selects Cargo library unit-test targets for both build
+    # and execution. Integration targets do not participate. See docs/testing.md,
+    # "Mutation testing target selection". Within that scope:
     #   * Path/package exclusions (the `-e` args from Get-MutantsExcludeArgument) drop whole files
     #     cargo-mutants should never mutate.
     #   * Individual tests that carry no mutation signal opt out at the test site with
     #     `#[cfg_attr(mutants, ignore = "<why>")]`. This keeps them running under normal
-    #     `cargo test`/coverage while skipping them under mutation - see
-    #     packages/cargo-bench-history for examples (the Azurite network tests and the
-    #     real-engine end-to-end test). cargo-mutants defines no cfg of its own, so this
-    #     recipe ensures `RUSTFLAGS` contains `--cfg mutants` below (preserving any
-    #     existing flags) to drive that opt-out.
+    #     `cargo test`/coverage while skipping them under mutation. cargo-mutants defines
+    #     no cfg of its own, so this recipe ensures `RUSTFLAGS` contains `--cfg mutants`
+    #     below (preserving existing flags) to drive that opt-out.
     $mutantArgs = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
 
     $mutantArgs += "--jobs"
@@ -109,7 +109,7 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
     # --caught --unviable - We want to see a list of all the mutations tried, as it helps us
     #     understand what is covered by mutation testing and how successfully.
     # --timeout - Keep a fixed test budget rather than deriving it from baseline timing.
-    #     This must be long enough to run a full package test suite (for all jobs in parallel)
+    #     This must be long enough to run the selected unit-test suites (for all jobs in parallel)
     #     but short enough to call a timeout and avoid things going on forever.
     #     This should only be reached if a mutation causes a serious issue (and may need to be
     #     skipped or the test improved).

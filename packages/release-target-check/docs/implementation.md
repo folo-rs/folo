@@ -18,6 +18,12 @@ identity for binary builds.
 
 ## Ownership and evidence
 
+The binary entry point delegates to the library's `run()` function. The library
+owns argument parsing, verification, diagnostics, and the implementation's unit
+tests, so Cargo's library-only mutation selection covers the same implementation
+used by release orchestration. Integration tests retain the real executable
+boundary.
+
 Git subprocesses establish exact HEAD identity and first-parent membership.
 Cleanliness checks reject staged edits, tracked edits, untracked files and index
 flags that conceal worktree edits. Ordinary ignored build output is not evidence.
