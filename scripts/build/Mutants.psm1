@@ -137,9 +137,10 @@ function Get-MutantsExcludeArgument {
 
 function Get-MutantsShardArgument {
     # Converts the shared 1-based "N/M" shard spec into cargo-mutants' native 0-based `--shard`
-    # argument (`@('--shard', '0/M') .. @('--shard', '(M-1)/M')`). An empty spec means "no
-    # sharding" and yields an empty array so every mutant runs in one job. Throws (via Sharding)
-    # for a malformed spec.
+    # argument and selects round-robin distribution to spread expensive source regions across
+    # runners. Ref: docs/build-and-tooling.md, "Mutation target selection".
+    # An empty spec yields no arguments so every mutant runs without sharding.
+    # Throws (via Sharding) for a malformed spec.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
@@ -151,7 +152,7 @@ function Get-MutantsShardArgument {
     }
 
     $shard = ConvertFrom-ShardSpec -Spec $Spec
-    return @('--shard', ('{0}/{1}' -f ($shard.Index - 1), $shard.Count))
+    return @('--shard', ('{0}/{1}' -f ($shard.Index - 1), $shard.Count), '--sharding', 'round-robin')
 }
 
 function Invoke-MutantsCommand {

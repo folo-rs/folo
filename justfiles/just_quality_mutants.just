@@ -38,8 +38,8 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
 
     # Optional sharding lets CI split mutation testing across multiple parallel runners. We accept
     # the same 1-based "N/M" format as `miri-harder` (so `1/8 .. 8/8` for 8 shards); the module
-    # converts it to cargo-mutants' native 0-based form. Without a SHARD argument, cargo-mutants
-    # runs every mutant in a single job (the original behavior).
+    # converts it to cargo-mutants' native 0-based form and selects round-robin distribution.
+    # Without a SHARD argument, cargo-mutants runs every mutant without sharding.
     $mutantArgs += Get-MutantsShardArgument -Spec $env:SHARD
     if ($env:OUTPUT) {
         $mutantArgs += @('--output', $env:OUTPUT)

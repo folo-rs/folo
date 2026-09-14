@@ -102,9 +102,10 @@ Describe 'Get-MutantsShardArgument' {
         Get-MutantsShardArgument -Spec '' | Should -BeNullOrEmpty
     }
 
-    It 'converts a 1-based spec to cargo-mutants 0-based --shard' {
-        Get-MutantsShardArgument -Spec '1/8' | Should -Be @('--shard', '0/8')
-        Get-MutantsShardArgument -Spec '8/8' | Should -Be @('--shard', '7/8')
+    It 'converts a 1-based spec to a 0-based shard with round-robin distribution' {
+        Get-MutantsShardArgument -Spec '1/8' | Should -Be @('--shard', '0/8', '--sharding', 'round-robin')
+        Get-MutantsShardArgument -Spec '8/8' | Should -Be @('--shard', '7/8', '--sharding', 'round-robin')
+        Get-MutantsShardArgument -Spec '1/1' | Should -Be @('--shard', '0/1', '--sharding', 'round-robin')
     }
 
     It 'propagates a malformed spec as a failure' {
