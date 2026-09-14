@@ -25,6 +25,18 @@ impl Repository {
         // Index modes are authoritative on every test host. Tests of actual
         // work-tree executable bits remain in the Git and integration suites.
         fixture.command(&["config", "core.fileMode", "false"]);
+        // GitRepo uses normal subprocess configuration. Local settings keep its
+        // reads consistent with staging even when the host has global ignore,
+        // attribute or line-ending rules.
+        for key in ["core.excludesFile", "core.attributesFile"] {
+            fixture.command(&[
+                "config",
+                key,
+                &fixture.path().join("global-config").to_string_lossy(),
+            ]);
+        }
+        fixture.command(&["config", "core.autocrlf", "false"]);
+        fixture.command(&["config", "core.eol", "lf"]);
         fixture
     }
 
