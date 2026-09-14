@@ -1,5 +1,10 @@
 // Classification of publishable packages against their anchors.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -573,31 +578,29 @@ fn classify_one(
 
     log_untracked(verbose, name, untracked.len());
 
-    if anchor_pkg.has_lockfile_target || package.has_lockfile_target {
-        for (dependency, change) in lockfile_closure_changes(
-            lockfiles,
-            git,
-            work_tree,
-            name,
-            anchor_pkg,
-            package,
-            &anchor.commit,
-            &anchor_snapshot.installation,
-        )? {
-            verbose.note(|| {
-                format!(
-                    "{shown}: the locked identity of {} is {} between the anchor and the work \
-                     tree, and this package has an installable binary target at one or both \
-                     endpoints, so the dependency is released content",
-                    quote_path(&dependency),
-                    change.as_str()
-                )
-            });
-            changed.push(ChangedItem::Lockfile {
-                dependency,
-                change: change.as_str().to_owned(),
-            });
-        }
+    for (dependency, change) in lockfile_closure_changes(
+        lockfiles,
+        git,
+        work_tree,
+        name,
+        anchor_pkg,
+        package,
+        &anchor.commit,
+        &anchor_snapshot.installation,
+    )? {
+        verbose.note(|| {
+            format!(
+                "{shown}: the locked identity of {} is {} between the anchor and the work \
+                 tree, and this package has an installable binary target at one or both \
+                 endpoints, so the dependency is released content",
+                quote_path(&dependency),
+                change.as_str()
+            )
+        });
+        changed.push(ChangedItem::Lockfile {
+            dependency,
+            change: change.as_str().to_owned(),
+        });
     }
 
     // A declared version below the anchor cannot describe a release: the anchor
@@ -1957,6 +1960,10 @@ fn workspace_relative_dir(dir: &str, workspace_prefix: &str) -> String {
     relative.extend(directory.iter().skip(common).copied());
     relative.join("/")
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod installation_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
