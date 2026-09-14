@@ -487,6 +487,10 @@ fn fingerprint(
 }
 
 fn artifact_path_is_supported(root: &Path, path: &Path) -> bool {
+    artifact_path_is_supported_with(path, |parent| PathCase::probe(&root.join(parent)))
+}
+
+fn artifact_path_is_supported_with(path: &Path, case: impl FnOnce(&Path) -> PathCase) -> bool {
     if path
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))
@@ -504,11 +508,10 @@ fn artifact_path_is_supported(root: &Path, path: &Path) -> bool {
     {
         return false;
     }
-    let path = root.join(path);
     let parent = path
         .parent()
-        .expect("an artifact filename has a parent under its root");
-    let case = PathCase::probe(parent);
+        .expect("a relative artifact filename has a parent, possibly the empty path");
+    let case = case(parent);
     case.same_path(name, "Cargo.toml") || case.same_path(name, "Cargo.lock")
 }
 
@@ -533,6 +536,23 @@ fn contains_input_path(
 /// Probing the leaf directory preserves distinct names on sensitive directories, including
 /// mixed-case-policy trees. Missing parents cannot alias an existing artifact directory.
 fn same_input_path(root: &Path, left: &Path, right: &Path) -> Result<bool, AppError> {
+    same_input_path_with(
+        left,
+        right,
+        |parent| {
+            let parent = root.join(parent);
+            resolve_path(&parent).map_err(|error| ReadFileError::caused_by(&parent, error).into())
+        },
+        PathCase::probe,
+    )
+}
+
+fn same_input_path_with(
+    left: &Path,
+    right: &Path,
+    mut directory: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+    case: impl FnOnce(&Path) -> PathCase,
+) -> Result<bool, AppError> {
     if left == right {
         return Ok(true);
     }
@@ -545,21 +565,15 @@ fn same_input_path(root: &Path, left: &Path, right: &Path) -> Result<bool, AppEr
     if !PathCase::Insensitive.same_path(left_name, right_name) {
         return Ok(false);
     }
-    let left = root.join(left);
-    let right = root.join(right);
     let left_parent = left
         .parent()
-        .expect("an input filename has a parent under its root");
+        .expect("a relative input filename has a parent, possibly the empty path");
     let right_parent = right
         .parent()
-        .expect("an input filename has a parent under its root");
-    let left_parent =
-        resolve_path(left_parent).map_err(|error| ReadFileError::caused_by(left_parent, error))?;
-    let right_parent = resolve_path(right_parent)
-        .map_err(|error| ReadFileError::caused_by(right_parent, error))?;
-    Ok(left_parent == right_parent
-        && (left_name == right_name
-            || PathCase::probe(&left_parent).same_path(left_name, right_name)))
+        .expect("a relative input filename has a parent, possibly the empty path");
+    let left_parent = directory(left_parent)?;
+    let right_parent = directory(right_parent)?;
+    Ok(left_parent == right_parent && case(&left_parent).same_path(left_name, right_name))
 }
 
 fn case_spelling_matches(left: &Path, right: &Path) -> bool {
@@ -1313,6 +1327,82 @@ mod tests {
             }])
             .unwrap_err();
         assert!(error.find_source::<ResolutionRequired>().is_some());
+    }
+
+    #[test]
+    fn artifact_names_use_the_supplied_case_policy_without_acquiring_other_paths() {
+        assert!(artifact_path_is_supported(
+            Path::new("not-read"),
+            Path::new("Cargo.toml")
+        ));
+        assert!(!artifact_path_is_supported(
+            Path::new("not-read"),
+            Path::new("src/lib.rs")
+        ));
+        for path in ["../Cargo.toml", "src/lib.rs"] {
+            assert!(!artifact_path_is_supported_with(Path::new(path), |_| {
+                panic!("invalid artifact shape requires no filesystem lookup")
+            }));
+        }
+        for case in [PathCase::Sensitive, PathCase::Insensitive] {
+            for path in ["member/cargo.toml", "member/CARGO.LOCK"] {
+                assert_eq!(
+                    artifact_path_is_supported_with(Path::new(path), |_| case),
+                    case == PathCase::Insensitive
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn input_identity_decisions_cover_both_directory_case_policies() {
+        let path = Path::new("Cargo.toml");
+        assert!(same_input_path(Path::new("not-read"), path, path).unwrap());
+        assert!(!same_input_path(Path::new("not-read"), path, Path::new("Cargo.lock")).unwrap());
+        for case in [PathCase::Sensitive, PathCase::Insensitive] {
+            assert_eq!(
+                same_input_path_with(
+                    Path::new("A/Cargo.toml"),
+                    Path::new("a/cargo.toml"),
+                    |_| Ok(PathBuf::from("same-directory")),
+                    |_| case,
+                )
+                .unwrap(),
+                case == PathCase::Insensitive
+            );
+        }
+        assert!(
+            !same_input_path_with(
+                Path::new("A/Cargo.toml"),
+                Path::new("B/Cargo.toml"),
+                |parent| Ok(parent.to_path_buf()),
+                |_| panic!("different directories do not require a case probe"),
+            )
+            .unwrap()
+        );
+        let error = same_input_path_with(
+            Path::new("A/Cargo.toml"),
+            Path::new("a/Cargo.toml"),
+            |parent| Err(UnsupportedInput::new(parent).into()),
+            |_| PathCase::Insensitive,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UnsupportedInput>().is_some());
+    }
+
+    #[test]
+    fn candidate_spelling_and_exact_path_sets_are_checked_without_filesystem_access() {
+        assert!(case_spelling_matches(
+            Path::new("A/Cargo.toml"),
+            Path::new("a/cargo.toml")
+        ));
+        assert!(!case_spelling_matches(
+            Path::new("A/Cargo.toml"),
+            Path::new("B/Cargo.toml")
+        ));
+        let paths = BTreeSet::from([PathBuf::from("Cargo.toml")]);
+        assert!(same_captured_paths(Path::new("not-read"), &paths, &paths).unwrap());
+        assert!(!same_captured_paths(Path::new("not-read"), &paths, &BTreeSet::new()).unwrap());
     }
 
     #[test]
