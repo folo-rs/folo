@@ -102,6 +102,11 @@ cargo-mutants applies them to both its test-build and test-execution commands.
 the preceding build phase. CLI applications expose their implementation through a
 library crate rather than adding binary targets to the mutation run.
 
+Sharded runs use `--sharding round-robin` to distribute mutations from expensive
+source regions across runners rather than assigning consecutive source ranges to
+each shard. The shared recipe applies this to both local and CI runs while
+preserving the 1-based `N/M` shard argument. Unsharded runs select every mutant.
+
 ### Coverage status policy
 
 Codecov requires at least 95% coverage for both the overall project and the
