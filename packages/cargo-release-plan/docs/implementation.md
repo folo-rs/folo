@@ -340,6 +340,16 @@ operations that make no edits. Live-input recapture and retained-candidate
 verification remain separate boundaries, so reuse never substitutes for checking
 whether the live checkout or retained evidence has changed.
 
+Captured spellings remain part of the input fingerprint. Final-byte projection
+applies a captured write to every case alias of that file in the same canonical
+parent directory, using that directory's probed case rules. Distinct directories
+and case-sensitive names remain distinct, and artifact writes that alias each
+other are rejected before installation.
+Candidate verification accepts only case-equivalent path sets that resolve to
+the same candidate inputs, then hashes their bytes under the original captured
+names. Cargo subprocess arguments retain Cargo's required `Cargo.toml` spelling
+when the actual filename is a probed case alias.
+
 `check`'s verdict is read back from the rendered diagnostics rather than
 recomputed from the classification, because every gating rule already appends a
 line. A rule added to the rendering therefore cannot be reported without also

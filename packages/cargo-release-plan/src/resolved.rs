@@ -11,8 +11,10 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 use toml_edit::{Item, TableLike};
 
+use crate::artifact_path::resolve_path;
 use crate::command::hash_bytes;
-use crate::manifest::{for_each_dependency_table, parse_document};
+use crate::git::os_path;
+use crate::manifest::{PathCase, for_each_dependency_table, parse_document};
 use crate::metadata::load_tracked_work_tree;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
 use crate::verbose::Verbose;
@@ -106,13 +108,18 @@ impl Inputs {
     }
 
     fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
-        if current.manifest != self.manifest
-            || current.head != self.head
-            || current.base != self.base
-            || current.index != self.index
-            || current.paths != self.paths
-            || current.digest != final_digest
-        {
+        if current.head != self.head || current.base != self.base || current.index != self.index {
+            return Err(StaleInputs::new().into());
+        }
+        if current.manifest != self.manifest || current.paths != self.paths {
+            if !case_spelling_matches(&self.manifest, &current.manifest)
+                || !same_input_path(&current.root, &self.manifest, &current.manifest)?
+                || !same_captured_paths(&current.root, &self.paths, &current.paths)?
+                || fingerprint(&current.root, &self.paths, &BTreeMap::new())? != final_digest
+            {
+                return Err(StaleInputs::new().into());
+            }
+        } else if current.digest != final_digest {
             return Err(StaleInputs::new().into());
         }
         Ok(())
@@ -151,15 +158,13 @@ impl Inputs {
     pub(crate) fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let mut seen = BTreeSet::new();
         for file in files {
-            if !self.paths.contains(&file.path)
-                || !matches!(
-                    file.path.file_name().and_then(|name| name.to_str()),
-                    Some("Cargo.toml" | "Cargo.lock")
-                )
-                || !seen.insert(&file.path)
+            if !artifact_path_is_supported(&self.root, &file.path)
+                || !contains_input_path(&self.root, &self.paths, &file.path)?
+                || contains_input_path(&self.root, &seen, &file.path)?
             {
                 return Err(ResolutionRequired::new().into());
             }
+            seen.insert(file.path.clone());
         }
         let replacements = files
             .iter()
@@ -263,8 +268,12 @@ impl ResolvedState {
         if *versions != self.versions {
             return Err(ResolutionRequired::new().into());
         }
-        if self.files.iter().any(|file| !allowed.contains(&file.path)) {
-            return Err(ResolutionRequired::new().into());
+        for file in &self.files {
+            if !artifact_path_is_supported(self.inputs.root(), &file.path)
+                || !contains_input_path(self.inputs.root(), allowed, &file.path)?
+            {
+                return Err(ResolutionRequired::new().into());
+            }
         }
         // final_digest owns captured-path membership and uniqueness; this layer additionally
         // restricts writes to the current workspace's member manifests and lockfile.
@@ -462,8 +471,8 @@ fn fingerprint(
             // Git's executable-file mode records whether any execute bit is present.
             metadata.permissions().mode() & 0o111 != 0
         })));
-        let contents = if let Some(replacement) = replacements.get(relative) {
-            Some(replacement.clone())
+        let contents = if let Some(replacement) = replacement_for(root, relative, replacements)? {
+            Some(replacement.to_owned())
         } else if metadata.is_some() {
             Some(fs::read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?)
         } else {
@@ -475,6 +484,132 @@ fn fingerprint(
         }
     }
     hash_bytes(&bytes, root)
+}
+
+fn artifact_path_is_supported(root: &Path, path: &Path) -> bool {
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if matches!(name, "Cargo.toml" | "Cargo.lock") {
+        return true;
+    }
+    if !PathCase::Insensitive.same_path(name, "Cargo.toml")
+        && !PathCase::Insensitive.same_path(name, "Cargo.lock")
+    {
+        return false;
+    }
+    let path = root.join(path);
+    let parent = path
+        .parent()
+        .expect("an artifact filename has a parent under its root");
+    let case = PathCase::probe(parent);
+    case.same_path(name, "Cargo.toml") || case.same_path(name, "Cargo.lock")
+}
+
+fn contains_input_path(
+    root: &Path,
+    paths: &BTreeSet<PathBuf>,
+    requested: &Path,
+) -> Result<bool, AppError> {
+    if paths.contains(requested) {
+        return Ok(true);
+    }
+    for path in paths {
+        if same_input_path(root, path, requested)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Case aliases share a replacement only when their actual parent directory is identical.
+///
+/// Probing the leaf directory preserves distinct names on sensitive directories, including
+/// mixed-case-policy trees. Missing parents cannot alias an existing artifact directory.
+fn same_input_path(root: &Path, left: &Path, right: &Path) -> Result<bool, AppError> {
+    if left == right {
+        return Ok(true);
+    }
+    let Some(left_name) = left.file_name().and_then(|name| name.to_str()) else {
+        return Ok(false);
+    };
+    let Some(right_name) = right.file_name().and_then(|name| name.to_str()) else {
+        return Ok(false);
+    };
+    if !PathCase::Insensitive.same_path(left_name, right_name) {
+        return Ok(false);
+    }
+    let left = root.join(left);
+    let right = root.join(right);
+    let left_parent = left
+        .parent()
+        .expect("an input filename has a parent under its root");
+    let right_parent = right
+        .parent()
+        .expect("an input filename has a parent under its root");
+    let left_parent =
+        resolve_path(left_parent).map_err(|error| ReadFileError::caused_by(left_parent, error))?;
+    let right_parent = resolve_path(right_parent)
+        .map_err(|error| ReadFileError::caused_by(right_parent, error))?;
+    Ok(left_parent == right_parent
+        && (left_name == right_name
+            || PathCase::probe(&left_parent).same_path(left_name, right_name)))
+}
+
+fn case_spelling_matches(left: &Path, right: &Path) -> bool {
+    PathCase::Insensitive.same_path(&os_path(left), &os_path(right))
+}
+
+/// A copied workspace may materialize a case alias with a different recorded spelling.
+///
+/// Compare identities in the candidate, then fingerprint it using the original captured names.
+/// This keeps the fingerprint encoding stable without allowing added or missing source inputs.
+fn same_captured_paths(
+    root: &Path,
+    expected: &BTreeSet<PathBuf>,
+    current: &BTreeSet<PathBuf>,
+) -> Result<bool, AppError> {
+    for (paths, candidates) in [(expected, current), (current, expected)] {
+        for path in paths {
+            if candidates.contains(path) {
+                continue;
+            }
+            let mut found = false;
+            for candidate in candidates {
+                if case_spelling_matches(path, candidate) && same_input_path(root, path, candidate)?
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn replacement_for<'a>(
+    root: &Path,
+    path: &Path,
+    replacements: &'a BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<Option<&'a [u8]>, AppError> {
+    if let Some(contents) = replacements.get(path) {
+        return Ok(Some(contents));
+    }
+    for (candidate, contents) in replacements {
+        if same_input_path(root, path, candidate)? {
+            return Ok(Some(contents));
+        }
+    }
+    Ok(None)
 }
 
 fn append_field(bytes: &mut Vec<u8>, field: &[u8]) {
@@ -1067,11 +1202,7 @@ mod tests {
                 .collect(),
             digest: String::new(),
         };
-        for paths in [
-            vec!["uncaptured/Cargo.toml"],
-            vec!["src/lib.rs"],
-            vec!["Cargo.toml", "Cargo.toml"],
-        ] {
+        for paths in [vec!["src/lib.rs"], vec!["Cargo.toml", "Cargo.toml"]] {
             let artifacts: Vec<_> = paths
                 .into_iter()
                 .map(|path| Artifact {
@@ -1082,6 +1213,106 @@ mod tests {
             let error = inputs.final_digest(&artifacts).unwrap_err();
             assert!(error.find_source::<ResolutionRequired>().is_some());
         }
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "probes real filesystem identities and invokes Git hashing"
+    )]
+    fn fingerprint_replacements_follow_case_aliases_without_merging_other_paths() {
+        let directory = tempdir().unwrap();
+        let original = PathBuf::from("CaseDir/Cargo.toml");
+        let alias = PathBuf::from("casedir/cargo.toml");
+        let other = PathBuf::from("other/Cargo.toml");
+        fs::create_dir_all(directory.path().join("CaseDir")).unwrap();
+        fs::write(directory.path().join(&original), "old").unwrap();
+        let aliases = directory.path().join(&alias).exists();
+        if !aliases {
+            fs::create_dir_all(directory.path().join("casedir")).unwrap();
+            fs::write(directory.path().join(&alias), "distinct").unwrap();
+        }
+        fs::create_dir_all(directory.path().join("other")).unwrap();
+        fs::write(directory.path().join(&other), "unrelated").unwrap();
+        let paths = BTreeSet::from([original.clone(), alias.clone(), other.clone()]);
+        let replacements = BTreeMap::from([(original.clone(), b"new".to_vec())]);
+        let expected = fingerprint(directory.path(), &paths, &replacements).unwrap();
+        fs::write(directory.path().join(&original), "new").unwrap();
+        assert_eq!(
+            fingerprint(directory.path(), &paths, &BTreeMap::new()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join(&other)).unwrap(),
+            "unrelated"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join(&alias)).unwrap(),
+            if aliases { "new" } else { "distinct" }
+        );
+        let expected_paths = BTreeSet::from([original.clone()]);
+        let candidate_paths = BTreeSet::from([alias.clone()]);
+        assert_eq!(
+            same_captured_paths(directory.path(), &expected_paths, &candidate_paths).unwrap(),
+            aliases
+        );
+        assert!(!same_captured_paths(directory.path(), &expected_paths, &BTreeSet::new()).unwrap());
+        if aliases {
+            let expected = Inputs {
+                manifest: original.clone(),
+                paths: expected_paths,
+                ..inputs()
+            };
+            let candidate = Inputs {
+                root: directory.path().to_owned(),
+                manifest: alias.clone(),
+                paths: candidate_paths,
+                ..expected.clone()
+            };
+            let digest = fingerprint(directory.path(), &expected.paths, &BTreeMap::new()).unwrap();
+            expected.compare_candidate(&candidate, &digest).unwrap();
+            fs::write(directory.path().join(&original), "tampered").unwrap();
+            assert!(
+                expected
+                    .compare_candidate(&candidate, &digest)
+                    .unwrap_err()
+                    .find_source::<StaleInputs>()
+                    .is_some()
+            );
+            let mut extra = candidate.paths;
+            extra.insert(other);
+            assert!(!same_captured_paths(directory.path(), &expected.paths, &extra).unwrap());
+        }
+
+        let inputs = Inputs {
+            root: directory.path().to_owned(),
+            paths,
+            ..inputs()
+        };
+        if aliases {
+            let error = inputs
+                .final_digest(&[
+                    Artifact {
+                        path: original,
+                        contents: "first".to_owned(),
+                    },
+                    Artifact {
+                        path: alias,
+                        contents: "second".to_owned(),
+                    },
+                ])
+                .unwrap_err();
+            assert!(error.find_source::<ResolutionRequired>().is_some());
+        }
+        fs::create_dir_all(directory.path().join("uncaptured")).unwrap();
+        fs::write(directory.path().join("uncaptured/Cargo.toml"), "unowned").unwrap();
+        let error = inputs
+            .final_digest(&[Artifact {
+                path: "uncaptured/Cargo.toml".into(),
+                contents: "replacement".to_owned(),
+            }])
+            .unwrap_err();
+        assert!(error.find_source::<ResolutionRequired>().is_some());
     }
 
     #[test]

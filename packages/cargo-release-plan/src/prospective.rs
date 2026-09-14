@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_input, run_capture_ok, run_capture_os};
-use crate::metadata::WorkTree;
+use crate::metadata::{WorkTree, cargo_manifest_path};
 use crate::resolved::{Artifact, Inputs, canonical, relative};
 use crate::verbose::Verbose;
 use crate::{ReadFileError, WriteFileError, quote_path};
@@ -114,12 +114,13 @@ impl Prospective {
     }
 
     pub(crate) fn resolve(&self, verbose: Verbose) -> Result<(), AppError> {
+        let manifest = cargo_manifest_path(&self.manifest);
         verbose.note(|| {
             format!(
                 "resolving {} with cargo update --offline --workspace before release decisions; \
              existing third-party locks are retained where Cargo permits, but dependency edges \
              can be reselected and must be classified",
-                quote_path(&self.manifest.to_string_lossy())
+                quote_path(&manifest.to_string_lossy())
             )
         });
         _ = run_capture_os(
@@ -129,7 +130,7 @@ impl Prospective {
                 OsStr::new("--offline"),
                 OsStr::new("--workspace"),
                 OsStr::new("--manifest-path"),
-                self.manifest.as_os_str(),
+                manifest.as_os_str(),
             ],
             self.manifest.parent().expect("a manifest has a parent"),
         )?;

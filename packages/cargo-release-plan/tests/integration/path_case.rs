@@ -82,7 +82,7 @@ fn case_aliases_preserve_the_release_anchor_and_only_report_changed_resolution()
         ),
         ("Rust", "rust"),
     ] {
-        rename_case(&fixture, from, to);
+        fixture.rename_case(from, to);
     }
     fixture.write(
         "rust/Cargo.lock",
@@ -112,8 +112,8 @@ fn case_aliases_preserve_the_release_anchor_and_only_report_changed_resolution()
     fixture.commit("unrelated repository change");
 
     // Keep the index's lowercase spellings: these work-tree renames are not staged.
-    rename_case(&fixture, "rust", "Rust");
-    rename_case(&fixture, "Rust/packages/foo", "Rust/packages/Foo");
+    fixture.rename_case("rust", "Rust");
+    fixture.rename_case("Rust/packages/foo", "Rust/packages/Foo");
     fixture.write(
         "Rust/.cargo/Config.toml",
         &fixture
@@ -158,13 +158,4 @@ fn case_aliases_preserve_the_release_anchor_and_only_report_changed_resolution()
         tool.get("changed").unwrap(),
         &json!([{"source": "lockfile", "dependency": "widget", "change": "modified"}])
     );
-}
-
-fn rename_case(fixture: &Fixture, from: &str, to: &str) {
-    let from = fixture.path().join(from);
-    // An intermediate spelling forces a real directory-entry rename even when the
-    // filesystem treats the final destination as the existing source.
-    let intermediate = from.with_extension("case-rename");
-    fs::rename(&from, &intermediate).unwrap();
-    fs::rename(intermediate, fixture.path().join(to)).unwrap();
 }

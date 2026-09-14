@@ -2053,9 +2053,21 @@ include = ["/src/", "/README.md"]
         )
         .unwrap()
         .unwrap();
-        assert!(parsed.packaging.is_released("src/lib.rs"));
-        assert!(parsed.packaging.is_released("README.md"));
-        assert!(!parsed.packaging.is_released("tests/x.rs"));
+        assert!(
+            parsed
+                .packaging
+                .is_released("src/lib.rs", PathCase::Sensitive)
+        );
+        assert!(
+            parsed
+                .packaging
+                .is_released("README.md", PathCase::Sensitive)
+        );
+        assert!(
+            !parsed
+                .packaging
+                .is_released("tests/x.rs", PathCase::Sensitive)
+        );
     }
 
     #[test]
@@ -2107,8 +2119,16 @@ publish.workspace = true
         .unwrap()
         .unwrap();
         assert!(!parsed.publish);
-        assert!(parsed.packaging.is_released("src/lib.rs"));
-        assert!(!parsed.packaging.is_released("README.md"));
+        assert!(
+            parsed
+                .packaging
+                .is_released("src/lib.rs", PathCase::Sensitive)
+        );
+        assert!(
+            !parsed
+                .packaging
+                .is_released("README.md", PathCase::Sensitive)
+        );
     }
 
     /// Manifest resources are split by where they are declared.

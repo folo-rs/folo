@@ -1126,7 +1126,7 @@ fn untracked_released(
         .filter(|full| !is_inside_any(full, &nested, side.case))
         .filter_map(|full| {
             let rel = side.case.relativize(full, side.dir)?.to_string();
-            side.rules.is_released(&rel).then_some(rel)
+            side.rules.is_released(&rel, side.case).then_some(rel)
         })
         .collect();
     // The listing above is filtered by the packaging rules and stops at the
@@ -1290,7 +1290,7 @@ fn released_from_paths(
         let Some(rel) = side.case.relativize(full, side.dir) else {
             continue;
         };
-        if side.rules.is_released(rel) {
+        if side.rules.is_released(rel, side.case) {
             map.insert(rel.to_string(), full.clone());
         }
     }

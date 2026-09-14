@@ -393,6 +393,7 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
     // Make the argument absolute before changing Cargo's working directory.
     let manifest_path =
         absolute(manifest_path).map_err(|error| ReadFileError::caused_by(manifest_path, error))?;
+    let manifest_path = cargo_manifest_path(&manifest_path);
     let cwd = manifest_path
         .parent()
         .expect("an absolute manifest filename has a parent directory");
@@ -414,6 +415,25 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
         cwd,
     )?;
     Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+}
+
+/// Cargo requires its canonical filename in argv even when the filesystem accepts an alias.
+pub(crate) fn cargo_manifest_path(path: &Path) -> PathBuf {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return path.to_path_buf();
+    };
+    if name == "Cargo.toml" || !PathCase::Insensitive.same_path(name, "Cargo.toml") {
+        return path.to_path_buf();
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if PathCase::probe(parent) == PathCase::Insensitive {
+        path.with_file_name("Cargo.toml")
+    } else {
+        path.to_path_buf()
+    }
 }
 
 fn work_tree_from_metadata(

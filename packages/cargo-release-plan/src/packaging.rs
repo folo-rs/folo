@@ -15,6 +15,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ohno::AppError;
 
 use crate::InvalidPackagingPatternError;
+use crate::manifest::PathCase;
 
 /// Include / exclude rules from a package manifest.
 ///
@@ -59,20 +60,16 @@ impl PackagingRules {
     /// Matching consults each parent directory as well as the path itself, so a
     /// directory pattern such as `src/` covers everything beneath it the way it
     /// does in Cargo and in `.gitignore`.
-    pub(crate) fn is_released(&self, package_relative_path: &str) -> bool {
+    pub(crate) fn is_released(&self, package_relative_path: &str, case: PathCase) -> bool {
         let path = package_relative_path.trim_start_matches("./");
-        if path == "Cargo.lock" {
+        if case.same_path(path, "Cargo.lock") {
             return false;
         }
-        if path == "Cargo.toml" {
+        if case.same_path(path, "Cargo.toml") {
             return true;
         }
         // Ref: docs/design.md, "Where Cargo departs from those rules".
-        if path == BUILD_DIR
-            || path
-                .strip_prefix(BUILD_DIR)
-                .is_some_and(|rest| rest.starts_with('/'))
-        {
+        if case.same_path(path, BUILD_DIR) || case.relativize(path, BUILD_DIR).is_some() {
             return false;
         }
         match &self.selection {
@@ -149,24 +146,50 @@ mod tests {
     #[test]
     fn a_backslash_is_part_of_a_file_name() {
         let rules = rules(Some(&["/src/"]), None).unwrap();
-        assert!(rules.is_released("./src/lib.rs"));
-        assert!(rules.is_released(r"src/odd\name.rs"));
-        assert!(!rules.is_released(r"benches\bench.rs"));
+        assert!(rules.is_released("./src/lib.rs", PathCase::Sensitive));
+        assert!(rules.is_released(r"src/odd\name.rs", PathCase::Sensitive));
+        assert!(!rules.is_released(r"benches\bench.rs", PathCase::Sensitive));
     }
 
     #[test]
     fn cargo_toml_is_always_released() {
         let rules = rules(Some(&["/src/"]), None).unwrap();
-        assert!(rules.is_released("Cargo.toml"));
+        assert!(rules.is_released("Cargo.toml", PathCase::Sensitive));
+    }
+
+    #[test]
+    fn reserved_case_aliases_precede_include_selection() {
+        let rules = rules(Some(&["/src/", "/TARGET/", "/cargo.lock"]), None).unwrap();
+        assert!(rules.is_released("cargo.toml", PathCase::Insensitive));
+        assert!(!rules.is_released("cargo.toml", PathCase::Sensitive));
+        for path in ["cargo.lock", "TARGET/debug/file"] {
+            assert!(!rules.is_released(path, PathCase::Insensitive));
+            assert!(rules.is_released(path, PathCase::Sensitive));
+        }
+    }
+
+    #[test]
+    fn reserved_case_aliases_precede_excludes_and_keep_nested_files() {
+        let excluded = rules(None, Some(&["/cargo.toml"])).unwrap();
+        assert!(excluded.is_released("cargo.toml", PathCase::Insensitive));
+        assert!(!excluded.is_released("cargo.toml", PathCase::Sensitive));
+        let all = PackagingRules::default();
+        for path in ["CARGO.LOCK", "TARGET", "TARGET/debug/file"] {
+            assert!(!all.is_released(path, PathCase::Insensitive));
+            assert!(all.is_released(path, PathCase::Sensitive));
+        }
+        for path in ["fixture/cargo.lock", "src/TARGET/file", "TARGETS/file"] {
+            assert!(all.is_released(path, PathCase::Insensitive));
+        }
     }
 
     #[test]
     fn only_the_package_lockfile_is_never_released() {
         let rules = PackagingRules::default();
-        assert!(!rules.is_released("Cargo.lock"));
+        assert!(!rules.is_released("Cargo.lock", PathCase::Sensitive));
         // A lockfile below the package root belongs to something the package
         // ships, such as a test fixture workspace, so it is ordinary source.
-        assert!(rules.is_released("fixtures/Cargo.lock"));
+        assert!(rules.is_released("fixtures/Cargo.lock", PathCase::Sensitive));
     }
 
     #[test]
@@ -174,55 +197,55 @@ mod tests {
         // Cargo drops it before reading either manifest key, so neither the
         // default selection nor an `include` naming it can pack build output.
         let default = PackagingRules::default();
-        assert!(!default.is_released("target"));
-        assert!(!default.is_released("target/debug/demo"));
+        assert!(!default.is_released("target", PathCase::Sensitive));
+        assert!(!default.is_released("target/debug/demo", PathCase::Sensitive));
 
         // Only the directory itself is special; a name that merely starts with
         // the same letters is ordinary source.
-        assert!(default.is_released("targets.rs"));
-        assert!(default.is_released("src/target/mod.rs"));
+        assert!(default.is_released("targets.rs", PathCase::Sensitive));
+        assert!(default.is_released("src/target/mod.rs", PathCase::Sensitive));
     }
 
     #[test]
     fn the_build_directory_is_never_released_by_include() {
         let included = rules(Some(&["/target/", "/src/"]), None).unwrap();
-        assert!(!included.is_released("target/debug/demo"));
-        assert!(included.is_released("src/lib.rs"));
+        assert!(!included.is_released("target/debug/demo", PathCase::Sensitive));
+        assert!(included.is_released("src/lib.rs", PathCase::Sensitive));
     }
 
     #[test]
     fn the_build_directory_is_never_released_by_exclude() {
         let excluded = rules(None, Some(&["/tests/"])).unwrap();
-        assert!(!excluded.is_released("target/debug/demo"));
+        assert!(!excluded.is_released("target/debug/demo", PathCase::Sensitive));
     }
 
     #[test]
     fn include_allow_list_keeps_matching_paths() {
         let rules = rules(Some(&["/src/", "/README.md"]), None).unwrap();
-        assert!(rules.is_released("src/lib.rs"));
-        assert!(rules.is_released("README.md"));
-        assert!(!rules.is_released("tests/foo.rs"));
-        assert!(!rules.is_released("benches/foo.rs"));
+        assert!(rules.is_released("src/lib.rs", PathCase::Sensitive));
+        assert!(rules.is_released("README.md", PathCase::Sensitive));
+        assert!(!rules.is_released("tests/foo.rs", PathCase::Sensitive));
+        assert!(!rules.is_released("benches/foo.rs", PathCase::Sensitive));
     }
 
     #[test]
     fn include_later_negation_drops_a_subset() {
         let rules = rules(Some(&["/src/", "!/src/private/"]), None).unwrap();
-        assert!(rules.is_released("src/lib.rs"));
-        assert!(!rules.is_released("src/private/x.rs"));
+        assert!(rules.is_released("src/lib.rs", PathCase::Sensitive));
+        assert!(!rules.is_released("src/private/x.rs", PathCase::Sensitive));
     }
 
     #[test]
     fn exclude_drops_matching_paths_when_include_absent() {
         let rules = rules(None, Some(&["/tests/"])).unwrap();
-        assert!(rules.is_released("src/lib.rs"));
-        assert!(!rules.is_released("tests/foo.rs"));
+        assert!(rules.is_released("src/lib.rs", PathCase::Sensitive));
+        assert!(!rules.is_released("tests/foo.rs", PathCase::Sensitive));
     }
 
     #[test]
     fn include_ignores_exclude() {
         let rules = rules(Some(&["/tests/"]), Some(&["/tests/"])).unwrap();
-        assert!(rules.is_released("tests/foo.rs"));
+        assert!(rules.is_released("tests/foo.rs", PathCase::Sensitive));
     }
 
     #[test]
@@ -230,8 +253,8 @@ mod tests {
         // Most rule tests need only literal directory matching. Keep recursive-glob coverage
         // on a short prefix so regex compilation does not dominate the Miri workload.
         let rules = rules(Some(&["s/**"]), None).unwrap();
-        assert!(rules.is_released("s/a/b"));
-        assert!(!rules.is_released("t/a"));
+        assert!(rules.is_released("s/a/b", PathCase::Sensitive));
+        assert!(!rules.is_released("t/a", PathCase::Sensitive));
     }
 
     /// An invalid include pattern is an error.
@@ -251,8 +274,8 @@ mod tests {
     #[test]
     fn no_rules_releases_everything_but_lockfile() {
         let rules = PackagingRules::default();
-        assert!(rules.is_released("src/lib.rs"));
-        assert!(rules.is_released("tests/foo.rs"));
-        assert!(!rules.is_released("Cargo.lock"));
+        assert!(rules.is_released("src/lib.rs", PathCase::Sensitive));
+        assert!(rules.is_released("tests/foo.rs", PathCase::Sensitive));
+        assert!(!rules.is_released("Cargo.lock", PathCase::Sensitive));
     }
 }

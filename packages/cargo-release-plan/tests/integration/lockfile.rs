@@ -781,11 +781,7 @@ fn direct_paths_select_exact_endpoint_versions_across_excluded_and_workspace_pac
         // Historical identity lookup must preserve the recorded spelling at the batch boundary.
         let alternate_case = fixture.path().join("external/foo/CARGO.TOML").exists();
         if alternate_case {
-            fs::rename(
-                fixture.path().join("external/foo/Cargo.toml"),
-                fixture.path().join("external/foo/cargo.toml"),
-            )
-            .unwrap();
+            fixture.rename_case("external/foo/Cargo.toml", "external/foo/cargo.toml");
         }
         let lockfile = r#"version = 4
 [[package]]

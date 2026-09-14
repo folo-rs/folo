@@ -102,6 +102,15 @@ resolver = "2"
         fs::read_to_string(self.path().join(rel)).unwrap()
     }
 
+    /// Forces a directory-entry case change without staging the rename in Git.
+    pub(crate) fn rename_case(&self, from: &str, to: &str) {
+        let from = self.path().join(from);
+        // The final spelling can address the source itself; force an actual entry rename.
+        let intermediate = from.with_extension("case-rename");
+        fs::rename(&from, &intermediate).unwrap();
+        fs::rename(intermediate, self.path().join(to)).unwrap();
+    }
+
     pub(crate) fn git(&self, args: &[&str]) -> String {
         let mut command = hermetic_git();
         command.arg("-C");
