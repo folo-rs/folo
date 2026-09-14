@@ -14,8 +14,9 @@
 //! this suite a liveness canary for the whole harness.
 //!
 //! Report and progress checks share the detection runs rather than creating extra
-//! histories. Storage retention uses a minimal history, while the window-cap check
-//! retains the complete family matrix above the real production cap.
+//! histories. Storage retention uses a minimal history. The in-crate window-cap
+//! test uses the same real adapters with every engine and family, without repeating
+//! its expensive statistical work across the platform labels exercised here.
 
 #![allow(
     clippy::arithmetic_side_effects,
@@ -89,9 +90,6 @@ const SERIES: usize = BENCHMARKS * DISCRIMINANT_SETS;
 /// mid-history step family in every set, plus the blessable step family in every
 /// set no blessing re-baselined.
 const HISTORY_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS + (DISCRIMINANT_SETS - BLESSED_SETS);
-
-/// Branch-mode regressions explicitly seeded by elevating two benchmarks in every set.
-const SEEDED_BRANCH_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS;
 
 /// Branch-mode regressions the default scenario can judge.
 ///
@@ -326,32 +324,6 @@ fn finds_the_seeded_branch_regressions() {
     // and no improvements at all.
     let stdout = successful_stress(&["--modes", "branch"]);
     assert_seeded_ground_truth(&stdout, &["branch"]);
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn branch_mode_handles_more_base_evidence_than_its_window_cap() {
-    let commits = MAX_BRANCH_BASE_COMMITS.saturating_mul(2).to_string();
-    let stdout = successful_stress(&["--commits", &commits, "--modes", "branch"]);
-    let with_runs = summary_count(&stdout, "with a run:");
-
-    assert!(
-        with_runs > MAX_BRANCH_BASE_COMMITS,
-        "the scenario must exceed the production branch window cap: {stdout}"
-    );
-    let rows = mode_rows(&stdout);
-    let branch = rows
-        .get("branch")
-        .expect("the requested branch analysis must be reported");
-    assert_eq!(
-        branch.objects,
-        (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
-        "{stdout}"
-    );
-    assert_eq!(branch.series, SERIES, "{stdout}");
-    assert_eq!(branch.regressions, SEEDED_BRANCH_REGRESSIONS, "{stdout}");
-    assert_eq!(branch.improvements, Some(BRANCH_IMPROVEMENTS), "{stdout}");
-    assert!(branch.notable, "{stdout}");
 }
 
 #[test]

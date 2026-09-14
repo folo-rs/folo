@@ -78,10 +78,14 @@ Detection smoke scenarios cover every shape and discriminant set above the evide
 gates and assert exact findings. Default-mode selection and repeatability share a
 scenario that compares repeated analysis with a fresh single-pass process using the
 same seed. Report headings and quiet/verbose progress channels are checked during
-those detection runs instead of creating extra histories. The branch-window scenario
-exceeds the real production cap with the complete family matrix and checks loaded
-objects, series and seeded regressions. Storage retention uses a minimal history
-because its contract does not depend on detection evidence.
+those detection runs instead of creating extra histories. The in-crate branch-window
+scenario exceeds the real production cap through the same Git, storage and analysis
+adapters, with every engine and timeline family. It uses one synthetic target label
+per engine because labels only partition storage; the CLI smoke scenarios exercise
+the full label matrix. It checks loaded objects, series and exact seeded findings
+without repeating full-window statistical searches across equivalent labels.
+Storage retention uses a minimal history because its contract does not depend on
+detection evidence.
 
 These scenarios run unchanged under ordinary and mutation testing. The mutation
 baseline's fixed deadline covers the aggregate Cargo command, not each package
