@@ -44,6 +44,12 @@ Classification and report validation share the status derivation from anchor,
 declared version, and change evidence. Deserialization cannot manufacture a pending
 release without a version increase or comparison evidence for an anchorless package.
 
+Report group validation separates member ordering from uniqueness. Ordinary sortedness
+checks the order, while one membership set rejects repeated members within or across
+groups. Together these enforce strictly increasing members without a redundant strict
+comparison. Shape tests keep package references reciprocal while independently varying
+group size, canonical naming, ordering and uniqueness.
+
 ## Subprocess boundaries
 
 All repository access goes through `GitRepo`, which spawns the installed `git`.
