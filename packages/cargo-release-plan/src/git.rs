@@ -878,6 +878,8 @@ mod tests {
     fn tree_records_report_the_executable_bit() {
         let script = testing::tree_entry("packages/foo/run.sh", EXECUTABLE_TREE_MODE);
         assert!(script.is_executable());
+        let parsed = TreeEntry::parse("100755 blob abc\tpackages/foo/run.sh").unwrap();
+        assert!(parsed.is_executable());
         let plain = TreeEntry::parse("100644 blob def\tpackages/foo/lib.rs").unwrap();
         assert!(!plain.is_executable());
         // A symbolic link is not a regular file and so is never executable.

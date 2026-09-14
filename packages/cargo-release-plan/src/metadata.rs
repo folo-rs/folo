@@ -3,6 +3,11 @@
 // The design forbids resolving a full graph or compiling. `--no-deps` is the
 // only Cargo invocation used for classification.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf, absolute};
@@ -34,6 +39,10 @@ use crate::{
     InvalidVersionError, LegacyVersionGroupsError, MalformedPrivateApiError, ParseMetadataError,
     ReadFileError, UnsupportedExactRequirementError,
 };
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod dependency_tests;
 
 /// Work-tree snapshot from `cargo metadata --no-deps`.
 #[derive(Debug)]
@@ -960,9 +969,8 @@ fn validated_exact_requirement(requirement: &str) -> Result<Option<Version>, ()>
         return Err(());
     };
     let version = version.trim();
-    if parsed.comparators.len() != 1 || version.split('.').count() != 3 {
-        return Err(());
-    }
+    // Parsing the entire suffix as a version enforces a complete triplet and
+    // rejects additional comparators without separate syntax-counting guards.
     let version = Version::parse(version).map_err(|_error| ())?;
     if !version.pre.is_empty() || !version.build.is_empty() {
         return Err(());
@@ -1556,6 +1564,9 @@ mod tests {
             "=1.2.3-alpha",
             "=1.2.3+build",
             "=1.2.3, <2.0.0",
+            "=1.2.3, =1.2.3",
+            "=1.2.*",
+            "=01.2.3",
             "^1.0.0, =1.2.3",
             "=not-a-version",
         ] {
