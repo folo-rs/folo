@@ -2570,9 +2570,7 @@ autoexamples = false
              branch = { git = \"https://example.invalid/foo\", branch = \"next\" }\n\
              tag = { git = \"https://example.invalid/foo\", tag = \"v1\" }\n\
              rev = { git = \"https://example.invalid/foo\", rev = \"abc\" }\n\
-             registry = { version = \"1\", registry-index = \"https://example.invalid/index\" }\n\
-             named = { version = \"1\", registry = \"private\" }\n\
-             crates_io = { version = \"1\", registry = \"crates-io\" }\n",
+             registry = { version = \"1\", registry-index = \"https://example.invalid/index\" }\n",
         );
         let dependencies = installation_dependencies(
             &document,
@@ -2603,13 +2601,30 @@ autoexamples = false
                 "https://example.invalid/index".to_owned()
             ))
         );
-        assert_eq!(
-            sources.get("named"),
-            Some(&DependencySource::NamedRegistry("private".to_owned()))
+    }
+
+    #[test]
+    fn installation_source_declarations_distinguish_default_and_named_registries() {
+        let document = root_doc(
+            "[dependencies]\n\
+             named = { version = \"1\", registry = \"private\" }\n\
+             crates_io = { version = \"1\", registry = \"crates-io\" }\n",
         );
+        let dependencies = installation_dependencies(
+            &document,
+            &WorkspaceInherit::default(),
+            Path::new("Cargo.toml"),
+        )
+        .unwrap();
         assert_eq!(
-            sources.get("crates_io"),
-            Some(&DependencySource::Registry(CRATES_IO_INDEX.to_owned()))
+            dependencies
+                .into_iter()
+                .map(|dependency| dependency.source)
+                .collect::<Vec<_>>(),
+            [
+                DependencySource::NamedRegistry("private".to_owned()),
+                DependencySource::Registry(CRATES_IO_INDEX.to_owned()),
+            ]
         );
     }
 
