@@ -108,6 +108,11 @@ Filesystem path tests create symlinked temporary roots explicitly rather than
 depending on the host's temporary-directory layout. Expected destinations use a
 canonical existing ancestor followed by the missing suffix, preserving assertions
 about symlink resolution and parent traversal without assuming a root spelling.
+Artifact path resolution accepts injected canonicalization and directory queries
+for deterministic operational-error tests. A transient failure must propagate even
+if a subsequent query would succeed; tests do not depend on filesystem races or
+the host account's permissions. Output staging is tested before promotion so its
+same-directory placement, complete contents, and unchanged destination are observable.
 
 ## Workspace snapshots
 
