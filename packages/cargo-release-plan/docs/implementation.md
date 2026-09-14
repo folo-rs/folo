@@ -55,6 +55,13 @@ The subprocess boundary also covers `cargo metadata --no-deps`,
 `cargo package --list`, and explicit offline preparation/preview. Classification never
 runs a build or a full dependency resolution.
 
+Immutable object reads use bounded `git cat-file --batch` requests rather than a
+new process per file. Request input reaches EOF through an anonymous temporary
+file; the child output is collected before object framing is interpreted. This
+avoids an interactive pipe protocol whose writer and reader could block each
+other. Process failures and malformed responses are errors. Missing or non-blob
+objects remain explicit results until their contents are required.
+
 Git paths remain repository-relative and `/`-separated. Operating-system paths
 from Cargo are converted once when they enter the manifest model. NUL-delimited
 Git output is used for file names and decoded strictly as UTF-8; substituting an
@@ -88,6 +95,13 @@ can establish all its assertions. Output-format combinations belong to renderer
 tests, not additional repository classifications. Structural expansion tests stop
 at the expanded artifact; only preview tests acquire resolved evidence.
 
+Lockfile integration cases change selected and development-only identities in the
+same acquired state, asserting the exact reported dependency changes. In-memory
+closure tests vary those identities independently and own the source, version,
+patch, and reachability combinations. Path-spelling tests call input capture
+directly rather than resolving and preparing a workspace merely to inspect its
+captured identity.
+
 Fixtures remain independently mutable. Immutable Git initialization and empty
 global configuration can be shared within a test process, while commits still
 use Git's normal index and filtering behavior. Process-local reuse must not be
@@ -104,6 +118,13 @@ about symlink resolution and parent traversal without assuming a root spelling.
 
 `cargo metadata --no-deps` supplies candidate current members and normalized
 dependency relationships. Git-tracked manifests constrain that candidate set.
+One acquired index supplies member eligibility, each package's tracked files and
+manifest resources, index modes, and the exact entries captured for prospective
+workspaces. Classification overlays actual work-tree mode changes once for the
+workspace. Filesystem presence is still probed within each package, retaining
+deleted-path and nested-package semantics without relisting the index for every
+selection. Each new workspace acquisition reads the index again; no cache spans
+edits or captured-input verification boundaries.
 The current model keeps both every tracked version target and the publishable
 `WorkPackage` projection used for classification. An untracked or ignored
 manifest found through a member glob can become neither a version target nor a
@@ -120,6 +141,13 @@ same Git repository; their workspace-relative parent components are retained
 while Git access remains repository-relative. A non-virtual root is always a
 member. Parsed manifests are cached per commit because anchor resolution and
 content comparison revisit the same snapshots across packages.
+
+Each cached commit also retains its tree entries and a batch of raw manifest and
+relevant Cargo-configuration objects. Text decoding and parsing remain lazy:
+fetching an excluded manifest's bytes does not make its UTF-8, TOML, or dependency
+declarations part of another package's assessment. Package comparisons select
+their anchor entries from the cached tree, preserving literal directory selection
+and the probed case rules for external resources.
 
 Each snapshot resolves the package fields that may inherit from
 `[workspace.package]` and the path dependencies inherited through
@@ -273,6 +301,14 @@ because it has no historical artifact.
 rules. `check` renders failing package and group verdicts in text and optionally
 as escaped GitHub workflow commands. Its packaging probe compares Cargo's list
 with the exact work-tree selection produced by classification.
+
+Preview acquires a fresh classification after every offline resolution. Its
+workspace model supplies the resolved artifact paths and the next pass's rewrite
+targets; its final verdict supplies the completion check and report. These reads
+share the same resolved state instead of rediscovering the repository between
+operations that make no edits. Live-input recapture and retained-candidate
+verification remain separate boundaries, so reuse never substitutes for checking
+whether the live checkout or retained evidence has changed.
 
 `check`'s verdict is read back from the rendered diagnostics rather than
 recomputed from the classification, because every gating rule already appends a

@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
-use std::{fs, io, str};
+use std::{fs, io, iter, str};
 
 use ohno::AppError;
 use semver::Version;
@@ -15,7 +15,9 @@ use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, Presence, TimelineEntry, resolve_anchor};
 use crate::diff::{FileVersion, file_diff, mode_change_diff};
-use crate::git::{DefaultBase, GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
+use crate::git::{
+    DefaultBase, GitObjects, GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode,
+};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::lockfile::{Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes};
@@ -27,6 +29,7 @@ use crate::manifest::{
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree};
 use crate::packaging::{PackagingRules, relativize};
+use crate::snapshot_files::SnapshotFiles;
 use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
 use crate::{
@@ -410,6 +413,20 @@ pub(crate) fn classify(
         .map(|target| target.name.clone())
         .collect();
     let mut lockfiles = LockfileCache::default();
+    let mut mode_paths: Vec<String> = work_tree
+        .packages
+        .iter()
+        .flat_map(|package| {
+            work_tree_mode_paths(
+                &work_tree_side(package, cache.case()),
+                &work_tree.index.paths,
+            )
+        })
+        .collect();
+    mode_paths.sort_unstable();
+    mode_paths.dedup();
+    let mode_paths: Vec<&str> = mode_paths.iter().map(String::as_str).collect();
+    let work_modes = git.work_tree_modes(&work_tree.index, &mode_paths)?;
 
     for package in &work_tree.packages {
         let class = classify_one(
@@ -422,6 +439,7 @@ pub(crate) fn classify(
             &work_root_doc,
             &mut cache,
             &mut lockfiles,
+            &work_modes,
             verbose,
         )?;
         classes.push(class);
@@ -472,6 +490,7 @@ fn classify_one(
     work_root_doc: &DocumentMut,
     cache: &mut SnapshotCache,
     lockfiles: &mut LockfileCache,
+    work_modes: &WorkTreeModes,
     verbose: Verbose,
 ) -> Result<PackageClass, AppError> {
     let name = &package.manifest.name;
@@ -499,12 +518,10 @@ fn classify_one(
             )
         });
         let side = work_tree_side(package, cache.case());
-        let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-        let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
-        let tracked_resources = tracked_resources(&side, &tracked_paths);
-        let content = released_in_work_tree(git, &side, &tracked_resources)?;
-        let work_modes = work_tree_modes(git, &side, &tracked_resources)?;
-        _ = validated_work_tree_files(git, name, &content.released, &work_modes)?;
+        let tracked_resources = tracked_resources(&side, &work_tree.index.paths);
+        let content =
+            released_in_work_tree(git, &side, &tracked_resources, &work_tree.index.paths)?;
+        _ = validated_work_tree_files(git, name, &content.released, work_modes)?;
         let untracked =
             untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
         log_untracked(verbose, name, untracked.len());
@@ -543,7 +560,9 @@ fn classify_one(
     let (changed_files, patch, stat, untracked) = diff_package(
         git,
         name,
-        &anchor.commit,
+        &work_tree.index.paths,
+        work_modes,
+        &anchor_snapshot.files.entries,
         &PackageSide {
             dir: &anchor_pkg.directory,
             rules: &anchor_pkg.packaging,
@@ -681,7 +700,7 @@ fn build_timeline(
             .checked_add(1)
             .is_some_and(|next| next == commits.len());
         let has_parent = if is_last {
-            git.has_parent_or_is_shallow_boundary(commit)?
+            cache.has_parent(git, commit)?
         } else {
             true
         };
@@ -777,22 +796,22 @@ fn resolve_resources(
 fn diff_package(
     git: &GitRepo,
     name: &str,
-    anchor_commit: &str,
+    tracked_paths: &[String],
+    work_modes: &WorkTreeModes,
+    entries: &[TreeEntry],
     anchor: &PackageSide<'_>,
     work_side: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     // Released content is defined from git-tracked files, and a manifest
     // resource may sit outside the package directory or outside its packaging
-    // rules, so the directory listing does not cover it. Querying Git for those
-    // paths keeps an untracked README from being read off disk and reported as
-    // a content change. Ref: docs/design.md, "Released content".
-    let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
-    let tracked_paths = git.tracked_paths(&resource_paths, work_side.case)?;
-    let tracked_resources = tracked_resources(work_side, &tracked_paths);
+    // rules, so a directory listing does not cover it. Selecting those paths
+    // from the acquired index keeps an untracked README from being read off disk
+    // and reported as a content change. Ref: docs/design.md, "Released content".
+    let tracked_resources = tracked_resources(work_side, tracked_paths);
 
-    let anchor_tree = anchor_tree_entries(git, anchor_commit, anchor)?;
+    let anchor_tree = anchor_tree_entries(entries, anchor);
     let anchor_files = released_at_commit(&anchor_tree, anchor);
-    let work = released_in_work_tree(git, work_side, &tracked_resources)?;
+    let work = released_in_work_tree(git, work_side, &tracked_resources, tracked_paths)?;
     let work_files = &work.released;
 
     reject_anchor_symlinks(name, &anchor_tree, &anchor_files)?;
@@ -807,8 +826,7 @@ fn diff_package(
         .iter()
         .map(|entry| (entry.path.as_str(), entry.id.as_str()))
         .collect();
-    let work_modes = work_tree_modes(git, work_side, &tracked_resources)?;
-    let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
+    let work_ids = work_blob_ids(git, name, work_files, work_modes)?;
 
     // Cargo copies the executable bit into the archive, so a file made
     // executable without an edit is released content that changed even though
@@ -823,6 +841,22 @@ fn diff_package(
         .chain(work_files.keys())
         .map(String::as_str)
         .collect();
+    // Identity and mode comparison need no content reads. Acquire only changed blobs, in one
+    // bounded Git request, and reuse converted work-tree objects instead of rerunning filters.
+    let content_ids: BTreeSet<&str> = rels
+        .iter()
+        .map(|rel| {
+            (
+                anchor_files
+                    .get(*rel)
+                    .and_then(|path| anchor_ids.get(path.as_str()).copied()),
+                work_ids.get(*rel).map(String::as_str),
+            )
+        })
+        .filter(|(old, new)| old != new)
+        .flat_map(|(old, new)| old.into_iter().chain(new))
+        .collect();
+    let contents = GitObjects::read(git.root(), &content_ids.into_iter().collect::<Vec<_>>())?;
 
     let mut changed = Vec::new();
     let mut patch = String::new();
@@ -866,12 +900,9 @@ fn diff_package(
             continue;
         }
         // The content itself is only needed to render an identity change.
-        let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
-            Some(path) => git.show_file_bytes(anchor_commit, path)?,
-            None => None,
-        };
-        let new = new_id.map(|id| git.show_blob_bytes(id)).transpose()?;
-        let old_side = old.as_deref().map(|content| FileVersion {
+        let old = old_id.map(|id| contents.blob(id)).transpose()?;
+        let new = new_id.map(|id| contents.blob(id)).transpose()?;
+        let old_side = old.map(|content| FileVersion {
             content,
             mode: tree_mode(
                 anchor_files
@@ -879,7 +910,7 @@ fn diff_package(
                     .is_some_and(|path| anchor_exec.contains(path.as_str())),
             ),
         });
-        let new_side = new.as_deref().map(|content| FileVersion {
+        let new_side = new.map(|content| FileVersion {
             content,
             mode: tree_mode(
                 work_files
@@ -901,22 +932,6 @@ fn diff_package(
         deletions,
     };
     Ok((changed, patch, stat, untracked))
-}
-
-/// Git modes for released work-tree paths.
-///
-/// The package directory does not cover a manifest resource that lives outside
-/// it, so those paths are asked for alongside the directory. Only tracked
-/// resources are asked for, because an untracked one is not released content
-/// and Git records no mode for it.
-fn work_tree_modes(
-    git: &GitRepo,
-    side: &PackageSide<'_>,
-    tracked_resources: &BTreeMap<String, String>,
-) -> Result<WorkTreeModes, AppError> {
-    let mut pathspecs = vec![side.dir];
-    pathspecs.extend(tracked_resources.values().map(String::as_str));
-    git.work_tree_modes(&pathspecs)
 }
 
 /// Object ids the released work-tree files would be stored under.
@@ -1004,30 +1019,32 @@ fn reject_anchor_symlinks(
     }
 }
 
-/// Lists the tree at `commit` for everything a package could release.
+/// Selects from the acquired tree everything a package could release.
 ///
 /// The package directory alone does not cover a manifest resource that lives
 /// outside it, so those paths are asked for in the same listing.
-fn anchor_tree_entries(
-    git: &GitRepo,
-    commit: &str,
-    side: &PackageSide<'_>,
-) -> Result<Vec<TreeEntry>, AppError> {
+fn anchor_tree_entries(tree: &[TreeEntry], side: &PackageSide<'_>) -> Vec<TreeEntry> {
     let mut pathspecs: Vec<&str> = vec![side.dir];
     pathspecs.extend(side.resources.values().map(String::as_str));
-    let entries = git.ls_tree(commit, &pathspecs)?;
+    let entries: Vec<TreeEntry> = tree
+        .iter()
+        .filter(|entry| {
+            pathspecs
+                .iter()
+                .any(|path| entry.path == *path || relativize(&entry.path, path).is_some())
+        })
+        .cloned()
+        .collect();
     let all_resources_found = side.resources.values().all(|resource| {
         entries
             .iter()
             .any(|entry| side.case.same_path(&entry.path, resource))
     });
     if side.case == PathCase::Insensitive && !all_resources_found {
-        // Unlike `ls-files`, `ls-tree` rejects the `icase` pathspec magic.
-        // Listing the tree is the only reliable way to resolve an external
-        // resource whose recorded spelling differs from the manifest.
-        return git.ls_tree(commit, &[""]);
+        // An external resource may use a spelling that only the probed case rules match.
+        return tree.to_vec();
     }
-    Ok(entries)
+    entries
 }
 
 fn released_at_commit(entries: &[TreeEntry], side: &PackageSide<'_>) -> HashMap<String, String> {
@@ -1039,7 +1056,7 @@ fn released_at_commit(entries: &[TreeEntry], side: &PackageSide<'_>) -> HashMap<
     let resources = tracked_resources(side, &paths);
     // Reading a resource back from the commit yields nothing when the commit
     // did not track it, so the tree itself performs the tracked-only filter the
-    // work tree needs `tracked_paths` for.
+    // work tree obtains from its acquired index.
     add_resources(&mut released, resources.iter());
     released
 }
@@ -1145,12 +1162,11 @@ pub(crate) fn released_work_tree_paths(
     git: &GitRepo,
     package: &WorkPackage,
     case: PathCase,
+    tracked_paths: &[String],
 ) -> Result<BTreeSet<String>, AppError> {
     let side = work_tree_side(package, case);
-    let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
-    let tracked_paths = git.tracked_paths(&resource_paths, side.case)?;
-    let tracked_resources = tracked_resources(&side, &tracked_paths);
-    let content = released_in_work_tree(git, &side, &tracked_resources)?;
+    let tracked_resources = tracked_resources(&side, tracked_paths);
+    let content = released_in_work_tree(git, &side, &tracked_resources, tracked_paths)?;
     Ok(content.released.into_keys().collect())
 }
 
@@ -1163,6 +1179,13 @@ fn work_tree_side(package: &WorkPackage, case: PathCase) -> PackageSide<'_> {
         auto_readme: package.manifest.auto_readme,
         case,
     }
+}
+
+/// Mode queries use recorded resource names, even when the checkout ignores case.
+fn work_tree_mode_paths(side: &PackageSide<'_>, tracked_paths: &[String]) -> Vec<String> {
+    iter::once(side.dir.to_owned())
+        .chain(tracked_resources(side, tracked_paths).into_values())
+        .collect()
 }
 
 /// One work-tree package's released content and the listing it was drawn from.
@@ -1178,8 +1201,15 @@ fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
     tracked_resources: &BTreeMap<String, String>,
+    tracked_paths: &[String],
 ) -> Result<WorkTreeContent, AppError> {
-    let tracked = git.ls_files(side.dir)?;
+    // Membership and release selection share one index acquisition. Only probe files inside
+    // this package: an unrelated work-tree path must not introduce a filesystem read failure.
+    let tracked: Vec<String> = tracked_paths
+        .iter()
+        .filter(|path| relativize(path, side.dir).is_some())
+        .cloned()
+        .collect();
     let present = present_in_work_tree(git, &tracked)?;
     let mut released = released_from_paths(&tracked, &present, side);
     add_resources(&mut released, tracked_resources.iter());
@@ -1354,6 +1384,7 @@ struct HistoricalPackage {
 /// Workspace members and root manifest at one commit.
 #[derive(Clone, Debug)]
 struct CommitSnapshot {
+    files: SnapshotFiles,
     packages: BTreeMap<String, HistoricalPackage>,
     /// Members that declared `publish = false` at this commit.
     ///
@@ -1368,6 +1399,7 @@ struct CommitSnapshot {
 /// Cache of [`CommitSnapshot`] values so a first-parent walk does not re-parse.
 struct SnapshotCache {
     inner: HashMap<String, Rc<CommitSnapshot>>,
+    parents: HashMap<String, bool>,
     case: PathCase,
     registries: BTreeMap<String, String>,
 }
@@ -1377,6 +1409,7 @@ impl SnapshotCache {
     fn new(workspace_root: &Path, registries: BTreeMap<String, String>) -> Self {
         Self {
             inner: HashMap::new(),
+            parents: HashMap::new(),
             case: PathCase::probe(workspace_root),
             registries,
         }
@@ -1385,6 +1418,16 @@ impl SnapshotCache {
     /// The probed case rules, shared by member matching and README detection.
     fn case(&self) -> PathCase {
         self.case
+    }
+
+    /// Root and shallow-boundary facts are shared by all packages in this history.
+    fn has_parent(&mut self, git: &GitRepo, commit: &str) -> Result<bool, AppError> {
+        if let Some(has_parent) = self.parents.get(commit) {
+            return Ok(*has_parent);
+        }
+        let has_parent = git.has_parent_or_is_shallow_boundary(commit)?;
+        self.parents.insert(commit.to_owned(), has_parent);
+        Ok(has_parent)
     }
 
     fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
@@ -1403,22 +1446,25 @@ fn load_snapshot(
     case: PathCase,
     registries: &BTreeMap<String, String>,
 ) -> Result<CommitSnapshot, AppError> {
+    let files = SnapshotFiles::load(git, commit)?;
     let root_rel = root_manifest_rel(git);
     // History before the workspace existed has no root manifest. An empty
     // `[workspace]` reproduces that state exactly: no members, so every current
     // package is absent from the snapshot and classified as newly created.
-    let root_content = git
-        .show_file(commit, &root_rel)?
-        .unwrap_or_else(|| "[workspace]\n".to_string());
-    let root_doc = parse_document(Path::new(&root_rel), &root_content)?;
-    let members = parse_workspace_members(&root_content, Path::new(&root_rel), case)?;
+    let root_content = files.text(commit, &root_rel)?.unwrap_or("[workspace]\n");
+    let root_doc = parse_document(Path::new(&root_rel), root_content)?;
+    let members = parse_workspace_members(root_content, Path::new(&root_rel), case)?;
     // `members` globs are written relative to the workspace root, which need not be
     // the git root, while Git yields git-root-relative paths. Rebase before
     // matching, or a nested workspace would find no members and silently classify
     // every package as absent from the base revision.
     let workspace_prefix = root_rel.strip_suffix(MANIFEST_FILE_NAME).unwrap_or("");
     let workspace = WorkspaceInherit::from_root(&root_doc);
-    let tree_paths = git.ls_tree_paths(commit)?;
+    let tree_paths: Vec<String> = files
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
 
     let mut manifest_paths: BTreeMap<String, String> = BTreeMap::new();
     for path in tree_paths
@@ -1430,8 +1476,8 @@ fn load_snapshot(
         manifest_paths.insert(member_dir, path.clone());
     }
 
-    let mut manifests = GitManifestSource {
-        git,
+    let mut manifests = SnapshotManifestSource {
+        files: &files,
         commit,
         workspace_prefix,
         workspace,
@@ -1478,7 +1524,7 @@ fn load_snapshot(
         );
     }
     if packages.values().any(|package| package.has_lockfile_target) {
-        match historical_registries(git, commit, registries, &tree_paths) {
+        match historical_registries(git, commit, registries, &tree_paths, &files) {
             Ok(registries) => installation.registries = registries,
             Err(error) => installation.registry_error = Some(installation_error(error)),
         }
@@ -1489,10 +1535,12 @@ fn load_snapshot(
             git,
             commit,
             &tree_paths,
+            &files,
             case,
         );
     }
     Ok(CommitSnapshot {
+        files,
         packages,
         unpublished,
         root_doc,
@@ -1506,6 +1554,7 @@ fn resolve_historical_installation_paths(
     git: &GitRepo,
     commit: &str,
     tree_paths: &[String],
+    files: &SnapshotFiles,
     case: PathCase,
 ) {
     let mut documents = BTreeMap::<String, Option<DocumentMut>>::new();
@@ -1530,9 +1579,9 @@ fn resolve_historical_installation_paths(
             if let Some(document) = documents.get(path) {
                 return Ok(document.clone());
             }
-            let document = git
-                .show_file(commit, path)?
-                .map(|content| parse_document(Path::new(path), &content))
+            let document = files
+                .text(commit, path)?
+                .map(|content| parse_document(Path::new(path), content))
                 .transpose()?;
             documents.insert(path.clone(), document.clone());
             Ok(document)
@@ -1551,6 +1600,7 @@ fn historical_registries(
     commit: &str,
     ambient: &BTreeMap<String, String>,
     tree_paths: &[String],
+    files: &SnapshotFiles,
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut registries = ambient.clone();
     for candidates in cargo_config_paths(git.prefix()) {
@@ -1558,10 +1608,10 @@ fn historical_registries(
             if !tree_paths.contains(&path) {
                 continue;
             }
-            let Some(content) = git.show_file(commit, &path)? else {
+            let Some(content) = files.text(commit, &path)? else {
                 continue;
             };
-            let doc = parse_document(Path::new(&path), &content)?;
+            let doc = parse_document(Path::new(&path), content)?;
             collect_registry_indices(&doc, &mut registries);
             break;
         }
@@ -1611,8 +1661,8 @@ trait ManifestSource {
 }
 
 /// Reads member manifests out of one commit, parsing each at most once.
-struct GitManifestSource<'a> {
-    git: &'a GitRepo,
+struct SnapshotManifestSource<'a> {
+    files: &'a SnapshotFiles,
     commit: &'a str,
     workspace_prefix: &'a str,
     workspace: WorkspaceInherit<'a>,
@@ -1621,7 +1671,7 @@ struct GitManifestSource<'a> {
     parsed: BTreeMap<String, Option<PackageManifest>>,
 }
 
-impl ManifestSource for GitManifestSource<'_> {
+impl ManifestSource for SnapshotManifestSource<'_> {
     fn candidate_dirs(&self) -> Vec<String> {
         self.paths.keys().cloned().collect()
     }
@@ -1629,8 +1679,8 @@ impl ManifestSource for GitManifestSource<'_> {
     fn manifest(&mut self, dir: &str) -> Result<Option<&PackageManifest>, AppError> {
         if !self.parsed.contains_key(dir) {
             let parsed = match self.paths.get(dir) {
-                Some(path) => match self.git.show_file(self.commit, path)? {
-                    Some(content) => parse_package_manifest(&content, path, &self.workspace)?,
+                Some(path) => match self.files.text(self.commit, path)? {
+                    Some(content) => parse_package_manifest(content, path, &self.workspace)?,
                     None => None,
                 },
                 None => None,
@@ -2039,6 +2089,7 @@ mod tests {
     #[test]
     fn only_a_package_the_base_never_carried_is_new_on_it() {
         let mut base = CommitSnapshot {
+            files: SnapshotFiles::default(),
             packages: BTreeMap::new(),
             unpublished: BTreeSet::new(),
             root_doc: DocumentMut::new(),
@@ -2391,6 +2442,32 @@ mod tests {
         assert_eq!(
             tracked_resources(&relaxed, &tracked),
             BTreeMap::from([("README.md".to_string(), "packages/a/readme.md".to_string())])
+        );
+    }
+
+    #[test]
+    fn mode_paths_use_the_tracked_spelling_of_external_resources() {
+        let rules = PackagingRules::default();
+        let resources = BTreeMap::from([
+            ("README.md".to_owned(), "README.md".to_owned()),
+            ("untracked.txt".to_owned(), "untracked.txt".to_owned()),
+        ]);
+        let tracked = vec!["readme.md".to_owned()];
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: false,
+            case: PathCase::Sensitive,
+        };
+        assert_eq!(work_tree_mode_paths(&side, &tracked), ["packages/a"]);
+        let side = PackageSide {
+            case: PathCase::Insensitive,
+            ..side
+        };
+        assert_eq!(
+            work_tree_mode_paths(&side, &tracked),
+            ["packages/a", "readme.md"]
         );
     }
 

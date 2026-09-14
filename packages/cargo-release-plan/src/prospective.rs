@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_input, run_capture_ok, run_capture_os};
-use crate::metadata::load_tracked_work_tree;
+use crate::metadata::WorkTree;
 use crate::resolved::{Artifact, Inputs, canonical, relative};
 use crate::verbose::Verbose;
 use crate::{ReadFileError, WriteFileError, quote_path};
@@ -136,9 +136,12 @@ impl Prospective {
         Ok(())
     }
 
-    pub(crate) fn artifacts(&self, inputs: &Inputs) -> Result<Vec<Artifact>, AppError> {
-        let (work_tree, _) = load_tracked_work_tree(&self.manifest)?;
-        let mut paths: BTreeSet<PathBuf> = work_tree.member_manifests.into_iter().collect();
+    pub(crate) fn artifacts(
+        &self,
+        inputs: &Inputs,
+        work_tree: &WorkTree,
+    ) -> Result<Vec<Artifact>, AppError> {
+        let mut paths: BTreeSet<PathBuf> = work_tree.member_manifests.iter().cloned().collect();
         paths.insert(work_tree.workspace_root.join("Cargo.toml"));
         paths.insert(work_tree.workspace_root.join("Cargo.lock"));
         let mut artifacts = Vec::new();

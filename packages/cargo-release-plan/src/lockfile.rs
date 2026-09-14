@@ -609,7 +609,7 @@ pub(crate) fn closure_changes(anchor: &Closure, work: &Closure) -> Vec<(String, 
 mod tests {
     use super::*;
     use crate::ReadFileError;
-    use crate::manifest::DependencySource;
+    use crate::manifest::{DependencySource, GitReference};
 
     const LABEL: &str = "Cargo.lock";
 
@@ -619,6 +619,42 @@ mod tests {
             .closure(root, version, &InstallationGraph::default())
             .unwrap()
             .unwrap()
+    }
+
+    /// Varies each resolved version independently without reacquiring a workspace.
+    ///
+    /// Entry indices already identify the edges, so changing an identity isolates
+    /// installation selection and comparison from the lockfile parser.
+    fn assert_version_changes(
+        lockfile: &mut Lockfile,
+        installation: &InstallationGraph,
+        cases: &[(&str, &str, bool)],
+    ) {
+        let before = lockfile
+            .closure("tool", "0.1.0", installation)
+            .unwrap()
+            .unwrap();
+        for &(name, version, installed) in cases {
+            let version: Version = version.parse().unwrap();
+            let index = lockfile
+                .entries
+                .iter()
+                .position(|entry| entry.name == name && entry.version == version)
+                .unwrap();
+            let entry = lockfile.entries.get_mut(index).unwrap();
+            entry.version.patch = entry.version.patch.checked_add(1).unwrap();
+            let after = lockfile
+                .closure("tool", "0.1.0", installation)
+                .unwrap()
+                .unwrap();
+            let expected = if installed {
+                vec![(name.to_owned(), ClosureChange::Modified)]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(closure_changes(&before, &after), expected, "{name}");
+            lockfile.entries.get_mut(index).unwrap().version = version;
+        }
     }
 
     #[test]
@@ -698,7 +734,11 @@ dependencies = ["widget 1.0.0"]
 [[package]]
 name = "development"
 version = "1.0.0"
-dependencies = ["tool"]
+dependencies = ["tool", "dev-leaf"]
+
+[[package]]
+name = "dev-leaf"
+version = "1.0.0"
 
 [[package]]
 name = "widget"
@@ -709,6 +749,7 @@ source = "registry+https://example.invalid"
 name = "widget"
 version = "2.0.0"
 source = "registry+https://example.invalid"
+dependencies = ["dev-leaf"]
 "#;
         let mut installation = InstallationGraph::default();
         installation.insert(
@@ -743,7 +784,7 @@ source = "registry+https://example.invalid"
                 }),
             }],
         );
-        let lockfile = Lockfile::parse(text, LABEL).unwrap();
+        let mut lockfile = Lockfile::parse(text, LABEL).unwrap();
         let closure = lockfile
             .closure("tool", "0.1.0", &installation)
             .unwrap()
@@ -756,6 +797,25 @@ source = "registry+https://example.invalid"
         assert_eq!(
             closure.get("widget").unwrap(),
             &BTreeSet::from(["1.0.0 (registry+https://example.invalid)".to_owned()])
+        );
+        assert_version_changes(
+            &mut lockfile,
+            &installation,
+            &[
+                ("widget", "1.0.0", true),
+                ("widget", "2.0.0", false),
+                ("development", "1.0.0", false),
+                ("dev-leaf", "1.0.0", false),
+            ],
+        );
+        installation.insert("helper".to_owned(), Version::new(0, 1, 0), Vec::new());
+        let after = lockfile
+            .closure("tool", "0.1.0", &installation)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            closure_changes(&closure, &after),
+            [("build-tool".to_owned(), ClosureChange::Deleted)]
         );
     }
 
@@ -796,46 +856,74 @@ version = "1.0.0"
 
     #[test]
     fn installation_edges_match_sources_not_just_name_and_version() {
-        let lockfile = Lockfile::parse(
+        let mut lockfile = Lockfile::parse(
             r#"
 [[package]]
 name = "tool"
+version = "0.1.0"
+dependencies = ["helper", "foo 1.0.0", "foo 1.0.0 (registry+https://example.invalid)"]
+[[package]]
+name = "helper"
 version = "0.1.0"
 dependencies = ["foo 1.0.0", "foo 1.0.0 (registry+https://example.invalid)"]
 [[package]]
 name = "foo"
 version = "1.0.0"
+dependencies = ["path-leaf"]
 [[package]]
 name = "foo"
 version = "1.0.0"
 source = "registry+https://example.invalid"
+dependencies = ["registry-leaf"]
+[[package]]
+name = "path-leaf"
+version = "1.0.0"
+[[package]]
+name = "registry-leaf"
+version = "1.0.0"
 "#,
             LABEL,
         )
         .unwrap();
-        for (source, identity) in [
+        for (source, identity, installed_leaf, dev_leaf) in [
             (
                 DependencySource::Path(PackageIdentity {
                     name: "foo".to_owned(),
                     version: Version::new(1, 0, 0),
                 }),
                 "1.0.0",
+                "path-leaf",
+                "registry-leaf",
             ),
             (
                 DependencySource::Registry("https://example.invalid".to_owned()),
                 "1.0.0 (registry+https://example.invalid)",
+                "registry-leaf",
+                "path-leaf",
             ),
         ] {
             let mut installation = InstallationGraph::default();
+            let selected = InstallationDependency {
+                name: "foo".to_owned(),
+                requirement: Some("1".parse().unwrap()),
+                source,
+            };
             installation.insert(
                 "tool".to_owned(),
                 Version::new(0, 1, 0),
-                vec![InstallationDependency {
-                    name: "foo".to_owned(),
-                    requirement: Some("1".parse().unwrap()),
-                    source,
-                }],
+                vec![
+                    selected.clone(),
+                    InstallationDependency {
+                        name: "helper".to_owned(),
+                        requirement: None,
+                        source: DependencySource::Path(PackageIdentity {
+                            name: "helper".to_owned(),
+                            version: Version::new(0, 1, 0),
+                        }),
+                    },
+                ],
             );
+            installation.insert("helper".to_owned(), Version::new(0, 1, 0), vec![selected]);
             let closure = lockfile
                 .closure("tool", "0.1.0", &installation)
                 .unwrap()
@@ -843,6 +931,253 @@ source = "registry+https://example.invalid"
             assert_eq!(
                 closure.get("foo").unwrap(),
                 &BTreeSet::from([identity.to_owned()])
+            );
+            assert_eq!(
+                closure.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                BTreeSet::from(["foo", "helper", installed_leaf])
+            );
+            assert_version_changes(
+                &mut lockfile,
+                &installation,
+                &[(dev_leaf, "1.0.0", false), (installed_leaf, "1.0.0", true)],
+            );
+        }
+    }
+
+    #[test]
+    fn direct_and_patched_path_versions_exclude_other_installations() {
+        let mut lockfile = Lockfile::parse(
+            "[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n\
+             dependencies = [\"foo 1.0.0\", \"foo 1.1.0\"]\n\
+             [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\ndependencies = [\"external-leaf\"]\n\
+             [[package]]\nname = \"foo\"\nversion = \"1.1.0\"\ndependencies = [\"workspace-leaf\"]\n\
+             [[package]]\nname = \"external-leaf\"\nversion = \"1.0.0\"\n\
+             [[package]]\nname = \"workspace-leaf\"\nversion = \"1.0.0\"\n",
+            LABEL,
+        )
+        .unwrap();
+        for (version, installed_leaf, dev_leaf) in [
+            (Version::new(1, 0, 0), "external-leaf", "workspace-leaf"),
+            (Version::new(1, 1, 0), "workspace-leaf", "external-leaf"),
+        ] {
+            for patched in [false, true] {
+                let path = InstallationDependency {
+                    name: "foo".to_owned(),
+                    requirement: Some("1".parse().unwrap()),
+                    source: DependencySource::UnresolvedPath(DependencyPath {
+                        path: "selected/foo".to_owned(),
+                        package_directory: None,
+                    }),
+                };
+                let mut installation = InstallationGraph::default();
+                let selected = if patched {
+                    installation.patches.push(DependencyPatch {
+                        origin: "https://example.invalid/index".to_owned(),
+                        name: "foo".to_owned(),
+                        replacement: Ok(path),
+                    });
+                    InstallationDependency {
+                        name: "foo".to_owned(),
+                        requirement: Some("1".parse().unwrap()),
+                        source: DependencySource::Registry(
+                            "https://example.invalid/index".to_owned(),
+                        ),
+                    }
+                } else {
+                    path
+                };
+                installation.insert("tool".to_owned(), Version::new(0, 1, 0), vec![selected]);
+                installation.resolve_paths(|_| {
+                    Ok(Some(PackageIdentity {
+                        name: "foo".to_owned(),
+                        version: version.clone(),
+                    }))
+                });
+                let closure = lockfile
+                    .closure("tool", "0.1.0", &installation)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    closure,
+                    BTreeMap::from([
+                        ("foo".to_owned(), BTreeSet::from([version.to_string()])),
+                        (
+                            installed_leaf.to_owned(),
+                            BTreeSet::from(["1.0.0".to_owned()])
+                        ),
+                    ])
+                );
+                assert_version_changes(
+                    &mut lockfile,
+                    &installation,
+                    &[(dev_leaf, "1.0.0", false), (installed_leaf, "1.0.0", true)],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn git_sources_and_patches_do_not_import_development_revisions() {
+        let text = r#"
+[[package]]
+name = "tool"
+version = "0.1.0"
+dependencies = [
+ "foo 1.0.0 (git+https://example.invalid/foo?branch=release%2Fnext#aaaa)",
+ "foo 1.0.0 (git+https://example.invalid/foo.git?branch=development#bbbb)",
+]
+[[package]]
+name = "foo"
+version = "1.0.0"
+source = "git+https://example.invalid/foo?branch=release%2Fnext#aaaa"
+[[package]]
+name = "foo"
+version = "1.0.0"
+source = "git+https://example.invalid/foo.git?branch=development#bbbb"
+"#;
+        for patched in [false, true] {
+            let mut installation = InstallationGraph::default();
+            let git = InstallationDependency {
+                name: "foo".to_owned(),
+                requirement: None,
+                source: DependencySource::Git {
+                    repository: "https://example.invalid/foo".to_owned(),
+                    reference: GitReference::Branch("release/next".to_owned()),
+                },
+            };
+            let selected = if patched {
+                installation.patches.push(DependencyPatch {
+                    origin: "https://example.invalid/index".to_owned(),
+                    name: "foo".to_owned(),
+                    replacement: Ok(git),
+                });
+                InstallationDependency {
+                    name: "foo".to_owned(),
+                    requirement: Some("1".parse().unwrap()),
+                    source: DependencySource::Registry("https://example.invalid/index".to_owned()),
+                }
+            } else {
+                git
+            };
+            installation.insert("tool".to_owned(), Version::new(0, 1, 0), vec![selected]);
+            let mut lockfile = Lockfile::parse(text, LABEL).unwrap();
+            let before = lockfile
+                .closure("tool", "0.1.0", &installation)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                before,
+                BTreeMap::from([(
+                    "foo".to_owned(),
+                    BTreeSet::from([
+                        "1.0.0 (git+https://example.invalid/foo?branch=release%2Fnext#aaaa)"
+                            .to_owned()
+                    ]),
+                )])
+            );
+            for (reference, previous, next, installed) in [
+                ("development", "#bbbb", "#cccc", false),
+                ("release%2Fnext", "#aaaa", "#dddd", true),
+            ] {
+                let entry = lockfile
+                    .entries
+                    .iter_mut()
+                    .find(|entry| {
+                        entry
+                            .source
+                            .as_ref()
+                            .is_some_and(|source| source.contains(reference))
+                    })
+                    .unwrap();
+                entry.source = Some(entry.source.as_ref().unwrap().replace(previous, next));
+                let after = lockfile
+                    .closure("tool", "0.1.0", &installation)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    closure_changes(&before, &after),
+                    if installed {
+                        vec![("foo".to_owned(), ClosureChange::Modified)]
+                    } else {
+                        Vec::new()
+                    }
+                );
+                let commit = if installed { next } else { "#aaaa" };
+                assert_eq!(
+                    after.get("foo").unwrap(),
+                    &BTreeSet::from([format!(
+                        "1.0.0 (git+https://example.invalid/foo?branch=release%2Fnext{commit})"
+                    )])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn named_registries_exclude_other_indices_and_protocols() {
+        for (installed_source, development_source, index) in [
+            (
+                "registry+https://example.invalid/private",
+                "registry+https://example.invalid/public",
+                "https://example.invalid/private",
+            ),
+            (
+                "sparse+https://example.invalid/index/",
+                "registry+https://example.invalid/index/",
+                "sparse+https://example.invalid/index/",
+            ),
+        ] {
+            let mut lockfile = Lockfile::parse(
+                &format!(
+                    "[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n\
+                     dependencies = [\"foo 1.0.0 ({installed_source})\", \"foo 1.0.0 ({development_source})\"]\n\
+                     [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n\
+                     source = \"{installed_source}\"\ndependencies = [\"installed-leaf\"]\n\
+                     [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n\
+                     source = \"{development_source}\"\ndependencies = [\"dev-leaf\"]\n\
+                     [[package]]\nname = \"installed-leaf\"\nversion = \"1.0.0\"\n\
+                     [[package]]\nname = \"dev-leaf\"\nversion = \"1.0.0\"\n"
+                ),
+                LABEL,
+            )
+            .unwrap();
+            let mut installation = InstallationGraph::default();
+            installation
+                .registries
+                .insert("private".to_owned(), index.to_owned());
+            installation.insert(
+                "tool".to_owned(),
+                Version::new(0, 1, 0),
+                vec![InstallationDependency {
+                    name: "foo".to_owned(),
+                    requirement: Some("1".parse().unwrap()),
+                    source: DependencySource::NamedRegistry("private".to_owned()),
+                }],
+            );
+            let closure = lockfile
+                .closure("tool", "0.1.0", &installation)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                closure,
+                BTreeMap::from([
+                    (
+                        "foo".to_owned(),
+                        BTreeSet::from([format!("1.0.0 ({installed_source})")])
+                    ),
+                    (
+                        "installed-leaf".to_owned(),
+                        BTreeSet::from(["1.0.0".to_owned()])
+                    ),
+                ])
+            );
+            assert_version_changes(
+                &mut lockfile,
+                &installation,
+                &[
+                    ("dev-leaf", "1.0.0", false),
+                    ("installed-leaf", "1.0.0", true),
+                ],
             );
         }
     }
@@ -1000,6 +1335,41 @@ source = "registry+https://example.invalid"
             .closure("tool", "0.1.0", &installation)
             .unwrap_err();
         assert!(error.find_source::<ReadFileError>().is_some());
+    }
+
+    #[test]
+    fn invalid_installation_declarations_only_fail_reachable_members() {
+        let lockfile = Lockfile::parse(
+            "[[package]]\nname = \"unrelated\"\nversion = \"0.1.0\"\n\
+             [[package]]\nname = \"tool\"\nversion = \"0.1.0\"\ndependencies = [\"library\"]\n\
+             [[package]]\nname = \"library\"\nversion = \"0.1.0\"\n",
+            LABEL,
+        )
+        .unwrap();
+        let mut installation = InstallationGraph::default();
+        installation.insert(
+            "library".to_owned(),
+            Version::new(0, 1, 0),
+            InstallationDependencies::Invalid(installation_error(
+                ReadFileError::new("installation declarations").into(),
+            )),
+        );
+        assert!(
+            lockfile
+                .closure("unrelated", "0.1.0", &installation)
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        for root in ["library", "tool"] {
+            let error = lockfile.closure(root, "0.1.0", &installation).unwrap_err();
+            assert!(
+                error
+                    .find_source::<LockfileClosureUnavailableError>()
+                    .is_some()
+            );
+            assert!(error.find_source::<ReadFileError>().is_some());
+        }
     }
 
     #[test]

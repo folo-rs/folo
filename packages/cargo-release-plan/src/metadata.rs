@@ -14,7 +14,7 @@ use serde_json::Value;
 use toml_edit::{DocumentMut, Item};
 
 use crate::command::run_capture;
-use crate::git::{GitRepo, join_git_rel};
+use crate::git::{GitIndex, GitRepo, join_git_rel};
 use crate::groups::Groups;
 #[cfg(test)]
 use crate::inherited::InheritedKeys;
@@ -39,6 +39,8 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct WorkTree {
     pub(crate) workspace_root: PathBuf,
+    /// Index facts shared by membership, released-content selection, and input capture.
+    pub(crate) index: GitIndex,
     pub(crate) packages: Vec<WorkPackage>,
     /// Every Git-tracked member whose declared version a plan may set.
     pub(crate) version_targets: Vec<VersionTarget>,
@@ -325,7 +327,7 @@ impl ManifestSnapshot {
 struct TrackedMetadata<'a> {
     git: &'a GitRepo,
     workspace_root: &'a Path,
-    paths: Vec<String>,
+    index: GitIndex,
     case: PathCase,
 }
 
@@ -342,7 +344,8 @@ impl TrackedMetadata<'_> {
             return false;
         };
         let manifest_path = join_git_rel(self.git.prefix(), &workspace_path);
-        self.paths
+        self.index
+            .paths
             .iter()
             .any(|path| self.case.same_path(path, &manifest_path))
     }
@@ -351,7 +354,7 @@ impl TrackedMetadata<'_> {
     fn has_lockfile_target(&self, manifest: &PackageManifest) -> Result<bool, AppError> {
         let package_dir = join_git_rel(self.git.prefix(), &manifest.directory);
         let mut present = Vec::new();
-        for path in &self.paths {
+        for path in &self.index.paths {
             let Some(relative) = relativize(path, &package_dir) else {
                 continue;
             };
@@ -376,7 +379,7 @@ pub(crate) fn load_tracked_work_tree(
     let workspace_root = PathBuf::from(&metadata.workspace_root);
     let git = GitRepo::discover(&workspace_root)?;
     let tracked = TrackedMetadata {
-        paths: git.ls_files("")?,
+        index: git.index()?,
         case: PathCase::probe(&workspace_root),
         git: &git,
         workspace_root: &workspace_root,
@@ -614,6 +617,7 @@ fn work_tree_from_metadata(
 
     Ok(WorkTree {
         workspace_root,
+        index: tracked.index.clone(),
         packages,
         version_targets,
         exact_dependencies,
@@ -661,6 +665,7 @@ fn resolve_installation_paths(
         }
         let identity = path_package_identity(&path, tracked.case, |path| {
             let Some(path) = tracked
+                .index
                 .paths
                 .iter()
                 .find(|candidate| tracked.case.same_path(candidate, path))

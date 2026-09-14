@@ -11,7 +11,7 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 use toml_edit::{Item, TableLike};
 
-use crate::command::{hash_bytes, run_capture};
+use crate::command::hash_bytes;
 use crate::manifest::{for_each_dependency_table, parse_document};
 use crate::metadata::load_tracked_work_tree;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
@@ -44,7 +44,7 @@ impl Inputs {
             None => git.default_base()?.revision().to_owned(),
         };
         let mut paths: BTreeSet<PathBuf> =
-            git.ls_files("")?.into_iter().map(PathBuf::from).collect();
+            work_tree.index.paths.iter().map(PathBuf::from).collect();
         paths.insert(relative(
             &root,
             &work_tree.workspace_root.join("Cargo.lock"),
@@ -80,7 +80,7 @@ impl Inputs {
             head: git.head()?,
             base: git.rev_parse(&base_revision)?,
             base_revision,
-            index: run_capture("git", &["ls-files", "--stage", "-z"], git.root())?,
+            index: work_tree.index.raw,
             paths,
             digest,
         })
@@ -632,6 +632,51 @@ mod tests {
         assert!(inputs.paths.contains(Path::new(".cargo/config.toml")));
         assert!(inputs.paths.contains(Path::new("rust/.cargo/config.toml")));
         assert!(inputs.paths.contains(Path::new("rust/Cargo.lock")));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    #[cfg_attr(
+        miri,
+        ignore = "uses Windows short paths and native PowerShell/Git/Cargo"
+    )]
+    fn short_windows_paths_use_the_same_captured_workspace_identity() {
+        let directory = capture_fixture("Cargo.toml");
+        // Probe actual short-name availability; capture owns path identity, not resolution.
+        let script = directory.path().join("short-path.ps1");
+        fs::write(
+            &script,
+            "# Returns the actual short-name spelling for the capture test's owned directory.\n\
+             param([string] $Path)\n\
+             Set-StrictMode -Version Latest\n\
+             $ErrorActionPreference = 'Stop'\n\
+             $PSNativeCommandUseErrorActionPreference = $true\n\
+             $filesystem = New-Object -ComObject Scripting.FileSystemObject\n\
+             $filesystem.GetFolder($Path).ShortPath\n",
+        )
+        .unwrap();
+        let output = Command::new("pwsh")
+            .args(["-NoProfile", "-NonInteractive", "-File"])
+            .arg(&script)
+            .arg(directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let short_root = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+        assert_eq!(
+            fs::canonicalize(&short_root).unwrap(),
+            fs::canonicalize(directory.path()).unwrap()
+        );
+        if short_root == directory.path() {
+            eprintln!("This volume exposes no distinct short directory name.");
+            return;
+        }
+        let inputs = Inputs::capture(&short_root.join("Cargo.toml"), Some("HEAD")).unwrap();
+        assert_eq!(
+            fs::canonicalize(inputs.root()).unwrap(),
+            fs::canonicalize(directory.path()).unwrap()
+        );
+        assert_eq!(inputs.manifest, Path::new("Cargo.toml"));
     }
 
     #[test]

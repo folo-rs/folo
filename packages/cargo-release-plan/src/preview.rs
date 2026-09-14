@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::WriteFileError;
 use crate::apply::compute_edits;
 use crate::artifact_path::{resolve_path, same_path};
-use crate::check::{CheckFormat, releases_breaking_change, run_check};
+use crate::check::{CheckFormat, check_classification, releases_breaking_change};
 use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify};
 use crate::command::hash_bytes;
 use crate::groups::GroupVerdict;
@@ -46,7 +46,8 @@ pub(crate) fn run_prepare(
     let prospective = Prospective::new(&output, &inputs)?;
     remove_marker(&output.join("prepared.json"))?;
     prospective.resolve(verbose)?;
-    let files = prospective.artifacts(&inputs)?;
+    let (resolved_work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
+    let files = prospective.artifacts(&inputs, &resolved_work_tree)?;
     inputs.verify(&manifest, None)?;
     let (work_tree, _) = load_tracked_work_tree(&manifest)?;
     let lockfile = work_tree.workspace_root.join("Cargo.lock");
@@ -86,30 +87,32 @@ pub(crate) fn run_preview(
         inputs.verify(manifest, None).map(|_| ())
     })?;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let initial = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+    let mut classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
     let mut resolved = resolve_plan(
         &plan,
-        &initial.work_tree.groups,
-        &initial.work_tree.target_versions(),
+        &classification.work_tree.groups,
+        &classification.work_tree.target_versions(),
         verbose,
     )?;
-    require_semantic_decisions(&initial.packages, &resolved)?;
+    require_semantic_decisions(&classification.packages, &resolved)?;
 
     // Each pass must either add a version consequence or change the resolved artifact.
     // Remember actual states, rather than imposing an arbitrary iteration deadline.
     let mut visited = BTreeSet::new();
     let mut previous_files = Vec::new();
     loop {
-        let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
-        for edit in compute_edits(&work_tree, &resolved, verbose)? {
+        // Each resolver pass refreshes the classification. Until the next edit, its workspace
+        // model also supplies rewrite targets, artifact paths, and final check diagnostics.
+        // Ref: docs/implementation.md, "Check and report".
+        for edit in compute_edits(&classification.work_tree, &resolved, verbose)? {
             if edit.original != edit.updated {
                 fs::write(&edit.path, edit.updated)
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
             }
         }
         prospective.resolve(verbose)?;
-        let classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
-        let files = prospective.artifacts(&prepared.inputs)?;
+        classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+        let files = prospective.artifacts(&prepared.inputs, &classification.work_tree)?;
         let mut expanded = resolved.clone();
         add_consequences(
             &classification.packages,
@@ -118,13 +121,8 @@ pub(crate) fn run_preview(
             &mut expanded,
         )?;
         if expanded == resolved && files == previous_files {
-            let (passed, message, _) = run_check(
-                Some(&prepared.inputs.base),
-                &prospective.manifest,
-                CheckFormat::Text,
-                false,
-                verbose,
-            )?;
+            let (passed, message, _) =
+                check_classification(&classification, CheckFormat::Text, false);
             require_complete_preview(passed, message)?;
             prepared.inputs.verify(manifest, None)?;
             let final_digest = prepared.inputs.final_digest(&files)?;
@@ -406,6 +404,7 @@ mod tests {
     use super::*;
     use crate::ParsePlanError;
     use crate::anchor::Anchor;
+    use crate::git::GitIndex;
     use crate::groups::Groups;
     use crate::lockfile::InstallationGraph;
     use crate::metadata::{DepKind, ExactDependency, ReportedDep, VersionTarget};
@@ -414,6 +413,7 @@ mod tests {
     fn work_tree(packages: &[PackageClass]) -> WorkTree {
         WorkTree {
             workspace_root: PathBuf::new(),
+            index: GitIndex::default(),
             packages: Vec::new(),
             version_targets: packages
                 .iter()

@@ -47,6 +47,19 @@ pub(crate) fn run_check(
     verbose: Verbose,
 ) -> Result<(bool, String, String), AppError> {
     let classification = classify(manifest_path, base, verbose)?;
+    Ok(check_classification(
+        &classification,
+        format,
+        verify_packaging,
+    ))
+}
+
+/// Evaluates the acquired state without rereading the repository.
+pub(crate) fn check_classification(
+    classification: &Classification,
+    format: CheckFormat,
+    verify_packaging: bool,
+) -> (bool, String, String) {
     // Every gating defect appends at least one diagnostic line, so the verdict is read back from
     // the rendered diagnostics. Recomputing it from the classification instead would let a rule
     // added to the rendering below be reported without ever failing the check.
@@ -60,7 +73,7 @@ pub(crate) fn run_check(
     );
 
     let warnings = if verify_packaging {
-        verify_packaging_rules(&classification)
+        verify_packaging_rules(classification)
     } else {
         String::new()
     };
@@ -71,7 +84,7 @@ pub(crate) fn run_check(
         message = success.to_string();
     }
 
-    Ok((passed, message, warnings))
+    (passed, message, warnings)
 }
 
 fn default_success_message(passed: bool, message: &str) -> Option<&'static str> {
@@ -421,8 +434,12 @@ fn verify_packaging_rules(classification: &Classification) -> String {
         // rebuilding it from `include` and `exclude` would miss a README Cargo
         // detects for itself and take in a nested package's files, warning about a
         // package whose rules are right.
-        let tool = match released_work_tree_paths(&classification.git, package, classification.case)
-        {
+        let tool = match released_work_tree_paths(
+            &classification.git,
+            package,
+            classification.case,
+            &classification.work_tree.index.paths,
+        ) {
             Ok(paths) => paths,
             Err(error) => {
                 writeln!(

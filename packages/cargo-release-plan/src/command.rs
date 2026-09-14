@@ -4,11 +4,12 @@
 // Cargo library, so this is the only subprocess boundary.
 
 use std::ffi::OsStr;
-use std::io::Write;
+use std::io::{Seek as _, Write as _};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output, Stdio};
 
 use ohno::AppError;
+use tempfile::tempfile;
 
 use crate::{CommandFailedError, CommandIoError};
 
@@ -18,41 +19,40 @@ pub(crate) fn hash_bytes(bytes: &[u8], cwd: &Path) -> Result<String, AppError> {
         .map(|output| output.trim().to_owned())
 }
 
-/// Sends captured bytes to a subprocess without involving a shell or staging file.
+/// Sends captured bytes to a subprocess and decodes stdout lossily.
 pub(crate) fn run_capture_input(
     program: &str,
     args: &[&str],
     bytes: &[u8],
     cwd: &Path,
 ) -> Result<String, AppError> {
-    let mut child = Command::new(program)
-        .args(args)
-        .current_dir(subprocess_cwd(cwd))
-        .env("CARGO_TERM_COLOR", "never")
-        .env("LC_ALL", "C")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| CommandIoError::caused_by(program, error))?;
-    child
-        .stdin
-        .take()
-        .expect("the child was started with a piped standard input")
+    run_capture_input_bytes(program, args, bytes, cwd)
+        .map(|output| String::from_utf8_lossy(&output).into_owned())
+}
+
+/// Captures raw output after giving a subprocess a finite, already-written input.
+///
+/// An anonymous file avoids a pipe deadlock when a batch reader fills stdout
+/// before consuming all its input. The child reads to EOF while `output` drains
+/// stdout and stderr together; no persistent process or writer thread is needed.
+pub(crate) fn run_capture_input_bytes(
+    program: &str,
+    args: &[&str],
+    bytes: &[u8],
+    cwd: &Path,
+) -> Result<Vec<u8>, AppError> {
+    let mut input = tempfile().map_err(|error| CommandIoError::caused_by(program, error))?;
+    input
         .write_all(bytes)
         .map_err(|error| CommandIoError::caused_by(program, error))?;
-    let output = child
-        .wait_with_output()
+    input
+        .rewind()
         .map_err(|error| CommandIoError::caused_by(program, error))?;
-    if !output.status.success() {
-        return Err(CommandFailedError::new(
-            program,
-            failure_status(output.status),
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        )
-        .into());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let output = capture_command(program, args, cwd)
+        .stdin(Stdio::from(input))
+        .output()
+        .map_err(|error| CommandIoError::caused_by(program, error))?;
+    capture_stdout(program, output)
 }
 
 /// Runs `program` with `args` in `cwd` and returns UTF-8 stdout on success.
@@ -75,17 +75,8 @@ pub(crate) fn run_capture_os(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<String, AppError> {
-    let output = spawn(program, args, cwd)?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        Err(CommandFailedError::new(
-            program,
-            failure_status(output.status),
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        )
-        .into())
-    }
+    run_capture_os_bytes(program, args, cwd)
+        .map(|output| String::from_utf8_lossy(&output).into_owned())
 }
 
 /// Like [`run_capture`], mapping a non-zero exit to `Ok(None)`.
@@ -117,7 +108,10 @@ pub(crate) fn run_capture_os_bytes(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<Vec<u8>, AppError> {
-    let output = spawn(program, args, cwd)?;
+    capture_stdout(program, spawn(program, args, cwd)?)
+}
+
+fn capture_stdout(program: &str, output: Output) -> Result<Vec<u8>, AppError> {
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -178,6 +172,16 @@ fn spawn(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<Output, AppError> {
+    capture_command(program, args, cwd)
+        .output()
+        .map_err(|error| CommandIoError::caused_by(program, error).into())
+}
+
+fn capture_command(
+    program: &str,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    cwd: &Path,
+) -> Command {
     // Every child here is captured through pipes and its output is parsed or
     // surfaced verbatim in diagnostics, so it must be free of ANSI escapes. The
     // override belongs on the shared boundary rather than at each call site
@@ -191,18 +195,19 @@ fn spawn(
     // an ordinary package creation or deletion would surface as an operational
     // error. GNU gettext ignores `LANGUAGE` once the locale is `C`, so this one
     // variable settles it.
-    Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(subprocess_cwd(cwd))
         .env("CARGO_TERM_COLOR", "never")
-        .env("LC_ALL", "C")
-        .output()
-        .map_err(|error| CommandIoError::caused_by(program, error).into())
+        .env("LC_ALL", "C");
+    command
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::collections::BTreeMap;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt as _;
 
@@ -219,10 +224,38 @@ mod tests {
     }
 
     #[test]
+    fn capture_configuration_is_shared_by_input_and_no_input_commands() {
+        let command = capture_command("git", ["cat-file", "--batch"], Path::new(""));
+        assert_eq!(command.get_program(), OsStr::new("git"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("cat-file"), OsStr::new("--batch")]
+        );
+        assert_eq!(command.get_current_dir(), Some(Path::new(".")));
+        assert_eq!(
+            command.get_envs().collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([
+                (OsStr::new("CARGO_TERM_COLOR"), Some(OsStr::new("never"))),
+                (OsStr::new("LC_ALL"), Some(OsStr::new("C"))),
+            ])
+        );
+    }
+
+    #[test]
+    fn successful_capture_preserves_arbitrary_stdout_bytes() {
+        let bytes = b"\0first\n\xfflast\0\n";
+        let output = Output {
+            status: ExitStatus::default(),
+            stdout: bytes.to_vec(),
+            stderr: b"non-failing diagnostic".to_vec(),
+        };
+        assert_eq!(capture_stdout("git", output).unwrap().as_slice(), bytes);
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore = "spawns Git with captured standard input")]
     fn captured_input_failure_preserves_a_nonzero_exit() {
-        // Git reads the complete object before validating its tree encoding, so this does
-        // not race the child closing stdin before the parent writes its test input.
+        // Invalid tree encoding makes Git reject input without requiring a repository.
         let error = run_capture_input(
             "git",
             &["hash-object", "--stdin", "-t", "tree"],

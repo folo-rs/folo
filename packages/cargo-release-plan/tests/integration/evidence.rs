@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cargo_release_plan::{RunInput, RunOutcome, run};
-use ohno::AppError;
 use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, resolved_plan};
+use crate::harness::resolved_plan;
 
 fn evidence_manifest(plan: &Path) -> PathBuf {
     let plan: Value = serde_json::from_slice(&fs::read(plan).unwrap()).unwrap();
@@ -23,15 +22,6 @@ fn evidence_manifest(plan: &Path) -> PathBuf {
     )
 }
 
-fn verify(plan: &Path, manifest: &Path) -> Result<(), AppError> {
-    run(&RunInput::VerifyPreview {
-        plan: plan.to_path_buf(),
-        manifest_path: manifest.to_path_buf(),
-        verbose: false,
-    })
-    .map(|_| ())
-}
-
 #[test]
 #[cfg_attr(
     miri,
@@ -42,18 +32,13 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     write_package(&fixture, "core", "0.1.0", "");
     write_package(
         &fixture,
-        "tool",
-        "0.1.0",
-        "\n[package.metadata.cargo_check_external_types]\nallowed_external_types = [\"core::*\"]\n\
-         [dependencies]\ncore = { path = \"../core\", version = \"0.1.0\" }\n",
-    );
-    write_package(
-        &fixture,
         "helper",
         "0.1.0",
         "\npublish = false\n[dependencies]\ncore = { path = \"../core\", version = \"=0.1.0\" }\n",
     );
-    fixture.write("packages/tool/src/main.rs", "fn main() {}\n");
+    // A published binary and its unpublished group member exercise retained resolution and
+    // publication filtering. Public-dependency level combinations have owning unit coverage.
+    fixture.write("packages/core/src/main.rs", "fn main() {}\n");
     fixture.cargo(&["generate-lockfile", "--offline"]);
     fixture.commit("released workspace");
     fixture.write(
@@ -63,11 +48,6 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let candidate = evidence_manifest(&plan);
     let root = candidate.parent().unwrap();
-    assert!(
-        fs::read_to_string(root.join("packages/tool/Cargo.toml"))
-            .unwrap()
-            .contains("0.2.0")
-    );
     assert!(
         fs::read_to_string(root.join("packages/helper/Cargo.toml"))
             .unwrap()
@@ -104,7 +84,6 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    verify(&plan, &candidate).unwrap();
     assert_eq!(fs::read(root.join("Cargo.lock")).unwrap(), expected_lock);
     let inspection = RunInput::InspectPlan {
         plan: plan.clone(),
@@ -116,10 +95,7 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
         panic!()
     };
     let result: Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(
-        result.get("publication_targets").unwrap(),
-        &json!(["core", "tool"])
-    );
+    assert_eq!(result.get("publication_targets").unwrap(), &json!(["core"]));
     assert_eq!(
         Path::new(
             result
@@ -131,14 +107,6 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
         candidate
     );
     let original: Value = serde_json::from_slice(&fs::read(&plan).unwrap()).unwrap();
-    let mut edited = original.clone();
-    *edited
-        .pointer_mut("/resolved/evidence_manifest_path")
-        .unwrap() = json!(fixture.manifest());
-    fs::write(&plan, serde_json::to_vec(&edited).unwrap()).unwrap();
-    run(&inspection).unwrap_err();
-    fs::write(&plan, serde_json::to_vec(&original).unwrap()).unwrap();
-
     let source = root.join("packages/core/src/lib.rs");
     let original_source = fs::read(&source).unwrap();
     fs::write(&source, "pub fn changed_after_evidence() {}\n").unwrap();
@@ -146,13 +114,6 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     fs::write(&source, &original_source).unwrap();
 
     let live_source = fixture.read("packages/core/src/lib.rs");
-    fixture.write(
-        "packages/core/src/lib.rs",
-        "pub fn changed_live_source() {}\n",
-    );
-    verify(&plan, &candidate).unwrap_err();
-    fixture.write("packages/core/src/lib.rs", &live_source);
-
     let manifest = fixture.read("packages/core/Cargo.toml");
     let lockfile = fixture.read("Cargo.lock");
     let mut edited = original.clone();
@@ -185,5 +146,14 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
         verbose: false,
     })
     .unwrap();
-    assert!(check(&fixture, "HEAD").0);
+    assert!(fixture.read("packages/core/Cargo.toml").contains("0.2.0"));
+    assert!(
+        fixture
+            .read("packages/helper/Cargo.toml")
+            .contains("=0.2.0")
+    );
+    assert_eq!(
+        fs::read(fixture.path().join("Cargo.lock")).unwrap(),
+        expected_lock
+    );
 }

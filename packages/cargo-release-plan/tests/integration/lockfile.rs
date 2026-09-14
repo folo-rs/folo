@@ -4,6 +4,10 @@
 //! an installable binary target is operationally relevant. Library consumers
 //! resolve the library in their own dependency graph.
 //! Ref: docs/design.md, "Relevant lockfile closures".
+//!
+//! Source-selection matrices live in `lockfile` unit tests. These fixtures change
+//! installed and development-only resolution together and assert the exact released
+//! changes, retaining real endpoint acquisition without reclassifying each combination.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -205,9 +209,6 @@ fn a_library_that_adds_its_first_binary_needs_no_anchor_lockfile() {
     write_lockfile(&fixture, "1.0.0");
     fixture.commit("add binary");
 
-    let (passed, message) = check_verbose(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("tool: needs-increment"), "{message}");
     assert_lockfile_change(&fixture, &base, "added");
 }
 
@@ -289,7 +290,7 @@ fn library_auxiliary_targets_never_require_or_compare_a_lockfile() {
     fixture.commit("record a lockfile");
     write_lockfile(&fixture, "1.0.1");
     fixture.commit("change only resolution");
-    assert_no_lockfile_changes(&fixture, &base);
+    assert_no_lockfile_changes(&lockfile_report(&fixture, &base));
 
     // Even unreadable resolution is irrelevant when no installed binary exists.
     fixture.write("Cargo.lock", "not = = toml");
@@ -343,14 +344,11 @@ fn library_source_and_requirements_still_need_increments_without_a_lockfile() {
     );
     fixture.commit("change published source and dependency requirements");
 
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(message.contains("source: needs-increment"), "{message}");
-    assert!(
-        message.contains("requirement: needs-increment"),
-        "{message}"
-    );
-    assert_no_lockfile_changes(&fixture, &base);
+    let report = lockfile_report(&fixture, &base);
+    for name in ["source", "requirement"] {
+        assert_eq!(reported_package(&report, name)["status"], "needs-increment");
+    }
+    assert_no_lockfile_changes(&report);
     assert!(!fixture.path().join("Cargo.lock").exists());
 }
 
@@ -468,12 +466,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             )
         },
     );
-    fixture.write("Cargo.lock", &development);
-    fixture.commit("change development-only resolution");
-
-    assert_no_lockfile_changes(&fixture, &base);
-    assert_eq!(fixture.read("Cargo.lock"), development);
-
     let installed = ["installed-leaf", "root-builder", "transitive-builder"];
     let updated = installed
         .iter()
@@ -481,19 +473,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             move_locked_package(&lockfile, name)
         });
     fixture.write("Cargo.lock", &updated);
-    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
-    let tool = report
-        .get("packages")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
-        .unwrap();
-    assert_eq!(tool.get("status").unwrap(), "needs-increment");
-    let expected: Vec<_> = installed
-        .map(|dependency| json!({"source": "lockfile", "dependency": dependency, "change": "modified"}))
-        .into();
-    assert_eq!(tool.get("changed").unwrap(), &json!(expected));
+    let report = lockfile_report(&fixture, &base);
+    assert_only_dependency_changes(
+        &report,
+        &installed.map(|dependency| (dependency, "modified")),
+    );
+    assert_eq!(fixture.read("Cargo.lock"), updated);
 
     // The declarations belong to each endpoint, not to the entire comparison.
     // Reclassifying a helper edge alone changes the installation without touching
@@ -506,18 +491,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             "[target.'cfg(unix)'.dev-dependencies]",
         ),
     );
-    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
-    let tool = report
-        .get("packages")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
-        .unwrap();
-    assert_eq!(
-        tool.get("changed").unwrap(),
-        &json!([{"source": "lockfile", "dependency": "transitive-builder", "change": "deleted"}])
-    );
+    let report = lockfile_report(&fixture, &base);
+    assert_only_dependency_changes(&report, &[("transitive-builder", "deleted")]);
+    assert_eq!(fixture.read("Cargo.lock"), development);
 }
 
 /// Historical `src/bin/*.rs` discovery feeds lockfile classification.
@@ -729,11 +705,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         fixture.commit("seed colliding installation and development sources");
         let base = fixture.sha("HEAD");
 
-        fixture.write("Cargo.lock", &move_locked_package(lockfile, dev_leaf));
-        assert_no_lockfile_changes(&fixture, &base);
-
-        fixture.write("Cargo.lock", &move_locked_package(lockfile, installed_leaf));
-        assert_dependency_change(&fixture, &base, installed_leaf, "modified");
+        fixture.write(
+            "Cargo.lock",
+            &move_locked_package(&move_locked_package(lockfile, dev_leaf), installed_leaf),
+        );
+        assert_only_dependency_changes(
+            &lockfile_report(&fixture, &base),
+            &[(installed_leaf, "modified")],
+        );
     }
 }
 
@@ -828,12 +807,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         fixture.commit("seed distinct path packages satisfying the same requirement");
         let base = fixture.sha("HEAD");
 
-        fixture.write("Cargo.lock", &move_locked_package(lockfile, dev_leaf));
-        assert_no_lockfile_changes(&fixture, &base);
-
-        fixture.write("Cargo.lock", &move_locked_package(lockfile, installed_leaf));
-        assert_dependency_change(&fixture, &base, installed_leaf, "modified");
-
         let manifest = format!("{directory}/Cargo.toml");
         fixture.write(
             &manifest,
@@ -844,14 +817,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         );
         fixture.write(
             "Cargo.lock",
-            &lockfile
+            &move_locked_package(&move_locked_package(lockfile, dev_leaf), installed_leaf)
                 .replace(&format!("foo {version}"), &format!("foo {next}"))
                 .replace(
                     &format!("name = \"foo\"\nversion = \"{version}\""),
                     &format!("name = \"foo\"\nversion = \"{next}\""),
                 ),
         );
-        assert_dependency_change(&fixture, &base, "foo", "modified");
+        let mut expected = [("foo", "modified"), (installed_leaf, "modified")];
+        expected.sort_unstable();
+        assert_only_dependency_changes(&lockfile_report(&fixture, &base), &expected);
     }
 }
 
@@ -921,7 +896,9 @@ fn unavailable_library_paths_do_not_block_an_unrelated_binary_closure() {
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
 #[test]
 fn historical_path_read_errors_only_block_binaries_that_reach_them() {
-    for (binary, consumes_library) in [(false, false), (true, false), (true, true)] {
+    // The unit test covers reachability; both fixtures keep a binary so historical
+    // path acquisition and ordinary library assessment share the real snapshot.
+    for consumes_library in [false, true] {
         let fixture = Fixture::new("exclude = [\"external/foo\"]");
         write_package(
             &fixture,
@@ -929,24 +906,22 @@ fn historical_path_read_errors_only_block_binaries_that_reach_them() {
             "0.1.0",
             "[dependencies]\nfoo = { path = \"../../external/foo\", version = \"1\" }\n",
         );
-        if binary {
-            let dependencies = if consumes_library {
-                "[dependencies]\nlibrary = { path = \"../library\", version = \"0.1.0\" }\n"
-            } else {
-                ""
-            };
-            write_binary_package(&fixture, "tool", "0.1.0", dependencies);
-            let tool_dependencies = if consumes_library {
-                "dependencies = [\"library\"]\n"
-            } else {
-                ""
-            };
-            fixture.write("Cargo.lock", &format!(
-                "version = 4\n[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n{tool_dependencies}\
-                 [[package]]\nname = \"library\"\nversion = \"0.1.0\"\ndependencies = [\"foo\"]\n\
-                 [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n"
-            ));
-        }
+        let dependencies = if consumes_library {
+            "[dependencies]\nlibrary = { path = \"../library\", version = \"0.1.0\" }\n"
+        } else {
+            ""
+        };
+        write_binary_package(&fixture, "tool", "0.1.0", dependencies);
+        let tool_dependencies = if consumes_library {
+            "dependencies = [\"library\"]\n"
+        } else {
+            ""
+        };
+        fixture.write("Cargo.lock", &format!(
+            "version = 4\n[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n{tool_dependencies}\
+             [[package]]\nname = \"library\"\nversion = \"0.1.0\"\ndependencies = [\"foo\"]\n\
+             [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n"
+        ));
         fixture.write("external/foo/Cargo.toml", "not = = toml");
         fixture.write("external/foo/src/lib.rs", "pub fn f() {}\n");
         fixture.commit("seed an unavailable historical installation identity");
@@ -972,7 +947,7 @@ fn historical_path_read_errors_only_block_binaries_that_reach_them() {
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
 #[test]
 fn historical_installation_declaration_errors_do_not_replace_library_assessment() {
-    for (binary, consumes_library) in [(false, false), (true, false), (true, true)] {
+    for consumes_library in [false, true] {
         let fixture = Fixture::new("");
         write_package(
             &fixture,
@@ -980,25 +955,23 @@ fn historical_installation_declaration_errors_do_not_replace_library_assessment(
             "0.1.0",
             "[dependencies]\nwidget = \"not a version requirement\"\n",
         );
-        if binary {
-            let dependencies = if consumes_library {
-                "[dependencies]\nlibrary = { path = \"../library\", version = \"0.1.0\" }\n"
-            } else {
-                ""
-            };
-            write_binary_package(&fixture, "tool", "0.1.0", dependencies);
-            let tool_dependencies = if consumes_library {
-                "dependencies = [\"library\"]\n"
-            } else {
-                ""
-            };
-            fixture.write("Cargo.lock", &format!(
-                "version = 4\n[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n{tool_dependencies}\
-                 [[package]]\nname = \"library\"\nversion = \"0.1.0\"\ndependencies = [\"widget\"]\n\
-                 [[package]]\nname = \"widget\"\nversion = \"1.0.0\"\n\
-                 source = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
-            ));
-        }
+        let dependencies = if consumes_library {
+            "[dependencies]\nlibrary = { path = \"../library\", version = \"0.1.0\" }\n"
+        } else {
+            ""
+        };
+        write_binary_package(&fixture, "tool", "0.1.0", dependencies);
+        let tool_dependencies = if consumes_library {
+            "dependencies = [\"library\"]\n"
+        } else {
+            ""
+        };
+        fixture.write("Cargo.lock", &format!(
+            "version = 4\n[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\n{tool_dependencies}\
+             [[package]]\nname = \"library\"\nversion = \"0.1.0\"\ndependencies = [\"widget\"]\n\
+             [[package]]\nname = \"widget\"\nversion = \"1.0.0\"\n\
+             source = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+        ));
         fixture.commit("seed historical installation declarations");
         let base = fixture.sha("HEAD");
         write_package(
@@ -1011,10 +984,13 @@ fn historical_installation_declaration_errors_do_not_replace_library_assessment(
         if consumes_library {
             _ = crate::harness::check_result(&fixture, &base).unwrap_err();
         } else {
-            let (passed, message) = check(&fixture, &base);
-            assert!(!passed, "{message}");
-            assert!(message.contains("library: needs-increment"), "{message}");
-            assert_no_lockfile_changes(&fixture, &base);
+            let report = lockfile_report(&fixture, &base);
+            assert_eq!(
+                reported_package(&report, "library")["status"],
+                "needs-increment"
+            );
+            assert_eq!(reported_package(&report, "tool")["status"], "unchanged");
+            assert_no_lockfile_changes(&report);
         }
     }
 }
@@ -1059,13 +1035,13 @@ fn excluded_path_targets_share_their_explicit_owning_workspace_at_each_endpoint(
     fixture.commit("seed explicitly owned excluded path packages");
     let base = fixture.sha("HEAD");
 
-    let (passed, message) = check(&fixture, &base);
-    assert!(passed, "{message}");
     fixture.write("Cargo.lock", &move_locked_package(lockfile, "leaf"));
-    let (passed, message) = check(&fixture, &base);
-    assert!(!passed, "{message}");
-    assert!(!message.contains("unrelated: needs-increment"), "{message}");
-    assert_dependency_change(&fixture, &base, "leaf", "modified");
+    let report = lockfile_report(&fixture, &base);
+    assert_eq!(
+        reported_package(&report, "unrelated")["status"],
+        "unchanged"
+    );
+    assert_only_dependency_changes(&report, &[("leaf", "modified")]);
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1146,13 +1122,14 @@ fn historical_registry_parse_errors_only_block_closures_requiring_registry_names
             .unwrap_err();
             assert_eq!(fixture.read("report/report.json"), "existing report");
         } else {
-            let (passed, message) = check(&fixture, &base);
-            assert!(passed, "{message}");
             fixture.write("packages/unrelated/src/lib.rs", "pub fn changed() {}\n");
-            let (passed, message) = check(&fixture, &base);
-            assert!(!passed, "{message}");
-            assert!(message.contains("unrelated: needs-increment"), "{message}");
-            assert!(!message.contains("tool: needs-increment"), "{message}");
+            let report = lockfile_report(&fixture, &base);
+            assert_eq!(reported_package(&report, "tool")["status"], "unchanged");
+            assert_eq!(
+                reported_package(&report, "unrelated")["status"],
+                "needs-increment"
+            );
+            assert_no_lockfile_changes(&report);
         }
         assert_eq!(fixture.read("Cargo.lock"), lockfile);
         assert_eq!(fixture.read("packages/tool/Cargo.toml"), manifest);
@@ -1202,11 +1179,11 @@ source = "git+https://example.invalid/foo.git?branch=development#bbbb"
         fixture.commit("seed colliding Git references");
         let base = fixture.sha("HEAD");
 
-        fixture.write("Cargo.lock", &lockfile.replace("#bbbb", "#cccc"));
-        assert_no_lockfile_changes(&fixture, &base);
-
-        fixture.write("Cargo.lock", &lockfile.replace("#aaaa", "#dddd"));
-        assert_dependency_change(&fixture, &base, "foo", "modified");
+        fixture.write(
+            "Cargo.lock",
+            &lockfile.replace("#bbbb", "#cccc").replace("#aaaa", "#dddd"),
+        );
+        assert_only_dependency_changes(&lockfile_report(&fixture, &base), &[("foo", "modified")]);
     }
 }
 
@@ -1255,18 +1232,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fixture.commit("seed distinct registry sources");
     let base = fixture.sha("HEAD");
 
-    fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    assert_no_lockfile_changes(&fixture, &base);
-
     fixture.write(
         ".cargo/config",
         "[registries.private]\nindex = \"https://example.invalid/current-index\"\n",
     );
     fixture.write(
         "Cargo.lock",
-        &lockfile.replace("original-index", "current-index"),
+        &move_locked_package(lockfile, "dev-leaf").replace("original-index", "current-index"),
     );
-    assert_dependency_change(&fixture, &base, "foo", "modified");
+    assert_only_dependency_changes(&lockfile_report(&fixture, &base), &[("foo", "modified")]);
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1316,14 +1290,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fixture.commit("seed registry kinds sharing an index URL");
     let base = fixture.sha("HEAD");
 
-    fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    assert_no_lockfile_changes(&fixture, &base);
-
     fixture.write(
         "Cargo.lock",
-        &move_locked_package(lockfile, "installed-leaf"),
+        &move_locked_package(&move_locked_package(lockfile, "dev-leaf"), "installed-leaf"),
     );
-    assert_dependency_change(&fixture, &base, "installed-leaf", "modified");
+    assert_only_dependency_changes(
+        &lockfile_report(&fixture, &base),
+        &[("installed-leaf", "modified")],
+    );
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1377,14 +1351,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     fixture.commit("seed a path patch beside a distinct development path package");
     let base = fixture.sha("HEAD");
 
-    fixture.write("Cargo.lock", &move_locked_package(lockfile, "dev-leaf"));
-    assert_no_lockfile_changes(&fixture, &base);
-
     fixture.write(
         "Cargo.lock",
-        &move_locked_package(lockfile, "installed-leaf"),
+        &move_locked_package(&move_locked_package(lockfile, "dev-leaf"), "installed-leaf"),
     );
-    assert_dependency_change(&fixture, &base, "installed-leaf", "modified");
+    assert_only_dependency_changes(
+        &lockfile_report(&fixture, &base),
+        &[("installed-leaf", "modified")],
+    );
 }
 
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
@@ -1494,18 +1468,22 @@ fn legacy_build_tables_are_installed_and_legacy_development_tables_are_not() {
     fixture.commit("seed legacy dependency spellings");
     let base = fixture.sha("HEAD");
 
-    let development = ["root-dev", "target-dev", "ignored-builder"]
-        .into_iter()
-        .fold(lockfile.clone(), |lockfile, name| {
-            move_locked_package(&lockfile, name)
-        });
-    fixture.write("Cargo.lock", &development);
-    assert_no_lockfile_changes(&fixture, &base);
-
-    for builder in ["root-builder", "target-builder"] {
-        fixture.write("Cargo.lock", &move_locked_package(&lockfile, builder));
-        assert_dependency_change(&fixture, &base, builder, "modified");
-    }
+    let updated = [
+        "root-dev",
+        "target-dev",
+        "ignored-builder",
+        "root-builder",
+        "target-builder",
+    ]
+    .into_iter()
+    .fold(lockfile.clone(), |lockfile, name| {
+        move_locked_package(&lockfile, name)
+    });
+    fixture.write("Cargo.lock", &updated);
+    assert_only_dependency_changes(
+        &lockfile_report(&fixture, &base),
+        &[("root-builder", "modified"), ("target-builder", "modified")],
+    );
 }
 
 fn move_locked_package(lockfile: &str, name: &str) -> String {
@@ -1516,24 +1494,13 @@ fn move_locked_package(lockfile: &str, name: &str) -> String {
 }
 
 fn assert_lockfile_change(fixture: &Fixture, base: &str, change: &str) {
-    assert_dependency_change(fixture, base, "widget", change);
-}
-
-fn assert_dependency_change(fixture: &Fixture, base: &str, dependency: &str, change: &str) {
-    let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
-    let package = report
-        .get("packages")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .find(|package| package.get("name").and_then(Value::as_str) == Some("tool"))
-        .unwrap();
-    assert_eq!(package.get("status").unwrap(), "needs-increment");
-    let changed = package.get("changed").and_then(Value::as_array).unwrap();
-
+    let report = lockfile_report(fixture, base);
+    let package = reported_package(&report, "tool");
+    assert_eq!(package["status"], "needs-increment");
+    let changed = package["changed"].as_array().unwrap();
     assert!(
         changed.contains(&json!({
-            "dependency": dependency,
+            "dependency": "widget",
             "change": change,
             "source": "lockfile"
         })),
@@ -1541,8 +1508,37 @@ fn assert_dependency_change(fixture: &Fixture, base: &str, dependency: &str, cha
     );
 }
 
-fn assert_no_lockfile_changes(fixture: &Fixture, base: &str) {
-    let report: Value = serde_json::from_str(&report_json(fixture, base)).unwrap();
+fn lockfile_report(fixture: &Fixture, base: &str) -> Value {
+    serde_json::from_str(&report_json(fixture, base)).unwrap()
+}
+
+fn reported_package<'a>(report: &'a Value, name: &str) -> &'a Value {
+    report
+        .get("packages")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|package| package.get("name").and_then(Value::as_str) == Some(name))
+        .unwrap()
+}
+
+fn assert_only_dependency_changes(report: &Value, expected: &[(&str, &str)]) {
+    let package = reported_package(report, "tool");
+    assert_eq!(package.get("status").unwrap(), "needs-increment");
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|(dependency, change)| {
+            json!({"source": "lockfile", "dependency": dependency, "change": change})
+        })
+        .collect();
+    assert_eq!(
+        package.get("changed").unwrap(),
+        &json!(expected),
+        "{package}"
+    );
+}
+
+fn assert_no_lockfile_changes(report: &Value) {
     for package in report.get("packages").and_then(Value::as_array).unwrap() {
         if package
             .get("changed")

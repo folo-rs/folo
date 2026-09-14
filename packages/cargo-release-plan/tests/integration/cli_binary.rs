@@ -7,7 +7,8 @@
 use std::fs;
 use std::process::{Command, Output};
 
-use crate::fixture::{Fixture, write_package};
+use crate::fixture::Fixture;
+use crate::harness::seeded_package;
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary; Miri cannot emulate that.
 #[test]
@@ -239,13 +240,6 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
     assert!(!output.status.success());
     assert!(stdout(&output).is_empty());
     assert!(!stderr(&output).is_empty());
-}
-
-fn seeded_package() -> Fixture {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "demo", "0.1.0", "");
-    fixture.commit("seed");
-    fixture
 }
 
 fn release_plan(args: &[&str], fixture: Option<&Fixture>) -> Output {

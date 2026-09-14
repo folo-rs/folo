@@ -10,10 +10,8 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
-use crate::manifest::PathCase;
-use crate::{
-    CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
-};
+pub(crate) use crate::git_objects::*;
+use crate::{CommandFailedError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError};
 
 /// Name Cargo requires for a manifest.
 const MANIFEST_FILE_NAME: &str = "Cargo.toml";
@@ -273,25 +271,6 @@ impl GitRepo {
         Ok(stdout.trim() == "true")
     }
 
-    /// Text at `commit:rel_path`, or `None` if the path is absent.
-    ///
-    /// Callers parse the result as TOML. Replacing invalid bytes would turn
-    /// content Cargo could never have parsed into a different, parseable
-    /// document and classify a package against text Git does not store, so a
-    /// blob that is not valid UTF-8 is reported instead.
-    pub(crate) fn show_file(
-        &self,
-        commit: &str,
-        rel_path: &str,
-    ) -> Result<Option<String>, AppError> {
-        match self.show_file_bytes(commit, rel_path)? {
-            Some(bytes) => String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|error| NonUtf8BlobError::caused_by(commit, rel_path, error).into()),
-            None => Ok(None),
-        }
-    }
-
     /// Raw bytes at `commit:rel_path`, or `None` if the path is absent.
     pub(crate) fn show_file_bytes(
         &self,
@@ -314,44 +293,16 @@ impl GitRepo {
         }
     }
 
-    /// Paths under `pathspec` that Git records in the index.
-    ///
-    /// A recorded path need not exist in the work tree, because a deletion is
-    /// tracked until it is staged. Callers that need work-tree presence check
-    /// for it separately, so that a deleted released file is still recognised
-    /// as one.
-    pub(crate) fn ls_files(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture_bytes(
+    /// Captures index paths, modes, and the entries used by prospective workspaces.
+    pub(crate) fn index(&self) -> Result<GitIndex, AppError> {
+        GitIndex::parse(run_capture_bytes(
             "git",
-            &["ls-files", "-z", "--", &dir_pathspec(pathspec)],
+            &["ls-files", "--stage", "-z"],
             &self.root,
-        )?;
-        split_z(&stdout)
+        )?)
     }
 
-    /// Tracked entries matching `paths`, using the spelling Git records.
-    ///
-    /// Files a manifest names from outside its package directory are not
-    /// covered by any per-directory listing, so their tracked state is asked
-    /// for by path. Matching follows the checkout's case rules because Cargo
-    /// opens manifest-declared resources through that checkout. An empty input
-    /// answers without invoking Git, because `git ls-files` with no pathspec
-    /// lists the whole repository.
-    pub(crate) fn tracked_paths(
-        &self,
-        paths: &[&str],
-        case: PathCase,
-    ) -> Result<Vec<String>, AppError> {
-        if paths.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
-        args.extend(paths.iter().map(|path| cased_pathspec(path, case)));
-        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        split_z(&stdout)
-    }
-
-    /// Modes under `pathspecs` that affect packaged work-tree content.
+    /// Modes that affect packaged work-tree content at this acquisition boundary.
     ///
     /// The index supplies the baseline mode. `git diff-files` then overlays
     /// changes that Git observes in the work tree, including an unstaged
@@ -360,37 +311,25 @@ impl GitRepo {
     /// the index remains the portable fallback.
     /// Ref: docs/implementation.md, "Classification".
     ///
-    /// An empty input answers without invoking Git, because `git ls-files` with
-    /// no pathspec lists the whole repository.
-    pub(crate) fn work_tree_modes(&self, pathspecs: &[&str]) -> Result<WorkTreeModes, AppError> {
+    /// Unrelated repository paths are not inspected. Empty selections need no Git query.
+    pub(crate) fn work_tree_modes(
+        &self,
+        index: &GitIndex,
+        pathspecs: &[&str],
+    ) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
             return Ok(WorkTreeModes::default());
         }
-        let mut args = vec![
-            "ls-files".to_string(),
-            "-s".to_string(),
-            "-z".to_string(),
-            "--".to_string(),
-        ];
-        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
-        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        let mut modes = WorkTreeModes::default();
-        for record in split_z(&stdout)? {
-            if let Some((mode, path)) = staged_path_mode(&record) {
-                modes.set(path, mode);
-            }
+        let mut modes = index.modes.clone();
+        let pathspecs: Vec<String> = pathspecs.iter().map(|path| dir_pathspec(path)).collect();
+        let paths: Vec<&str> = pathspecs.iter().map(String::as_str).collect();
+        for chunk in command_line_batches(&paths, PATH_ARG_BUDGET)? {
+            let args = ["diff-files", "--raw", "-z", "--no-renames", "--"]
+                .into_iter()
+                .chain(chunk);
+            let stdout = run_capture_os_bytes("git", args, &self.root)?;
+            overlay_work_tree_modes(&stdout, &mut modes)?;
         }
-
-        let mut args = vec![
-            "diff-files".to_string(),
-            "--raw".to_string(),
-            "-z".to_string(),
-            "--no-renames".to_string(),
-            "--".to_string(),
-        ];
-        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
-        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
-        overlay_work_tree_modes(&stdout, &mut modes)?;
         Ok(modes)
     }
 
@@ -469,21 +408,6 @@ impl GitRepo {
             );
         }
         Ok(ids)
-    }
-
-    /// Bytes of a blob already present in Git's object database.
-    pub(crate) fn show_blob_bytes(&self, id: &str) -> Result<Vec<u8>, AppError> {
-        run_capture_bytes("git", &["cat-file", "blob", id], &self.root)
-    }
-
-    /// Every path at `commit`, used to reconstruct historical package metadata.
-    pub(crate) fn ls_tree_paths(&self, commit: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture_bytes(
-            "git",
-            &["ls-tree", "-r", "--name-only", "-z", commit],
-            &self.root,
-        )?;
-        split_z(&stdout)
     }
 }
 
@@ -585,13 +509,45 @@ impl TreeEntry {
     }
 }
 
+/// One index acquisition shared by metadata, classification, and input capture.
+///
+/// Raw entries preserve stages and object identities for prospective workspaces.
+/// Parsed paths and modes avoid decoding that same listing for every package.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GitIndex {
+    pub(crate) raw: String,
+    pub(crate) paths: Vec<String>,
+    modes: WorkTreeModes,
+}
+
+impl GitIndex {
+    fn parse(bytes: Vec<u8>) -> Result<Self, AppError> {
+        let records = split_z(&bytes)?;
+        let raw = String::from_utf8(bytes)
+            .expect("split_z validated every record and the NUL separators are valid UTF-8");
+        let mut paths = Vec::new();
+        let mut modes = WorkTreeModes::default();
+        for record in records {
+            let (mode, path) = staged_path_mode(&record).ok_or_else(MalformedIndexError::new)?;
+            paths.push(path.to_owned());
+            modes.set(path, mode);
+        }
+        Ok(Self { raw, paths, modes })
+    }
+}
+
+/// Invalid Git output cannot supply an authoritative tracked-file snapshot.
+#[ohno::error]
+#[display("Git returned an invalid index entry")]
+struct MalformedIndexError;
+
 /// Work-tree modes that affect released artifacts or their interpretation.
 ///
 /// Executable paths provide the mode Cargo copies into the archive. Symlink
 /// paths must be rejected before hashing because `core.symlinks=false` can
 /// materialize an indexed link as an ordinary work-tree file.
 /// Ref: docs/implementation.md, "Content identity and file modes".
-#[derive(Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct WorkTreeModes {
     executable: HashSet<String>,
     symlinks: HashSet<String>,
@@ -681,18 +637,6 @@ fn dir_pathspec(dir: &str) -> String {
     format!(":(literal){dir}")
 }
 
-/// Turns a path into a literal pathspec that follows the checkout's case rules.
-///
-/// Cargo opens manifest-declared resources through the filesystem, while Git
-/// pathspecs are case-sensitive by default even on a case-insensitive checkout.
-fn cased_pathspec(path: &str, case: PathCase) -> String {
-    let path = if path.is_empty() { "." } else { path };
-    match case {
-        PathCase::Sensitive => format!(":(literal){path}"),
-        PathCase::Insensitive => format!(":(icase,literal){path}"),
-    }
-}
-
 /// Joins a workspace-relative path onto the workspace's git prefix.
 ///
 /// The result is a pathspec that `git ls-files` and `git show` resolve against
@@ -771,6 +715,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::command::run_capture_input;
 
     #[test]
     fn a_recorded_remote_head_is_the_default_base() {
@@ -902,6 +847,40 @@ mod tests {
         assert_eq!(staged_path_mode("100755 abc 0 packages/foo"), None);
     }
 
+    #[test]
+    fn index_snapshot_preserves_raw_entries_and_derives_paths_and_modes() {
+        // Object names and stages must survive capture, while tabs/newlines belong to paths.
+        let raw = "100755 abc 0\tpackages/run\ttool\n.sh\0\
+                   120000 def 0\tpackages/link\0\
+                   100644 ghi 0\tpackages/lib.rs\0";
+        let index = GitIndex::parse(raw.as_bytes().to_vec()).unwrap();
+        assert_eq!(index.raw, raw);
+        assert_eq!(
+            index.paths,
+            [
+                "packages/run\ttool\n.sh",
+                "packages/link",
+                "packages/lib.rs"
+            ]
+        );
+        assert!(index.modes.is_executable("packages/run\ttool\n.sh"));
+        assert!(index.modes.is_symlink("packages/link"));
+        assert!(!index.modes.is_executable("packages/lib.rs"));
+        assert!(!index.modes.is_symlink("packages/lib.rs"));
+        let empty = GitIndex::parse(Vec::new()).unwrap();
+        assert!(empty.raw.is_empty());
+        assert!(empty.paths.is_empty());
+        assert_eq!(empty.modes, WorkTreeModes::default());
+    }
+
+    #[test]
+    fn index_snapshot_rejects_unusable_records() {
+        let error = GitIndex::parse(b"missing field separator\0".to_vec()).unwrap_err();
+        assert!(error.find_source::<MalformedIndexError>().is_some());
+        let error = GitIndex::parse(b"100644 abc 0\tbad\xffpath\0".to_vec()).unwrap_err();
+        assert!(error.find_source::<NonUtf8PathError>().is_some());
+    }
+
     /// A regular file's mode is chosen by its executable bit.
     #[test]
     fn a_regular_files_mode_is_chosen_by_its_executable_bit() {
@@ -909,10 +888,7 @@ mod tests {
         assert_eq!(tree_mode(false), REGULAR_TREE_MODE);
     }
 
-    /// An empty pathspec list never reaches Git.
-    ///
-    /// `git ls-files` with no pathspec lists the whole repository, which would report executable
-    /// paths from every package rather than only the one being classified.
+    /// The acquired index supplies modes until an actual work-tree change overrides them.
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
     #[test]
     fn work_tree_modes_include_the_index() {
@@ -940,11 +916,19 @@ mod tests {
             fs::set_permissions(path, permissions).unwrap();
         }
 
-        let modes = repo.work_tree_modes(&["packages/foo"]).unwrap();
+        let index = repo.index().unwrap();
+        assert_eq!(
+            index.paths,
+            ["first.txt", "packages/foo/lib.rs", "packages/foo/run.sh"]
+        );
+        let modes = repo.work_tree_modes(&index, &["packages/foo"]).unwrap();
         assert!(modes.is_executable("packages/foo/run.sh"));
         assert!(!modes.is_executable("packages/foo/lib.rs"));
         assert!(!modes.is_symlink("packages/foo/run.sh"));
-        assert_eq!(repo.work_tree_modes(&[]).unwrap(), WorkTreeModes::default());
+        assert_eq!(
+            repo.work_tree_modes(&index, &[]).unwrap(),
+            WorkTreeModes::default()
+        );
     }
 
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
@@ -1150,10 +1134,9 @@ mod tests {
         };
 
         repo.first_parent_commits("HEAD").unwrap_err();
-        repo.ls_files("").unwrap_err();
+        repo.index().unwrap_err();
         repo.ls_untracked("").unwrap_err();
         repo.ls_tree("HEAD", &[""]).unwrap_err();
-        repo.ls_tree_paths("HEAD").unwrap_err();
         repo.hash_objects(&["Cargo.toml"]).unwrap_err();
         repo.rev_parse("HEAD").unwrap_err();
     }
@@ -1215,11 +1198,40 @@ mod tests {
         let repo = init_repo_with_two_commits(temp.path());
 
         assert_eq!(
-            repo.show_file("HEAD", "first.txt").unwrap().as_deref(),
-            Some("one\n")
+            repo.show_file_bytes("HEAD", "first.txt")
+                .unwrap()
+                .as_deref(),
+            Some(b"one\n".as_slice())
         );
-        assert_eq!(repo.show_file("HEAD", "absent.txt").unwrap(), None);
-        repo.show_file("no-such-revision", "first.txt").unwrap_err();
+        assert_eq!(repo.show_file_bytes("HEAD", "absent.txt").unwrap(), None);
+        repo.show_file_bytes("no-such-revision", "first.txt")
+            .unwrap_err();
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "spawns Git with real object replacement refs")]
+    fn batch_objects_follow_repository_replacement_refs() {
+        let temp = tempdir().unwrap();
+        let repo = init_repo(temp.path());
+        let original = repo.rev_parse("HEAD:first.txt").unwrap();
+        let bytes = b"replacement\0bytes\n";
+        let replacement =
+            run_capture_input("git", &["hash-object", "-w", "--stdin"], bytes, temp.path())
+                .unwrap();
+        run_capture(
+            "git",
+            &["replace", &original, replacement.trim()],
+            temp.path(),
+        )
+        .unwrap();
+        let objects = GitObjects::read(temp.path(), &[&original]).unwrap();
+        assert_eq!(objects.blob(&original).unwrap(), bytes);
+        assert_eq!(
+            repo.show_file_bytes("HEAD", "first.txt")
+                .unwrap()
+                .as_deref(),
+            Some(bytes.as_slice())
+        );
     }
 
     fn init_repo_with_two_commits(root: &Path) -> GitRepo {
@@ -1273,22 +1285,6 @@ mod tests {
         assert_eq!(dir_pathspec("packages/foo*"), ":(literal)packages/foo*");
     }
 
-    #[test]
-    fn cased_pathspec_follows_the_checkout_case_rules() {
-        assert_eq!(
-            cased_pathspec("Packages/README.md", PathCase::Sensitive),
-            ":(literal)Packages/README.md"
-        );
-        assert_eq!(
-            cased_pathspec("Packages/README.md", PathCase::Insensitive),
-            ":(icase,literal)Packages/README.md"
-        );
-        assert_eq!(
-            cased_pathspec("", PathCase::Insensitive),
-            ":(icase,literal)."
-        );
-    }
-
     /// A directory named like a pattern lists only its own files.
     ///
     /// The literal pathspec must survive the round trip through Git itself: the escaping is only
@@ -1306,10 +1302,6 @@ mod tests {
         }
         let repo = init_repo(root);
 
-        assert_eq!(
-            repo.ls_files("packages/de[m]o").unwrap(),
-            vec!["packages/de[m]o/lib.rs".to_string()]
-        );
         let entries = repo.ls_tree("HEAD", &["packages/de[m]o"]).unwrap();
         assert_eq!(
             entries
