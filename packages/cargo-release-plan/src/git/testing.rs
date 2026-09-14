@@ -37,6 +37,8 @@ impl Repository {
         }
         fixture.command(&["config", "core.autocrlf", "false"]);
         fixture.command(&["config", "core.eol", "lf"]);
+        // Disposable fixtures must not start a daemon from inherited host settings.
+        fixture.command(&["config", "core.fsmonitor", "false"]);
         fixture
     }
 
