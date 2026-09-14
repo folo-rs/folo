@@ -71,6 +71,11 @@ directories to cover successful output capture and nonzero exits. Tests that nee
 repository state create it explicitly in temporary fixtures; integration tests
 share a hermetic fixture. The source tree's Git metadata is never a test prerequisite.
 
+Cargo subprocess arguments retain the required `Cargo.toml` basename even when
+canonicalized captured inputs record another spelling. This conversion follows
+the containing directory's probed alias behavior; it never redirects a distinct
+manifest on a sensitive filesystem. Git lookups continue to use recorded spelling.
+
 ### Test boundaries
 
 Pure decision and validation tests own the combinations of versions, dependency
@@ -96,10 +101,23 @@ use Cargo's test classifications: ordinary testing includes integration targets,
 while mutation testing selects only library unit-test targets under the
 [workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
 
+Released-file discovery unit tests use small Git indexes and filesystem fixtures
+without constructing or resolving Cargo workspaces. They exercise selection,
+presence, modes and cleaned blob bytes at the acquisition boundary. Optional
+reads and hash-input validation inject metadata and byte-read observations so
+disappearance between operations, permission failures and symlink rejection remain
+deterministic without races, delays or host symlink privileges. Real-filesystem
+link tests also exercise the metadata adapter on platforms that permit them.
+
 Filesystem path tests create symlinked temporary roots explicitly rather than
 depending on the host's temporary-directory layout. Expected destinations use a
 canonical existing ancestor followed by the missing suffix, preserving assertions
 about symlink resolution and parent traversal without assuming a root spelling.
+Artifact path resolution accepts injected canonicalization and directory queries
+for deterministic operational-error tests. A transient failure must propagate even
+if a subsequent query would succeed; tests do not depend on filesystem races or
+the host account's permissions. Output staging is tested before promotion so its
+same-directory placement, complete contents, and unchanged destination are observable.
 
 ## Workspace snapshots
 
@@ -207,10 +225,24 @@ package are flattened to the archive root, matching Cargo's layout. Their
 tracked state is queried explicitly so an untracked external README cannot affect
 a verdict.
 
-Path case is probed once at the workspace root and reused for member matching,
-declared-resource resolution, and default README detection. Git's recorded
-resource spelling is retained for blob and mode lookups. An inconclusive probe
+Path case is probed at the workspace root and reused throughout each current and
+historical snapshot. Relative-path matching compares whole components and retains
+Git's recorded suffix. Historical manifests, configuration and lockfiles resolve
+to recorded tree paths before blob lookup. Implicit path members use recorded
+directory keys, so dependency aliases cannot omit members or introduce duplicate
+membership. The manifest-history pathspec follows the same probed rules.
+
+The read-only filesystem probe forwards directory entries and case-flipped entry
+checks, without following symbolic links, to a pure decision function. Unit tests
+exercise both possible filesystem responses and ambiguous entries independently of the host volume;
+real-filesystem regressions verify the acquisition boundary. An inconclusive probe
 chooses case-sensitive matching, which does not widen the selected content.
+Insensitive historical selection uses a full Git tree listing: Git can record
+files under differently cased directory prefixes that merge in the checkout,
+and `ls-tree` cannot express case-insensitive pathspecs. Final packaging and
+resource matching determine the released files, not the breadth of the listing.
+Cargo's own reserved packaging names and include/exclude patterns retain their
+literal matching semantics.
 
 ### Patch rendering
 

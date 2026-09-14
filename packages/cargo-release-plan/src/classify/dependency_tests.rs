@@ -50,6 +50,7 @@ fn historical_paths_distinguish_local_inherited_and_outside_members() {
         git: &git,
         commit: commit.trim(),
         workspace_prefix: "nested/",
+        case: PathCase::Sensitive,
         workspace: WorkspaceInherit::from_root(&root),
         paths,
         parsed: BTreeMap::new(),
