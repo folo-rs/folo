@@ -25,6 +25,9 @@ The integration suite is one test binary, `tests/integration/`, split into a
 topic module per area of behavior over the shared `harness`. Add a new case to
 the module that matches its subject rather than growing a single file.
 
+Place complete prepare/preview/evidence scenarios in `tests/integration/artifact_workflow/`.
+Its early deterministic scheduling keeps long subprocess chains from forming the suite's tail.
+
 Keep field and decision matrices in the owning module's unit tests. Do not build
 a prepared/previewed workspace merely to test a validator or an output format.
 Reuse one classification report for assertions about the same unchanged state.

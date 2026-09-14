@@ -379,8 +379,7 @@ pub(crate) fn classify(
         package.resources =
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
-    let head = git.head()?;
-    let base_sha = git.rev_parse(&base)?;
+    let (head, base_sha) = git.head_and_base(&base)?;
     verbose.note(|| {
         format!(
             "classifying {} against base {} ({base_sha}); \
@@ -700,7 +699,7 @@ fn build_timeline(
             .checked_add(1)
             .is_some_and(|next| next == commits.len());
         let has_parent = if is_last {
-            cache.has_parent(git, commit)?
+            cache.oldest_has_parent(git, commit)?
         } else {
             true
         };
@@ -1420,8 +1419,11 @@ impl SnapshotCache {
         self.case
     }
 
-    /// Root and shallow-boundary facts are shared by all packages in this history.
-    fn has_parent(&mut self, git: &GitRepo, commit: &str) -> Result<bool, AppError> {
+    /// The oldest commit of a complete first-parent walk is a root unless history is shallow.
+    fn oldest_has_parent(&mut self, git: &GitRepo, commit: &str) -> Result<bool, AppError> {
+        if !git.is_shallow() {
+            return Ok(false);
+        }
         if let Some(has_parent) = self.parents.get(commit) {
             return Ok(*has_parent);
         }
@@ -1446,7 +1448,7 @@ fn load_snapshot(
     case: PathCase,
     registries: &BTreeMap<String, String>,
 ) -> Result<CommitSnapshot, AppError> {
-    let files = SnapshotFiles::load(git, commit)?;
+    let files = SnapshotFiles::load(git, commit, case)?;
     let root_rel = root_manifest_rel(git);
     // History before the workspace existed has no root manifest. An empty
     // `[workspace]` reproduces that state exactly: no members, so every current

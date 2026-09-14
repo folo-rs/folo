@@ -113,6 +113,7 @@ fn decode_default_base(recorded: Option<String>) -> DefaultBase {
 pub(crate) struct GitRepo {
     root: PathBuf,
     prefix: String,
+    shallow: bool,
 }
 
 impl GitRepo {
@@ -123,22 +124,26 @@ impl GitRepo {
         } else {
             start
         };
-        // Both answers are asked of the same directory rather than derived from
-        // one another: stripping the root from a path Cargo reported would
-        // compare two spellings of the same directory that need not match, since
-        // Windows hands out 8.3 short names for some paths and symlinked or
-        // substituted roots differ on every platform.
-        //
-        // Each answer is read from its own invocation because `git` separates
-        // them with a newline, which is a legal character in a path name and so
-        // cannot be told apart from one inside an answer.
-        let root = run_capture("git", &["rev-parse", "--show-toplevel"], dir)?;
-        // Empty when the repository root is the directory itself.
-        let prefix = run_capture("git", &["rev-parse", "--show-prefix"], dir)?;
-        let prefix = strip_terminator(&prefix);
+        let location = run_capture(
+            "git",
+            &["rev-parse", "--show-toplevel", "--is-shallow-repository"],
+            dir,
+        )?;
+        let (root, shallow) = decode_repository_location(&location)?;
+        // An exact root match proves the prefix is empty. Otherwise ask Git rather than
+        // subtracting differently spelled Cargo/Git paths (short names, symlinks, or aliases).
+        // Keep the path answers separate: newlines are legal within paths, not a safe separator.
+        let prefix = if root == dir {
+            String::new()
+        } else {
+            let prefix = run_capture("git", &["rev-parse", "--show-prefix"], dir)?;
+            let prefix = strip_terminator(&prefix);
+            prefix.strip_suffix('/').unwrap_or(prefix).to_owned()
+        };
         Ok(Self {
-            root: PathBuf::from(strip_terminator(&root)),
-            prefix: prefix.strip_suffix('/').unwrap_or(prefix).to_string(),
+            root,
+            prefix,
+            shallow,
         })
     }
 
@@ -178,12 +183,17 @@ impl GitRepo {
         Ok(decode_default_base(recorded))
     }
 
-    // HEAD is only used as a report label; tests do not pin the exact SHA string.
-    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn head(&self) -> Result<String, AppError> {
         Ok(run_capture("git", &["rev-parse", "HEAD"], &self.root)?
             .trim()
             .to_string())
+    }
+
+    /// Reuses the resolved head when it also identifies the requested baseline.
+    pub(crate) fn head_and_base(&self, base: &str) -> Result<(String, String), AppError> {
+        let head = self.head()?;
+        let base = resolve_base_from_head(&head, base, || self.rev_parse(base))?;
+        Ok((head, base))
     }
 
     /// First-parent commits reachable from `rev`, newest first, as full hashes.
@@ -210,7 +220,7 @@ impl GitRepo {
         if run_capture_ok("git", &["rev-parse", "--verify", &spec], &self.root)?.is_some() {
             return Ok(true);
         }
-        self.is_shallow()
+        Ok(self.is_shallow())
     }
 
     fn commit_has_parent_header(&self, commit: &str) -> Result<bool, AppError> {
@@ -234,41 +244,24 @@ impl GitRepo {
     /// first-parent commit.
     pub(crate) fn first_parent_manifest_commits(&self, rev: &str) -> Result<Vec<String>, AppError> {
         let all = self.first_parent_commits(rev)?;
-        let stdout = run_capture(
-            "git",
-            &[
-                "rev-list",
-                "--first-parent",
-                rev,
-                "--",
-                MANIFEST_FILE_NAME,
-                MANIFEST_GLOB_PATHSPEC,
-            ],
-            &self.root,
-        )?;
-        let touching: HashSet<&str> = stdout
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
-        // Keep the base revision and the oldest first-parent commit even when they
-        // do not touch a manifest, so the timeline still observes HEAD and can
-        // distinguish a true root from truncated history.
-        let newest = all.first().cloned();
-        let oldest = all.last().cloned();
-        Ok(all
-            .into_iter()
-            .filter(|commit| {
-                touching.contains(commit.as_str())
-                    || newest.as_deref() == Some(commit.as_str())
-                    || oldest.as_deref() == Some(commit.as_str())
-            })
-            .collect())
+        select_manifest_commits(all, || {
+            run_capture(
+                "git",
+                &[
+                    "rev-list",
+                    "--first-parent",
+                    rev,
+                    "--",
+                    MANIFEST_FILE_NAME,
+                    MANIFEST_GLOB_PATHSPEC,
+                ],
+                &self.root,
+            )
+        })
     }
 
-    fn is_shallow(&self) -> Result<bool, AppError> {
-        let stdout = run_capture("git", &["rev-parse", "--is-shallow-repository"], &self.root)?;
-        Ok(stdout.trim() == "true")
+    pub(crate) fn is_shallow(&self) -> bool {
+        self.shallow
     }
 
     /// Raw bytes at `commit:rel_path`, or `None` if the path is absent.
@@ -417,6 +410,69 @@ impl GitRepo {
 /// so trimming whitespace would silently rename it.
 fn strip_terminator(value: &str) -> &str {
     value.strip_suffix('\n').unwrap_or(value)
+}
+
+/// The fixed boolean trailer is unambiguous even when the root contains newlines.
+fn decode_repository_location(output: &str) -> Result<(PathBuf, bool), AppError> {
+    let output = output
+        .strip_suffix('\n')
+        .ok_or_else(MalformedRepositoryLocationError::new)?;
+    let (root, shallow) = output
+        .rsplit_once('\n')
+        .ok_or_else(MalformedRepositoryLocationError::new)?;
+    if root.is_empty() {
+        return Err(MalformedRepositoryLocationError::new().into());
+    }
+    let shallow = match shallow {
+        "true" => true,
+        "false" => false,
+        _ => return Err(MalformedRepositoryLocationError::new().into()),
+    };
+    Ok((PathBuf::from(root), shallow))
+}
+
+fn select_manifest_commits(
+    all: Vec<String>,
+    touching: impl FnOnce() -> Result<String, AppError>,
+) -> Result<Vec<String>, AppError> {
+    // Both history boundaries are always retained. A history containing only those boundaries
+    // cannot be narrowed by checking which commits changed manifests.
+    if matches!(all.as_slice(), [] | [_] | [_, _]) {
+        return Ok(all);
+    }
+    let stdout = touching()?;
+    let touching: HashSet<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let newest = all.first().cloned();
+    let oldest = all.last().cloned();
+    Ok(all
+        .into_iter()
+        .filter(|commit| {
+            touching.contains(commit.as_str())
+                || newest.as_deref() == Some(commit.as_str())
+                || oldest.as_deref() == Some(commit.as_str())
+        })
+        .collect())
+}
+
+/// Invalid discovery output cannot identify the repository or its history boundary.
+#[ohno::error]
+#[display("Git returned invalid repository location or shallow-state output")]
+struct MalformedRepositoryLocationError;
+
+fn resolve_base_from_head(
+    head: &str,
+    base: &str,
+    resolve: impl FnOnce() -> Result<String, AppError>,
+) -> Result<String, AppError> {
+    if base == "HEAD" || base == head {
+        Ok(head.to_owned())
+    } else {
+        resolve()
+    }
 }
 
 /// Command-line budget one `git hash-object` invocation may spend on paths.
@@ -1088,6 +1144,7 @@ mod tests {
         let repo = GitRepo::discover(temp.path()).unwrap();
 
         assert_eq!(repo.prefix(), "");
+        assert!(!repo.is_shallow());
         assert!(
             repo.root().ends_with(
                 temp.path()
@@ -1120,6 +1177,85 @@ mod tests {
         GitRepo::discover(temp.path()).unwrap_err();
     }
 
+    #[test]
+    fn known_head_baselines_do_not_repeat_resolution() {
+        // Opaque identities stand in for the result of a prior Git lookup.
+        let head = "head-id";
+        for base in ["HEAD", head] {
+            assert_eq!(
+                resolve_base_from_head(head, base, || panic!("unnecessary Git lookup")).unwrap(),
+                head
+            );
+        }
+        assert_eq!(
+            resolve_base_from_head(head, "release-line", || Ok("base-id".to_owned())).unwrap(),
+            "base-id"
+        );
+        let error = resolve_base_from_head(head, "missing", || {
+            Err(UnresolvedBaseError::new("missing").into())
+        })
+        .unwrap_err();
+        assert!(error.find_source::<UnresolvedBaseError>().is_some());
+    }
+
+    #[test]
+    fn repository_location_keeps_path_newlines_before_the_boolean_trailer() {
+        let root = "/repository with spaces/line\ntrue\n";
+        for (flag, expected) in [("false", false), ("true", true)] {
+            let (path, shallow) = decode_repository_location(&format!("{root}\n{flag}\n")).unwrap();
+            assert_eq!(path, Path::new(root));
+            assert_eq!(shallow, expected);
+        }
+        for output in [
+            "",
+            "/repository\n",
+            "\nfalse\n",
+            "/repository\nfalse",
+            "/repository\nunknown\n",
+            "/repository\nfalse\nextra\n",
+        ] {
+            let error = decode_repository_location(output).unwrap_err();
+            assert!(
+                error
+                    .find_source::<MalformedRepositoryLocationError>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn boundary_only_histories_need_no_manifest_query() {
+        for commits in [vec![], vec!["head"], vec!["head", "root"]] {
+            let commits: Vec<String> = commits.into_iter().map(str::to_owned).collect();
+            let selected = select_manifest_commits(commits.clone(), || {
+                panic!("both history boundaries are retained without a path query")
+            })
+            .unwrap();
+            assert_eq!(selected, commits);
+        }
+    }
+
+    #[test]
+    fn longer_histories_keep_boundaries_and_only_relevant_interior_commits() {
+        let commits: Vec<String> = ["head", "quiet", "manifest", "root"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            select_manifest_commits(commits.clone(), || Ok("\n manifest \nother\n".to_owned()))
+                .unwrap(),
+            ["head", "manifest", "root"]
+        );
+        assert_eq!(
+            select_manifest_commits(commits.clone(), || Ok(String::new())).unwrap(),
+            ["head", "root"]
+        );
+        let error =
+            select_manifest_commits(commits, || Err(UnresolvedBaseError::new("missing").into()))
+                .unwrap_err();
+        assert!(error.find_source::<UnresolvedBaseError>().is_some());
+    }
+
     /// Listings fail when the root is not a repository.
     ///
     /// Every listing runs `git` in the repository root, so a root that is not a repository must
@@ -1131,6 +1267,7 @@ mod tests {
         let repo = GitRepo {
             root: temp.path().to_path_buf(),
             prefix: String::new(),
+            shallow: false,
         };
 
         repo.first_parent_commits("HEAD").unwrap_err();

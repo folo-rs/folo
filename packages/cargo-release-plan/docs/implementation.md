@@ -55,12 +55,23 @@ The subprocess boundary also covers `cargo metadata --no-deps`,
 `cargo package --list`, and explicit offline preparation/preview. Classification never
 runs a build or a full dependency resolution.
 
+Already established identities avoid redundant lookups: an exact match to Git's
+reported root needs no prefix query, and a baseline naming the resolved `HEAD`
+needs no second revision lookup. Other directory spellings and revision
+expressions remain Git queries rather than inferred path or reference rules.
+Discovery reads shallow state alongside the root using a fixed boolean trailer,
+which remains unambiguous when the path contains newlines.
+
 Immutable object reads use bounded `git cat-file --batch` requests rather than a
 new process per file. Request input reaches EOF through an anonymous temporary
 file; the child output is collected before object framing is interpreted. This
 avoids an interactive pipe protocol whose writer and reader could block each
 other. Process failures and malformed responses are errors. Missing or non-blob
 objects remain explicit results until their contents are required.
+
+Ordinary hashing and index installation retain in-memory stdin: those commands
+consume input before producing their bounded response. File-backed input is
+reserved for batches whose output can arrive before all requests are consumed.
 
 Git paths remain repository-relative and `/`-separated. Operating-system paths
 from Cargo are converted once when they enter the manifest model. NUL-delimited
@@ -94,6 +105,11 @@ classifies each unchanged workspace state only once where the resulting report
 can establish all its assertions. Output-format combinations belong to renderer
 tests, not additional repository classifications. Structural expansion tests stop
 at the expanded artifact; only preview tests acquire resolved evidence.
+
+Complete artifact workflows are grouped ahead of classification topics in the
+deterministic libtest name order. Starting their long subprocess chains while the
+suite has other work avoids a late tail of underutilized test workers. This is
+scheduling within the same unfiltered suite, not a separate or omitted baseline.
 
 Lockfile integration cases change selected and development-only identities in the
 same acquired state, asserting the exact reported dependency changes. In-memory
@@ -177,6 +193,11 @@ Only first-parent commits that can affect a parsed manifest are reconstructed,
 plus the newest and oldest commits needed to distinguish a true root from a
 shallow boundary. `anchor` walks the resulting package timeline until it finds a
 version change, package creation, or insufficient history.
+
+A walk containing only its retained boundaries needs no manifest-path query.
+The oldest commit of a successfully completed walk in a non-shallow repository
+is a root. Shallow repositories retain the explicit parent-header check, whose
+result is shared across packages rather than reacquired for each timeline.
 
 A package not published by the baseline bypasses the walk and becomes new.
 Within a walk, an unpublished manifest is skipped rather than treated as absent:

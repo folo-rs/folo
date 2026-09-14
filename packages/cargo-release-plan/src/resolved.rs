@@ -74,11 +74,12 @@ impl Inputs {
             &mut paths,
         )?;
         let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
+        let (head, base) = git.head_and_base(&base_revision)?;
         Ok(Self {
             root,
             manifest,
-            head: git.head()?,
-            base: git.rev_parse(&base_revision)?,
+            head,
+            base,
             base_revision,
             index: work_tree.index.raw,
             paths,

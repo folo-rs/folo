@@ -777,6 +777,16 @@ fn direct_paths_select_exact_endpoint_versions_across_excluded_and_workspace_pac
              [dependencies]\nexternal-leaf = \"1\"\n",
         );
         fixture.write("external/foo/src/lib.rs", "pub fn f() {}\n");
+        // Probe the actual fixture filesystem before using a case-variant manifest spelling.
+        // Historical identity lookup must preserve the recorded spelling at the batch boundary.
+        let alternate_case = fixture.path().join("external/foo/CARGO.TOML").exists();
+        if alternate_case {
+            fs::rename(
+                fixture.path().join("external/foo/Cargo.toml"),
+                fixture.path().join("external/foo/cargo.toml"),
+            )
+            .unwrap();
+        }
         let lockfile = r#"version = 4
 [[package]]
 name = "tool"
@@ -805,6 +815,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
         fixture.write("Cargo.lock", lockfile);
         fixture.commit("seed distinct path packages satisfying the same requirement");
+        if alternate_case {
+            assert!(
+                fixture
+                    .git(&["ls-files", "-z"])
+                    .split('\0')
+                    .any(|path| path == "external/foo/cargo.toml")
+            );
+        }
         let base = fixture.sha("HEAD");
 
         let manifest = format!("{directory}/Cargo.toml");

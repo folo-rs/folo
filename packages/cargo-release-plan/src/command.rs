@@ -26,8 +26,24 @@ pub(crate) fn run_capture_input(
     bytes: &[u8],
     cwd: &Path,
 ) -> Result<String, AppError> {
-    run_capture_input_bytes(program, args, bytes, cwd)
-        .map(|output| String::from_utf8_lossy(&output).into_owned())
+    // Hashing and index installation consume their input before returning a bounded response.
+    // Keep those frequent calls in memory; object batches use the file-backed path below.
+    let mut child = capture_command(program, args, cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| CommandIoError::caused_by(program, error))?;
+    let written = child
+        .stdin
+        .take()
+        .expect("the child was started with piped standard input")
+        .write_all(bytes);
+    let output = child
+        .wait_with_output()
+        .map_err(|error| CommandIoError::caused_by(program, error))?;
+    written.map_err(|error| CommandIoError::caused_by(program, error))?;
+    capture_stdout(program, output).map(|output| String::from_utf8_lossy(&output).into_owned())
 }
 
 /// Captures raw output after giving a subprocess a finite, already-written input.

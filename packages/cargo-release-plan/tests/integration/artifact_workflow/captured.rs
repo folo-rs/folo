@@ -1,4 +1,4 @@
-//! Captured-state rejection boundaries and nested workspace input identity.
+//! Captured-input rejection before preparing a resolution workspace.
 
 use cargo_release_plan::{RunInput, run};
 
