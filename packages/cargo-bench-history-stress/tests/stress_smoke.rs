@@ -6,12 +6,16 @@
 //! exercised quickly. They spawn real processes (the harness and `git`), so they
 //! are `#[cfg_attr(miri, ignore)]`.
 //!
-//! The scenario is sized from the detectors' evidence gates rather than picked for
+//! Detection scenarios are sized from the detectors' evidence gates rather than picked for
 //! speed alone, and the assertions pin the exact set of findings the synthetic
 //! dataset is built to produce. Both matter: a scenario below the gates, or a
 //! defect that stopped the pipeline short of detection, would report zero findings
 //! while every "the binary ran" check still passed. Pinning the ground truth makes
 //! this suite a liveness canary for the whole harness.
+//!
+//! Orthogonal CLI/storage checks use a minimal history. The window-cap check keeps
+//! the real production cap but needs only the drifting family in each discriminant
+//! set; the ordinary detection scenarios cover the complete family matrix.
 
 #![allow(
     clippy::arithmetic_side_effects,
@@ -85,9 +89,6 @@ const SERIES: usize = BENCHMARKS * DISCRIMINANT_SETS;
 /// mid-history step family in every set, plus the blessable step family in every
 /// set no blessing re-baselined.
 const HISTORY_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS + (DISCRIMINANT_SETS - BLESSED_SETS);
-
-/// Branch-mode regressions explicitly seeded by elevating two benchmarks in every set.
-const SEEDED_BRANCH_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS;
 
 /// Branch-mode regressions the default scenario can judge.
 ///
@@ -331,13 +332,26 @@ fn finds_the_seeded_branch_regressions() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn branch_mode_handles_more_base_evidence_than_its_window_cap() {
+    // The first benchmark is the drifting family, elevated on the feature branch.
+    // One series per set exercises the production cap and both noisy/count metrics
+    // without repeating full-window regime searches for the other shape families.
+    const BENCHMARKS: usize = 1;
+
+    let benchmarks = BENCHMARKS.to_string();
     let commits = MAX_BRANCH_BASE_COMMITS.saturating_mul(2).to_string();
-    let stdout = successful_stress(&["--commits", &commits, "--modes", "branch"]);
+    let stdout = successful_stress(&[
+        "--benchmarks",
+        &benchmarks,
+        "--commits",
+        &commits,
+        "--modes",
+        "branch",
+    ]);
     let with_runs = summary_count(&stdout, "with a run:");
 
     assert!(
-        with_runs >= MAX_BRANCH_BASE_COMMITS,
-        "the scenario must reach the production branch window cap: {stdout}"
+        with_runs > MAX_BRANCH_BASE_COMMITS,
+        "the scenario must exceed the production branch window cap: {stdout}"
     );
     let rows = mode_rows(&stdout);
     let branch = rows
@@ -348,8 +362,8 @@ fn branch_mode_handles_more_base_evidence_than_its_window_cap() {
         (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
         "{stdout}"
     );
-    assert_eq!(branch.series, SERIES, "{stdout}");
-    assert_eq!(branch.regressions, SEEDED_BRANCH_REGRESSIONS, "{stdout}");
+    assert_eq!(branch.series, BENCHMARKS * DISCRIMINANT_SETS, "{stdout}");
+    assert_eq!(branch.regressions, DISCRIMINANT_SETS, "{stdout}");
     assert_eq!(branch.improvements, Some(BRANCH_IMPROVEMENTS), "{stdout}");
     assert!(branch.notable, "{stdout}");
 }
@@ -358,7 +372,9 @@ fn branch_mode_handles_more_base_evidence_than_its_window_cap() {
 #[cfg_attr(miri, ignore)]
 fn is_deterministic_across_runs() {
     let first = successful_stress(&["--repeat", "2", "--seed", "424242"]);
-    let second = successful_stress(&["--repeat", "2", "--seed", "424242"]);
+    // Compare repeated analysis with a fresh single-pass process: repeat count
+    // must not change findings, and rebuilding the same seed must reproduce them.
+    let second = successful_stress(&["--repeat", "1", "--seed", "424242"]);
 
     assert_eq!(
         mode_rows(&first),
@@ -379,7 +395,19 @@ fn keeps_seeded_data_under_the_versioned_prefix_when_asked() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().to_str().expect("temp path is valid UTF-8");
 
-    let stdout = successful_stress(&["--keep", "--dir", path, "--modes", "history"]);
+    // Storage layout does not depend on clearing detection's evidence gates.
+    // Keep the engine matrix, blessings and dirty snapshots, but not a long history.
+    let stdout = successful_stress(&[
+        "--benchmarks",
+        "1",
+        "--commits",
+        "1",
+        "--keep",
+        "--dir",
+        path,
+        "--modes",
+        "history",
+    ]);
 
     // Local storage writes the same versioned key layout the backends use, so every
     // object the run reports having seeded must be a file under the project
@@ -421,8 +449,9 @@ fn rejects_a_cache_against_local_storage() {
 #[cfg_attr(miri, ignore)]
 fn reports_progress_and_explains_only_under_verbose() {
     // Always-on phase markers go to stderr; explanatory detail lines appear there
-    // only when --verbose is set.
-    let quiet = run_stress(&["--modes", "history"]);
+    // only when --verbose is set. A minimal stored history exercises those IO
+    // phases without repeating the detection scenarios' statistical work.
+    let quiet = run_stress(&["--benchmarks", "1", "--commits", "1", "--modes", "history"]);
     assert!(
         quiet.status.success(),
         "stderr: {}",
@@ -438,7 +467,15 @@ fn reports_progress_and_explains_only_under_verbose() {
         "detail lines must stay silent without --verbose: {quiet_err}"
     );
 
-    let verbose = run_stress(&["--modes", "history", "--verbose"]);
+    let verbose = run_stress(&[
+        "--benchmarks",
+        "1",
+        "--commits",
+        "1",
+        "--modes",
+        "history",
+        "--verbose",
+    ]);
     assert!(
         verbose.status.success(),
         "stderr: {}",

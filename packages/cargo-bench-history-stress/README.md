@@ -72,6 +72,20 @@ anchor + SplitMix64 generator), so timings are comparable across runs. The seede
 shapes are relative to each series' own base value, so the *findings* depend on the
 sizing alone — the seed moves every value but changes no verdict.
 
+### Smoke-test scope
+
+Detection smoke scenarios cover every shape and discriminant set above the evidence
+gates and assert exact findings. Repeatability compares repeated analysis with a fresh
+single-pass process using the same seed. The branch-window scenario exceeds the real
+production cap using a drifting series in every discriminant set; it checks loaded
+objects, series and seeded regressions without multiplying full-window statistical
+searches across the other shapes. Storage retention and verbosity checks use minimal
+histories because their contracts do not depend on detection evidence.
+
+These scenarios run unchanged under ordinary and mutation testing. The mutation
+baseline's fixed deadline covers the aggregate Cargo command, not each package
+individually; a package-only smoke pass does not establish that a workspace shard fits.
+
 ## Running it
 
 Local filesystem (a temporary directory, removed on exit unless `--keep`):
