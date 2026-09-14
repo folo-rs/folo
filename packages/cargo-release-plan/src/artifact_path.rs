@@ -2,7 +2,7 @@
 // Resolve existing ancestors before comparing their eventual filesystem locations.
 
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, Metadata};
 use std::io::{Error as IoError, ErrorKind};
 use std::path::{Component, Path, PathBuf, absolute};
 
@@ -15,15 +15,30 @@ pub(crate) fn same_path(left: &Path, right: &Path) -> Result<bool, AppError> {
 }
 
 pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf, AppError> {
-    let mut ancestor = absolute(path).map_err(|error| WriteFileError::caused_by(path, error))?;
+    resolve_path_with(
+        path,
+        absolute(path).map_err(|error| WriteFileError::caused_by(path, error))?,
+        |path| fs::canonicalize(path),
+        |path| fs::metadata(path),
+    )
+}
+
+// Acquisition is injectable so transient filesystem failures can be exercised without
+// permission changes or races. See docs/implementation.md, "Test boundaries".
+fn resolve_path_with(
+    path: &Path,
+    mut ancestor: PathBuf,
+    mut canonicalize: impl FnMut(&Path) -> Result<PathBuf, IoError>,
+    mut metadata: impl FnMut(&Path) -> Result<Metadata, IoError>,
+) -> Result<PathBuf, AppError> {
     let mut suffix = Vec::<OsString>::new();
     loop {
-        match fs::canonicalize(&ancestor) {
+        match canonicalize(&ancestor) {
             Ok(mut resolved) => {
                 // A parent component can return from a missing directory to an existing one.
                 // Resolve each subsequent component again so a later symlink keeps its meaning.
                 for component in suffix.into_iter().rev() {
-                    match fs::metadata(&resolved) {
+                    match metadata(&resolved) {
                         Ok(metadata) if !metadata.is_dir() => {
                             return Err(WriteFileError::caused_by(
                                 path,
@@ -40,7 +55,7 @@ pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf, AppError> {
                     } else if component != "." {
                         resolved.push(component);
                     }
-                    match fs::canonicalize(&resolved) {
+                    match canonicalize(&resolved) {
                         Ok(canonical) => resolved = canonical,
                         Err(error) if error.kind() == ErrorKind::NotFound => {}
                         Err(error) => return Err(WriteFileError::caused_by(path, error).into()),
@@ -70,6 +85,7 @@ pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf, AppError> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::mem;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
@@ -78,6 +94,75 @@ mod tests {
     use tempfile::tempdir_in;
 
     use super::*;
+
+    #[test]
+    fn an_initial_operational_error_is_not_retried_as_a_missing_suffix() {
+        let mut failure = Some(IoError::from(ErrorKind::PermissionDenied));
+        let error = resolve_path_with(
+            Path::new("plan.json"),
+            Path::new("root").join("plan.json"),
+            |path| match failure.take() {
+                Some(error) => Err(error),
+                None => Ok(path.to_path_buf()),
+            },
+            |_| Err(IoError::from(ErrorKind::NotFound)),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<WriteFileError>().is_some());
+        assert_eq!(
+            error.find_source::<IoError>().unwrap().kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn directory_inspection_errors_are_not_missing_directories() {
+        let mut missing = true;
+        let error = resolve_path_with(
+            Path::new("plan.json"),
+            Path::new("root").join("plan.json"),
+            |path| {
+                if mem::take(&mut missing) {
+                    Err(IoError::from(ErrorKind::NotFound))
+                } else {
+                    Ok(path.to_path_buf())
+                }
+            },
+            |_| Err(IoError::from(ErrorKind::PermissionDenied)),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<WriteFileError>().is_some());
+        assert_eq!(
+            error.find_source::<IoError>().unwrap().kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn suffix_resolution_errors_are_not_missing_paths() {
+        let output = Path::new("root").join("plan.json");
+        let mut missing = true;
+        let error = resolve_path_with(
+            &output,
+            output.clone(),
+            |path| {
+                if mem::take(&mut missing) {
+                    Err(IoError::from(ErrorKind::NotFound))
+                } else if path == output {
+                    Err(IoError::from(ErrorKind::PermissionDenied))
+                } else {
+                    Ok(path.to_path_buf())
+                }
+            },
+            |_| Err(IoError::from(ErrorKind::NotFound)),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<WriteFileError>().is_some());
+        assert_eq!(
+            error.find_source::<IoError>().unwrap().kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
 
     #[test]
     #[cfg_attr(miri, ignore = "resolves filesystem paths with missing ancestors")]
@@ -116,6 +201,31 @@ mod tests {
                 .join("plan.json"),
         )
         .unwrap_err();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[cfg_attr(miri, ignore = "checks parent traversal through a regular file")]
+    fn parent_traversal_cannot_escape_a_non_directory() {
+        let directory = tempdir().unwrap();
+        let file = directory.path().join("file");
+        fs::write(&file, "not a directory").unwrap();
+        let error = resolve_path(
+            &directory
+                .path()
+                .join("missing")
+                .join("..")
+                .join("file")
+                .join("..")
+                .join("plan.json"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.find_source::<IoError>().unwrap().kind(),
+            ErrorKind::NotADirectory
+        );
+        assert_eq!(fs::read_to_string(file).unwrap(), "not a directory");
+        assert!(!directory.path().join("missing").exists());
     }
 
     #[cfg(unix)]
