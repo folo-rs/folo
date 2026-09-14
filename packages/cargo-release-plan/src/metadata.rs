@@ -3,6 +3,11 @@
 // The design forbids resolving a full graph or compiling. `--no-deps` is the
 // only Cargo invocation used for classification.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf, absolute};
@@ -1307,6 +1312,10 @@ pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String>
         .map(|package| package.manifest.name.clone())
         .collect()
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod discovery_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

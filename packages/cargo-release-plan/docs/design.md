@@ -416,6 +416,9 @@ A path selected at either end participates. Deleted files, files dropped from an
 `include` list, and formatting-only edits to a packaged manifest therefore remain
 visible.
 
+Only filesystem absence is interpreted as missing released content. Operational
+failures while inspecting or reading tracked inputs stop assessment.
+
 ### Where Cargo adds content
 
 Cargo includes several inputs outside ordinary package rules:
@@ -441,6 +444,9 @@ An installable binary target makes its package's recorded dependency resolution
 release-relevant, including when that package also contains a library. Examples,
 benchmarks, tests, and build scripts do not qualify, even when they are executable
 or physically included in an archive.
+
+Automatic target discovery uses tracked, present regular files. Untracked files,
+deleted inputs and directories named like binary sources do not qualify.
 
 The package-specific closure is compared rather than the workspace lockfile's
 bytes, so unrelated dependency movement does not affect every binary
