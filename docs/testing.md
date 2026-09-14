@@ -217,6 +217,33 @@ primitives instead — these are Miri-compatible.
 This rule applies even when `parking_lot` would offer a measurable performance
 benefit: Miri coverage is more valuable than the fast-path savings.
 
+## Mutation testing target selection
+
+Mutation testing builds and runs Cargo library unit-test targets (`--lib`).
+Cargo integration-test targets are excluded because their repeated
+build and execution cost is not part of the mutation-testing budget. Doctests,
+binary targets, examples, and benchmarks also stay outside this selection.
+
+Use Cargo's classifications directly. A test belongs to the selected unit-test
+suite because it is compiled into a library test harness, not because
+of a separate assessment of its complexity, runtime, or use of I/O. Expensive
+unit tests may be moved into Cargo integration-test targets when appropriate;
+the runner does not introduce another test taxonomy.
+
+CLI applications keep their implementation and its unit tests in a library crate,
+with a thin binary entry point. This lets their implementation participate in
+library-only mutation testing without testing the binary shell.
+
+Integration tests remain part of ordinary testing and coverage. They protect
+real-system behavior independently of mutation testing; they do not need to run
+against every mutant. The unmutated baseline still runs the selected unit-test
+targets, and missed mutations and timeouts still fail mutation validation.
+
+Improve unit coverage when practical. If a mutation cannot reasonably be caught
+by unit tests, it may be explicitly skipped with a justification under the policy
+below. An integration-only detection path is not a reason to include integration
+targets in mutation testing.
+
 ## Mutation testing coverage and skipping mutations
 
 We expect all mutations to either be unviable or to be caught. Uncaught mutations
@@ -237,6 +264,8 @@ justifiable reasons are:
   reached due to higher layers of the API preventing the situation from arising.
 * The mutation is in trivial forwarder code (e.g. a facade that chooses between a
   real and mock implementation).
+* The mutation requires integration testing to detect and cannot reasonably be
+  exercised through unit tests.
 
 To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a
 comment to justify why we are skipping it.

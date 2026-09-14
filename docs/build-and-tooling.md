@@ -88,6 +88,20 @@ applicable rather than on every polling-session creation.
 We operate under a **zero warnings allowed** requirement - fix all warnings that
 validation generates.
 
+### Mutation target selection
+
+`just mutants` selects Cargo library unit-test targets with `--lib`.
+The same selection applies to the unmutated baseline and each mutant. Integration
+tests, doctests, binary targets, examples, and benchmarks are not mutation-test targets; ordinary
+testing and coverage retain their own selections. See
+[the mutation-testing policy](testing.md#mutation-testing-target-selection).
+
+The selectors live in `.cargo/mutants.toml` under `additional_cargo_args`, so
+cargo-mutants applies them to both its test-build and test-execution commands.
+`additional_cargo_test_args` alone would still compile integration targets during
+the preceding build phase. CLI applications expose their implementation through a
+library crate rather than adding binary targets to the mutation run.
+
 ### Coverage status policy
 
 Codecov requires at least 95% coverage for both the overall project and the

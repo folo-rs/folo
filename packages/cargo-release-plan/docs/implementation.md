@@ -92,8 +92,9 @@ Fixtures remain independently mutable. Immutable Git initialization and empty
 global configuration can be shared within a test process, while commits still
 use Git's normal index and filtering behavior. Process-local reuse must not be
 assumed to span nextest's separate test processes. Both native and mutation runs
-exercise the same behavioral suite; runtime reductions do not rely on a relaxed
-deadline or mutation-only test exclusions.
+use Cargo's test classifications: ordinary testing includes integration targets,
+while mutation testing selects only library unit-test targets under the
+[workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
 
 Filesystem path tests create symlinked temporary roots explicitly rather than
 depending on the host's temporary-directory layout. Expected destinations use a
