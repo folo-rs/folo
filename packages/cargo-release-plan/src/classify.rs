@@ -33,7 +33,7 @@ use crate::manifest::{
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree};
 use crate::packaging::{PackagingRules, relativize};
 use crate::text::{plural, quote_path, short_type_name};
-use crate::verbose::Verbose;
+use crate::verbose::{NoteSink, Verbose};
 use crate::{
     LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
     VersionRegressionError, short_commit,
@@ -516,7 +516,7 @@ fn classify_one(
         _ = validated_work_tree_files(git, name, &content.released, &work_modes)?;
         let untracked =
             untracked_released(git, &side, &tracked_resources, &content.present_tracked)?;
-        log_untracked(verbose, name, untracked.len());
+        log_untracked(&verbose, name, untracked.len());
         return Ok(PackageClass {
             name: name.clone(),
             declared_version: package.manifest.version.clone(),
@@ -580,7 +580,7 @@ fn classify_one(
         changed.push(ChangedItem::Inherited { field: item.field });
     }
 
-    log_untracked(verbose, name, untracked.len());
+    log_untracked(&verbose, name, untracked.len());
 
     if anchor_pkg.has_lockfile_target || package.has_lockfile_target {
         for (dependency, change) in lockfile_closure_changes(
@@ -623,7 +623,6 @@ fn classify_one(
         .into());
     }
 
-    let version_increased = package.manifest.version > anchor.version;
     let status = PackageStatus::from_evidence(
         &package.manifest.version,
         Some(&anchor.version),
@@ -655,16 +654,26 @@ fn classify_one(
         consumer_contract: package.consumer_contract,
         manifest_path: package.manifest_path.clone(),
     };
-    verbose.note(|| {
+    log_status(&verbose, &class);
+
+    Ok(class)
+}
+
+/// Explains an anchored classification without recomputing its verdict.
+fn log_status(notes: &impl NoteSink, class: &PackageClass) {
+    notes.note(|| {
+        let anchor = class
+            .anchor()
+            .expect("the final classification note follows successful anchor resolution");
+        let version_increased = class.declared_version > anchor.version;
         format!(
-            "{shown}: status {:?} because version_increased={version_increased} and \
+            "{}: status {:?} because version_increased={version_increased} and \
          changed_items={}",
+            quote_path(&class.name),
             class.status(),
             class.changed().len()
         )
     });
-
-    Ok(class)
 }
 
 fn build_timeline(
@@ -1882,11 +1891,11 @@ fn decode_lockfile(bytes: Vec<u8>, path: &str) -> Result<String, AppError> {
     String::from_utf8(bytes).map_err(|error| MalformedLockfileError::caused_by(path, error).into())
 }
 
-fn log_untracked(verbose: Verbose, name: &str, count: usize) {
+fn log_untracked(notes: &impl NoteSink, name: &str, count: usize) {
     if count == 0 {
         return;
     }
-    verbose.note(|| {
+    notes.note(|| {
         format!(
             "{}: {} match packaging rules and are advisory only; released content is defined as \
          the git-tracked files under the package, so untracked paths are never counted as changes \
@@ -2010,6 +2019,10 @@ fn workspace_relative_dir(dir: &str, workspace_prefix: &str, case: PathCase) -> 
     relative.extend(directory.iter().skip(common).copied());
     relative.join("/")
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod diagnostic_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

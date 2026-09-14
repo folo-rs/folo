@@ -482,6 +482,15 @@ Git's `core.quotePath` output. Quotes, backslashes, and control characters are
 escaped so a path cannot forge another terminal line or GitHub workflow command.
 GitHub command properties receive their additional delimiter escaping.
 
+Classification emits lazy notes through a diagnostic sink. Its stderr adapter keeps
+the ordinary verbose toggle; recording sinks let unit tests observe emission
+conditions and computed values without process-global output capture. Status
+explanations consume the completed classification and do not decide its verdict.
+
+Renderer tests compare GitHub annotations with the generated plain diagnostics,
+including the manifest destination for unpublished version-group members. They
+assert structured fields and scenario values rather than freezing advisory prose.
+
 Subprocess stderr remains intact because Git and Cargo already quote their own
 paths, and escaping the entire diagnostic would destroy its multiline structure.
 
