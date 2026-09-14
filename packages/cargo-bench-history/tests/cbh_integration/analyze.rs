@@ -1628,48 +1628,46 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_feature_that_merged_master_uses_the_base_ref_window() {
-    for (tip_value, expected_regressions) in [(130.0, 1_u64), (100.0, 0_u64)] {
-        let workspace = Workspace::repo(&storage_only_config());
-        // master:  root - c1 - c2 - ... - c{MIN_SERIES_POINTS}
-        //                  \
-        // feature:          f1 - M - f2
-        //                        /
-        // M merges master's tip into feature, so merge-base(feature, master) is
-        // c{MIN_SERIES_POINTS}, which is not on feature's first-parent line
-        // [root, c1, f1, M, f2].
-        workspace.commit("c1");
-        workspace.checkout_new_branch("feature");
-        workspace.commit("f1");
-        workspace.checkout("master");
-        for index in 2..=MIN_SERIES_POINTS {
-            workspace.commit(&format!("c{index}"));
-        }
-        workspace.checkout("feature");
-        workspace.merge("master", "M");
-        workspace.commit("f2");
+    // A clear upward move and an unchanged control share the same topology.
+    const BASELINE: f64 = 100.0;
+    const REGRESSED: f64 = 130.0;
 
-        for index in 1..=MIN_SERIES_POINTS {
-            workspace.seed_callgrind(&format!("c{index}"), 100.0);
-        }
-        workspace.seed_callgrind("f2", tip_value);
-
-        let report = workspace.drive_json(&["analyze"]).await;
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["mode"], "branch", "{report}");
-        assert_eq!(
-            parsed["regressions"], expected_regressions,
-            "tip value {tip_value} is compared with master's own recent history: {report}"
-        );
-        if expected_regressions == 1 {
-            assert_eq!(parsed["findings"][0]["baseline"], 100.0, "{report}");
-            assert_eq!(parsed["findings"][0]["latest"], tip_value, "{report}");
-        } else {
-            assert!(
-                parsed["findings"].as_array().unwrap().is_empty(),
-                "{report}"
-            );
-        }
+    let workspace = Workspace::repo(&storage_only_config());
+    // master:  root - c1 - c2 - ... - c{MIN_SERIES_POINTS}
+    //                  \
+    // feature:          f1 - M - f2
+    //                        /
+    // M merges master's tip into feature, so merge-base(feature, master) is
+    // c{MIN_SERIES_POINTS}, which is not on feature's first-parent line
+    // [root, c1, f1, M, f2].
+    workspace.commit("c1");
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.checkout("master");
+    for index in 2..=MIN_SERIES_POINTS {
+        workspace.commit(&format!("c{index}"));
     }
+    workspace.checkout("feature");
+    workspace.merge("master", "M");
+    workspace.commit("f2");
+
+    for index in 1..=MIN_SERIES_POINTS {
+        workspace.seed_two_benchmarks(&format!("c{index}"), BASELINE, BASELINE);
+    }
+    workspace.seed_two_benchmarks("f2", REGRESSED, BASELINE);
+
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["mode"], "branch", "{report}");
+    assert_eq!(parsed["series"], 2, "{report}");
+    assert_eq!(parsed["census"]["unjudged"], 0, "{report}");
+    assert_eq!(parsed["regressions"], 1, "{report}");
+    assert_eq!(parsed["improvements"], 0, "{report}");
+    let findings = parsed["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{report}");
+    assert_eq!(findings[0]["segments"][0], "alpha", "{report}");
+    assert_eq!(findings[0]["baseline"], BASELINE, "{report}");
+    assert_eq!(findings[0]["latest"], REGRESSED, "{report}");
 }
 
 /// Two machine-key partitions on the same engine/triple stay isolated: a rising

@@ -82,7 +82,8 @@ those detection runs instead of creating extra histories. The in-crate branch-wi
 scenario exceeds the real production cap through the same Git, storage and analysis
 adapters, with every engine and timeline family. It uses one synthetic target label
 per engine because labels only partition storage; the CLI smoke scenarios exercise
-the full label matrix. It checks loaded objects, series and exact seeded findings
+the full label matrix. Selected partitions keep their original matrix indices, seed
+values and blessing assignments. The cap test checks loaded objects, series and exact seeded findings
 without repeating full-window statistical searches across equivalent labels.
 Storage retention uses a minimal history because its contract does not depend on
 detection evidence.

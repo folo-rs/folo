@@ -122,6 +122,28 @@ pub(crate) fn seed(
     Ok(stats)
 }
 
+/// Seeds selected partitions without renumbering the complete set matrix.
+///
+/// Boundary fixtures retain each partition's original seed values and blessing
+/// assignment while avoiding statistical work for duplicate platform labels.
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) fn seed_selected_sets(
+    root: &Path,
+    scenario: Scenario,
+    sets: &[DiscriminantSet],
+    selected_sets: &[usize],
+    repo: &SeededRepo,
+) -> Result<SeedStats, Error> {
+    let mut tasks = plan_tasks(scenario, sets, repo);
+    tasks.retain(|task| selected_sets.contains(&set_index(task)));
+    Ok(SeedStats {
+        bytes: write_tasks(root, scenario, sets, &tasks)?,
+        objects: tasks.len(),
+        series: scenario.benchmarks.saturating_mul(selected_sets.len()),
+    })
+}
+
 /// Enumerates every object the dataset should contain.
 fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -> Vec<Task> {
     let mut tasks = Vec::new();

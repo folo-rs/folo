@@ -33,3 +33,7 @@ mod seed;
 mod target;
 
 pub use run::run;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod branch_window_tests;
