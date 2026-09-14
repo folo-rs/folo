@@ -209,7 +209,7 @@ fn exact_dependencies(member: DocumentMut, workspace: DocumentMut) -> Vec<ExactD
 }
 
 #[test]
-fn exact_dependency_discovery_follows_aliases_and_inherited_paths() {
+fn exact_dependency_discovery_follows_optional_aliases_and_forms_groups() {
     let mut alias = dependency(&[
         ("package", "helper"),
         ("path", "../helper"),
@@ -220,13 +220,35 @@ fn exact_dependency_discovery_follows_aliases_and_inherited_paths() {
         .unwrap()
         .insert("optional", value(true));
     let found = exact_dependencies(
-        document([
-            ("dependencies", table([("alias", alias)])),
-            (
-                "build-dependencies",
-                table([("inherited", table([("workspace", value(true))]))]),
-            ),
-        ]),
+        document([("dependencies", table([("alias", alias)]))]),
+        DocumentMut::new(),
+    );
+    assert_eq!(
+        found,
+        [ExactDependency {
+            source: "member".to_string(),
+            target: "helper".to_string(),
+            requirement: "=1.2.2".to_string(),
+            manifest_path: PathBuf::from("workspace/member/Cargo.toml"),
+            location: "dependencies.alias".to_string(),
+        }]
+    );
+    let groups = Groups::from_edges(
+        ["member", "helper"].map(str::to_string),
+        found
+            .into_iter()
+            .map(|dependency| (dependency.source, dependency.target)),
+    );
+    assert_eq!(groups.members("helper"), ["helper", "member"]);
+}
+
+#[test]
+fn exact_dependency_discovery_resolves_inherited_build_paths_at_the_workspace_root() {
+    let found = exact_dependencies(
+        document([(
+            "build-dependencies",
+            table([("inherited", table([("workspace", value(true))]))]),
+        )]),
         document([(
             "workspace",
             table([(
@@ -244,28 +266,15 @@ fn exact_dependency_discovery_follows_aliases_and_inherited_paths() {
     );
     assert_eq!(
         found,
-        [
-            ("=1.2.2", "dependencies.alias"),
-            (
-                "=1.2.3",
-                "build-dependencies.inherited -> workspace.dependencies.inherited"
-            ),
-        ]
-        .map(|(requirement, location)| ExactDependency {
+        [ExactDependency {
             source: "member".to_string(),
             target: "helper".to_string(),
-            requirement: requirement.to_string(),
+            requirement: "=1.2.3".to_string(),
             manifest_path: PathBuf::from("workspace/member/Cargo.toml"),
-            location: location.to_string(),
-        })
+            location: "build-dependencies.inherited -> workspace.dependencies.inherited"
+                .to_string(),
+        }]
     );
-    let groups = Groups::from_edges(
-        ["member", "helper"].map(str::to_string),
-        found
-            .into_iter()
-            .map(|dependency| (dependency.source, dependency.target)),
-    );
-    assert_eq!(groups.members("helper"), ["helper", "member"]);
 }
 
 #[test]
@@ -485,24 +494,28 @@ fn development_dependencies_do_not_relay_public_exposure() {
 
 fn assert_exposure_chain(relay_kind: DepKind) {
     // Name order makes the outer package visit the intermediary before its
-    // exposure widens. A later pass must revisit the outer package.
+    // exposure widens. Compact identifiers avoid irrelevant hashing work in Miri.
+    const OUTER: &str = "a";
+    const PRIVATE: &str = "b";
+    const FACADE: &str = "c";
+    const IMPLEMENTATION: &str = "d";
     let mut packages = [
-        work_package("a_outer", vec![edge("b_private", DepKind::Normal)]),
-        work_package("b_private", vec![edge("c_facade", relay_kind)]),
-        work_package("c_facade", vec![edge("d_impl", DepKind::Normal)]),
-        work_package("d_impl", Vec::new()),
+        work_package(OUTER, vec![edge(PRIVATE, DepKind::Normal)]),
+        work_package(PRIVATE, vec![edge(FACADE, relay_kind)]),
+        work_package(FACADE, vec![edge(IMPLEMENTATION, DepKind::Normal)]),
+        work_package(IMPLEMENTATION, Vec::new()),
     ];
     // Consumer-contract privacy does not cut the conservative exposure
     // chain: public types may still pass through implementation partitions.
     packages[1].consumer_contract = false;
     let exposed = [
-        ("a_outer", "d_impl"),
-        ("b_private", "c_facade"),
-        ("c_facade", "d_impl"),
+        (OUTER, IMPLEMENTATION),
+        (PRIVATE, FACADE),
+        (FACADE, IMPLEMENTATION),
     ]
     .map(|(package, exposed)| (package.to_string(), vec![exposed.to_string()]))
     .into();
-    let libraries = ["a_outer", "b_private", "c_facade", "d_impl"]
+    let libraries = [OUTER, PRIVATE, FACADE, IMPLEMENTATION]
         .map(|name| (name, name.to_string()))
         .into();
 
