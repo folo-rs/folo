@@ -75,12 +75,13 @@ sizing alone — the seed moves every value but changes no verdict.
 ### Smoke-test scope
 
 Detection smoke scenarios cover every shape and discriminant set above the evidence
-gates and assert exact findings. Repeatability compares repeated analysis with a fresh
-single-pass process using the same seed. The branch-window scenario exceeds the real
-production cap using a drifting series in every discriminant set; it checks loaded
-objects, series and seeded regressions without multiplying full-window statistical
-searches across the other shapes. Storage retention and verbosity checks use minimal
-histories because their contracts do not depend on detection evidence.
+gates and assert exact findings. Default-mode selection and repeatability share a
+scenario that compares repeated analysis with a fresh single-pass process using the
+same seed. Report headings and quiet/verbose progress channels are checked during
+those detection runs instead of creating extra histories. The branch-window scenario
+exceeds the real production cap with the complete family matrix and checks loaded
+objects, series and seeded regressions. Storage retention uses a minimal history
+because its contract does not depend on detection evidence.
 
 These scenarios run unchanged under ordinary and mutation testing. The mutation
 baseline's fixed deadline covers the aggregate Cargo command, not each package
