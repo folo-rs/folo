@@ -521,6 +521,23 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_patch_rendering_reports_bytes_and_ordered_line_counts() {
+        // Unequal edit counts detect swapped statistics; non-ASCII text distinguishes
+        // the rendered byte length from a character count.
+        let expected = "--- a/benchmark.txt\n+++ b/benchmark.txt\n\
+                        @@ -1,1 +1,2 @@\n-old\n+caf\u{e9}\n+extra\n";
+        assert_eq!(
+            benchmark_patch_rendering("old\n", "caf\u{e9}\nextra\n"),
+            (expected.len(), 2, 1)
+        );
+    }
+
+    #[test]
+    fn benchmark_patch_rendering_reports_no_change() {
+        assert_eq!(benchmark_patch_rendering("same\n", "same\n"), (0, 0, 0));
+    }
+
+    #[test]
     fn an_addition_reports_the_absent_side_as_dev_null() {
         let diff = render(None, Some("a\n"));
         assert!(diff.text.contains("--- /dev/null\n+++ b/src/lib.rs\n"));

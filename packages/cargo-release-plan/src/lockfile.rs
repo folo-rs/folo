@@ -622,6 +622,35 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_lockfile_closures_sums_the_requested_walks() {
+        let text = r#"
+[[package]]
+name = "tool"
+version = "0.1.0"
+dependencies = ["dependency"]
+
+[[package]]
+name = "dependency"
+version = "1.0.0"
+"#;
+        // Repetition accumulates each walk, while selecting the leaf root yields no dependencies.
+        assert_eq!(benchmark_lockfile_closures(text, "tool", "0.1.0", 3), 3);
+        assert_eq!(
+            benchmark_lockfile_closures(text, "dependency", "1.0.0", 1),
+            0
+        );
+    }
+
+    #[test]
+    fn benchmark_lockfile_closures_does_not_walk_when_none_are_requested() {
+        // No root lookup is needed when the requested workload contains no walks.
+        assert_eq!(
+            benchmark_lockfile_closures("version = 4\n", "tool", "0.1.0", 0),
+            0
+        );
+    }
+
+    #[test]
     fn a_lockfile_without_packages_has_an_empty_closure() {
         let lockfile = Lockfile::parse("version = 4\n", LABEL).unwrap();
         assert!(
