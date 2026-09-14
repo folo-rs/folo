@@ -41,7 +41,7 @@ fn historical_registry_configuration_overlays_ambient_using_recorded_files() {
         ),
     ]);
     assert_eq!(
-        historical_registries(&git, "HEAD", &ambient, &paths).unwrap(),
+        historical_registries(&git, "HEAD", &ambient, &paths, PathCase::Sensitive).unwrap(),
         BTreeMap::from([
             (
                 "ambient".to_owned(),
@@ -58,7 +58,7 @@ fn historical_registry_configuration_overlays_ambient_using_recorded_files() {
         ])
     );
     assert_eq!(
-        historical_registries(&git, "HEAD", &ambient, &[]).unwrap(),
+        historical_registries(&git, "HEAD", &ambient, &[], PathCase::Sensitive).unwrap(),
         ambient
     );
 }
@@ -82,7 +82,7 @@ fn historical_registry_configuration_preserves_parse_errors() {
     let git = fixture.repo();
     let paths = git.ls_tree_paths("HEAD").unwrap();
     assert!(
-        historical_registries(&git, "HEAD", &BTreeMap::new(), &paths)
+        historical_registries(&git, "HEAD", &BTreeMap::new(), &paths, PathCase::Sensitive)
             .unwrap_err()
             .find_source::<ParseTomlError>()
             .is_some()
@@ -173,7 +173,7 @@ fn lockfile_changes_select_each_endpoint_independently() {
     ] {
         let (work_tree, work_package, anchor) =
             endpoints(fixture.path(), anchor_binary, work_binary);
-        let mut cache = LockfileCache::default();
+        let mut cache = lockfile_cache();
         let changes = lockfile_closure_changes(
             &mut cache,
             &git,
@@ -207,7 +207,7 @@ fn library_endpoints_need_no_lockfiles_but_binary_endpoints_do() {
         let (work_tree, work_package, anchor) =
             endpoints(fixture.path(), anchor_binary, work_binary);
         let result = lockfile_closure_changes(
-            &mut LockfileCache::default(),
+            &mut lockfile_cache(),
             &git,
             &work_tree,
             "tool",
@@ -243,7 +243,7 @@ fn anchor_lockfiles_are_selected_by_commit_not_current_work_tree() {
     let second = fixture.command(&["rev-parse", "HEAD"]).trim().to_owned();
     fixture.write("Cargo.lock", b"not valid TOML");
     let git = fixture.repo();
-    let mut cache = LockfileCache::default();
+    let mut cache = lockfile_cache();
     for (commit, version) in [(&first, "1.0.0"), (&second, "1.1.0"), (&first, "1.0.0")] {
         let lockfile = cache.anchor(&git, "tool", commit, "Cargo.lock").unwrap();
         assert_eq!(
@@ -258,6 +258,14 @@ fn anchor_lockfiles_are_selected_by_commit_not_current_work_tree() {
                 )])
             )])
         );
+    }
+}
+
+fn lockfile_cache() -> LockfileCache {
+    LockfileCache {
+        work: None,
+        anchors: HashMap::new(),
+        case: PathCase::Sensitive,
     }
 }
 

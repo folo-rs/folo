@@ -25,8 +25,9 @@ impl Repository {
         // Index modes are authoritative on every test host. Tests of actual
         // work-tree executable bits remain in the Git and integration suites.
         fixture.command(&["config", "core.fileMode", "false"]);
-        // Production queries inherit the host environment, so repository-local
-        // settings keep their ignores and clean filters consistent with setup.
+        // GitRepo uses normal subprocess configuration. Local settings keep its
+        // reads consistent with staging even when the host has global ignore,
+        // attribute or line-ending rules.
         for key in ["core.excludesFile", "core.attributesFile"] {
             fixture.command(&[
                 "config",
@@ -36,6 +37,7 @@ impl Repository {
         }
         fixture.command(&["config", "core.autocrlf", "false"]);
         fixture.command(&["config", "core.eol", "lf"]);
+        // Disposable fixtures must not start a daemon from inherited host settings.
         fixture.command(&["config", "core.fsmonitor", "false"]);
         fixture
     }
