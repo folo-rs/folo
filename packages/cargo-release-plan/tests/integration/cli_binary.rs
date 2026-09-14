@@ -226,20 +226,6 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
             .status
             .success()
     );
-
-    let output = release_plan(
-        &[
-            "verify-preview",
-            "--plan",
-            &plan.to_string_lossy(),
-            "--manifest-path",
-            &fixture.manifest().to_string_lossy(),
-        ],
-        Some(&fixture),
-    );
-    assert!(!output.status.success());
-    assert!(stdout(&output).is_empty());
-    assert!(!stderr(&output).is_empty());
 }
 
 fn release_plan(args: &[&str], fixture: Option<&Fixture>) -> Output {

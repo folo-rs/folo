@@ -519,7 +519,9 @@ mod tests {
 
     use super::*;
     use crate::classify::{PackageStatus, classify};
+    use crate::plan::PlanIncrement;
     use crate::prospective::Prospective;
+    use crate::{RunInput, run};
 
     // A real empty file supports Git for Windows on ARM64, unlike the NUL device.
     // Keep it outside fixtures so it cannot enter their captured or committed inputs.
@@ -585,6 +587,105 @@ mod tests {
             &["commit", "--quiet", "-m", "released fixture"],
         );
         directory
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "validates captured application through real Git and Cargo"
+    )]
+    fn captured_application_enforces_dry_run_staleness_idempotence_and_evidence_identity() {
+        let directory = capture_fixture("Cargo.toml");
+        let manifest = directory.path().join("Cargo.toml");
+        let source = directory.path().join("src/lib.rs");
+        let lockfile = directory.path().join("Cargo.lock");
+        let original = fs::read_to_string(&manifest).unwrap();
+        let original_source = fs::read(&source).unwrap();
+        let updated = original.replace("0.1.0", "0.1.1");
+        let original_lock = "version = 4\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n";
+        let updated_lock = original_lock.replace("0.1.0", "0.1.1");
+        // An untracked lockfile must still participate in captured-input validation.
+        fs::write(&lockfile, original_lock).unwrap();
+        let inputs = Inputs::capture(&manifest, Some("HEAD")).unwrap();
+        let index = inputs.index.clone();
+        let files = vec![
+            Artifact {
+                path: "Cargo.toml".into(),
+                contents: updated.clone(),
+            },
+            Artifact {
+                path: "Cargo.lock".into(),
+                contents: updated_lock.clone(),
+            },
+        ];
+        let candidate = directory.path().join("candidate/Cargo.toml");
+        fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+        fs::write(&candidate, &original).unwrap();
+        let state = ResolvedState {
+            final_digest: inputs.final_digest(&files).unwrap(),
+            inputs,
+            files,
+            versions: BTreeMap::from([("demo".to_owned(), "0.1.1".to_owned())]),
+            evidence_manifest_path: candidate,
+        };
+        let mut plan = PlanFile::new(
+            PlanStage::Expanded,
+            vec![PlanIncrement {
+                name: "demo".to_owned(),
+                level: None,
+                version: Some("0.1.1".to_owned()),
+            }],
+        );
+        plan.resolved = Some(state);
+        // Application consumes captured artifacts; generating a preview is a separate boundary.
+        let plan_path = directory.path().join("resolved.json");
+        write_json(&plan_path, &plan).unwrap();
+        let apply = |dry_run| {
+            run(&RunInput::Apply {
+                plan: plan_path.clone(),
+                dry_run,
+                manifest_path: manifest.clone(),
+                verbose: false,
+            })
+        };
+        apply(true).unwrap();
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), original);
+        assert_eq!(fs::read_to_string(&lockfile).unwrap(), original_lock);
+        fs::write(&source, "pub fn stale() {}\n").unwrap();
+        assert!(
+            apply(false)
+                .unwrap_err()
+                .find_source::<StaleInputs>()
+                .is_some()
+        );
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), original);
+        assert_eq!(fs::read_to_string(&lockfile).unwrap(), original_lock);
+        fs::write(&source, original_source).unwrap();
+        let stale_lock = format!("{original_lock}# changed captured bytes\n");
+        fs::write(&lockfile, &stale_lock).unwrap();
+        assert!(
+            apply(false)
+                .unwrap_err()
+                .find_source::<StaleInputs>()
+                .is_some()
+        );
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), original);
+        assert_eq!(fs::read_to_string(&lockfile).unwrap(), stale_lock);
+        fs::write(&lockfile, original_lock).unwrap();
+        apply(false).unwrap();
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), updated);
+        assert_eq!(fs::read_to_string(&lockfile).unwrap(), updated_lock);
+        apply(false).unwrap();
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), updated);
+        assert_eq!(fs::read_to_string(&lockfile).unwrap(), updated_lock);
+        assert_eq!(git(directory.path(), &["ls-files", "--stage", "-z"]), index);
+        let error = run(&RunInput::VerifyPreview {
+            plan: plan_path,
+            manifest_path: manifest,
+            verbose: false,
+        })
+        .unwrap_err();
+        assert!(error.find_source::<WrongEvidenceWorkspace>().is_some());
     }
 
     #[test]

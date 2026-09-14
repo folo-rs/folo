@@ -105,6 +105,10 @@ classifies each unchanged workspace state only once where the resulting report
 can establish all its assertions. Output-format combinations belong to renderer
 tests, not additional repository classifications. Structural expansion tests stop
 at the expanded artifact; only preview tests acquire resolved evidence.
+Resolved-application scenarios start from captured plans over a small live
+workspace, so dry-run, stale-input, idempotence, and evidence-identity checks do
+not extend a transitive release-preview workflow. The CLI round trip retains the
+executable dispatch and stream checks.
 
 Complete artifact workflows are grouped ahead of classification topics in the
 deterministic libtest name order. Starting their long subprocess chains while the

@@ -8,7 +8,6 @@ use cargo_release_plan::{RunInput, run};
 use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::check;
 
 fn prepare(fixture: &Fixture) -> PathBuf {
     let output = fixture.path().join("prepared");
@@ -55,16 +54,6 @@ fn versions(plan: &PathBuf) -> BTreeMap<String, String> {
             )
         })
         .collect()
-}
-
-fn apply(fixture: &Fixture, plan: PathBuf) {
-    run(&RunInput::Apply {
-        plan,
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: true,
-    })
-    .unwrap();
 }
 
 fn binary(fixture: &Fixture, name: &str, extra: &str) {
@@ -144,33 +133,19 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
         fixture.read("preview/workspace/packages/core/src/new.rs"),
         "pub fn changed() {}\n"
     );
-    run(&RunInput::Apply {
-        plan: plan.clone(),
-        dry_run: true,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap();
-    assert_eq!(fixture.read("Cargo.lock"), old_lock);
-    assert!(fixture.read("packages/core/Cargo.toml").contains("0.1.0"));
-    fixture.write("packages/core/src/new.rs", "pub fn stale() {}\n");
-    run(&RunInput::Apply {
-        plan: plan.clone(),
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert_eq!(fixture.read("Cargo.lock"), old_lock);
-    assert!(fixture.read("packages/core/Cargo.toml").contains("0.1.0"));
-    fixture.write("packages/core/src/new.rs", "pub fn changed() {}\n");
-    apply(&fixture, plan.clone());
-    let (passed, diagnostics) = check(&fixture, "HEAD");
-    assert!(passed, "{diagnostics}");
-    let lock = fixture.read("Cargo.lock");
-    assert_ne!(lock, old_lock);
-    apply(&fixture, plan);
-    assert_eq!(fixture.read("Cargo.lock"), lock);
+    for package in ["core", "bridge", "tool"] {
+        assert!(
+            fixture
+                .read(&format!("preview/workspace/packages/{package}/Cargo.toml"))
+                .contains("0.1.1")
+        );
+        assert!(
+            fixture
+                .read(&format!("packages/{package}/Cargo.toml"))
+                .contains("0.1.0")
+        );
+    }
+    assert_ne!(fixture.read("preview/workspace/Cargo.lock"), old_lock);
     assert_eq!(fixture.git(&["ls-files", "--stage", "-z"]), index);
 }
 
@@ -246,22 +221,12 @@ fn preparation_resolves_already_locked_registry_edges_before_grading() {
     let plan = preview(&fixture, prepared, &json!([]));
     assert_eq!(versions(&plan).get("tool"), Some(&"0.1.1".to_owned()));
     assert_eq!(fixture.read("Cargo.lock"), prepared_lock);
-    // Reinstating the earlier binary installation closure is stale input, not permission
-    // for apply to resolve it again or add another release target.
-    fixture.write("Cargo.lock", &baseline);
-    let manifest = fixture.read("packages/tool/Cargo.toml");
-    run(&RunInput::Apply {
-        plan: plan.clone(),
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: false,
-    })
-    .unwrap_err();
-    assert_eq!(fixture.read("packages/tool/Cargo.toml"), manifest);
-    assert_eq!(fixture.read("Cargo.lock"), baseline);
-    fixture.write("Cargo.lock", &prepared_lock);
-    apply(&fixture, plan);
-    assert!(check(&fixture, "HEAD").0);
+    assert!(
+        fixture
+            .read("preview/workspace/packages/tool/Cargo.toml")
+            .contains("0.1.1")
+    );
+    assert_ne!(fixture.read("preview/workspace/Cargo.lock"), prepared_lock);
 }
 
 #[test]
