@@ -141,6 +141,11 @@ workspace. Filesystem presence is still probed within each package, retaining
 deleted-path and nested-package semantics without relisting the index for every
 selection. Each new workspace acquisition reads the index again; no cache spans
 edits or captured-input verification boundaries.
+
+Directory and metadata-path selection uses the same probed component comparison
+throughout acquisition and classification, while results retain Git's recorded
+spelling. Git queries use case-aware pathspecs where supported; selection from a
+cached tree applies the same comparison in process.
 The current model keeps both every tracked version target and the publishable
 `WorkPackage` projection used for classification. An untracked or ignored
 manifest found through a member glob can become neither a version target nor a

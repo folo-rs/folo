@@ -61,28 +61,35 @@ fn inspection_requires_a_plan_and_preserves_workspace_selection() {
 }
 
 #[test]
-fn artifact_commands_require_inputs_and_do_not_accept_workspace_options() {
-    for command in ["analysis-order", "semver-targets"] {
-        assert!(parse(&[command]).unwrap_err().status.is_err());
-        for option in ["--base", "--manifest-path"] {
-            assert!(
-                parse(&[command, "--report", "report.json", option, "other"])
-                    .unwrap_err()
-                    .status
-                    .is_err()
-            );
+fn analysis_order_requires_inputs_and_rejects_workspace_options() {
+    assert_artifact_command("analysis-order");
+}
+
+#[test]
+fn semver_targets_requires_inputs_and_rejects_workspace_options() {
+    assert_artifact_command("semver-targets");
+}
+
+fn assert_artifact_command(command: &str) {
+    assert!(parse(&[command]).unwrap_err().status.is_err());
+    for option in ["--base", "--manifest-path"] {
+        assert!(
+            parse(&[command, "--report", "report.json", option, "other"])
+                .unwrap_err()
+                .status
+                .is_err()
+        );
+    }
+    let input = parse(&[command, "--report", "report.json", "--verbose"])
+        .unwrap()
+        .into_input();
+    match (command, input) {
+        ("analysis-order", RunInput::AnalysisOrder { report, verbose })
+        | ("semver-targets", RunInput::SemverTargets { report, verbose }) => {
+            assert_eq!(report, PathBuf::from("report.json"));
+            assert!(verbose);
         }
-        let input = parse(&[command, "--report", "report.json", "--verbose"])
-            .unwrap()
-            .into_input();
-        match input {
-            RunInput::AnalysisOrder { report, verbose }
-            | RunInput::SemverTargets { report, verbose } => {
-                assert_eq!(report, PathBuf::from("report.json"));
-                assert!(verbose);
-            }
-            other => panic!("unexpected input {other:?}"),
-        }
+        other => panic!("unexpected input {other:?}"),
     }
 }
 

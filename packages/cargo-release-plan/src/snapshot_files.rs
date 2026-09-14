@@ -19,6 +19,7 @@ pub(crate) struct SnapshotFiles {
     pub(crate) entries: Vec<TreeEntry>,
     metadata: BTreeMap<String, String>,
     objects: GitObjects,
+    case: PathCase,
 }
 
 impl SnapshotFiles {
@@ -30,7 +31,12 @@ impl SnapshotFiles {
             .collect();
         let metadata: BTreeMap<String, String> = entries
             .iter()
-            .filter(|entry| is_manifest(&entry.path, case) || configurations.contains(&entry.path))
+            .filter(|entry| {
+                is_manifest(&entry.path, case)
+                    || configurations
+                        .iter()
+                        .any(|candidate| case.same_path(candidate, &entry.path))
+            })
             .map(|entry| (entry.path.clone(), entry.id.clone()))
             .collect();
         let ids: BTreeSet<&str> = metadata.values().map(String::as_str).collect();
@@ -39,21 +45,46 @@ impl SnapshotFiles {
             entries,
             metadata,
             objects,
+            case,
         })
     }
 
     pub(crate) fn text(&self, commit: &str, path: &str) -> Result<Option<&str>, AppError> {
-        let Some(id) = self.metadata.get(path) else {
+        let Some((recorded, id)) = self.recorded_metadata(path) else {
             return Ok(None);
         };
         let bytes = self.objects.blob(id)?;
         str::from_utf8(bytes)
             .map(Some)
-            .map_err(|error| NonUtf8BlobError::caused_by(commit, path, error).into())
+            .map_err(|error| NonUtf8BlobError::caused_by(commit, recorded, error).into())
+    }
+
+    /// Resolves the recorded spelling of a tree path, including lazily read lockfiles.
+    pub(crate) fn recorded_path(&self, path: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .find(|entry| self.case.same_path(&entry.path, path))
+            })
+            .map(|entry| entry.path.as_str())
+    }
+
+    fn recorded_metadata(&self, path: &str) -> Option<(&str, &str)> {
+        self.metadata
+            .get_key_value(path)
+            .or_else(|| {
+                self.metadata
+                    .iter()
+                    .find(|(recorded, _)| self.case.same_path(recorded, path))
+            })
+            .map(|(recorded, id)| (recorded.as_str(), id.as_str()))
     }
 }
 
-fn is_manifest(path: &str, case: PathCase) -> bool {
+pub(crate) fn is_manifest(path: &str, case: PathCase) -> bool {
     path.rsplit('/')
         .next()
         .is_some_and(|name| case.same_path(name, "Cargo.toml"))
@@ -79,5 +110,35 @@ mod tests {
             "vendor/dependency/cargo.toml",
             PathCase::Insensitive
         ));
+    }
+
+    #[test]
+    fn metadata_lookup_resolves_manifests_and_configuration_without_renaming_keys() {
+        let files = SnapshotFiles {
+            metadata: BTreeMap::from([
+                ("rust/cargo.toml".to_owned(), "manifest".to_owned()),
+                ("rust/.cargo/Config.toml".to_owned(), "config".to_owned()),
+            ]),
+            case: PathCase::Insensitive,
+            ..SnapshotFiles::default()
+        };
+        assert_eq!(
+            files.recorded_metadata("Rust/Cargo.toml"),
+            Some(("rust/cargo.toml", "manifest"))
+        );
+        assert_eq!(
+            files.recorded_metadata("Rust/.cargo/config.toml"),
+            Some(("rust/.cargo/Config.toml", "config"))
+        );
+        assert_eq!(files.recorded_metadata("absent/Cargo.toml"), None);
+        let files = SnapshotFiles {
+            case: PathCase::Sensitive,
+            ..files
+        };
+        assert_eq!(files.recorded_metadata("Rust/Cargo.toml"), None);
+        assert_eq!(
+            files.recorded_metadata("rust/cargo.toml"),
+            Some(("rust/cargo.toml", "manifest"))
+        );
     }
 }

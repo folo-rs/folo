@@ -914,9 +914,8 @@ fn unavailable_library_paths_do_not_block_an_unrelated_binary_closure() {
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
 #[test]
 fn historical_path_read_errors_only_block_binaries_that_reach_them() {
-    // The unit test covers reachability; both fixtures keep a binary so historical
-    // path acquisition and ordinary library assessment share the real snapshot.
-    for consumes_library in [false, true] {
+    // Keep the no-binary acquisition boundary as well as both reachability outcomes.
+    for (binary, consumes_library) in [(false, false), (true, false), (true, true)] {
         let fixture = Fixture::new("exclude = [\"external/foo\"]");
         write_package(
             &fixture,
@@ -929,7 +928,11 @@ fn historical_path_read_errors_only_block_binaries_that_reach_them() {
         } else {
             ""
         };
-        write_binary_package(&fixture, "tool", "0.1.0", dependencies);
+        if binary {
+            write_binary_package(&fixture, "tool", "0.1.0", dependencies);
+        } else {
+            write_package(&fixture, "tool", "0.1.0", dependencies);
+        }
         let tool_dependencies = if consumes_library {
             "dependencies = [\"library\"]\n"
         } else {
@@ -965,7 +968,7 @@ fn historical_path_read_errors_only_block_binaries_that_reach_them() {
 #[cfg_attr(miri, ignore = "Spawns git and cargo and reads fixture files.")]
 #[test]
 fn historical_installation_declaration_errors_do_not_replace_library_assessment() {
-    for consumes_library in [false, true] {
+    for (binary, consumes_library) in [(false, false), (true, false), (true, true)] {
         let fixture = Fixture::new("");
         write_package(
             &fixture,
@@ -978,7 +981,11 @@ fn historical_installation_declaration_errors_do_not_replace_library_assessment(
         } else {
             ""
         };
-        write_binary_package(&fixture, "tool", "0.1.0", dependencies);
+        if binary {
+            write_binary_package(&fixture, "tool", "0.1.0", dependencies);
+        } else {
+            write_package(&fixture, "tool", "0.1.0", dependencies);
+        }
         let tool_dependencies = if consumes_library {
             "dependencies = [\"library\"]\n"
         } else {

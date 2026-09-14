@@ -11,6 +11,7 @@ use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
 pub(crate) use crate::git_objects::*;
+use crate::manifest::PathCase;
 use crate::{CommandFailedError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError};
 
 /// Name Cargo requires for a manifest.
@@ -242,19 +243,17 @@ impl GitRepo {
     /// Version and membership can change only on those commits, so classification
     /// reconstructs historical workspaces from this subset rather than every
     /// first-parent commit.
-    pub(crate) fn first_parent_manifest_commits(&self, rev: &str) -> Result<Vec<String>, AppError> {
+    pub(crate) fn first_parent_manifest_commits(
+        &self,
+        rev: &str,
+        case: PathCase,
+    ) -> Result<Vec<String>, AppError> {
         let all = self.first_parent_commits(rev)?;
         select_manifest_commits(all, || {
+            let [root, descendants] = manifest_pathspecs(case);
             run_capture(
                 "git",
-                &[
-                    "rev-list",
-                    "--first-parent",
-                    rev,
-                    "--",
-                    MANIFEST_FILE_NAME,
-                    MANIFEST_GLOB_PATHSPEC,
-                ],
+                &["rev-list", "--first-parent", rev, "--", root, descendants],
                 &self.root,
             )
         })
@@ -309,12 +308,16 @@ impl GitRepo {
         &self,
         index: &GitIndex,
         pathspecs: &[&str],
+        case: PathCase,
     ) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
             return Ok(WorkTreeModes::default());
         }
         let mut modes = index.modes.clone();
-        let pathspecs: Vec<String> = pathspecs.iter().map(|path| dir_pathspec(path)).collect();
+        let pathspecs: Vec<String> = pathspecs
+            .iter()
+            .map(|path| cased_pathspec(path, case))
+            .collect();
         let paths: Vec<&str> = pathspecs.iter().map(String::as_str).collect();
         for chunk in command_line_batches(&paths, PATH_ARG_BUDGET)? {
             let args = ["diff-files", "--raw", "-z", "--no-renames", "--"]
@@ -329,7 +332,11 @@ impl GitRepo {
     /// Untracked, non-ignored paths under `pathspec`.
     // Advisory-only listing; classification does not fail on untracked files.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn ls_untracked(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
+    pub(crate) fn ls_untracked(
+        &self,
+        pathspec: &str,
+        case: PathCase,
+    ) -> Result<Vec<String>, AppError> {
         let stdout = run_capture_bytes(
             "git",
             &[
@@ -338,7 +345,7 @@ impl GitRepo {
                 "--others",
                 "--exclude-standard",
                 "--",
-                &dir_pathspec(pathspec),
+                &cased_pathspec(pathspec, case),
             ],
             &self.root,
         )?;
@@ -693,6 +700,23 @@ fn dir_pathspec(dir: &str) -> String {
     format!(":(literal){dir}")
 }
 
+fn cased_pathspec(path: &str, case: PathCase) -> String {
+    match case {
+        PathCase::Sensitive => dir_pathspec(path),
+        PathCase::Insensitive => {
+            let path = if path.is_empty() { "." } else { path };
+            format!(":(icase,literal){path}")
+        }
+    }
+}
+
+fn manifest_pathspecs(case: PathCase) -> [&'static str; 2] {
+    match case {
+        PathCase::Sensitive => [MANIFEST_FILE_NAME, MANIFEST_GLOB_PATHSPEC],
+        PathCase::Insensitive => [":(icase,literal)Cargo.toml", ":(icase,glob)**/Cargo.toml"],
+    }
+}
+
 /// Joins a workspace-relative path onto the workspace's git prefix.
 ///
 /// The result is a pathspec that `git ls-files` and `git show` resolve against
@@ -977,12 +1001,15 @@ mod tests {
             index.paths,
             ["first.txt", "packages/foo/lib.rs", "packages/foo/run.sh"]
         );
-        let modes = repo.work_tree_modes(&index, &["packages/foo"]).unwrap();
+        let modes = repo
+            .work_tree_modes(&index, &["packages/foo"], PathCase::Sensitive)
+            .unwrap();
         assert!(modes.is_executable("packages/foo/run.sh"));
         assert!(!modes.is_executable("packages/foo/lib.rs"));
         assert!(!modes.is_symlink("packages/foo/run.sh"));
         assert_eq!(
-            repo.work_tree_modes(&index, &[]).unwrap(),
+            repo.work_tree_modes(&index, &[], PathCase::Sensitive)
+                .unwrap(),
             WorkTreeModes::default()
         );
     }
@@ -1272,7 +1299,7 @@ mod tests {
 
         repo.first_parent_commits("HEAD").unwrap_err();
         repo.index().unwrap_err();
-        repo.ls_untracked("").unwrap_err();
+        repo.ls_untracked("", PathCase::Sensitive).unwrap_err();
         repo.ls_tree("HEAD", &[""]).unwrap_err();
         repo.hash_objects(&["Cargo.toml"]).unwrap_err();
         repo.rev_parse("HEAD").unwrap_err();
@@ -1412,6 +1439,30 @@ mod tests {
         // byte would name a file that is not the one Git reported.
         let error = split_z(b"ok.rs\0bad\xffname.rs\0").unwrap_err();
         assert!(error.find_source::<NonUtf8PathError>().is_some());
+    }
+
+    #[test]
+    fn case_aware_queries_keep_literal_paths_and_manifest_globs_distinct() {
+        assert_eq!(
+            cased_pathspec("packages/[A]", PathCase::Sensitive),
+            ":(literal)packages/[A]"
+        );
+        assert_eq!(
+            cased_pathspec("packages/[A]", PathCase::Insensitive),
+            ":(icase,literal)packages/[A]"
+        );
+        assert_eq!(
+            cased_pathspec("", PathCase::Insensitive),
+            ":(icase,literal)."
+        );
+        assert_eq!(
+            manifest_pathspecs(PathCase::Sensitive),
+            ["Cargo.toml", ":(glob)**/Cargo.toml"]
+        );
+        assert_eq!(
+            manifest_pathspecs(PathCase::Insensitive),
+            [":(icase,literal)Cargo.toml", ":(icase,glob)**/Cargo.toml"]
+        );
     }
 
     #[test]

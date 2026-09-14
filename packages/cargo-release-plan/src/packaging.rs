@@ -116,19 +116,6 @@ fn compile_gitignore(patterns: &[String]) -> Result<Gitignore, AppError> {
         .map_err(|error| InvalidPackagingPatternError::caused_by("include/exclude", error).into())
 }
 
-/// Relative path of `full` inside `package_dir`, both repo-relative with `/`.
-pub(crate) fn relativize<'a>(full: &'a str, package_dir: &str) -> Option<&'a str> {
-    let full = full.trim_start_matches("./");
-    if package_dir.is_empty() || package_dir == "." {
-        return Some(full);
-    }
-    let prefix = package_dir.trim_end_matches('/');
-    if full == prefix {
-        return None;
-    }
-    full.strip_prefix(prefix)?.strip_prefix('/')
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -165,24 +152,6 @@ mod tests {
         assert!(rules.is_released("./src/lib.rs"));
         assert!(rules.is_released(r"src/odd\name.rs"));
         assert!(!rules.is_released(r"benches\bench.rs"));
-    }
-
-    /// A package directory has no relative path inside itself.
-    ///
-    /// The package directory itself is not a path inside the package, so it has no relative form
-    /// and must not be mistaken for the package root file.
-    #[test]
-    fn a_package_directory_has_no_relative_path_inside_itself() {
-        assert_eq!(relativize("packages/foo", "packages/foo"), None);
-        assert_eq!(
-            relativize("packages/foo/src/lib.rs", "packages/foo"),
-            Some("src/lib.rs")
-        );
-        assert_eq!(
-            relativize("packages/foo/src/lib.rs", ""),
-            Some("packages/foo/src/lib.rs")
-        );
-        assert_eq!(relativize("other/foo.rs", "packages/foo"), None);
     }
 
     #[test]
@@ -285,23 +254,5 @@ mod tests {
         assert!(rules.is_released("src/lib.rs"));
         assert!(rules.is_released("tests/foo.rs"));
         assert!(!rules.is_released("Cargo.lock"));
-    }
-
-    #[test]
-    fn relativize_strips_package_dir() {
-        assert_eq!(
-            relativize("packages/foo/src/lib.rs", "packages/foo"),
-            Some("src/lib.rs")
-        );
-        assert_eq!(
-            relativize("packages/foo/Cargo.toml", "packages/foo"),
-            Some("Cargo.toml")
-        );
-        assert_eq!(relativize("packages/bar/src/lib.rs", "packages/foo"), None);
-        // Empty and `.` are both "workspace root as package dir"; each arm must
-        // independently return the full path so `||` cannot become `&&`.
-        assert_eq!(relativize("src/lib.rs", ""), Some("src/lib.rs"));
-        assert_eq!(relativize("src/lib.rs", "."), Some("src/lib.rs"));
-        assert_eq!(relativize("src/lib.rs", "src"), Some("lib.rs"));
     }
 }

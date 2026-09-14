@@ -23,5 +23,6 @@ mod inspect_plan;
 mod lockfile;
 mod nesting;
 mod packaging;
+mod path_case;
 mod report;
 mod status;

@@ -28,8 +28,8 @@ use crate::manifest::{
     parse_package_manifest, parse_workspace_members, path_package_identity, to_git_separators,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_tracked_work_tree};
-use crate::packaging::{PackagingRules, relativize};
-use crate::snapshot_files::SnapshotFiles;
+use crate::packaging::PackagingRules;
+use crate::snapshot_files::{SnapshotFiles, is_manifest};
 use crate::text::{plural, quote_path, short_type_name};
 use crate::verbose::Verbose;
 use crate::{
@@ -355,6 +355,10 @@ pub(crate) fn classify(
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
     let (mut work_tree, git) = load_tracked_work_tree(manifest_path)?;
+    let mut cache = SnapshotCache::new(
+        &work_tree.workspace_root,
+        work_tree.installation.registries.clone(),
+    );
     let base = match base {
         Some(base) => base.to_owned(),
         None => {
@@ -376,8 +380,12 @@ pub(crate) fn classify(
     };
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
-        package.resources =
-            resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
+        package.resources = resolve_resources(
+            &package.manifest,
+            &package.manifest.directory,
+            git.prefix(),
+            cache.case(),
+        );
     }
     let (head, base_sha) = git.head_and_base(&base)?;
     verbose.note(|| {
@@ -390,10 +398,6 @@ pub(crate) fn classify(
         )
     });
 
-    let mut cache = SnapshotCache::new(
-        &work_tree.workspace_root,
-        work_tree.installation.registries.clone(),
-    );
     let base_snapshot = cache.snapshot(&git, &base_sha)?;
     let work_root_path = work_tree.workspace_root.join("Cargo.toml");
     let work_root_doc = parse_document(
@@ -402,7 +406,7 @@ pub(crate) fn classify(
             .map_err(|error| ReadFileError::caused_by(&work_root_path, error))?,
     )?;
 
-    let commits = git.first_parent_manifest_commits(&base_sha)?;
+    let commits = git.first_parent_manifest_commits(&base_sha, cache.case())?;
     let mut classes = Vec::new();
     let versions = work_tree.target_versions();
     let exempt: HashSet<String> = work_tree
@@ -425,7 +429,7 @@ pub(crate) fn classify(
     mode_paths.sort_unstable();
     mode_paths.dedup();
     let mode_paths: Vec<&str> = mode_paths.iter().map(String::as_str).collect();
-    let work_modes = git.work_tree_modes(&work_tree.index, &mode_paths)?;
+    let work_modes = git.work_tree_modes(&work_tree.index, &mode_paths, cache.case())?;
 
     for package in &work_tree.packages {
         let class = classify_one(
@@ -600,7 +604,7 @@ fn classify_one(
             anchor_pkg,
             package,
             &anchor.commit,
-            &anchor_snapshot.installation,
+            &anchor_snapshot,
         )? {
             verbose.note(|| {
                 format!(
@@ -757,6 +761,7 @@ fn resolve_resources(
     manifest: &PackageManifest,
     package_dir: &str,
     workspace_prefix: &str,
+    case: PathCase,
 ) -> BTreeMap<String, String> {
     let workspace_prefix = workspace_prefix.trim_end_matches('/');
     let mut resolved = BTreeMap::new();
@@ -778,7 +783,7 @@ fn resolve_resources(
         // is and only flattens one from outside into the crate root. Both are
         // recorded, because `include` and `exclude` do not apply to either: a
         // README the package excludes is still released content.
-        let key = match relativize(&full, package_dir) {
+        let key = match case.relativize(&full, package_dir) {
             Some(rel) => rel.to_string(),
             // A resource from outside is flattened into the crate root under its
             // file name, which is everything after the last separator.
@@ -1028,9 +1033,10 @@ fn anchor_tree_entries(tree: &[TreeEntry], side: &PackageSide<'_>) -> Vec<TreeEn
     let entries: Vec<TreeEntry> = tree
         .iter()
         .filter(|entry| {
-            pathspecs
-                .iter()
-                .any(|path| entry.path == *path || relativize(&entry.path, path).is_some())
+            pathspecs.iter().any(|path| {
+                side.case.same_path(&entry.path, path)
+                    || side.case.relativize(&entry.path, path).is_some()
+            })
         })
         .cloned()
         .collect();
@@ -1106,20 +1112,20 @@ fn untracked_released(
     tracked_resources: &BTreeMap<String, String>,
     tracked: &[String],
 ) -> Result<Vec<String>, AppError> {
-    let listed: Vec<String> = git.ls_untracked(side.dir)?;
+    let listed: Vec<String> = git.ls_untracked(side.dir, side.case)?;
     // The same nested-package boundary the tracked listing observes applies
     // here, or a file under a nested package would be advertised as content
     // Cargo would pack for the outer one. The manifest drawing that boundary
     // may itself still be untracked, so both listings feed the scan.
     let mut boundary_paths = listed.clone();
     boundary_paths.extend_from_slice(tracked);
-    let nested = nested_package_dirs(&boundary_paths, side.dir);
+    let nested = nested_package_dirs(&boundary_paths, side.dir, side.case);
 
     let mut untracked: Vec<String> = listed
         .iter()
-        .filter(|full| !is_inside_any(full, &nested))
+        .filter(|full| !is_inside_any(full, &nested, side.case))
         .filter_map(|full| {
-            let rel = relativize(full, side.dir)?.to_string();
+            let rel = side.case.relativize(full, side.dir)?.to_string();
             side.rules.is_released(&rel).then_some(rel)
         })
         .collect();
@@ -1206,7 +1212,7 @@ fn released_in_work_tree(
     // this package: an unrelated work-tree path must not introduce a filesystem read failure.
     let tracked: Vec<String> = tracked_paths
         .iter()
-        .filter(|path| relativize(path, side.dir).is_some())
+        .filter(|path| side.case.relativize(path, side.dir).is_some())
         .cloned()
         .collect();
     let present = present_in_work_tree(git, &tracked)?;
@@ -1275,13 +1281,13 @@ fn released_from_paths(
     present: &[String],
     side: &PackageSide<'_>,
 ) -> HashMap<String, String> {
-    let nested = nested_package_dirs(present, side.dir);
+    let nested = nested_package_dirs(present, side.dir, side.case);
     let mut map = HashMap::new();
     for full in tracked {
-        if is_inside_any(full, &nested) {
+        if is_inside_any(full, &nested, side.case) {
             continue;
         }
-        let Some(rel) = relativize(full, side.dir) else {
+        let Some(rel) = side.case.relativize(full, side.dir) else {
             continue;
         };
         if side.rules.is_released(rel) {
@@ -1324,7 +1330,7 @@ fn detected_readme(dir: &str, present: &HashSet<&str>, case: PathCase) -> Option
                 .min()
                 .map(|held| (*held).to_string()),
         }?;
-        let rel = relativize(&full, dir)?.to_string();
+        let rel = case.relativize(&full, dir)?.to_string();
         Some((rel, full))
     })
 }
@@ -1339,28 +1345,20 @@ fn detected_readme(dir: &str, present: &HashSet<&str>, case: PathCase) -> Option
 /// reading them off the member list would attribute the files of an excluded or
 /// otherwise non-member nested package to the outer package and report changes it
 /// will never release.
-fn nested_package_dirs(paths: &[String], dir: &str) -> Vec<String> {
-    let prefix = if dir.is_empty() {
-        String::new()
-    } else {
-        format!("{dir}/")
-    };
+fn nested_package_dirs(paths: &[String], dir: &str, case: PathCase) -> Vec<String> {
     paths
         .iter()
         .filter_map(|path| {
             let (parent, file) = path.rsplit_once('/')?;
-            (file == "Cargo.toml").then_some(parent)
+            case.same_path(file, "Cargo.toml").then_some(parent)
         })
-        .filter(|parent| *parent != dir && parent.starts_with(&prefix))
+        .filter(|parent| !case.same_path(parent, dir) && case.relativize(parent, dir).is_some())
         .map(ToOwned::to_owned)
         .collect()
 }
 
-fn is_inside_any(path: &str, dirs: &[String]) -> bool {
-    dirs.iter().any(|dir| {
-        path.strip_prefix(dir.as_str())
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
+fn is_inside_any(path: &str, dirs: &[String], case: PathCase) -> bool {
+    dirs.iter().any(|dir| case.relativize(path, dir).is_some())
 }
 
 /// Package facts reconstructed from a historical tree, keyed by package name.
@@ -1469,12 +1467,9 @@ fn load_snapshot(
         .collect();
 
     let mut manifest_paths: BTreeMap<String, String> = BTreeMap::new();
-    for path in tree_paths
-        .iter()
-        .filter(|path| path.rsplit('/').next() == Some(MANIFEST_FILE_NAME))
-    {
+    for path in tree_paths.iter().filter(|path| is_manifest(path, case)) {
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let member_dir = workspace_relative_dir(dir, workspace_prefix);
+        let member_dir = workspace_relative_dir(dir, workspace_prefix, case);
         manifest_paths.insert(member_dir, path.clone());
     }
 
@@ -1485,6 +1480,7 @@ fn load_snapshot(
         workspace,
         paths: manifest_paths,
         parsed: BTreeMap::new(),
+        case,
     };
     let member_dirs = resolve_members(&mut manifests, &members)?;
     let mut packages = BTreeMap::new();
@@ -1514,19 +1510,19 @@ fn load_snapshot(
                 directory: parsed.directory.clone(),
                 version: parsed.version.clone(),
                 packaging: parsed.packaging.clone(),
-                resources: resolve_resources(parsed, &parsed.directory, workspace_prefix),
+                resources: resolve_resources(parsed, &parsed.directory, workspace_prefix, case),
                 auto_readme: parsed.auto_readme,
                 has_lockfile_target: parsed.targets.has_lockfile_target(
                     tree_paths
                         .iter()
-                        .filter_map(|path| relativize(path, &parsed.directory)),
+                        .filter_map(|path| case.relativize(path, &parsed.directory)),
                     case,
                 ),
             },
         );
     }
     if packages.values().any(|package| package.has_lockfile_target) {
-        match historical_registries(git, commit, registries, &tree_paths, &files) {
+        match historical_registries(git, commit, registries, &files) {
             Ok(registries) => installation.registries = registries,
             Err(error) => installation.registry_error = Some(installation_error(error)),
         }
@@ -1601,15 +1597,11 @@ fn historical_registries(
     git: &GitRepo,
     commit: &str,
     ambient: &BTreeMap<String, String>,
-    tree_paths: &[String],
     files: &SnapshotFiles,
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut registries = ambient.clone();
     for candidates in cargo_config_paths(git.prefix()) {
         for path in candidates {
-            if !tree_paths.contains(&path) {
-                continue;
-            }
             let Some(content) = files.text(commit, &path)? else {
                 continue;
             };
@@ -1671,6 +1663,7 @@ struct SnapshotManifestSource<'a> {
     /// Git-root-relative manifest path of every candidate directory.
     paths: BTreeMap<String, String>,
     parsed: BTreeMap<String, Option<PackageManifest>>,
+    case: PathCase,
 }
 
 impl ManifestSource for SnapshotManifestSource<'_> {
@@ -1709,7 +1702,7 @@ impl ManifestSource for SnapshotManifestSource<'_> {
                     .map(|relative| join_relative(workspace_prefix, relative)),
             )
             .flatten()
-            .map(|target| workspace_relative_dir(&target, workspace_prefix))
+            .map(|target| workspace_relative_dir(&target, workspace_prefix, self.case))
             // Cargo implicitly adds path dependencies only when they live below
             // the workspace root. Explicit member patterns add outside members.
             .filter(|target| target != ".." && !target.starts_with("../"))
@@ -1854,15 +1847,19 @@ fn lockfile_closure_changes(
     anchor_package: &HistoricalPackage,
     work_package: &WorkPackage,
     anchor_commit: &str,
-    anchor_installation: &InstallationGraph,
+    anchor_snapshot: &CommitSnapshot,
 ) -> Result<Vec<(String, ClosureChange)>, AppError> {
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
     let anchor = if anchor_package.has_lockfile_target {
-        let lockfile = cache.anchor(git, name, anchor_commit, &git_path)?;
+        let path = anchor_snapshot
+            .files
+            .recorded_path(&git_path)
+            .unwrap_or(&git_path);
+        let lockfile = cache.anchor(git, name, anchor_commit, path)?;
         let Some(closure) = lockfile.closure(
             name,
             &anchor_package.version.to_string(),
-            anchor_installation,
+            &anchor_snapshot.installation,
         )?
         else {
             return Err(LockfileClosureUnavailableError::new(
@@ -1989,7 +1986,7 @@ fn root_manifest_rel(git: &GitRepo) -> String {
 /// separator, or empty when the workspace root is the git root. Leading parent
 /// components preserve members that use `[package] workspace` from beside a
 /// nested workspace root.
-fn workspace_relative_dir(dir: &str, workspace_prefix: &str) -> String {
+fn workspace_relative_dir(dir: &str, workspace_prefix: &str, case: PathCase) -> String {
     let workspace: Vec<&str> = workspace_prefix
         .trim_matches('/')
         .split('/')
@@ -2003,7 +2000,7 @@ fn workspace_relative_dir(dir: &str, workspace_prefix: &str) -> String {
     let common = workspace
         .iter()
         .zip(&directory)
-        .take_while(|(left, right)| left == right)
+        .take_while(|(left, right)| case.same_path(left, right))
         .count();
     let mut relative = vec![".."; workspace.len().saturating_sub(common)];
     relative.extend(directory.iter().skip(common).copied());
@@ -2069,23 +2066,28 @@ mod tests {
 
     #[test]
     fn workspace_relative_dir_rebases_onto_the_workspace_root() {
+        let case = PathCase::Sensitive;
         // Workspace root is the git root: paths pass through unchanged.
-        assert_eq!(workspace_relative_dir("packages/a", ""), "packages/a");
-        assert_eq!(workspace_relative_dir("", ""), "");
+        assert_eq!(workspace_relative_dir("packages/a", "", case), "packages/a");
+        assert_eq!(workspace_relative_dir("", "", case), "");
 
         // Workspace root is nested: the prefix is stripped so member globs match.
         assert_eq!(
-            workspace_relative_dir("rust/packages/a", "rust/"),
+            workspace_relative_dir("rust/packages/a", "rust/", case),
             "packages/a"
         );
-        assert_eq!(workspace_relative_dir("rust", "rust/"), "");
+        assert_eq!(workspace_relative_dir("rust", "rust/", case), "");
 
         // Explicit members beside a nested root retain their parent traversal.
         assert_eq!(
-            workspace_relative_dir("dotnet/packages/a", "rust/"),
+            workspace_relative_dir("dotnet/packages/a", "rust/", case),
             "../dotnet/packages/a"
         );
-        assert_eq!(workspace_relative_dir("", "rust/"), "..");
+        assert_eq!(workspace_relative_dir("", "rust/", case), "..");
+        assert_eq!(
+            workspace_relative_dir("rust/packages/a", "Rust/", PathCase::Insensitive),
+            "packages/a"
+        );
     }
 
     #[test]
@@ -2244,16 +2246,16 @@ mod tests {
             "packages/ab/Cargo.toml".to_string(),
         ];
         assert_eq!(
-            nested_package_dirs(&paths, "packages/a"),
+            nested_package_dirs(&paths, "packages/a", PathCase::Sensitive),
             vec!["packages/a/inner".to_string()]
         );
         assert_eq!(
-            nested_package_dirs(&paths, "packages/a/inner"),
+            nested_package_dirs(&paths, "packages/a/inner", PathCase::Sensitive),
             Vec::<String>::new()
         );
         // A root package contains every other manifest.
         assert_eq!(
-            nested_package_dirs(&paths, ""),
+            nested_package_dirs(&paths, "", PathCase::Sensitive),
             vec![
                 "packages/a".to_string(),
                 "packages/a/inner".to_string(),
@@ -2270,8 +2272,44 @@ mod tests {
             "packages/a/inner/Cargo.toml.bak".to_string(),
         ];
         assert_eq!(
-            nested_package_dirs(&paths, "packages/a"),
+            nested_package_dirs(&paths, "packages/a", PathCase::Sensitive),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn insensitive_package_selection_preserves_spelling_and_nested_boundaries() {
+        let rules = PackagingRules::default();
+        let resources = BTreeMap::new();
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: true,
+            case: PathCase::Insensitive,
+        };
+        let paths: Vec<String> = [
+            "PACKAGES/A/cargo.toml",
+            "PACKAGES/A/Src/lib.rs",
+            "PACKAGES/A/Readme.md",
+            "PACKAGES/A/Fixture/cargo.toml",
+            "PACKAGES/A/Fixture/src/lib.rs",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        assert_eq!(
+            nested_package_dirs(&paths, side.dir, side.case),
+            ["PACKAGES/A/Fixture"]
+        );
+        let files = released_from_paths(&paths, &paths, &side);
+        assert_eq!(
+            files,
+            HashMap::from([
+                ("cargo.toml".to_owned(), "PACKAGES/A/cargo.toml".to_owned()),
+                ("Src/lib.rs".to_owned(), "PACKAGES/A/Src/lib.rs".to_owned()),
+                ("Readme.md".to_owned(), "PACKAGES/A/Readme.md".to_owned()),
+            ])
         );
     }
 
@@ -2545,7 +2583,7 @@ mod tests {
             &["README.md"],
         );
 
-        let resolved = resolve_resources(&manifest, "packages/a", "");
+        let resolved = resolve_resources(&manifest, "packages/a", "", PathCase::Sensitive);
 
         assert_eq!(
             resolved,
@@ -2568,7 +2606,8 @@ mod tests {
     fn inherited_resources_resolve_against_the_workspace_prefix() {
         let manifest = manifest_with_resources("inner/packages/a", &[], &["README.md"]);
 
-        let resolved = resolve_resources(&manifest, "inner/packages/a", "inner/");
+        let resolved =
+            resolve_resources(&manifest, "inner/packages/a", "inner/", PathCase::Sensitive);
 
         assert_eq!(
             resolved,
@@ -2584,7 +2623,7 @@ mod tests {
     fn a_resource_outside_the_repository_is_dropped() {
         let manifest = manifest_with_resources("packages/a", &["../../../elsewhere/LICENSE"], &[]);
 
-        assert!(resolve_resources(&manifest, "packages/a", "").is_empty());
+        assert!(resolve_resources(&manifest, "packages/a", "", PathCase::Sensitive).is_empty());
     }
 
     fn manifest_with_resources(
@@ -2666,9 +2705,17 @@ mod tests {
     #[test]
     fn is_inside_any_requires_a_directory_boundary() {
         let dirs = vec!["packages/a".to_string()];
-        assert!(is_inside_any("packages/a/src/lib.rs", &dirs));
-        assert!(!is_inside_any("packages/a", &dirs));
-        assert!(!is_inside_any("packages/ab/src/lib.rs", &dirs));
+        assert!(is_inside_any(
+            "packages/a/src/lib.rs",
+            &dirs,
+            PathCase::Sensitive
+        ));
+        assert!(!is_inside_any("packages/a", &dirs, PathCase::Sensitive));
+        assert!(!is_inside_any(
+            "packages/ab/src/lib.rs",
+            &dirs,
+            PathCase::Sensitive
+        ));
     }
 
     /// Serves pre-parsed manifests.

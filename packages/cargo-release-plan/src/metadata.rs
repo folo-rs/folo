@@ -29,7 +29,6 @@ use crate::manifest::{
 };
 #[cfg(test)]
 use crate::packaging::PackagingRules;
-use crate::packaging::relativize;
 use crate::{
     InvalidVersionError, LegacyVersionGroupsError, MalformedPrivateApiError, ParseMetadataError,
     ReadFileError, UnsupportedExactRequirementError,
@@ -355,7 +354,7 @@ impl TrackedMetadata<'_> {
         let package_dir = join_git_rel(self.git.prefix(), &manifest.directory);
         let mut present = Vec::new();
         for path in &self.index.paths {
-            let Some(relative) = relativize(path, &package_dir) else {
+            let Some(relative) = self.case.relativize(path, &package_dir) else {
                 continue;
             };
             match fs::symlink_metadata(self.git.root().join(path)) {

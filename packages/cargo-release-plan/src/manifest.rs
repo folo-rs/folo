@@ -394,6 +394,23 @@ impl PathCase {
                 .eq(right.chars().flat_map(char::to_lowercase)),
         }
     }
+
+    /// Returns a descendant's relative path without changing its recorded spelling.
+    pub(crate) fn relativize<'a>(self, path: &'a str, directory: &str) -> Option<&'a str> {
+        let path = path.trim_start_matches("./");
+        if directory.is_empty() || directory == "." {
+            return Some(path);
+        }
+        let mut remaining = path;
+        for expected in directory.trim_end_matches('/').split('/') {
+            let (actual, rest) = remaining.split_once('/')?;
+            if !self.same_path(actual, expected) {
+                return None;
+            }
+            remaining = rest;
+        }
+        Some(remaining)
+    }
 }
 
 /// Rewrites a manifest-declared relative path into Git's `/`-separated form.
@@ -1898,6 +1915,48 @@ b = { path = "../b" }
     }
 
     #[test]
+    fn relative_paths_follow_case_rules_and_keep_recorded_suffixes() {
+        for case in [PathCase::Sensitive, PathCase::Insensitive] {
+            assert_eq!(
+                case.relativize("packages/a/Src/lib.rs", ""),
+                Some("packages/a/Src/lib.rs")
+            );
+            assert_eq!(
+                case.relativize("packages/a/Src/lib.rs", "packages/a"),
+                Some("Src/lib.rs")
+            );
+            assert_eq!(case.relativize("packages/ab/file", "packages/a"), None);
+            assert_eq!(case.relativize("packages/a", "packages/a"), None);
+            assert_eq!(
+                case.relativize("./packages/a/Src/lib.rs", "packages/a/"),
+                Some("Src/lib.rs")
+            );
+            assert_eq!(
+                case.relativize(r"./src/odd\name.rs", "."),
+                Some(r"src/odd\name.rs")
+            );
+            assert_eq!(case.relativize("other/foo.rs", "packages/a"), None);
+            assert_eq!(
+                case.relativize("packages/a/Cargo.toml", "packages/a"),
+                Some("Cargo.toml")
+            );
+        }
+        assert_eq!(
+            PathCase::Sensitive.relativize("PACKAGES/A/file", "packages/a"),
+            None
+        );
+        assert_eq!(
+            PathCase::Insensitive.relativize("PACKAGES/A/File.rs", "packages/a"),
+            Some("File.rs")
+        );
+        // Kelvin sign lowercases to an ASCII character with a different UTF-8 width.
+        assert_eq!(
+            PathCase::Insensitive.relativize("ROOT/\u{212A}/Src.rs", "root/k"),
+            Some("Src.rs")
+        );
+    }
+
+    #[test]
     fn case_sensitive_matching_follows_the_probed_filesystem() {
         let strict = cased_members(&["P/*"], PathCase::Sensitive);
         assert!(!is_workspace_member("p/a", &strict));
@@ -2295,7 +2354,7 @@ autoexamples = false
              renamed = { package = \"actual\", version = \"2\" }\n\
              development = { package = \"dev-only\", version = \"3\" }\n",
         );
-        let manifest = parse_package_manifest(
+        let manifest = root_doc(
             "[package]\nname = \"tool\"\nversion = \"0.1.0\"\n\
              [dependencies]\nshared.workspace = true\n\
              local = { path = \"../local\" }\n\
@@ -2304,15 +2363,13 @@ autoexamples = false
              [target.'cfg(windows)'.build-dependencies]\nwindows-builder = \"5\"\n\
              [dev-dependencies]\nshared = \"9\"\n\
              [target.'cfg(unix)'.dev-dependencies]\ndevelopment.workspace = true\n",
-            "Cargo.toml",
+        );
+        let declarations = installation_dependencies(
+            &manifest,
             &WorkspaceInherit::from_root(&root),
+            Path::new("Cargo.toml"),
         )
-        .unwrap()
         .unwrap();
-        let InstallationDependencies::Parsed(declarations) = manifest.installation_dependencies
-        else {
-            panic!("valid fixture declarations must parse");
-        };
         let dependencies: Vec<_> = declarations
             .iter()
             .map(|dependency| {
