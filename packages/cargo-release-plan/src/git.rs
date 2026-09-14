@@ -3,6 +3,11 @@
 // The design forbids git2/gix; every read of history, trees, and diffs goes
 // through this type. Ref: docs/implementation.md, "Subprocess boundaries".
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::collections::HashSet;
 use std::mem;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
@@ -14,6 +19,10 @@ use crate::manifest::PathCase;
 use crate::{
     CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
 };
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) mod testing;
 
 /// Name Cargo requires for a manifest.
 const MANIFEST_FILE_NAME: &str = "Cargo.toml";
@@ -867,7 +876,7 @@ mod tests {
     /// Tree entries report the executable bit off the mode field.
     #[test]
     fn tree_records_report_the_executable_bit() {
-        let script = TreeEntry::parse("100755 blob abc\tpackages/foo/run.sh").unwrap();
+        let script = testing::tree_entry("packages/foo/run.sh", EXECUTABLE_TREE_MODE);
         assert!(script.is_executable());
         let plain = TreeEntry::parse("100644 blob def\tpackages/foo/lib.rs").unwrap();
         assert!(!plain.is_executable());
@@ -988,6 +997,9 @@ mod tests {
             modes.symlinks,
             HashSet::from(["made-link".to_string(), "unchanged-link".to_string()])
         );
+        assert!(modes.is_symlink("made-link"));
+        assert!(modes.is_symlink("unchanged-link"));
+        assert!(!modes.is_symlink("made-regular-link"));
     }
 
     /// A malformed mode record cannot invent an executable path.
@@ -1342,5 +1354,47 @@ mod tests {
             .unwrap();
 
         assert_eq!(hashed, recorded);
+        for (id, bytes) in hashed.iter().zip([b"x", b"y"]) {
+            assert_eq!(repo.show_blob_bytes(id).unwrap(), bytes);
+        }
+        repo.show_blob_bytes("missing-object").unwrap_err();
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "queries a real Git index")]
+    fn tracked_resource_queries_keep_recorded_paths_and_exclude_untracked_files() {
+        let fixture = testing::Repository::new();
+        fixture.write("shared/Guide.md", b"tracked");
+        fixture.write("shared/untracked.md", b"not staged");
+        fixture.command(&["add", "shared/Guide.md"]);
+        let repo = fixture.repo();
+
+        assert_eq!(
+            repo.tracked_paths(
+                &[
+                    "shared/Guide.md",
+                    "shared/untracked.md",
+                    "shared/missing.md"
+                ],
+                PathCase::Sensitive,
+            )
+            .unwrap(),
+            ["shared/Guide.md"]
+        );
+        assert!(
+            repo.tracked_paths(&[], PathCase::Sensitive)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            repo.tracked_paths(&["shared/guide.md"], PathCase::Sensitive)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            repo.tracked_paths(&["shared/guide.md"], PathCase::Insensitive)
+                .unwrap(),
+            ["shared/Guide.md"]
+        );
     }
 }
