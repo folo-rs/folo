@@ -68,6 +68,10 @@ Generated diagnostics remain separate from source inputs, including while a chec
 copies the source tree for isolated execution. Partial logs remain available after
 interruption, and genuine checker failures retain their status and artifacts.
 
+Step summaries fit GitHub's upload limit including the authoritative final result
+and exit code. Diagnostic truncation is visible and retains references to complete
+artifacts; it does not change the check verdict.
+
 An empty mutation shard is explicitly reported as no work, not a passing baseline.
 The shared mutation recipe runs cargo-mutants' baseline for nonempty shards.
 Missing output is not proof of an empty shard. Reproduction instructions preserve
