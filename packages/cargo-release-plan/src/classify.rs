@@ -1,5 +1,10 @@
 // Classification of publishable packages against their anchors.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -954,19 +959,32 @@ fn validated_work_tree_files<'a>(
     released: &'a HashMap<String, String>,
     modes: &WorkTreeModes,
 ) -> Result<Vec<(&'a str, &'a str)>, AppError> {
+    validated_work_tree_files_with(git.root(), name, released, modes, |path| {
+        fs::symlink_metadata(path).map(|metadata| metadata.file_type().is_symlink())
+    })
+}
+
+/// Validates acquired link metadata independently of host symlink privileges.
+fn validated_work_tree_files_with<'a>(
+    root: &Path,
+    name: &str,
+    released: &'a HashMap<String, String>,
+    modes: &WorkTreeModes,
+    mut symlink_metadata: impl FnMut(&Path) -> io::Result<bool>,
+) -> Result<Vec<(&'a str, &'a str)>, AppError> {
     let mut files = Vec::with_capacity(released.len());
     for (rel, path) in released {
         if modes.is_symlink(path) {
             return Err(SymlinkReleasedError::new(name, path).into());
         }
-        match fs::symlink_metadata(git.root().join(path)) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+        match symlink_metadata(&root.join(path)) {
+            Ok(true) => {
                 return Err(SymlinkReleasedError::new(name, path).into());
             }
-            Ok(_) => {}
+            Ok(false) => {}
             Err(error) if is_not_found(&error) => continue,
             Err(error) => {
-                return Err(ReadFileError::caused_by(git.root().join(path), error).into());
+                return Err(ReadFileError::caused_by(root.join(path), error).into());
             }
         }
         files.push((rel.as_str(), path.as_str()));
@@ -1896,15 +1914,35 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
 /// yields a comparison that is right at both ends. Ref: docs/design.md,
 /// "Released content".
 fn read_optional_bytes(path: &Path, name: &str, rel: &str) -> Result<Option<Vec<u8>>, AppError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
+    read_optional_bytes_with(
+        path,
+        name,
+        rel,
+        fs::symlink_metadata(path).map(|metadata| metadata.file_type().is_symlink()),
+        || fs::read(path),
+    )
+}
+
+/// Interprets the filesystem observations without changing their order.
+///
+/// Injecting acquisition makes disappearance between metadata and reading
+/// deterministic in tests, without racing another thread or using delays.
+fn read_optional_bytes_with(
+    path: &Path,
+    name: &str,
+    rel: &str,
+    symlink: io::Result<bool>,
+    read: impl FnOnce() -> io::Result<Vec<u8>>,
+) -> Result<Option<Vec<u8>>, AppError> {
+    match symlink {
+        Ok(true) => {
             return Err(SymlinkReleasedError::new(name, rel).into());
         }
-        Ok(_) => {}
+        Ok(false) => {}
         Err(error) if is_not_found(&error) => return Ok(None),
         Err(error) => return Err(ReadFileError::caused_by(path, error).into()),
     }
-    match fs::read(path) {
+    match read() {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if is_not_found(&error) => Ok(None),
         Err(error) => Err(ReadFileError::caused_by(path, error).into()),
@@ -1957,6 +1995,10 @@ fn workspace_relative_dir(dir: &str, workspace_prefix: &str) -> String {
     relative.extend(directory.iter().skip(common).copied());
     relative.join("/")
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod discovery_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

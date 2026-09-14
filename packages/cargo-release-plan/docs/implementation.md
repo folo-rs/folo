@@ -96,6 +96,14 @@ use Cargo's test classifications: ordinary testing includes integration targets,
 while mutation testing selects only library unit-test targets under the
 [workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
 
+Released-file discovery unit tests use small Git indexes and filesystem fixtures
+without constructing or resolving Cargo workspaces. They exercise selection,
+presence, modes and cleaned blob bytes at the acquisition boundary. Optional
+reads and hash-input validation inject metadata and byte-read observations so
+disappearance between operations, permission failures and symlink rejection remain
+deterministic without races, delays or host symlink privileges. Real-filesystem
+link tests also exercise the metadata adapter on platforms that permit them.
+
 Filesystem path tests create symlinked temporary roots explicitly rather than
 depending on the host's temporary-directory layout. Expected destinations use a
 canonical existing ancestor followed by the missing suffix, preserving assertions
