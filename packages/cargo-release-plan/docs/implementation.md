@@ -205,9 +205,9 @@ to recorded tree paths before blob lookup. Implicit path members use recorded
 directory keys, so dependency aliases cannot omit members or introduce duplicate
 membership. The manifest-history pathspec follows the same probed rules.
 
-The read-only filesystem probe forwards directory entries and case-flipped
-existence checks to a pure decision function. Unit tests exercise both possible
-filesystem responses and ambiguous entries independently of the host volume;
+The read-only filesystem probe forwards directory entries and case-flipped entry
+checks, without following symbolic links, to a pure decision function. Unit tests
+exercise both possible filesystem responses and ambiguous entries independently of the host volume;
 real-filesystem regressions verify the acquisition boundary. An inconclusive probe
 chooses case-sensitive matching, which does not widen the selected content.
 Insensitive historical selection uses a full Git tree listing: Git can record

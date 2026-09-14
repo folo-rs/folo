@@ -367,7 +367,8 @@ impl PathCase {
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
-        Self::from_directory_entries(&names, |name| dir.join(name).exists())
+        // A dangling link is still a directory entry; its target cannot decide path case.
+        Self::from_directory_entries(&names, |name| fs::symlink_metadata(dir.join(name)).is_ok())
     }
 
     fn from_directory_entries(names: &[String], mut exists: impl FnMut(&str) -> bool) -> Self {
@@ -1482,6 +1483,9 @@ pub(crate) fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Opt
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     use super::*;
 
     /// A requirement names a version only when it pins exactly that version.
@@ -1973,6 +1977,23 @@ b = { path = "../b" }
             PathCase::Sensitive
         };
         assert_eq!(probed, observed);
+    }
+
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore = "Creates and probes a real dangling symbolic link.")]
+    #[test]
+    fn path_case_probe_observes_dangling_directory_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        symlink("missing-target", directory.path().join("Probe.txt")).unwrap();
+        let observed = match fs::symlink_metadata(directory.path().join("pROBE.TXT")) {
+            Ok(metadata) => {
+                assert!(metadata.file_type().is_symlink());
+                PathCase::Insensitive
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathCase::Sensitive,
+            Err(error) => panic!("filesystem alias probe failed: {error}"),
+        };
+        assert_eq!(PathCase::probe(directory.path()), observed);
     }
 
     #[test]
