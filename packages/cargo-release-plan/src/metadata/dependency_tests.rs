@@ -5,20 +5,30 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::git::testing::Repository;
+use crate::manifest::InstallationDependencies;
 
 fn doc(text: &str) -> DocumentMut {
     parse_document(Path::new("Cargo.toml"), text).unwrap()
 }
 
 fn package(name: &str, root: &Path) -> MetadataPackage {
-    serde_json::from_value(json!({
-        "name": name,
-        "version": "1.2.3",
-        "id": name,
-        "manifest_path": root.join(name).join("Cargo.toml"),
-        "targets": [{"name": name, "kind": ["lib"]}]
-    }))
-    .unwrap()
+    MetadataPackage {
+        name: name.to_string(),
+        version: "1.2.3".to_string(),
+        id: name.to_string(),
+        manifest_path: root
+            .join(name)
+            .join("Cargo.toml")
+            .to_string_lossy()
+            .into_owned(),
+        publish: None,
+        dependencies: Vec::new(),
+        targets: vec![MetadataTarget {
+            name: name.to_string(),
+            kind: vec!["lib".to_string()],
+        }],
+        metadata: Value::Null,
+    }
 }
 
 #[test]
@@ -158,19 +168,19 @@ fn exact_dependency_discovery_uses_effective_raw_declarations_and_selected_ident
         metadata: Value::Null,
     };
     let selected = HashSet::from(["member", "helper"]);
-    let snapshot = ManifestSnapshot::load_with(
-        &metadata,
-        &selected,
-        root,
-        |path| {
-            Ok(if path == root.join("Cargo.toml") {
-                "[workspace.dependencies]\n\
+    // Discovery consumes parsed declarations, not the derived package facts.
+    // Snapshot acquisition and package projection have their own tests.
+    let snapshot = ManifestSnapshot {
+        documents: BTreeMap::from([
+            (
+                root.join("Cargo.toml"),
+                doc("[workspace.dependencies]\n\
                  inherited = { package = 'helper', path = 'helper', version = '=1.2.3' }\n\
-                 unused = { package = 'helper', path = 'helper', version = '=1.2' }\n"
-                    .to_string()
-            } else if path == root.join("member/Cargo.toml") {
-                "[package]\nname = 'member'\nversion = '1.2.3'\n\
-                 [dependencies]\n\
+                 unused = { package = 'helper', path = 'helper', version = '=1.2' }\n"),
+            ),
+            (
+                root.join("member/Cargo.toml"),
+                doc("[dependencies]\n\
                  alias = { package = 'helper', path = '../helper', version = '=1.2.2', optional = true }\n\
                  nonexact = { package = 'helper', path = '../helper', version = '^1.2.3' }\n\
                  wrong_name = { path = '../helper', version = '=1.2.3' }\n\
@@ -178,16 +188,12 @@ fn exact_dependency_discovery_uses_effective_raw_declarations_and_selected_ident
                  registry = '=1.2.3'\n\
                  [build-dependencies]\ninherited.workspace = true\n\
                  [target.'cfg(unix)'.dev-dependencies]\n\
-                 helper = { path = '../helper', version = '=1.2.3' }\n"
-                    .to_string()
-            } else {
-                assert_eq!(path, root.join("helper/Cargo.toml"));
-                "[package]\nname = 'helper'\nversion = '1.2.3'\npublish = false\n".to_string()
-            })
-        },
-        parse_document,
-    )
-    .unwrap();
+                 helper = { path = '../helper', version = '=1.2.3' }\n"),
+            ),
+            (root.join("helper/Cargo.toml"), DocumentMut::new()),
+        ]),
+        packages: BTreeMap::new(),
+    };
     let members = ["member", "helper"]
         .map(|name| (root.join(name), name.to_string()))
         .into();
@@ -302,17 +308,23 @@ fn development_versions_ignore_other_kinds_and_retain_any_versioned_target() {
 }
 
 fn work_package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
-    let path = format!("{name}/Cargo.toml");
-    let manifest = package_manifest_from_document(
-        &doc(&format!("[package]\nname = '{name}'\nversion = '1.2.3'\n")),
-        &path,
-        &WorkspaceInherit::default(),
-    )
-    .unwrap()
-    .unwrap();
     WorkPackage {
-        manifest,
-        manifest_path: path.into(),
+        manifest: PackageManifest {
+            name: name.to_string(),
+            version: Version::new(1, 2, 3),
+            directory: name.to_string(),
+            packaging: PackagingRules::default(),
+            inherited: InheritedKeys::default(),
+            publish: true,
+            path_dependencies: Vec::new(),
+            inherited_path_dependencies: Vec::new(),
+            installation_dependencies: InstallationDependencies::default(),
+            resource_paths: Vec::new(),
+            inherited_resource_paths: Vec::new(),
+            auto_readme: false,
+            targets: TargetDiscovery::default(),
+        },
+        manifest_path: PathBuf::from(name).join("Cargo.toml"),
         dependencies,
         consumer_contract: true,
         has_lockfile_target: false,
