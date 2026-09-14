@@ -236,6 +236,14 @@ callers may supply an empty external output directory. Logs are written directly
 so partial diagnostics survive interruption without a final staging/copy step.
 Successful artifact preservation does not turn failed validation green.
 
+Diagnostic appends share a bounded UTF-8 summary. Finalization reserves the actual
+final-result footer within GitHub's per-step byte limit, shortening diagnostics at
+a UTF-8 character boundary when necessary and retaining a visible omission notice.
+This final boundary also covers execution-error text written outside the diagnostic
+helpers. The wrapper owns the entire step-summary payload and copies the finalized
+artifact bytes unchanged, without newline conversion, a new byte-order mark or
+appending to earlier content. Raw logs and native mutation artifacts stay complete.
+
 The Just recipes own toolchain selection, test runners, helper preparation and
 configuration. Ordinary Miri therefore uses nextest and its `default-miri` profile
 in both development and CI. The many-seed recipe computes its own shard range.

@@ -9,8 +9,8 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 # Prefix/tail windows retain setup context and the last failing phase without loading full logs.
 $script:LogReadByteLimit = 64KB
-# All diagnostic appends share this budget, including descriptions and individual mutation logs.
-# The execution wrapper appends its short authoritative recipe result separately.
+# GitHub's per-step upload limit covers diagnostics, the truncation notice and the final result.
+# Finalization reserves the actual footer bytes. Ref: .github/workflows/implementation.md#deep-execution.
 $script:SummaryByteLimit = 1MB
 # Native outcomes can contain large per-mutation records. Oversized JSON remains an artifact,
 # rather than allocating its full object graph or interpreting an incomplete prefix.
@@ -53,6 +53,33 @@ function Add-ScheduledDiagnosticText {
         $stream.Write($bytes, 0, $budget)
         $stream.Write($marker, 0, $marker.Length)
         return $false
+    } finally { $stream.Dispose() }
+}
+
+function Complete-ScheduledSummary {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $SummaryPath,
+        [Parameter(Mandatory)][string] $Footer
+    )
+
+    $footerBytes = [Text.Encoding]::UTF8.GetBytes($Footer)
+    $marker = [Text.Encoding]::UTF8.GetBytes($script:SummaryTruncationText)
+    $budget = $script:SummaryByteLimit - $footerBytes.Length - $marker.Length
+    if ($budget -lt 0) { throw 'The final result and truncation notice exceed the summary byte limit.' }
+    $stream = [IO.File]::Open($SummaryPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+    try {
+        if ($stream.Length + $footerBytes.Length -gt $script:SummaryByteLimit) {
+            # Include one lookahead byte so truncation cannot leave a partial UTF-8 scalar.
+            # This also removes any prior terminal omission notice before adding its replacement.
+            $prefix = Read-ScheduledDiagnosticBuffer $stream ($budget + 1)
+            while ($budget -gt 0 -and ($prefix[$budget] -band 0xC0) -eq 0x80) { $budget-- }
+            $stream.SetLength($budget)
+            $stream.Position = $budget
+            $stream.Write($marker, 0, $marker.Length)
+        }
+        $stream.Position = $stream.Length
+        $stream.Write($footerBytes, 0, $footerBytes.Length)
     } finally { $stream.Dispose() }
 }
 
@@ -190,4 +217,4 @@ function Write-ScheduledMutationLog {
     }
 }
 
-Export-ModuleMember -Function Write-ScheduledLogExcerpt, Write-ScheduledMutationSummary
+Export-ModuleMember -Function Write-ScheduledLogExcerpt, Write-ScheduledMutationSummary, Complete-ScheduledSummary
