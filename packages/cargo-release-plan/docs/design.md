@@ -484,9 +484,12 @@ while the entry remains versionless; adding or removing its version does.
 
 ### Path case
 
-Member paths and default README names follow the case behavior of the workspace
-volume rather than an operating-system assumption. Git-tracked spellings remain
-distinct in reports so a case-only rename stays visible.
+Filesystem lookups, including workspace membership, target discovery, nested
+package boundaries and historical Cargo inputs, follow the probed behavior of the
+workspace directory rather than an operating-system assumption. Git-tracked
+spellings remain distinct in reports so a case-only rename stays visible.
+Filesystem identity does not make Cargo's packaging patterns or reserved-name
+comparisons case-insensitive.
 
 ## Package status
 

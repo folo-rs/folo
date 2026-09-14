@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_input, run_capture_ok, run_capture_os};
-use crate::metadata::load_tracked_work_tree;
+use crate::metadata::{cargo_manifest_path, load_tracked_work_tree};
 use crate::resolved::{Artifact, Inputs, canonical, relative};
 use crate::verbose::Verbose;
 use crate::{ReadFileError, WriteFileError, quote_path};
@@ -114,12 +114,15 @@ impl Prospective {
     }
 
     pub(crate) fn resolve(&self, verbose: Verbose) -> Result<(), AppError> {
+        // Captured identity keeps the filesystem spelling; Cargo requires its conventional
+        // manifest filename at the subprocess boundary even when another spelling aliases it.
+        let manifest = cargo_manifest_path(&self.manifest);
         verbose.note(|| {
             format!(
                 "resolving {} with cargo update --offline --workspace before release decisions; \
              existing third-party locks are retained where Cargo permits, but dependency edges \
              can be reselected and must be classified",
-                quote_path(&self.manifest.to_string_lossy())
+                quote_path(&manifest.to_string_lossy())
             )
         });
         _ = run_capture_os(
@@ -129,7 +132,7 @@ impl Prospective {
                 OsStr::new("--offline"),
                 OsStr::new("--workspace"),
                 OsStr::new("--manifest-path"),
-                self.manifest.as_os_str(),
+                manifest.as_os_str(),
             ],
             self.manifest.parent().expect("a manifest has a parent"),
         )?;
@@ -194,6 +197,60 @@ mod tests {
             manifest,
             retained: false,
         }
+    }
+
+    fn resolver_candidate(root: &Path) -> Prospective {
+        let prospective = candidate(root);
+        fs::write(
+            &prospective.manifest,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             [workspace]\n",
+        )
+        .unwrap();
+        let package = prospective.manifest.parent().unwrap();
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::write(package.join("src/lib.rs"), "pub fn released() {}\n").unwrap();
+        prospective
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "resolves a real Cargo manifest under a filesystem case alias"
+    )]
+    fn resolver_preserves_captured_spelling_at_the_cargo_boundary() {
+        let directory = tempdir().unwrap();
+        let prospective = resolver_candidate(&directory.path().join("workspace"));
+        let package = prospective.manifest.parent().unwrap();
+        let alias = package.join("cargo.toml");
+        if !alias.exists() {
+            eprintln!("This filesystem does not provide a case alias for Cargo.toml.");
+            return;
+        }
+        let intermediate = package.join("case-rename");
+        fs::rename(&prospective.manifest, &intermediate).unwrap();
+        fs::rename(intermediate, &alias).unwrap();
+        let mut prospective = prospective;
+        prospective.manifest = canonical(&alias).unwrap();
+        prospective.resolve(Verbose::new(false)).unwrap();
+        assert_eq!(prospective.manifest.file_name().unwrap(), "cargo.toml");
+        assert!(
+            fs::read_to_string(alias.with_file_name("Cargo.lock"))
+                .unwrap()
+                .contains("name = \"demo\"")
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "invokes Cargo with an unsupported manifest filename")]
+    fn resolver_rejects_an_unrelated_manifest_filename() {
+        let directory = tempdir().unwrap();
+        let mut prospective = resolver_candidate(&directory.path().join("workspace"));
+        let unrelated = prospective.manifest.with_file_name("manifest.input");
+        fs::copy(&prospective.manifest, &unrelated).unwrap();
+        prospective.manifest = unrelated;
+        prospective.resolve(Verbose::new(false)).unwrap_err();
+        assert!(!prospective.manifest.with_file_name("Cargo.lock").exists());
     }
 
     #[test]
