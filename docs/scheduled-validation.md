@@ -39,8 +39,9 @@ The local shallow and deep validation commands retain their separate meanings.
 **Standard validation** runs ordinary required checks.
 **[Deep validation](../.github/workflows/deep-validation.yml)** runs the complete
 Miri platform matrix, many-seed Miri cases, mutation shards, careful checks,
-feature-powerset compilation, unused-dependency checks and ARM64 tests with benchmark smoke checks
-nightly on main. Every nightly run executes the checks; previous success does not
+release builds, example execution, dependency default-feature policy checks,
+feature-powerset compilation, unused-dependency checks and ARM64 tests with benchmark
+smoke checks nightly on main. Every nightly run executes the checks; previous success does not
 skip a night. Ordinary dependency/build caches remain available.
 
 The scheduled matrix invokes the same `just miri`, `just miri-harder`, `just mutants`
