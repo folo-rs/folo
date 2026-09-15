@@ -166,6 +166,13 @@ or explicit uncertainty, useful diagnostics and report/job links, reproduction
 steps with applicable toolchain/target/seed details, and acceptance criteria.
 Triage need not finish the repair investigation or prescribe a speculative patch.
 
+When supported by the evidence, distinguish packages likely to need repair edits
+or version movements from packages merely affected by a failed check. Note known
+version-group or dependent-package effects and link any prerequisite repair,
+explaining why it is needed. Mark estimates and unresolved scope explicitly;
+these ordinary issue notes help intake assess overlap without requiring a release
+plan, a mandatory field or a speculative dependency.
+
 Repeated unresolved failures update the existing problem with links and materially
 new evidence. A supported recurrence after a fix can reopen the issue; a run of
 pre-fix code is not a recurrence. Link uncertain duplicates rather than
@@ -228,7 +235,8 @@ not indicate ongoing work.
 The [scheduled-intake skill](../.github/skills/scheduled-intake/SKILL.md) coordinates
 repairs. It follows existing claimed issues and PRs first, then starts at most one
 new repair session per invocation, subject to the
-[repair-session limit](#repair-session-capacity-and-cleanup) after completion cleanup.
+[repair-session limit](#repair-session-capacity-and-cleanup) after completion cleanup
+and the [package-overlap policy](#package-overlap-and-stacked-repairs).
 Only open findings are repair candidates; closure ends automatic repair follow-up,
 including follow-up of linked PRs. Known sessions linked to closed findings remain
 in scope for completion reconciliation and safe archival. Keep the issue open
@@ -335,6 +343,81 @@ ownership/completion defers admission rather than implying free capacity. Keep
 intake invocations nonoverlapping; these observations are not an atomic reservation
 or a financial cap.
 
+### Package overlap and stacked repairs
+
+Concurrent repairs of the same package can independently choose the same version
+increment. Intake reduces this avoidable synchronization work by deferring a new
+repair when its likely edited or version-moving packages overlap an incomplete
+repair. Waiting for checks, human review or merge does not release that scope.
+This is a best-effort scheduling heuristic, not a package lock or a replacement
+for normal version validation.
+
+Use current PR **Version/release plan** sections, changed paths and substantive
+issue/owner notes. Include known version-group members and dependent releases, not
+just directly edited packages. Distinguish likely repair targets from a check's
+broader affected scope; an infrastructure failure or unreleased documentation edit
+does not imply every tested package needs publishing. A missing release plan is
+not an empty package set. Make a bounded read of relevant source or manifests when
+useful, without preparing Rust or computing exhaustive release plans in intake.
+Defer plausible overlaps whose scope is unresolved, but uncertainty alone is not
+a repository-wide lock. Continue scanning for the oldest eligible independent
+finding rather than stopping at the first deferred issue.
+
+A new repair may instead form a stacked PR when it naturally depends on an
+existing repair's changes. Sharing a package or wanting a different version is
+not a dependency. The proposed parent must have an open PR with committed, pushed
+changes and a current release plan whose increments are present at its head.
+Published progress and PR evidence must establish a settled scope and release
+plan; unresolved development likely to change them is not a suitable base.
+Checks may still be running if they do not reveal such unresolved work.
+
+Use one ordered chain, extending its current top rather than creating competing
+siblings. Verify that the whole prerequisite chain is suitable and contains every
+known overlapping repair; a stack does not excuse a collision with unrelated
+work. Record the dependency reason, parent issue/PR, branch and exact head commit
+on GitHub. Recheck the parent and package scope immediately before admission and
+again before the worker edits. If the parent merged, reassess against current main;
+if it moved, was abandoned or is no longer suitable, defer or reconcile through
+the existing owners rather than silently changing the base.
+
+Each layer has its own session, claim, branch and PR, consumes a normal incomplete
+slot, and counts toward the one-new-session-per-invocation limit. The coordinator
+creates only the admitted upper layer from the verified pushed parent branch,
+using `create_session` with an explicit `base_branch`. Its ordinary issue ownership
+comment identifies the session until its own app-native PR supplies the native
+link. Do not open a duplicate issue session to attach it. The Local App's bundled
+`pr-stack` skill supplies native stack inspection, creation/extension and
+synchronization mechanics; it is an App prerequisite, not a repository-local
+skill. Confirm it is exposed before admitting a stacked layer. If unavailable,
+defer stacked admission, disclose the missing prerequisite and continue to
+consider independent repairs without installing a substitute. This skill does
+not authorize extra workers, modifying another owner's branch or merging.
+Where native registration is unsupported, an explicit dependent-PR chain retains
+ordinary bottom-to-top synchronization in the owning sessions without requiring
+native membership.
+
+The worker keeps release evidence anchored to current main, not an unreleased
+parent. It also assesses its own released-content and dependency effects against
+the parent: each existing package needing a release for this layer must advance
+beyond the parent's version by the level this layer requires. An inherited pending
+increment is not that additional increment. Inheritance alone does not justify
+a second semantic increment. Required group alignment and dependent releases
+still move every target in the expanded plan, including otherwise unchanged
+inherited packages. New packages follow first-publication rules. Keep the complete
+release plan and explain all parent-to-child movements, including mechanical
+movements, separately from release-anchor versions.
+Parent changes or merges require refreshed scope, version and relevant validation
+evidence even if the child's existing checks are green. Owners publish the
+reconciled parent snapshot for later intake runs. Agreed ancestor/descendant
+overlap does not block necessary parent fixes; coordinate downstream updates.
+Normal version checks remain authoritative.
+
+Workers publish likely package scope early and update it when diagnosis or the
+expanded release plan changes. Intake records substantive overlap deferrals and
+prerequisite links in ordinary issue discussion so later invocations can reassess
+them. Package waiting alone does not warrant assignment, `needs-human`, a timer
+or repeated comments. No schema, reservation counter or private registry is needed.
+
 ## Local App setup and operation
 
 Use separate repository-level **Local** App automations for triage and repair.
@@ -357,7 +440,8 @@ operator choices. Setup neither installs tooling nor runs an automation.
 | Repair coordination | Folo scheduled repair | `scheduled-intake` |
 
 The coordinator uses native session lookup and `open_issue_session` or
-`open_pr_session` to open/resume visible linked sessions. It preserves the
+`open_pr_session` to open/resume visible linked sessions, and `create_session` with
+the verified parent branch for an admitted stacked layer. It preserves the
 existing executor when available. GitHub remains the source of truth; native
 runtime metadata locates executors and verifies session cleanup, not repair
 correctness or ownership.
