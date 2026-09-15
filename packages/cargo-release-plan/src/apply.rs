@@ -980,6 +980,29 @@ version = \"0.1.0\"
 
         assert!(!targets.declares("../gone", "demo"));
     }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "canonicalizes real filesystem directories")]
+    fn canonical_dependency_identity_requires_both_name_and_directory() {
+        let directory = tempdir().unwrap();
+        for name in ["member", "outside", "via"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        // Keep an equivalent but non-lexical member spelling to exercise the
+        // filesystem fallback without requiring symlink privileges on Windows.
+        let members =
+            BTreeMap::from([(directory.path().join("via/../member"), "member".to_string())]);
+        let targets = DepTargets {
+            manifest_dir: directory.path().to_path_buf(),
+            members_by_dir: &members,
+        };
+
+        assert!(targets.declares("member", "member"));
+        assert!(!targets.declares("member", "other"));
+        assert!(!targets.declares("outside", "member"));
+        assert!(!targets.declares("outside", "other"));
+    }
+
     /// A workspace whose only member is `demo`.
     ///
     /// It is laid out under a shared root so the rewrite tests can express both
