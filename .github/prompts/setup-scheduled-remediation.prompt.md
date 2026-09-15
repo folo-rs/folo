@@ -29,6 +29,13 @@ change is requested; never select a paid model on the operator's behalf. Record
 the chosen repair-session model and reasoning effort in the repair prompt as ordinary prose, or
 explicitly say to use the App defaults.
 
+Record the **maximum incomplete repair sessions** in the repair prompt, using `5`
+unless the operator selects a different nonnegative integer. Preserve an existing
+explicit limit unless a change is requested; `0` pauses new admissions while
+retaining follow-up and cleanup. Reject invalid or conflicting settings rather
+than silently replacing them. This repository-wide limit includes repairs waiting
+for human review or merge.
+
 Review the App's available schedule description, timezone and next-run preview.
 If timezone or next-run information is not exposed, ask the operator to confirm
 the intended local-time interpretation and report that confirmation separately
@@ -42,10 +49,12 @@ The entries are:
 | Suggested name | Saved prompt |
 |---|---|
 | Folo scheduled failure triage | Run the repository's `scheduled-triage` skill in this Local App project. Process open run reports oldest first using the selected model. Do not edit source, start repairs or change automation/account/billing settings. |
-| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Follow existing repairs and PRs first, then start at most one new repair. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
+| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Follow existing repairs and PRs, reconcile completion and archive finished sessions before checking capacity. Start at most one new repair session when below the maximum incomplete repair sessions: {{MAX_INCOMPLETE_REPAIR_SESSIONS}}. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
 
-Expand the repair prompt's model/effort sentence with the actual operator choice,
-including a shared selection, not a placeholder or inferred setting. For explicit
+Expand the repair prompt's model/effort sentence with the actual operator choice
+and replace `{{MAX_INCOMPLETE_REPAIR_SESSIONS}}` with the selected or preserved
+limit. Do not save unresolved placeholders. Include a shared model selection,
+not an inferred setting. For explicit
 overrides, instruct `scheduled-intake` in that saved prompt to pass them through
 `kickoff.model` and `kickoff.reasoning_effort` when opening a new repair session
 with `open_issue_session` or `open_pr_session`, following the skill's waiting
@@ -91,7 +100,7 @@ example, not a file to persist or a schema for issues:
 |---|---|
 | `PROJECT_ID` | Actual repository project ID returned by `list_projects`. |
 | `ROLE_NAME` | Operator-approved name for this role. |
-| `ROLE_PROMPT` | The role's short prompt, with the operator's model/effort choice and new-session propagation instruction included where needed. |
+| `ROLE_PROMPT` | The role's short prompt, with the operator's model/effort choice, new-session propagation instruction and maximum incomplete repair sessions included where needed. |
 | `OPERATOR_CRON` | Operator-selected schedule, reviewed against the available App preview with local-time interpretation confirmed as described in Stage 1. |
 
 Ask the operator to verify the actual **Local** environment, project, prompt,
@@ -119,8 +128,9 @@ do not write a setup journal or create another entry blindly.
 ## Stage 3: Verify and report
 
 Reread `list_workflows` to verify the persisted repository, Local environment,
-prompt, selected model/effort, mode, schedule and disabled state. Use operator
-review of the native editor for settings not exposed by supported metadata.
+prompt (including the repair-session limit), selected model/effort, mode, schedule
+and disabled state. Use operator review of the native editor for settings not
+exposed by supported metadata.
 Report the actual entry names/IDs, distinguish metadata-verified settings from
 operator confirmations, and state any remaining uncertainty or decisions. If
 confirmation conflicts with saved metadata, reconcile the discrepancy before
