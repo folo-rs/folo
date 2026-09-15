@@ -42,19 +42,35 @@ impl Verbose {
     }
 }
 
+impl NoteSink for Verbose {
+    fn note(&self, message: impl FnOnce() -> String) {
+        (*self).note(message);
+    }
+}
+
+/// Receives lazily formatted diagnostic notes independently of their destination.
+///
+/// Classification uses this boundary to test emission conditions and explanatory
+/// values without acquiring repository state or capturing process-global stderr.
+pub(crate) trait NoteSink {
+    fn note(&self, message: impl FnOnce() -> String);
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
-    /// A note is emitted in either mode without panicking.
-    ///
-    /// Notes are explanatory diagnostics with no return value, so the contract this can assert is
-    /// that emitting one is infallible in either mode.
     #[test]
-    fn a_note_is_emitted_in_either_mode_without_panicking() {
-        Verbose::new(true).note(|| "enabled".to_string());
-        Verbose::new(false).note(|| "disabled".to_string());
+    fn the_note_sink_respects_the_verbose_toggle() {
+        for enabled in [true, false] {
+            let mut built = false;
+            NoteSink::note(&Verbose::new(enabled), || {
+                built = true;
+                "diagnostic".to_string()
+            });
+            assert_eq!(built, enabled);
+        }
     }
 
     /// A disabled note does not build its message.
