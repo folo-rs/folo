@@ -560,5 +560,9 @@ scale with workspace size:
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
 or parse state, and its fixed allocator model would omit a material part of their
-cost. The benchmark-only surface is gated behind `private-test-util` and does not
-participate in normal builds.
+cost. The benchmark-only surface is available in unit-test builds and through
+`private-test-util`, but does not participate in normal builds. Small unit tests
+exercise the adapters' byte and line statistics, root selection and repeated-walk
+totals without running a benchmark harness. Both adapters and their underlying
+algorithms participate in library-only mutation testing; benchmark smoke runs
+separately exercise the measured workloads without collecting measurements.
