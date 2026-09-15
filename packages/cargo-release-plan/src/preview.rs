@@ -152,14 +152,14 @@ pub(crate) fn run_preview(
 fn resolve_until_stable(
     mut resolved: ResolvedVersions,
     root: &Path,
-    mut resolve: impl FnMut(&ResolvedVersions) -> Result<(ResolvedVersions, Vec<Artifact>), AppError>,
+    mut pass: impl FnMut(&ResolvedVersions) -> Result<(ResolvedVersions, Vec<Artifact>), AppError>,
 ) -> Result<(ResolvedVersions, Vec<Artifact>), AppError> {
     // The callback owns rewriting, offline resolution and recapture; this loop owns convergence.
     // Ref: docs/implementation.md, "Prepared and prospective resolution".
     let mut visited = BTreeSet::new();
     let mut previous_files = Vec::new();
     loop {
-        let (expanded, files) = resolve(&resolved)?;
+        let (expanded, files) = pass(&resolved)?;
         if expanded == resolved && files == previous_files {
             return Ok((resolved, files));
         }
