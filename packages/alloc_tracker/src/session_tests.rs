@@ -222,7 +222,7 @@ fn output_probe() {
         "file" => Session::new().no_stdout(),
         "stdout" => Session::new().no_file(),
         "disabled" | "report" => Session::new().no_stdout().no_file(),
-        _ => panic!("unknown output probe case"),
+        _ => panic!("unknown output probe case: {case}"),
     };
 
     match case {
