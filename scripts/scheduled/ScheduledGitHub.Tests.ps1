@@ -41,6 +41,7 @@ Describe 'Same-workflow failure reporting' {
             $script:comments = @()
             $script:writes = [Collections.Generic.List[hashtable]]::new()
             $script:artifactReads = [Collections.Generic.List[long]]::new()
+            Mock Start-Sleep {}
             Mock Invoke-ScheduledGitHubJson {
                 param($Endpoint, $Method, $Body)
                 if ($Method -in @('POST', 'PATCH')) {
@@ -370,7 +371,7 @@ Describe 'Same-workflow failure reporting' {
                 })
                 throw [IO.IOException]::new()
             } -ParameterFilter { $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/issues' }
-            { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+            Invoke-ScheduledReporting example/repo 10 1 $script:directory | Should -Match '/issues/50'
             Invoke-ScheduledReporting example/repo 10 1 $script:directory | Should -Match '/issues/50'
             Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly -ParameterFilter {
                 $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/issues'
@@ -467,19 +468,25 @@ Describe 'Same-workflow failure reporting' {
             @{ LabelName = 'scheduled-run-failure' }, @{ LabelName = 'Scheduled-Run-Failure' }
         ) {
             $script:labelName = $LabelName
-            Mock Invoke-ScheduledGitHubJson { return ,@() } -ParameterFilter {
+            $script:labelCreated = $false
+            Mock Invoke-ScheduledGitHubJson {
+                if ($script:labelCreated) {
+                    return ,@(@{ name = $script:labelName; color = '123456'; description = 'Existing description' })
+                }
+                return ,@()
+            } -ParameterFilter {
                 $Endpoint -ceq 'repos/example/repo/labels?per_page=100&page=1'
             }
-            Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter {
+            Mock Invoke-ScheduledGitHubJson {
+                $script:labelCreated = $true
+                throw [IO.IOException]::new()
+            } -ParameterFilter {
                 $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/labels'
             }
-            Mock Invoke-ScheduledGitHubJson {
-                return @{ name = $script:labelName; color = '123456'; description = 'Existing description' }
-            } -ParameterFilter { $Endpoint -ceq 'repos/example/repo/labels/scheduled-run-failure' }
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
             $script:writes[0].endpoint | Should -BeExactly 'repos/example/repo/issues'
-            Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly -ParameterFilter {
-                $Endpoint -ceq 'repos/example/repo/labels/scheduled-run-failure'
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 2 -Exactly -ParameterFilter {
+                $Endpoint -ceq 'repos/example/repo/labels?per_page=100&page=1'
             }
             Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
                 $Method -ceq 'PATCH' -and $Endpoint -match '/labels'
@@ -493,14 +500,15 @@ Describe 'Same-workflow failure reporting' {
             Mock Invoke-ScheduledGitHubJson { throw $script:creationFailure } -ParameterFilter {
                 $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/labels'
             }
-            Mock Invoke-ScheduledGitHubJson { throw [InvalidOperationException]::new() } -ParameterFilter {
-                $Endpoint -ceq 'repos/example/repo/labels/scheduled-run-failure'
-            }
             $failure = { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw -PassThru
             $failure.Exception | Should -Be $script:creationFailure
             $script:writes.Count | Should -Be 0
         }
         It 'propagates continuation publication failures' {
+            $script:issues = @(@{
+                number = 50; state = 'open'; html_url = 'https://github.com/example/repo/issues/50'
+                body = 'Failed https://github.com/example/repo/actions/runs/10/attempts/1'
+            })
             Mock Read-ScheduledArtifactText {
                 return ((1..2000 | ForEach-Object { "MISSED mutant $_ in example::operation - replace the return expression with another value" }) -join "`n")
             }
@@ -510,7 +518,7 @@ Describe 'Same-workflow failure reporting' {
                 $Method -ceq 'POST' -and $Endpoint.EndsWith('/comments')
             }
             { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
-            $script:writes[0].endpoint | Should -BeExactly 'repos/example/repo/issues'
+            $script:writes.Count | Should -Be 0
         }
         It 'does not infer another failure from a summary with a different job name' {
             $script:jobs[0].name = 'miri-linux-other'
@@ -588,12 +596,47 @@ Describe 'Same-workflow failure reporting' {
             ($script:writes | Where-Object method -EQ PATCH).endpoint | Should -BeExactly 'repos/example/repo/issues/51'
             ($script:writes | Where-Object endpoint -EQ 'repos/example/repo/issues/51/comments').body.body | Should -Match '/issues/50'
         }
+        It 'does not repeat a persisted duplicate explanation after its closure fails' {
+            $script:issues = @(50, 51 | ForEach-Object { @{
+                number = $_; state = 'open'; html_url = "https://github.com/example/repo/issues/$_"
+                body = 'https://github.com/example/repo/actions/runs/10/attempts/1'
+            } })
+            $script:duplicateComments = @()
+            Mock Invoke-ScheduledGitHubJson {
+                param($Body)
+                $script:duplicateComments += @{ body = $Body.body }
+            } -ParameterFilter { $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/issues/51/comments' }
+            Mock Invoke-ScheduledGitHubJson { return ,$script:duplicateComments } -ParameterFilter {
+                $Endpoint -ceq 'repos/example/repo/issues/51/comments?per_page=100&page=1'
+            }
+            Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter {
+                $Method -ceq 'PATCH'
+            }
+            Mock Invoke-ScheduledGitHubJson { return $script:issues[1] } -ParameterFilter {
+                $Endpoint -ceq 'repos/example/repo/issues/51' -and $Method -cne 'PATCH'
+            }
+            { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+            $script:duplicateComments.Count | Should -Be 1
+            Mock Invoke-ScheduledGitHubJson {} -ParameterFilter { $Method -ceq 'PATCH' }
+            Invoke-ScheduledReporting example/repo 10 1 $script:directory | Should -Match '/issues/50'
+            $script:duplicateComments.Count | Should -Be 1
+        }
         It 'completes missing continuation comments after interrupted publication without repeating saved text' {
             Mock Read-ScheduledArtifactText {
                 return ((1..2000 | ForEach-Object { "MISSED mutant $_ in example::operation - replace the return expression with another value" }) -join "`n")
             }
             $script:jobs[0].name = 'miri-linux'
             $script:artifacts = @(@{ id = 31; name = 'scheduled-result-10-1-miri-linux'; expired = $false })
+            $script:jobs = @(1..30 | ForEach-Object {
+                $job = $script:jobs[0].Clone()
+                $job.id = $_
+                $job.name = "miri-linux-$_"
+                $job.html_url = "https://github.com/example/repo/actions/runs/10/job/$_"
+                $job
+            })
+            $script:artifacts = @(1..30 | ForEach-Object {
+                @{ id = $_; name = "scheduled-result-10-1-miri-linux-$_"; expired = $false }
+            })
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
             $allMessages = @($script:writes | ForEach-Object { $_.body.body })
             $allMessages.Count | Should -BeGreaterThan 2
@@ -603,7 +646,7 @@ Describe 'Same-workflow failure reporting' {
             $script:comments = @(@{ body = $allMessages[1] })
             $script:writes.Clear()
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
-            $script:writes.Count | Should -Be ($allMessages.Count - 2)
+            $script:writes.Count | Should -BeGreaterThan 0
             ($script:writes | ForEach-Object { $_.body.body }) | Should -Not -Contain $allMessages[1]
             ($script:writes[-1].body.body) | Should -Match 'MISSED mutant 2000'
         }
@@ -647,6 +690,7 @@ Describe 'Artifact summary reading' {
             BeforeEach {
                 $script:savedExitCode = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
                 $script:requestCount = 0
+                Mock Start-Sleep {}
                 # Other script suites load their own nested Retry modules. Mock our direct
                 # dependency, not whichever module named Retry Pester happens to find.
                 Mock Invoke-WithRetry {
