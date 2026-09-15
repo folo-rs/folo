@@ -52,6 +52,13 @@ writes are a relaxed load followed by a relaxed store rather than a read-modify-
 thread readers accordingly see values that may be slightly stale, which is acceptable because
 process-scope figures are approximate by nature.
 
+Process spans sample the registry at their lifetime boundaries and pass the closing totals
+to delta arithmetic as a value. The arithmetic subtracts the opening counters without
+dividing by iterations or converting to floating point; the operation accumulator receives
+whole-span integer totals. Keeping sampling separate lets unit tests exercise exact deltas
+without depending on other tests' allocator traffic. Integration tests exercise the global
+allocator and the complete process-span lifetime.
+
 Outstanding bytes is signed. A block is attributed to whichever thread performs the
 deallocation, so a thread that frees memory allocated elsewhere drives its own outstanding
 count below zero. This is a deliberate consequence of measuring allocator events per thread
