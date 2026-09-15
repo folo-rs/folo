@@ -2610,6 +2610,8 @@ autoexamples = false
             Some(false),
         );
         for unsupported in [
+            "ftp://example.invalid/foo",
+            "https://example.invalid/caf\u{e9}",
             "https://EXAMPLE.invalid/foo",
             "https://example.invalid:443/foo",
             "https://example.invalid:0444/foo",
@@ -2622,6 +2624,8 @@ autoexamples = false
             "https://127.0.0.256/foo",
             "https://127.0.0.01/foo",
             "https://@example.invalid/foo",
+            "file://server/share/foo",
+            "ssh://github.com:443/Owner/Repo",
             "https://example.invalid/foo\0",
         ] {
             assert_eq!(
@@ -2641,6 +2645,19 @@ autoexamples = false
             ),
             Some(false)
         );
+        for (source, canonical) in [
+            ("file:///tmp/foo.git", "file:///tmp/foo"),
+            (
+                "ssh://example.invalid:443/foo.git",
+                "ssh://example.invalid:443/foo",
+            ),
+            (
+                "ssh://github.com:444/Owner/Repo.git",
+                "https://github.com:444/owner/repo",
+            ),
+        ] {
+            assert_eq!(same_source_url(source, canonical), Some(true));
+        }
     }
 
     #[test]
@@ -2712,6 +2729,73 @@ autoexamples = false
                 "https://example.invalid/index".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn installation_source_declarations_distinguish_default_and_named_registries() {
+        let document = root_doc(
+            "[dependencies]\n\
+             named = { version = \"1\", registry = \"private\" }\n\
+             crates_io = { version = \"1\", registry = \"crates-io\" }\n",
+        );
+        let dependencies = installation_dependencies(
+            &document,
+            &WorkspaceInherit::default(),
+            Path::new("Cargo.toml"),
+        )
+        .unwrap();
+        assert_eq!(
+            dependencies
+                .into_iter()
+                .map(|dependency| dependency.source)
+                .collect::<Vec<_>>(),
+            [
+                DependencySource::NamedRegistry("private".to_owned()),
+                DependencySource::Registry(CRATES_IO_INDEX.to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_configuration_overlays_only_declared_indices() {
+        let mut indices = BTreeMap::from([
+            (
+                "ambient".to_owned(),
+                "https://example.invalid/ambient".to_owned(),
+            ),
+            (
+                "private".to_owned(),
+                "https://example.invalid/old".to_owned(),
+            ),
+        ]);
+        collect_registry_indices(
+            &root_doc(
+                "[registries.private]\nindex = \"https://example.invalid/new\"\n\
+                 [registries.sparse]\nindex = \"sparse+https://example.invalid/index/\"\n\
+                 [registries.ambient]\ntoken = \"unused-test-value\"\n",
+            ),
+            &mut indices,
+        );
+        assert_eq!(
+            indices,
+            BTreeMap::from([
+                (
+                    "ambient".to_owned(),
+                    "https://example.invalid/ambient".to_owned()
+                ),
+                (
+                    "private".to_owned(),
+                    "https://example.invalid/new".to_owned()
+                ),
+                (
+                    "sparse".to_owned(),
+                    "sparse+https://example.invalid/index/".to_owned()
+                ),
+            ])
+        );
+        let before = indices.clone();
+        collect_registry_indices(&DocumentMut::new(), &mut indices);
+        assert_eq!(indices, before);
     }
 
     #[test]
