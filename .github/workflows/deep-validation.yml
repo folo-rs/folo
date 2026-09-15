@@ -91,6 +91,14 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+      - name: Run clippy release on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just clippy release
+
       - name: Run build release on ${{ matrix.platform }}
         shell: pwsh
         run: |
