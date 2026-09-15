@@ -538,6 +538,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "testing",
  "tick",
  "tokio",
 ]
@@ -574,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "clap",
  "criterion",
