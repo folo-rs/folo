@@ -24,6 +24,10 @@ use crate::{
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod testing;
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod history_tests;
+
 /// Name Cargo requires for a manifest.
 const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 
@@ -1181,52 +1185,6 @@ mod tests {
         repo.ls_tree_paths("HEAD").unwrap_err();
         repo.hash_objects(&["Cargo.toml"]).unwrap_err();
         repo.rev_parse("HEAD").unwrap_err();
-    }
-
-    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
-    #[test]
-    fn a_commit_with_a_reachable_parent_is_not_a_root() {
-        let temp = tempdir().unwrap();
-        let repo = init_repo_with_two_commits(temp.path());
-        let head = repo.rev_parse("HEAD").unwrap();
-        let root = repo.rev_parse("HEAD~1").unwrap();
-
-        assert!(repo.has_parent_or_is_shallow_boundary(&head).unwrap());
-        assert!(!repo.has_parent_or_is_shallow_boundary(&root).unwrap());
-    }
-
-    /// A root commit whose message mentions a parent is still a root.
-    ///
-    /// The commit message follows the headers in `cat-file -p` output, so a message body that
-    /// mentions a parent must not be read as a header.
-    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
-    #[test]
-    fn a_root_commit_whose_message_mentions_a_parent_is_still_a_root() {
-        let temp = tempdir().unwrap();
-        let root = temp.path();
-        run_capture("git", &["init", "-q"], root).unwrap();
-        run_capture("git", &["config", "user.name", "test"], root).unwrap();
-        run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
-        run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
-        fs::write(root.join("first.txt"), "one\n").unwrap();
-        run_capture("git", &["add", "-A"], root).unwrap();
-        run_capture(
-            "git",
-            &[
-                "commit",
-                "-q",
-                "-m",
-                "subject",
-                "-m",
-                "parent 0123456789012345678901234567890123456789",
-            ],
-            root,
-        )
-        .unwrap();
-        let repo = GitRepo::discover(root).unwrap();
-        let head = repo.rev_parse("HEAD").unwrap();
-
-        assert!(!repo.has_parent_or_is_shallow_boundary(&head).unwrap());
     }
 
     /// Show file distinguishes an absent path from a failure.

@@ -107,6 +107,12 @@ use Cargo's test classifications: ordinary testing includes integration targets,
 while mutation testing selects only library unit-test targets under the
 [workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
 
+History acquisition unit tests use small hermetic Git histories without loading
+Cargo metadata. They verify first-parent ordering, manifest selection and endpoint
+retention directly. Local shallow fetches exercise missing-parent evidence and
+preserve the distinction between a truncated branch and a true root in the same
+repository; commit messages remain separate from parent headers.
+
 Installation acquisition unit tests use small temporary repositories without
 Cargo metadata or resolution. They distinguish historical blobs from work-tree
 files, check ancestor and filename configuration precedence, and retain missing
