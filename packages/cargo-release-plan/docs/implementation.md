@@ -270,6 +270,13 @@ replacement after the budget is exhausted. The fallback remains a correct patch
 and cannot change the verdict, which was already established from object ids and
 modes.
 
+The search preserves the furthest candidate after taking each edit, not merely
+the furthest predecessor. Deletion advances the old-line position and insertion
+does not, so equal predecessor positions require deletion. Forward search and
+backtracking use the same choice. Small overlapping-line fixtures verify valid
+line consumption, minimal edits within the budget, and valid replacement below
+that budget without selecting a preferred spelling among equivalent scripts.
+
 The renderer carries a file's content and mode together so an absent side cannot
 accidentally receive a mode. Binary files receive presence and mode headers but
 no textual hunk.
