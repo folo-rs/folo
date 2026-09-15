@@ -27,6 +27,7 @@ function Invoke-ScheduledGitHubJson {
         [hashtable] $Body
     )
     $request = @{ arguments = @('api', $Endpoint, '--method', $Method); body = $Body }
+    if ($Method -ne 'GET') { $request.arguments += '--include' }
     $invoke = {
         # Capture native stderr records without mixing successful CLI warnings into JSON.
         $PSNativeCommandUseErrorActionPreference = $false
@@ -35,9 +36,26 @@ function Invoke-ScheduledGitHubJson {
             $request.body | ConvertTo-Json -Depth 20 -Compress | & gh @arguments --input - 2>&1
         } else { & gh @arguments 2>&1 })
         if ($LASTEXITCODE -ne 0) {
-            throw "GitHub API request failed (exit $LASTEXITCODE): $($arguments -join ' '): $($output -join "`n")"
+            $text = $output -join "`n"
+            $failure = [InvalidOperationException]::new("GitHub API request failed (exit $LASTEXITCODE): $($arguments -join ' '): $text")
+            # Only an explicit rate-limit rejection is safe to replay. Transport failures,
+            # server errors and malformed success responses may already have committed a write.
+            if ($text -match '(?im)^HTTP/\S+ (429)\b' -or
+                ($text -match '(?im)^HTTP/\S+ (403)\b' -and
+                    $text -match '(?i)rate limit|temporarily blocked from content creation')) {
+                $failure.Data['ScheduledThrottleResponse'] = $text
+            }
+            throw $failure
         }
-        return ($output | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] }) -join "`n"
+        $text = ($output | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] }) -join "`n"
+        if ($request.arguments -contains '--include') {
+            $parts = $text -split '\r?\n\r?\n', 2
+            if ($parts.Count -ne 2 -or $parts[0] -cnotmatch '^HTTP/\S+ 2[0-9][0-9]\b') {
+                throw 'GitHub write response lacks successful HTTP headers.'
+            }
+            return $parts[1]
+        }
+        return $text
     }
     # Match the read-side gh retry settings used by the benchmark-history helpers.
     # Parsing stays outside the retry: malformed successful JSON is not a network fault.
@@ -47,6 +65,49 @@ function Invoke-ScheduledGitHubJson {
             -RetryOn { param($failure) Test-TransientFailure $failure.Exception.Message } -Action $invoke
     } else { & $invoke }
     return ,($response -join "`n" | ConvertFrom-Json -AsHashtable -NoEnumerate)
+}
+
+function Invoke-ScheduledGitHubWrite {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Endpoint,
+        [ValidateSet('POST', 'PATCH')][string] $Method = 'POST',
+        [Parameter(Mandatory)][hashtable] $Body,
+        [Parameter(Mandatory)][scriptblock] $FindPersisted
+    )
+    # GitHub recommends serial writes with at least a second between mutations, and a
+    # minute/exponential cooldown for secondary limits. Header deadlines are lower bounds.
+    # https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api
+    # Finite attempts leave persistent throttling visible rather than keeping the job alive.
+    $attemptLimit = 3
+    for ($attempt = 0; $attempt -lt $attemptLimit; $attempt++) {
+        Start-Sleep -Seconds 1
+        try {
+            return Invoke-ScheduledGitHubJson $Endpoint -Method $Method -Body $Body
+        } catch {
+            $failure = $_
+            $throttled = $failure.Exception.Data['ScheduledThrottleResponse']
+            if ($null -ne $throttled) {
+                if ($attempt -eq $attemptLimit - 1) { throw }
+                $delay = 60 * [Math]::Pow(2, $attempt)
+                if ($throttled -match '(?im)^retry-after:\s*(\d+)\s*$') {
+                    $delay = [Math]::Max($delay, [double]$Matches[1])
+                }
+                if ($throttled -match '(?im)^x-ratelimit-remaining:\s*0\s*$' -and
+                    $throttled -match '(?im)^x-ratelimit-reset:\s*(\d+)\s*$') {
+                    $delay = [Math]::Max($delay, [double]$Matches[1] - ([datetimeoffset](Get-Date)).ToUnixTimeSeconds() + 1)
+                }
+                Write-Verbose "GitHub rejected $Method $Endpoint for rate limiting; waiting $delay seconds before reconciliation and attempt $($attempt + 2) of $attemptLimit."
+                Start-Sleep -Seconds $delay
+            }
+            # Read after the cooldown, never during it. An absent result permits another POST
+            # only for a known rejection, not an ambiguous response or an unavailable lookup.
+            try { $persisted = & $FindPersisted }
+            catch { throw [InvalidOperationException]::new("Could not reconcile $Method ${Endpoint}: $($_.Exception.Message)", $failure.Exception) }
+            if ($null -ne $persisted) { return $persisted }
+            if ($null -eq $throttled) { throw $failure }
+        }
+    }
 }
 
 function Get-ScheduledGitHubCollection {
@@ -68,6 +129,29 @@ function Get-ScheduledGitHubCollection {
         $items
         $page++
     } while ($items.Count -eq 100)
+}
+
+function Get-ScheduledReport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Repository,
+        [Parameter(Mandatory)][string] $AttemptUrl
+    )
+    $issues = @(Get-ScheduledGitHubCollection "repos/$Repository/issues?state=all&labels=scheduled-run-failure")
+    $linkBoundary = '(?=$|[\s<>)\].,;!?])'
+    $attemptPattern = [regex]::Escape($AttemptUrl) + $linkBoundary
+    $bodyAttemptPattern = 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*' + $linkBoundary
+    $issues | Where-Object {
+        if ($_.ContainsKey('pull_request')) { return $false }
+        if ([string]$_.body -cmatch $attemptPattern) { return $true }
+        # A body identifying another attempt takes precedence over comparison links in comments.
+        if ([string]$_.body -cmatch $bodyAttemptPattern) { return $false }
+        if ($_.ContainsKey('comments') -and $_.comments -eq 0) { return $false }
+        # Human reports may identify the attempt in discussion. An unavailable discussion
+        # must fail lookup, not authorize another issue.
+        $discussion = @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($_.number)/comments")
+        return @($discussion | Where-Object body -CMatch $attemptPattern).Count -gt 0
+    } | Sort-Object number
 }
 
 function Get-ScheduledDownloadStartInfo {
@@ -252,22 +336,13 @@ function Invoke-ScheduledReporting {
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
     $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
     $attemptUrl = "https://github.com/$Repository/actions/runs/$RunId/attempts/$RunAttempt"
-    $issues = @(Get-ScheduledGitHubCollection "repos/$Repository/issues?state=all&labels=scheduled-run-failure")
-    $linkBoundary = '(?=$|[\s<>)\].,;!?])'
-    $attemptPattern = [regex]::Escape($attemptUrl) + $linkBoundary
-    $bodyAttemptPattern = 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*' + $linkBoundary
-    $reports = @($issues | Where-Object {
-        if ($_.ContainsKey('pull_request')) { return $false }
-        if ([string]$_.body -cmatch $attemptPattern) { return $true }
-        # A body identifying another attempt takes precedence over comparison links in comments.
-        # Otherwise a closed report could absorb a new failure instead of creating triage work.
-        if ([string]$_.body -cmatch $bodyAttemptPattern) { return $false }
-        if ($_.ContainsKey('comments') -and $_.comments -eq 0) { return $false }
-        # Human reports may identify the attempt in their discussion rather than the body.
-        # An unavailable discussion must fail lookup, not authorize another issue.
-        $discussion = @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($_.number)/comments")
-        return @($discussion | Where-Object body -CMatch $attemptPattern).Count -gt 0
-    } | Sort-Object number)
+    $reports = @(Get-ScheduledReport $Repository $attemptUrl)
+    $existingText = @()
+    if ($reports.Count -gt 0) {
+        $report = $reports[0]
+        $comments = @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($report.number)/comments")
+        $existingText = @([string]$report.body) + @($comments | ForEach-Object { [string]$_.body })
+    }
 
     $notices = [Collections.Generic.List[string]]::new()
     $artifacts = @()
@@ -276,6 +351,7 @@ function Invoke-ScheduledReporting {
     $failures = [Collections.Generic.List[hashtable]]::new()
     foreach ($job in $failedJobs) {
         $diagnostics = [Collections.Generic.List[string]]::new()
+        $artifactUrls = [Collections.Generic.List[string]]::new()
         $steps = @($job['steps'] | Where-Object { $null -ne $_ -and $_.conclusion -cnotin @('success', 'skipped') })
         $summary = if ($steps.Count -gt 0) {
             'Unsuccessful steps: ' + (($steps | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join '; ')
@@ -300,7 +376,7 @@ function Invoke-ScheduledReporting {
         $diagnostics.Add("Job execution attempt: $($job.run_attempt)")
         $resultArtifacts = @($artifacts | Where-Object name -CEQ "scheduled-result-$RunId-$($job.run_attempt)-$($job.name)")
         foreach ($artifact in $resultArtifacts) {
-            $diagnostics.Add("Result artifact: https://github.com/$Repository/actions/runs/$RunId/artifacts/$($artifact.id)")
+            $artifactUrls.Add("https://github.com/$Repository/actions/runs/$RunId/artifacts/$([long]$artifact.id)")
             try {
                 $text = Read-ScheduledArtifactText $Repository $artifact $OutputDirectory
                 if ([string]::IsNullOrWhiteSpace($text)) { throw 'The check summary is empty.' }
@@ -312,11 +388,11 @@ function Invoke-ScheduledReporting {
         }
         $failures.Add(@{
             name = $job.name; url = $job.html_url; conclusion = $job.conclusion
-            summary = $summary; diagnostics = $diagnostics.ToArray()
+            summary = $summary; diagnostics = $diagnostics.ToArray(); artifact_urls = $artifactUrls.ToArray()
         })
     }
     $messages = @(Format-ScheduledReport -Run $run -AttemptUrl $attemptUrl `
-        -Failures $failures.ToArray() -Notices $notices.ToArray())
+        -Failures $failures.ToArray() -Notices $notices.ToArray() -ExistingText $existingText)
     for ($index = 0; $index -lt $messages.Count; $index++) {
         Set-Content -LiteralPath (Join-Path $OutputDirectory "report-$index.md") -Value $messages[$index] -Encoding utf8 -NoNewline
     }
@@ -324,26 +400,20 @@ function Invoke-ScheduledReporting {
         $labels = @(Get-ScheduledGitHubCollection "repos/$Repository/labels")
         if (@($labels | Where-Object name -EQ 'scheduled-run-failure').Count -eq 0) {
             # Error-red distinguishes the failed-run triage queue from repair work.
-            try {
-                $null = Invoke-ScheduledGitHubJson "repos/$Repository/labels" -Method POST -Body @{
-                    name = 'scheduled-run-failure'; color = 'B60205'; description = 'A failed deep-validation attempt awaiting triage'
-                }
-            } catch {
-                # Other run reporters can create the label concurrently. Only its observed
-                # presence permits continuing; never overwrite its existing metadata.
-                $creationFailure = $_
-                try { $label = Invoke-ScheduledGitHubJson "repos/$Repository/labels/scheduled-run-failure" }
-                catch { throw $creationFailure }
-                if ($null -eq $label -or $label['name'] -ne 'scheduled-run-failure') { throw $creationFailure }
+            $null = Invoke-ScheduledGitHubWrite "repos/$Repository/labels" -Body @{
+                name = 'scheduled-run-failure'; color = 'B60205'; description = 'A failed deep-validation attempt awaiting triage'
+            } -FindPersisted {
+                # Another reporter may create the label concurrently. Only observed presence
+                # permits continuing, under the same cooldown policy as every other write.
+                @(Get-ScheduledGitHubCollection "repos/$Repository/labels") |
+                    Where-Object name -EQ 'scheduled-run-failure' | Select-Object -First 1
             }
         }
         $date = ([datetimeoffset]$run.run_started_at).UtcDateTime.ToString('yyyy-MM-dd')
-        $report = Invoke-ScheduledGitHubJson "repos/$Repository/issues" -Method POST -Body @{
+        $report = Invoke-ScheduledGitHubWrite "repos/$Repository/issues" -Body @{
             title = "Scheduled validation failed on $date"; body = $messages[0]; labels = @('scheduled-run-failure')
-        }
-        $existingText = @($messages[0])
-    } else {
-        $report = $reports[0]
+        } -FindPersisted { Get-ScheduledReport $Repository $attemptUrl | Select-Object -First 1 }
+        # A lost response may resolve to an existing human report, not the body we sent.
         $comments = @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($report.number)/comments")
         $existingText = @([string]$report.body) + @($comments | ForEach-Object { [string]$_.body })
     }
@@ -351,15 +421,27 @@ function Invoke-ScheduledReporting {
     # interrupted while adding lengthy diagnostics, and supplements a human-authored report.
     foreach ($message in $messages) {
         if ($message -cnotin $existingText) {
-            $null = Invoke-ScheduledGitHubJson "repos/$Repository/issues/$($report.number)/comments" -Method POST -Body @{ body = $message }
+            $null = Invoke-ScheduledGitHubWrite "repos/$Repository/issues/$($report.number)/comments" -Body @{ body = $message } -FindPersisted {
+                @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($report.number)/comments") |
+                    Where-Object body -CEQ $message | Select-Object -First 1
+            }
+            $existingText += $message
         }
     }
     # Exact attempt duplicates need only normal issue reconciliation, not a publication journal.
     foreach ($duplicate in @($reports | Select-Object -Skip 1 | Where-Object state -CEQ 'open')) {
-        $null = Invoke-ScheduledGitHubJson "repos/$Repository/issues/$($duplicate.number)/comments" -Method POST -Body @{
-            body = "[Copilot speaking]`n`nDuplicate report for $attemptUrl. Continuing triage in $($report.html_url)."
+        $explanation = "[Copilot speaking]`n`nDuplicate report for $attemptUrl. Continuing triage in $($report.html_url)."
+        $findExplanation = {
+            @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($duplicate.number)/comments") |
+                Where-Object body -CEQ $explanation | Select-Object -First 1
         }
-        $null = Invoke-ScheduledGitHubJson "repos/$Repository/issues/$($duplicate.number)" -Method PATCH -Body @{ state = 'closed'; state_reason = 'not_planned' }
+        if ($null -eq (& $findExplanation)) {
+            $null = Invoke-ScheduledGitHubWrite "repos/$Repository/issues/$($duplicate.number)/comments" -Body @{ body = $explanation } -FindPersisted $findExplanation
+        }
+        $null = Invoke-ScheduledGitHubWrite "repos/$Repository/issues/$($duplicate.number)" -Method PATCH -Body @{ state = 'closed'; state_reason = 'not_planned' } -FindPersisted {
+            $observed = Invoke-ScheduledGitHubJson "repos/$Repository/issues/$($duplicate.number)"
+            if ($observed.state -ceq 'closed') { $observed }
+        }
     }
     return "Report: $($report.html_url)"
 }

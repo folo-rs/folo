@@ -67,13 +67,18 @@ excerpts. It links full logs and tool-generated artifacts and explains missing
 diagnostics or checks that never ran. The reporter describes observations, not
 inferred root causes.
 
-Reports start with `[Copilot speaking]`. Long findings may continue in readable
-Markdown comments, not API response blobs or encoded pages. Useful failure details
-remain on GitHub after Actions logs expire; successful-job inventories and whole
-logs do not belong in issues.
+Reports start with `[Copilot speaking]`. Bounded per-job excerpts may continue in
+readable Markdown comments, not API response blobs or encoded pages. Every
+unsuccessful job retains diagnostic links, and clipped text has an omission notice.
+Useful failure details remain on GitHub after Actions logs expire; successful-job
+inventories and whole logs do not belong in issues. Diagnostic verbosity does not
+create an unlimited sequence of comments.
 
 The visible run URL and attempt identify a report. Reporter retries search open
-and closed reports for that attempt before creating one. Each failed rerun gets
+and closed reports for that attempt before creating one, then publish only missing
+sections without rewriting completed snapshots. Writes are paced; explicit rate
+limits receive bounded backoff and ambiguous outcomes are checked for persistence,
+not blindly replayed. Each failed rerun gets
 its own report; a successful rerun neither files a failure nor silently closes
 older reports or problems. If reporting fails, the report job's failure remains
 visible in **Deep validation**. Resolve an ambiguous duplicate with an ordinary
