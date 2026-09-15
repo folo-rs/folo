@@ -49,11 +49,12 @@ The entries are:
 | Suggested name | Saved prompt |
 |---|---|
 | Folo scheduled failure triage | Run the repository's `scheduled-triage` skill in this Local App project. Process open run reports oldest first using the selected model. Do not edit source, start repairs or change automation/account/billing settings. |
-| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Follow existing repairs and PRs, reconcile completion and archive finished sessions before checking capacity. Start at most one new repair session when below the maximum incomplete repair sessions: 5. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
+| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Follow existing repairs and PRs, reconcile completion and archive finished sessions before checking capacity. Start at most one new repair session when below the maximum incomplete repair sessions: {{MAX_INCOMPLETE_REPAIR_SESSIONS}}. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
 
 Expand the repair prompt's model/effort sentence with the actual operator choice
-and replace its default limit with the selected or preserved value. Include a
-shared model selection, not a placeholder or inferred setting. For explicit
+and replace `{{MAX_INCOMPLETE_REPAIR_SESSIONS}}` with the selected or preserved
+limit. Do not save unresolved placeholders. Include a shared model selection,
+not an inferred setting. For explicit
 overrides, instruct `scheduled-intake` in that saved prompt to pass them through
 `kickoff.model` and `kickoff.reasoning_effort` when opening a new repair session
 with `open_issue_session` or `open_pr_session`, following the skill's waiting

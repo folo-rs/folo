@@ -19,11 +19,11 @@ hide a failure or claim success for blocked work.
 
 # Stage 1: Verify the claim and current work
 
-On a completion-cleanup request, first inspect the issue and PR's final disposition.
-If the repair is merged, resolved without a PR or explicitly abandoned, reconcile
-any remaining local work and leave the final handoff described below. Do not revive
-a released claim, rerun completed checks or start another repair merely to keep
-the session active.
+On a completion-cleanup request, first inspect the final disposition of the issue
+and any linked PR. If the repair is merged, resolved without a PR or explicitly
+abandoned, reconcile any remaining local work and leave the final handoff described
+below. Do not revive a released claim, rerun completed checks or start another
+repair merely to keep the session active.
 
 Read the issue's current discussion, assignees and linked PRs, and confirm this
 session and branch match its plain ownership comment. Follow the
