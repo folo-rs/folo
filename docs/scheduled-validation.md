@@ -385,18 +385,27 @@ slot, and counts toward the one-new-session-per-invocation limit. The coordinato
 creates only the admitted upper layer from the verified pushed parent branch,
 using `create_session` with an explicit `base_branch`. Its ordinary issue ownership
 comment identifies the session until its own app-native PR supplies the native
-link. Do not open a duplicate issue session to attach it. The `pr-stack` skill
-supplies native stack creation/extension and synchronization mechanics; it does
+link. Do not open a duplicate issue session to attach it. The Local App's bundled
+`pr-stack` skill supplies native stack inspection, creation/extension and
+synchronization mechanics; it is an App prerequisite, not a repository-local
+skill. Confirm it is exposed before admitting a stacked layer. If unavailable,
+defer stacked admission, disclose the missing prerequisite and continue to
+consider independent repairs without installing a substitute. This skill does
 not authorize extra workers, modifying another owner's branch or merging.
+Where native registration is unsupported, an explicit dependent-PR chain retains
+ordinary bottom-to-top synchronization in the owning sessions without requiring
+native membership.
 
 The worker keeps release evidence anchored to current main, not an unreleased
 parent. It also assesses its own released-content and dependency effects against
 the parent: each existing package needing a release for this layer must advance
 beyond the parent's version by the level this layer requires. An inherited pending
-increment is not that additional increment. Retain parent-only releases without
-artificially incrementing them again; new packages follow first-publication rules.
-Keep the complete release plan and explain the parent-to-child movements
-separately from release-anchor versions.
+increment is not that additional increment. Inheritance alone does not justify
+a second semantic increment. Required group alignment and dependent releases
+still move every target in the expanded plan, including otherwise unchanged
+inherited packages. New packages follow first-publication rules. Keep the complete
+release plan and explain all parent-to-child movements, including mechanical
+movements, separately from release-anchor versions.
 Parent changes or merges require refreshed scope, version and relevant validation
 evidence even if the child's existing checks are green. Owners publish the
 reconciled parent snapshot for later intake runs. Agreed ancestor/descendant

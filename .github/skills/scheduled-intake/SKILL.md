@@ -194,7 +194,12 @@ increments are committed and pushed, and whose plan matches its current head.
 Use substantive owner/PR evidence, not idleness or an unsupported readiness claim.
 Defer while development could still change the prerequisite or release plan.
 
-Inspect any existing stack using `pr-stack`'s membership/preflight procedure.
+The Local App supplies the bundled `pr-stack` skill; it is not checked into this
+repository. Load it for its membership/preflight procedure before admitting a
+stacked layer. If the App does not expose it, report the missing prerequisite and
+defer stacked admission while continuing to consider independent repairs. Do not
+install or invent a substitute procedure. Inspect any existing stack using that
+skill's supported procedure.
 Extend only its verified current top; do not add a sibling or silently insert a
 layer. Every prerequisite must be suitable, and every known overlapping repair
 must be in that ancestry. An unrelated overlapping repair still defers admission.

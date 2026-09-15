@@ -137,8 +137,10 @@ layer's released-content and dependency effects relative to the recorded parent
 head. Each package requiring release for this layer that exists in the parent
 must advance above the parent's declared version, sufficiently for this layer's
 own semantic change level as well as the combined main-based assessment. Include
-group alignment and dependent releases; do not add increments for changes merely
-inherited unchanged. New packages retain the normal first-publication handoff.
+all group alignment and dependent releases required by the expanded plan, even
+when they move packages otherwise inherited unchanged. Inheritance alone does not
+justify a second semantic increment, but it never exempts a package from required
+mechanical movements. New packages retain the normal first-publication handoff.
 
 The normal planner retains sufficient pending increments, so running it alone
 can leave this layer at the parent's version. Compare the resulting versions with
@@ -170,14 +172,18 @@ movements; explicitly state when released content and versions do not change.
 Do not replace this with an attestation, registry entry or managed-repair marker.
 
 For a stacked repair, create the PR from this session against its verified parent
-branch and verify the actual base/head relationship. Invoke `pr-stack` only for
-registration/extension of these existing PRs and later in-place synchronization;
-do not let its layer-creation flow spawn another session. Preserve existing stack
-membership, including merged ancestors. Link the prerequisite and explain the
-dependency in the PR. In the release plan, retain normal release-anchor versions
-and additionally show parent-to-child version movements for this layer. A native
-stack requires supported same-repository heads; where registration is unsupported,
-retain the explicit dependent-PR chain and disclose that limitation.
+branch and verify the actual base/head relationship. Native stack operations use
+the Local App's bundled `pr-stack` skill, not a repository-local skill. Invoke it
+only for registration/extension of these existing PRs and later native stack
+synchronization; do not let its layer-creation flow spawn another session. If the
+App does not expose it, report the missing prerequisite rather than inventing
+native stack operations. Preserve existing native membership, including merged
+ancestors. Link the prerequisite and explain the dependency in the PR. In the
+release plan, retain normal release-anchor versions and additionally show all
+parent-to-child version movements, including required group/dependent movements
+for otherwise unchanged inherited packages. A native stack requires supported
+same-repository heads; where registration is unsupported, retain the explicit
+dependent-PR chain and disclose that limitation.
 
 Link the PR from the issue. Put validation evidence in a PR comment, not a
 changed-file or validation-log inventory in the description. Record the **tested
@@ -208,11 +214,18 @@ addressed findings. Fix straightforward problems and preserve human changes;
 request a human decision before design changes or unsafe ambiguity.
 
 For stacked work, also follow the parent's live head, release plan and disposition.
-Have changes synchronized bottom to top in the owning sessions using `pr-stack`;
-retain the same child session, PR and native stack membership. After a parent
-merge, verify the child's effective base and sync with current main as appropriate.
-Reassess package overlap and regenerate version evidence so child releases remain
-above the parent's actual versions, then refresh affected local validation and
+For a registered native stack, use the App-supplied `pr-stack` synchronization
+procedure and preserve its membership. For an unregistered dependent-PR chain,
+synchronize and retarget the existing PRs bottom to top in their owning sessions,
+verifying current parent refs and preserving concurrent changes with explicit
+lease-protected pushes when rewriting history. Native membership is not a
+prerequisite for that fallback. Retain the same child session and PR in either
+case. After a parent merge, verify the child's effective base and sync with current
+main as appropriate.
+
+Reassess package overlap and regenerate version evidence for the child's own
+release requirements and every required group/dependent movement, including
+otherwise unchanged inherited members. Refresh affected local validation and
 the PR plan. A parent closed without merging requires an explicit disposition;
 do not silently detach the child or claim readiness. Parent changes that invalidate
 the dependency or settled plan require coordination before more dependent work.

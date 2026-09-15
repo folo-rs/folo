@@ -36,6 +36,12 @@ retaining follow-up and cleanup. Reject invalid or conflicting settings rather
 than silently replacing them. This repository-wide limit includes repairs waiting
 for human review or merge.
 
+Confirm that the Local App exposes its bundled `pr-stack` skill for stacked
+repair admission and native stack operations. It is supplied by the App rather
+than this repository. If unavailable, report that stacked admissions must be
+deferred; ordinary independent repairs remain supported. Do not install tooling
+or copy a substitute skill into the repository as part of setup.
+
 Review the App's available schedule description, timezone and next-run preview.
 If timezone or next-run information is not exposed, ask the operator to confirm
 the intended local-time interpretation and report that confirmation separately
