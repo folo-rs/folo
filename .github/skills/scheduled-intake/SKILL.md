@@ -1,6 +1,6 @@
 ---
 name: scheduled-intake
-description: Coordinate scheduled-finding repairs through ordinary GitHub claims and native Local App issue/PR sessions. Follow existing repairs, archive finished sessions, then start at most one new session within the incomplete-session limit.
+description: Coordinate scheduled-finding repairs through GitHub claims and Local App sessions. Follow and clean up existing repairs, then admit at most one session within capacity, avoiding package overlap except for stable, naturally dependent stacked repairs.
 ---
 
 # Scope
@@ -60,6 +60,14 @@ comments, not names or the shared assignee alone. Include sessions whose issues
 are now closed or whose PRs are merged or closed, even when the open queue is empty.
 An issue and PR linked to the same session identify one executor.
 
+Read each incomplete repair's current **Version/release plan**, changed paths and
+substantive owner notes to estimate its edited and version-moving packages.
+Include known version groups and dependent releases. For work without a plan,
+use the issue's likely repair scope and published investigation; missing detail
+does not mean no overlap. Keep uncertain scope explicit. Distinguish packages
+merely affected by a failed check from packages likely to need edits or publishing.
+Resolve parent/child PR relationships from GitHub, not session nesting or names.
+
 # Stage 2: Follow existing repairs and PRs first
 
 For claims assigned to this automation or explicitly handed to it, read each PR's
@@ -88,8 +96,13 @@ permission-paused, idle or unavailable owner merely because it is inconvenient.
 Replacing an executor requires explicit release or handoff and accounting for
 unpublished local changes; its conversation is not the handoff record.
 
-When actionable feedback, a check failure or a conflict needs work, reread the
-issue state and claim. If the issue is closed, stop its intake follow-up.
+Treat a changed prerequisite head/release plan, parent merge or closure, or newly
+evidenced package overlap as actionable input for affected existing owners too.
+Use the GitHub handoff's parent snapshot to identify a change, not a private
+watermark. A child needs reassessment even if its own checks are still green.
+
+When actionable input needs work, reread the issue state and claim. If the issue
+is closed, stop its intake follow-up.
 Otherwise, send the existing session a focused `send_session_message` with
 `delivery_mode: immediate`, the issue/PR links, new input and `scheduled-repair`.
 Do not resend unchanged input every poll. Surface unresolved native questions or
@@ -151,19 +164,77 @@ and report the missing evidence.
 If the count is **greater than or equal to `N`**, do not claim a new repair or
 create a repair session, including a replacement executor. Existing follow-up and
 cleanup still run. If below `N`, prioritize an explicitly handed-off repair needing
-an executor; otherwise choose the oldest actionable, unassigned and unclaimed
-open finding without `needs-human` or competing work. Repairs awaiting review
-permit more admissions only while below the limit. Start at most one new repair
-session per invocation, including replacements; this is pacing, not a financial cap.
+an executor; otherwise examine actionable, unassigned and unclaimed open findings
+oldest first, excluding `needs-human` and competing work. Apply the overlap screen
+below before choosing one. Repairs awaiting review permit more admissions only
+while below the limit. Start at most one new repair
+session per invocation, including replacements and stacked layers; stacking never
+bypasses capacity. This is pacing, not a financial cap.
+
+## Screen package overlap and prerequisites
+
+Compare each candidate's likely edited and version-moving packages with other
+incomplete repairs, including those waiting for checks, human review or merge.
+Use existing release plans and issue evidence, including group/dependent effects.
+Make only bounded source/manifest reads to clarify scope; do not run release
+planning or prepare Rust in intake. Follow the
+[package-overlap policy](../../../docs/scheduled-validation.md#package-overlap-and-stacked-repairs).
+
+Defer a known or plausible overlap and continue to the next eligible finding.
+Unknown scope alone is not a global lock or proof of independence; state what is
+known and use the available evidence. Do not make up package claims for broad
+infrastructure failures. Replacements still need this screen against other repairs.
+Respect known competing human work without counting it as scheduled capacity.
+
+The exception is a natural prerequisite relationship: the new repair uses or
+builds on changes in an existing repair. Sharing a package or avoiding an
+increment collision alone does not justify stacking. Require an open parent PR
+whose scope and complete release plan are settled, whose code and version
+increments are committed and pushed, and whose plan matches its current head.
+Use substantive owner/PR evidence, not idleness or an unsupported readiness claim.
+Defer while development could still change the prerequisite or release plan.
+
+The Local App supplies the bundled `pr-stack` skill; it is not checked into this
+repository. Load it for its membership/preflight procedure before admitting a
+stacked layer. If the App does not expose it, report the missing prerequisite and
+defer stacked admission while continuing to consider independent repairs. Do not
+install or invent a substitute procedure. Inspect any existing stack using that
+skill's supported procedure.
+Extend only its verified current top; do not add a sibling or silently insert a
+layer. Every prerequisite must be suitable, and every known overlapping repair
+must be in that ancestry. An unrelated overlapping repair still defers admission.
+Preserve existing membership after partial merges. If all prerequisites are
+merged, reassess an ordinary main-based repair; closed-unmerged or unstable
+prerequisites require reconciliation, not admission.
+Use only stack inspection and creation/extension mechanics here, never splitting,
+reordering, landing or spawning additional layers.
+
+Preserve useful scope estimates and prerequisite links in ordinary issue
+discussion. For a substantive deferral, name the overlapping packages, related
+issue/PR, evidence and condition for reconsideration. Do not claim or assign a
+deferred new issue, add `needs-human` for routine package waiting, or repost
+unchanged reasons. No mandatory schema or coordination registry is needed.
+
+## Create the admitted session
 
 Read the issue again and confirm it is still open. Locate an existing linked
 session before opening one; do not adopt an unrelated human session. Refresh the
-count immediately before opening a new session, or before claiming a new repair
-in an existing session, and defer if capacity has filled. A newly admitted session
-occupies that slot: do not apply the admission gate again when claiming and
-starting that same executor.
-Use `open_pr_session` for an existing PR or `open_issue_session` for issue-only
-work. Reconcile an uncertain native result with session lookup before retrying.
+count and overlap evidence immediately before opening a new session, or before
+claiming a new repair in an existing session, and defer if capacity has filled or
+the candidate is no longer eligible. A newly admitted session occupies that slot:
+do not charge another slot when claiming and starting that same executor.
+
+Use `open_pr_session` for an existing PR or `open_issue_session` for ordinary
+issue-only work. For a new stacked layer, use `create_session` in this Local
+project with `base_branch` set to the verified parent's actual branch and
+`coordinate_with_creator: true`. Recheck its live head, plan and stack top before
+creation; verify the new checkout starts at that pushed commit. Do not use
+`open_issue_session` to create an extra executor or to attach the stacked session.
+The ownership comment identifies it until its own PR supplies the native link.
+Reconcile an uncertain native result with session lookup before retrying.
+If snapshot verification blocks startup after creation, record the actual
+session/branch and pending reconciliation on the issue so intake can still
+account for that executor; do not start edits or lose it as an unlinked session.
 For a new session, omit kickoff when the operator chose App defaults. An explicit
 operator-selected model/effort needs the supported kickoff fields; its bootstrap
 prompt must only establish the session and wait, without diagnosis or edits.
@@ -172,19 +243,26 @@ Inspect the actual Local session and branch, then follow the
 [ownership convention](../../../docs/scheduled-validation.md#ownership-and-handoff):
 assign the responsible GitHub user and post a short comment
 naming the owner, actual session and branch. Once available, link the GitHub branch
-and PR. Repair branches follow ordinary repository conventions. All authored posts
-start with `[Copilot speaking]`.
+and PR. Include likely edited/version-moving packages and unresolved scope. For a
+stacked repair, record the dependency reason and parent issue/PR, branch and exact
+pushed head commit; link these from both issues without changing the parent's
+ownership. Repair branches follow ordinary repository conventions. All authored
+posts start with `[Copilot speaking]`.
 
-Reread after claiming and before starting work. The earlier unreleased claim wins
-a collision; withdraw without removing its assignment. Claims are an
-ordinary collaboration convention, not an atomic lock. No timeout authorizes
+Reread ownership, package overlap and any parent snapshot after claiming and before
+starting work. If eligibility changed, preserve the admitted session and reconcile
+through its owner rather than starting edits or creating a duplicate. The earlier
+unreleased claim wins a collision; withdraw without removing its assignment.
+Claims are an ordinary collaboration convention, not an atomic lock. No timeout authorizes
 takeover. If you cannot proceed, retain a concrete blocker or explicitly release
 your claim with enough information for a new worker.
 
-Send `scheduled-repair` to the issue-linked session with the issue URL and goal:
+Send `scheduled-repair` to the claimed session with the issue URL and goal:
 confirm the failure, make the justified repair, and follow the ordinary PR through
-checks and review to human disposition. Use `send_session_message` with
-`delivery_mode: immediate` and `mode: autopilot` after the claim is established;
+checks and review to human disposition. Include scope/overlap evidence and any
+agreed stack dependency, parent snapshot and additional-version requirement.
+The worker uses this executor and creates only its own PR. Use `send_session_message`
+with `delivery_mode: immediate` and `mode: autopilot` after the claim is established;
 do not send model fields to this tool. Preserve existing session settings. Supply
 links and context, not a copied local-state payload.
 
@@ -193,8 +271,9 @@ links and context, not a copied local-state payload.
 Report sessions continued or archived, the refreshed incomplete count (or why it
 cannot be established) and limit, the new repair if any, and specific
 cleanup/admission blockers in the native session. Distinguish requested cleanup
-from verified completion. Post on GitHub only for substantive progress, handoff or
-blockers, not heartbeats or empty scans. Include decision diagnostics in a collapsible
-section when posting a summary. Do not declare blocked or incomplete work
-successful. Future follow-up belongs to this repository automation, never to a
-per-PR automation or hidden process.
+from verified completion, and report package-overlap deferrals, unresolved scope
+and the evidence for any admitted stacking relationship. Post on GitHub only for
+substantive progress, handoff or blockers, not heartbeats or empty scans. Include
+decision diagnostics in a collapsible section when posting a summary. Do not
+declare blocked or incomplete work successful. Future follow-up belongs to this
+repository automation, never to a per-PR automation or hidden process.
