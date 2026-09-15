@@ -102,6 +102,13 @@ cargo-mutants applies them to both its test-build and test-execution commands.
 the preceding build phase. CLI applications expose their implementation through a
 library crate rather than adding binary targets to the mutation run.
 
+Cargo target selection does not restrict cargo-mutants source discovery.
+`Get-MutantsExcludeArgument` in `scripts/build/Mutants.psm1` excludes `**/src/main.rs`
+and `**/src/bin/**` alongside the platform-specific source exclusions. These paths
+contain binary shells and their private helpers, not shared library implementation.
+Keep new binary targets in these conventional locations; a custom binary source
+layout needs corresponding source-selection handling.
+
 Sharded runs use `--sharding round-robin` to distribute mutations from expensive
 source regions across runners rather than assigning consecutive source ranges to
 each shard. The shared recipe applies this to both local and CI runs while
