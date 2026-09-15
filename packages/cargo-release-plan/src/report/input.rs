@@ -75,12 +75,11 @@ impl ReportFile {
         let mut grouped = BTreeSet::new();
         for (name, group) in &self.groups {
             _ = parse_version(name, &group.version)?;
+            // Ordering and uniqueness are separate: `grouped` rejects duplicates both
+            // within one group and across groups. A strict comparison here is redundant.
             if group.members.len() < 2
                 || group.members.first() != Some(name)
-                || !group
-                    .members
-                    .iter()
-                    .is_sorted_by(|left, right| left < right)
+                || !group.members.is_sorted()
             {
                 return Err(InvalidReportGroup::new(name).into());
             }
@@ -380,29 +379,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_names_and_nonreciprocal_groups() {
+    fn rejects_empty_and_duplicate_package_names() {
         let original = grouped();
-        for name in ["", "api"] {
+        for name in ["", " ", "api"] {
             let mut report = original.clone();
             report.non_publishable_packages.first_mut().unwrap().name = name.to_owned();
             let error = report.validate().unwrap_err();
             assert!(error.find_source::<InvalidReportPackage>().is_some());
         }
-        for members in [
-            vec!["api"],
-            vec!["helper", "api"],
-            vec!["api", "api"],
-            vec!["api", "absent"],
-            vec!["helper", "missing"],
-        ] {
-            let mut report = original.clone();
-            report.groups.get_mut("api").unwrap().members =
-                members.into_iter().map(str::to_owned).collect();
-            let error = report.validate().unwrap_err();
-            assert!(error.find_source::<InvalidReportGroup>().is_some());
-        }
-        let mut report = original.clone();
+    }
+
+    #[test]
+    fn rejects_singleton_groups_with_reciprocal_membership() {
+        let mut report = grouped();
+        report.validate().unwrap();
         report.non_publishable_packages.first_mut().unwrap().group = None;
+        report.groups.get_mut("api").unwrap().members = vec!["api".to_owned()];
         assert!(
             report
                 .validate()
@@ -410,7 +402,114 @@ mod tests {
                 .find_source::<InvalidReportGroup>()
                 .is_some()
         );
-        let mut report = original;
+        report.groups.clear();
+        report.packages.first_mut().unwrap().group = None;
+        report.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_groups_without_package_references() {
+        let mut report = report(Vec::new());
+        report.groups = grouped().groups;
+        report.groups.get_mut("api").unwrap().members.clear();
+        assert!(
+            report
+                .validate()
+                .unwrap_err()
+                .find_source::<InvalidReportGroup>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn group_keys_must_name_the_first_sorted_member() {
+        let original = grouped();
+        for name in ["API", "helper"] {
+            let mut report = original.clone();
+            let group = report.groups.remove("api").unwrap();
+            report.groups.insert(name.to_owned(), group);
+            report.packages.first_mut().unwrap().group = Some(name.to_owned());
+            report.non_publishable_packages.first_mut().unwrap().group = Some(name.to_owned());
+            assert!(
+                report
+                    .validate()
+                    .unwrap_err()
+                    .find_source::<InvalidReportGroup>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_descending_members_after_the_canonical_first_member() {
+        let mut report = grouped();
+        let mut helper = report.non_publishable_packages.first().unwrap().clone();
+        helper.name = "worker".to_owned();
+        report.non_publishable_packages.push(helper);
+        report.groups.get_mut("api").unwrap().members =
+            ["api", "helper", "worker"].map(str::to_owned).to_vec();
+        report.validate().unwrap();
+        report.groups.get_mut("api").unwrap().members.swap(1, 2);
+        assert!(
+            report
+                .validate()
+                .unwrap_err()
+                .find_source::<InvalidReportGroup>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_members_in_otherwise_valid_groups() {
+        let original = grouped();
+        for member in ["api", "helper"] {
+            let mut report = original.clone();
+            let members = &mut report.groups.get_mut("api").unwrap().members;
+            members.push(member.to_owned());
+            members.sort();
+            assert!(
+                report
+                    .validate()
+                    .unwrap_err()
+                    .find_source::<InvalidReportGroup>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn group_members_must_reference_their_group() {
+        let original = grouped();
+        for reference in [None, Some("helper"), Some("API")] {
+            let mut report = original.clone();
+            report.non_publishable_packages.first_mut().unwrap().group =
+                reference.map(str::to_owned);
+            assert!(
+                report
+                    .validate()
+                    .unwrap_err()
+                    .find_source::<InvalidReportGroup>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn group_members_must_name_reported_packages() {
+        let mut report = grouped();
+        report.non_publishable_packages.clear();
+        assert!(
+            report
+                .validate()
+                .unwrap_err()
+                .find_source::<InvalidReportGroup>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn package_group_references_must_have_reciprocal_membership() {
+        let mut report = grouped();
         report.groups.clear();
         assert!(
             report
