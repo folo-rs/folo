@@ -27,7 +27,9 @@ static PANIC_ON_NEXT_ALLOCATION: AtomicBool = AtomicBool::new(false);
 ///
 /// # Examples
 ///
-/// ```rust
+/// This debugging example arms the global allocator and is compile-checked only.
+///
+/// ```no_run
 /// use alloc_tracker::{Allocator, panic_on_next_alloc};
 ///
 /// #[global_allocator]
@@ -199,10 +201,16 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(feature = "panic_on_next_alloc")]
+    use std::env;
     use std::hint::black_box;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    #[cfg(feature = "panic_on_next_alloc")]
+    use std::process::Command;
     use std::{ptr, thread};
 
+    #[cfg(feature = "panic_on_next_alloc")]
+    use testing::assert_panics;
     use testing::with_watchdog;
 
     use super::*;
@@ -499,13 +507,64 @@ mod tests {
 
     #[test]
     #[cfg(feature = "panic_on_next_alloc")]
-    fn panic_on_next_alloc_can_be_enabled_and_disabled() {
-        assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+    #[cfg_attr(
+        miri,
+        ignore = "Uses a child library harness to isolate the process-global flag"
+    )]
+    fn panic_on_next_alloc_is_one_shot() {
+        // The child runs only this test, without installing Allocator as the global allocator.
+        // Directly checking the flag avoids unwinding through GlobalAlloc and prevents other
+        // allocator tests from consuming it. Ref: docs/implementation.md, "Allocation tripwire".
+        const CHILD: &str = "ALLOC_TRACKER_PANIC_CHECK_CHILD";
+        const TEST: &str = "allocator::tests::panic_on_next_alloc_is_one_shot";
+        // Require evidence that the child ran the scenario, not just an empty successful harness.
+        const COMPLETED: &str = "allocation tripwire checks completed";
 
-        panic_on_next_alloc(true);
-        assert!(PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+        with_watchdog(|| {
+            if env::var_os(CHILD).is_none() {
+                let output = Command::new(env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--nocapture"])
+                    .env(CHILD, "1")
+                    .output()
+                    .unwrap();
 
-        panic_on_next_alloc(false);
-        assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                print!("{stdout}");
+                eprint!("{}", String::from_utf8(output.stderr).unwrap());
+                assert!(output.status.success());
+                assert!(stdout.lines().any(|line| line == COMPLETED));
+                return;
+            }
+
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+
+            panic_on_next_alloc(true);
+            assert!(PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            assert_panics(check_and_panic_if_enabled);
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+
+            // Arming on another thread must affect this thread's check as well.
+            thread::spawn(|| panic_on_next_alloc(true)).join().unwrap();
+            assert_panics(check_and_panic_if_enabled);
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+
+            panic_on_next_alloc(true);
+            panic_on_next_alloc(false);
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+
+            // Serial libtest prints the test-name prefix without a trailing newline.
+            println!();
+            println!("{COMPLETED}");
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "panic_on_next_alloc"))]
+    fn panic_check_without_feature_is_noop() {
+        check_and_panic_if_enabled();
     }
 }
