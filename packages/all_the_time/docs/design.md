@@ -21,10 +21,10 @@ distinct from completed iterations that consumed no measurable processor time.
 A report is a detached snapshot of operation measurements. Reports can cross
 threads and merge operations with matching names.
 
-The primary per-iteration figure is an iteration-weighted, through-origin
-processor-time estimate rather than a pooled arithmetic mean. This reduces the
-influence of low-iteration warmup spans. Totals remain available independently
-of this estimate.
+The primary per-iteration figure is a through-origin processor-time estimate
+weighted by squared iteration counts rather than a pooled arithmetic mean.
+This reduces the influence of low-iteration warmup spans. Totals remain
+available independently of this estimate.
 
 An operation without spans has no per-iteration estimate or statistics. Recorded
 spans covering no iterations have statistics with an undefined rate and no
