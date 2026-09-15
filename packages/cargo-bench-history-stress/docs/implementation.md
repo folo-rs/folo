@@ -32,7 +32,7 @@ The process-argument/runtime wrapper is a trivial forwarder and carries a
 justified mutation exclusion; scenario decisions, parsed-input execution,
 configuration side effects and exit mapping remain mutation targets.
 
-Coverage excludes the binary-only wrapper and successful real-I/O coordinator
-whose spawned execution cannot be instrumented by the library coverage run.
+The process-facing wrapper and real-I/O coordinator are excluded from line
+coverage; the seeded binary assertions protect their complete execution.
 The independently exercised validation, configuration writer and exit mapper
 remain instrumented.

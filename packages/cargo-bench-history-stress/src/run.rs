@@ -337,13 +337,13 @@ mod tests {
     #[test]
     fn scenario_rejects_zero_benchmarks() {
         let cli = Cli::parse_from(["cargo-bench-history-stress", "--benchmarks", "0"]);
-        assert!(build_scenario(&cli).is_err());
+        _ = build_scenario(&cli).unwrap_err();
     }
 
     #[test]
     fn scenario_rejects_zero_commits() {
         let cli = Cli::parse_from(["cargo-bench-history-stress", "--commits", "0"]);
-        assert!(build_scenario(&cli).is_err());
+        _ = build_scenario(&cli).unwrap_err();
     }
 
     #[test]
@@ -351,7 +351,7 @@ mod tests {
         for flag in ["--benchmarks", "--commits"] {
             let cli = Cli::parse_from(["cargo-bench-history-stress", flag, "0"]);
             // No Tokio runtime is needed: validation must finish before the I/O path.
-            assert!(block_on(run_harness(cli)).is_err());
+            _ = block_on(run_harness(cli)).unwrap_err();
         }
     }
 
@@ -382,11 +382,9 @@ mod tests {
         fs::write(&parent, "not a directory").unwrap();
         let target = StorageTarget::local(None).unwrap();
 
-        assert!(
-            write_config(dir.path(), &target, Logger::new(false))
-                .await
-                .is_err()
-        );
+        _ = write_config(dir.path(), &target, Logger::new(false))
+            .await
+            .unwrap_err();
         assert_eq!(fs::read_to_string(parent).unwrap(), "not a directory");
     }
 
@@ -398,11 +396,9 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         let target = StorageTarget::local(None).unwrap();
 
-        assert!(
-            write_config(dir.path(), &target, Logger::new(false))
-                .await
-                .is_err()
-        );
+        _ = write_config(dir.path(), &target, Logger::new(false))
+            .await
+            .unwrap_err();
         assert!(path.is_dir());
     }
 
