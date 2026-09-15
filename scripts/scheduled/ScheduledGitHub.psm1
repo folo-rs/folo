@@ -351,6 +351,7 @@ function Invoke-ScheduledReporting {
     $failures = [Collections.Generic.List[hashtable]]::new()
     foreach ($job in $failedJobs) {
         $diagnostics = [Collections.Generic.List[string]]::new()
+        $artifactUrls = [Collections.Generic.List[string]]::new()
         $steps = @($job['steps'] | Where-Object { $null -ne $_ -and $_.conclusion -cnotin @('success', 'skipped') })
         $summary = if ($steps.Count -gt 0) {
             'Unsuccessful steps: ' + (($steps | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join '; ')
@@ -375,7 +376,7 @@ function Invoke-ScheduledReporting {
         $diagnostics.Add("Job execution attempt: $($job.run_attempt)")
         $resultArtifacts = @($artifacts | Where-Object name -CEQ "scheduled-result-$RunId-$($job.run_attempt)-$($job.name)")
         foreach ($artifact in $resultArtifacts) {
-            $diagnostics.Add("Result artifact: https://github.com/$Repository/actions/runs/$RunId/artifacts/$($artifact.id)")
+            $artifactUrls.Add("https://github.com/$Repository/actions/runs/$RunId/artifacts/$([long]$artifact.id)")
             try {
                 $text = Read-ScheduledArtifactText $Repository $artifact $OutputDirectory
                 if ([string]::IsNullOrWhiteSpace($text)) { throw 'The check summary is empty.' }
@@ -387,7 +388,7 @@ function Invoke-ScheduledReporting {
         }
         $failures.Add(@{
             name = $job.name; url = $job.html_url; conclusion = $job.conclusion
-            summary = $summary; diagnostics = $diagnostics.ToArray()
+            summary = $summary; diagnostics = $diagnostics.ToArray(); artifact_urls = $artifactUrls.ToArray()
         })
     }
     $messages = @(Format-ScheduledReport -Run $run -AttemptUrl $attemptUrl `

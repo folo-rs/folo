@@ -289,7 +289,11 @@ inaccessible logs are explicit gaps in the report, not reasons to omit a failure
 Issue content contains observed failures and direct links, not serialized API
 inventories. The renderer bounds diagnostic text per unsuccessful job, retaining
 the start and end of the job-log and check-summary excerpts, visible omission
-notices, and artifact destinations outside the clipped text. Full diagnostics
+notices, and structured artifact destinations outside the clipped text. Short
+metadata receives its allocation first, then verbose sources share the remaining
+budget and are each clipped once; assembly does not discard another source's
+opening or final context. Artifact destinations come from the Actions inventory,
+not from matching wording inside a check summary. Full diagnostics
 remain in the linked logs and artifacts. Fixed-size failed-job inventory pages
 and complete diagnostic sections are packed into size-limited Markdown messages;
 source verbosity cannot create an unlimited continuation sequence.

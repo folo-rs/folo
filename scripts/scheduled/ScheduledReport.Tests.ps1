@@ -90,8 +90,8 @@ Describe 'Readable failure rendering' {
         }
     }
     It 'keeps whole sections and artifact destinations even for densely indented diagnostics' {
+        $failure.artifact_urls = @('https://github.com/example/repo/actions/runs/10/artifacts/30')
         $failure.diagnostics = @(("start`n" + ("`n" * 100000) + 'end'),
-            'Result artifact: https://github.com/example/repo/actions/runs/10/artifacts/30',
             ("x" * 100000))
         $messages = @(Format-ScheduledReport $run $attempt @($failure))
         $messages.Count | Should -Be 1
@@ -99,6 +99,30 @@ Describe 'Readable failure rendering' {
         $messages[0] | Should -Match '/artifacts/30'
         $messages[0] | Should -Match 'start'
         $messages[0] | Should -Match 'end'
+    }
+    It 'allocates the final budget without discarding any source opening or result' {
+        $failure.diagnostics = @('Job execution attempt: 1') + @('steps', 'log', 'summary' | ForEach-Object {
+            "Opening $_`n" + ("verbose $_ diagnostics`n" * 10000) + "Result $_"
+        })
+        $text = @(Format-ScheduledReport $run $attempt @($failure)) -join "`n"
+        foreach ($source in @('steps', 'log', 'summary')) {
+            $text | Should -Match "Opening $source"
+            $text | Should -Match "Result $source"
+        }
+        $text | Should -Match 'Job execution attempt: 1'
+        $text.Length | Should -BeLessThan 12000
+    }
+    It 'uses distinct structured artifact destinations rather than promoting diagnostic text' {
+        $failure.artifact_urls = @(
+            'https://github.com/example/repo/actions/runs/10/artifacts/30',
+            'https://github.com/example/repo/actions/runs/10/artifacts/30'
+        )
+        $failure.diagnostics = @('Result artifact: https://github.com/example/repo/issues/999')
+        $text = @(Format-ScheduledReport $run $attempt @($failure)) -join "`n"
+        @([regex]::Matches($text, '(?m)^Result artifact: https://github.com/example/repo/actions/runs/10/artifacts/30$')).Count |
+            Should -Be 1
+        $text | Should -Match '(?m)^    Result artifact: https://github.com/example/repo/issues/999$'
+        $text | Should -Not -Match '(?m)^Result artifact: https://github.com/example/repo/issues/999$'
     }
     It 'resumes missing sections without repeating completed snapshots after diagnostics change' {
         $failures = @(1..30 | ForEach-Object { @{

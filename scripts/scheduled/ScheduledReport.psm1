@@ -101,14 +101,24 @@ function Format-ScheduledReport {
     foreach ($failure in $Failures) {
         $heading = "## Diagnostic excerpt: $($failure.url)"
         $name = Get-ScheduledTextExcerpt (ConvertTo-ScheduledTableCell $failure.name) 400
-        # Reserve room for both the job log and check summary before the whole-job bound.
-        # Short metadata entries do not reduce their budgets. Artifact links remain outside
-        # diagnostic text so clipping cannot hide their destinations.
-        $sourceLimit = [int]($diagnosticLimit / [Math]::Min(2, [Math]::Max(1, $failure.diagnostics.Count)))
-        $parts = @($failure.diagnostics | ForEach-Object { Get-ScheduledTextExcerpt $_ $sourceLimit })
-        $excerpt = Get-ScheduledTextExcerpt ($parts -join "`n`n") $diagnosticLimit
+        # Allocate short metadata first, then share the remaining budget between verbose
+        # sources. Clip each source only once so both of its ends survive final assembly.
+        $parts = [string[]]::new($failure.diagnostics.Count)
+        $remainingSources = $parts.Length
+        $remaining = $diagnosticLimit - [Math]::Max(0, ($parts.Length - 1) * 2)
+        if ($parts.Length -gt 0) {
+            $indices = @(0..($parts.Length - 1) | Sort-Object { $failure.diagnostics[$_].Length })
+            foreach ($index in $indices) {
+                $share = [int][Math]::Floor($remaining / $remainingSources)
+                $parts[$index] = Get-ScheduledTextExcerpt $failure.diagnostics[$index] $share
+                $remaining -= $parts[$index].Length
+                $remainingSources--
+            }
+        }
+        $excerpt = $parts -join "`n`n"
         $text = (($excerpt -split '\r?\n' | ForEach-Object { "    $_" }) -join "`n")
-        $links = @($failure.diagnostics | Where-Object { $_ -cmatch '^Result artifact: https://github\.com/\S+$' })
+        # Destinations come from the Actions artifact inventory, not diagnostic wording.
+        $links = @(($failure['artifact_urls'] ?? @()) | Select-Object -Unique | ForEach-Object { "Result artifact: $_" })
         $blocks.Add(@{
             heading = $heading
             text = "$heading`n`n[$($name.Replace("`n", ' ')) - job and full logs]($($failure.url))`n`n$($links -join "`n")`n`n$text"
