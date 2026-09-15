@@ -232,20 +232,53 @@ mod tests {
 
     #[test]
     fn uses_thread_time_from_pal() {
-        // Verify that a thread span specifically calls thread_time() from the PAL.
         let fake_platform = FakePlatform::new();
-        fake_platform.set_thread_time(Duration::from_millis(50));
-        fake_platform.set_process_time(Duration::from_millis(200)); // Different from thread time
+        // Distinct starts and deltas detect mixing the clocks at either end of the span.
+        fake_platform.set_thread_time(Duration::from_nanos(50));
+        fake_platform.set_process_time(Duration::from_nanos(200));
 
-        let platform_facade = PlatformFacade::fake(fake_platform);
+        let platform_facade = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform_facade);
         let operation = session.operation("test");
 
         {
             let _span = operation.measure_thread().iterations(1);
-            // Should use thread_time (50ms), not process_time (200ms).
+            fake_platform.set_thread_time(Duration::from_nanos(80));
+            fake_platform.set_process_time(Duration::from_nanos(400));
         }
 
+        assert_eq!(operation.total_iterations(), 1);
+        assert_eq!(operation.total_processor_time(), Duration::from_nanos(30));
+    }
+
+    #[test]
+    fn decreasing_thread_clock_saturates_to_zero() {
+        let clock = FakePlatform::new();
+        clock.set_thread_time(Duration::from_nanos(23));
+        let session = Session::with_platform(PlatformFacade::fake(clock.clone()));
+        let operation = session.operation("test");
+        let span = operation.measure_thread().iterations(2);
+        clock.set_thread_time(Duration::from_nanos(7));
+        drop(span);
+
+        assert_eq!(operation.total_iterations(), 2);
+        assert_eq!(operation.total_processor_time(), Duration::ZERO);
+    }
+
+    #[test]
+    fn thread_delta_saturates_at_nanosecond_capacity() {
+        let clock = FakePlatform::new();
+        let session = Session::with_platform(PlatformFacade::fake(clock.clone()));
+        let operation = session.operation("test");
+        let span = operation.measure_thread().iterations(1);
+        // Match the process-span conversion boundary without advancing a real clock.
+        clock.set_thread_time(Duration::from_nanos_u128(u128::from(u64::MAX) + 1));
+        drop(span);
+
+        assert_eq!(
+            operation.total_processor_time(),
+            Duration::from_nanos(u64::MAX)
+        );
         assert_eq!(operation.total_iterations(), 1);
     }
 
