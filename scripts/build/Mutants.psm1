@@ -32,6 +32,13 @@ function Get-MutantsExcludeArgument {
     )
 
     $exclude = @(
+        # Cargo's --lib restricts builds/tests, not cargo-mutants source discovery. Binary
+        # shells (including their private helpers) are not compiled by that runner. Keep
+        # shared implementation in the library, outside these conventional binary paths.
+        # Ref: docs/testing.md, "Mutation testing target selection".
+        '-e', '**/src/main.rs',
+        '-e', '**/src/bin/**',
+
         # Parts of this package require Criterion to work and other parts are currently not tested
         # as there is no public way to simulate a system topology for `many_cpus`.
         '-e', 'many_cpus_benchmarking',

@@ -74,6 +74,11 @@ fn workspace_projections_distinguish_version_targets_and_rewrite_members() {
             format!("[package]\nname = \"{name}\"\nversion = \"1.2.3\"\n{publication}").as_bytes(),
         );
     }
+    fixture.write(
+        "public/Cargo.toml",
+        b"[package]\nname = 'public'\nversion = '1.2.3'\n\
+          [dependencies]\nhelper = { path = '../helper', version = '=1.2.3' }\n",
+    );
     fixture.command(&[
         "add",
         "Cargo.toml",
@@ -82,11 +87,20 @@ fn workspace_projections_distinguish_version_targets_and_rewrite_members() {
     ]);
     let mut helper = package("helper", fixture.path());
     helper.publish = Some(Vec::new());
+    let mut public = package("public", fixture.path());
+    public.dependencies.push(MetadataDep {
+        name: "helper".to_string(),
+        req: "=1.2.3".to_string(),
+        rename: None,
+        path: Some(fixture.path().join("helper").to_string_lossy().into_owned()),
+        kind: None,
+        source: None,
+    });
     let metadata = MetadataJson {
         packages: vec![
             package("loose", fixture.path()),
             helper,
-            package("public", fixture.path()),
+            public,
             package("nonmember", fixture.path()),
         ],
         workspace_members: ["public", "helper", "loose"].map(str::to_string).to_vec(),
@@ -117,6 +131,10 @@ fn workspace_projections_distinguish_version_targets_and_rewrite_members() {
             .collect::<Vec<_>>(),
         ["public"]
     );
+    assert_eq!(tree.groups.members("helper"), ["helper", "public"]);
+    assert_eq!(tree.groups.group_of("public"), Some("helper"));
+    assert_eq!(tree.groups.group_of("helper"), Some("helper"));
+    assert_eq!(tree.groups.group_of("loose"), None);
     assert_eq!(
         tree.members_by_dir,
         ["helper", "loose", "public"]
