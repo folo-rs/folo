@@ -132,8 +132,8 @@ fn azure_config_for(container: &str) -> String {
 ///
 /// That mode validates a token's structure and time claims (`iss` prefix, `aud`,
 /// `nbf`/`iat`/`exp`) but never verifies the signature, so a locally crafted token
-/// stands in for a real Entra token. Real signature validation stays covered by the
-/// `test-azure` / `test-azure-gh` jobs against a real Entra-only account.
+/// stands in for a real Entra token. Real-Azure integration tests cover signature
+/// validation with both developer and self-minting credentials against an Entra-only account.
 #[derive(Debug)]
 struct FakeEntraCredential;
 

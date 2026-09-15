@@ -46,7 +46,7 @@ the pull request, with `cargo-semver-checks` as a floor — see
 ### `verify-semver-checks` canary
 
 `just verify-semver-checks` proves that `cargo-semver-checks` can actually run
-before the `increment-versions` skill or the CI `semver-checks` job trusts it.
+before the `increment-versions` skill or CI's compatibility step in `validate-versions` trusts it.
 When the tool *fails to run* — classically an installed cargo-semver-checks too
 old for the toolchain's rustdoc JSON format ("unsupported rustdoc format v…") —
 a broken tool must never be read as "no breaking changes". The canary runs
