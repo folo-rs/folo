@@ -17,7 +17,7 @@ include = ["src/**/*"]
 
 [workspace.dependencies]
 all_the_time = { version = "0.6.8", path = "packages/all_the_time", default-features = false }
-alloc_tracker = { version = "0.7.7", path = "packages/alloc_tracker", default-features = false }
+alloc_tracker = { version = "0.7.8", path = "packages/alloc_tracker", default-features = false }
 anyspawn = { version = "0.8.0", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
 async-trait = { version = "0.1.89", default-features = false }
