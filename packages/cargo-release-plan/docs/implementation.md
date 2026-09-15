@@ -101,6 +101,12 @@ use Cargo's test classifications: ordinary testing includes integration targets,
 while mutation testing selects only library unit-test targets under the
 [workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
 
+Installation acquisition unit tests use small temporary repositories without
+Cargo metadata or resolution. They distinguish historical blobs from work-tree
+files, check ancestor and filename configuration precedence, and retain missing
+versus unreadable-input behavior. Pure source-comparison and patch-applicability
+tests cover the decisions independently of acquisition.
+
 Released-file discovery unit tests use small Git indexes and filesystem fixtures
 without constructing or resolving Cargo workspaces. They exercise selection,
 presence, modes and cleaned blob bytes at the acquisition boundary. Optional
@@ -294,7 +300,9 @@ library artifact into an installable binary artifact.
 
 Each endpoint that has an installable binary target must have a lockfile resolving
 the package at its corresponding declared version. An endpoint without such a
-target contributes an empty closure and does not require a lockfile. Missing or
+target contributes an empty closure and does not require a lockfile. Endpoint
+selection belongs to closure comparison itself, so classification needs no
+separate binary-target gate. Missing or
 incomplete required lockfile data stops classification because regenerating
 historical resolution would violate the offline, no-full-resolution boundary. A
 package absent from the baseline returns as new before lockfile comparison
@@ -481,6 +489,15 @@ All repository-controlled names pass through one quoting helper modeled after
 Git's `core.quotePath` output. Quotes, backslashes, and control characters are
 escaped so a path cannot forge another terminal line or GitHub workflow command.
 GitHub command properties receive their additional delimiter escaping.
+
+Classification emits lazy notes through a diagnostic sink. Its stderr adapter keeps
+the ordinary verbose toggle; recording sinks let unit tests observe emission
+conditions and computed values without process-global output capture. Status
+explanations consume the completed classification and do not decide its verdict.
+
+Renderer tests compare GitHub annotations with the generated plain diagnostics,
+including the manifest destination for unpublished version-group members. They
+assert structured fields and scenario values rather than freezing advisory prose.
 
 Subprocess stderr remains intact because Git and Cargo already quote their own
 paths, and escaping the entire diagnostic would destroy its multiline structure.

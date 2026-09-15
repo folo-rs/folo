@@ -119,9 +119,7 @@ fn work_tree_presence_and_hash_inputs_distinguish_missing_and_invalid_paths() {
     // core.symlinks=false can leave an indexed link as a regular file on disk.
     // The index must reject that path before the regular-file metadata can accept it.
     fixture.command(&["config", "core.symlinks", "false"]);
-    let modes = git
-        .work_tree_modes(&["pkg"], PathCase::probe(fixture.path()))
-        .unwrap();
+    let modes = git.work_tree_modes(&["pkg"], PathCase::Sensitive).unwrap();
     let error = validated_work_tree_files(&git, "pkg", &released, &modes).unwrap_err();
     assert!(error.find_source::<SymlinkReleasedError>().is_some());
 }
