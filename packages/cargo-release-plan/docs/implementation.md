@@ -165,6 +165,20 @@ formatting changes do not masquerade as inherited-value changes. Dependency
 table kinds are retained so versionless dev dependencies omitted by Cargo do not
 create false inherited-value changes.
 
+Exact dependencies are discovered from effective raw declarations, not Cargo's
+normalized requirements. Both package identity and resolved member directory
+must match. Parsing the entire suffix after `=` as a SemVer version enforces a
+complete triplet and rejects compound requirements; separate prerelease and
+build-metadata checks retain the plain-release-only rule.
+
+Dependency unit tests use synthetic metadata and parsed manifests for declaration
+and exposure decisions. Small shared Git fixtures cover tracked-member selection
+and historical path acquisition without Cargo resolution. Canonical fallback
+tests use equivalent filesystem paths without requiring symlink privileges.
+Exposure tests retain propagation through private intermediaries, revisit
+earlier dependents until closure settles, and distinguish normal edges from
+build and development edges at every hop.
+
 ## Classification
 
 Classification combines one current work-tree model with package-specific
@@ -255,6 +269,13 @@ edit distance rather than total file size, and it falls back to a whole-file
 replacement after the budget is exhausted. The fallback remains a correct patch
 and cannot change the verdict, which was already established from object ids and
 modes.
+
+The search preserves the furthest candidate after taking each edit, not merely
+the furthest predecessor. Deletion advances the old-line position and insertion
+does not, so equal predecessor positions require deletion. Forward search and
+backtracking use the same choice. Small overlapping-line fixtures verify valid
+line consumption, minimal edits within the budget, and valid replacement below
+that budget without selecting a preferred spelling among equivalent scripts.
 
 The renderer carries a file's content and mode together so an absent side cannot
 accidentally receive a mode. Binary files receive presence and mode headers but
@@ -466,6 +487,14 @@ candidate from the prepared input rather than incrementing the preceding
 candidate again. Classification uses the same pinned release baseline throughout.
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
+
+The convergence loop is separate from the callback that rewrites manifests,
+resolves offline, classifies and captures each pass. It returns only when both
+version consequences and captured file contents are unchanged. Library tests
+drive successive resolver outputs through this same loop, including changing
+files with unchanged version decisions, before any final evidence verification.
+The loop returns the stable artifacts; the callback retains that pass's
+classification in the caller for report emission.
 
 Cycle history retains a Git object digest for each complete version/artifact
 state rather than retaining serialized lockfiles and manifests for every pass.
