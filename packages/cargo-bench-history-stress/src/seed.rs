@@ -366,6 +366,11 @@ fn i64_from(value: usize) -> i64 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod write_tests;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
     use jiff::Timestamp;
