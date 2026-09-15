@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "all_the_time",
  "criterion",
@@ -2601,7 +2601,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.58"
+version = "0.2.59"
 dependencies = [
  "all_the_time",
  "alloc_tracker",

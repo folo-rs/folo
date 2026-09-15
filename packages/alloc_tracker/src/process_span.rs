@@ -126,7 +126,8 @@ impl Drop for ProcessSpan {
             "the span was dropped without an iteration count; call `.iterations(1)` \
              if the measured region is a single iteration",
         );
-        let (bytes_delta, count_delta) = process_deltas(self.start_bytes, self.start_count);
+        let (bytes_delta, count_delta) =
+            process_deltas(self.start_bytes, self.start_count, allocation_totals());
         let mut data = self.metrics.lock().expect(ERR_POISONED_LOCK);
         data.add_span(SpanMeasurement {
             iterations,
@@ -146,11 +147,13 @@ impl Drop for ProcessSpan {
 /// The whole-span deltas are returned undivided; per-iteration figures are derived
 /// later by the shared span accumulator, which weights each span by its iteration
 /// count.
-fn process_deltas(start_bytes: u64, start_count: u64) -> (u64, u64) {
+// Sampling belongs to the span boundary; explicit totals keep the arithmetic independent
+// of concurrent allocator traffic. Ref: docs/implementation.md, "Counters".
+fn process_deltas(start_bytes: u64, start_count: u64, current: AllocationTotals) -> (u64, u64) {
     let AllocationTotals {
         bytes: current_bytes,
         count: current_count,
-    } = allocation_totals();
+    } = current;
 
     let bytes_delta = current_bytes
         .checked_sub(start_bytes)
@@ -174,6 +177,63 @@ mod tests {
     // The span is Send but !Sync due to PhantomData<Cell<()>>.
     static_assertions::assert_impl_all!(ProcessSpan: Send, UnwindSafe, RefUnwindSafe);
     static_assertions::assert_not_impl_any!(ProcessSpan: Sync);
+
+    #[test]
+    fn process_deltas_subtract_each_start_counter() {
+        // Distinct nonzero baselines and deltas distinguish bytes from allocation counts
+        // and prevent an absolute total from looking like a span measurement.
+        let current = AllocationTotals {
+            bytes: 137,
+            count: 19,
+        };
+
+        assert_eq!(process_deltas(100, 12, current), (37, 7));
+        assert_eq!(process_deltas(120, 16, current), (17, 3));
+    }
+
+    #[test]
+    fn process_deltas_preserve_zero_activity() {
+        let current = AllocationTotals {
+            bytes: 137,
+            count: 19,
+        };
+
+        assert_eq!(
+            process_deltas(current.bytes, current.count, current),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn process_deltas_preserve_large_integer_totals() {
+        // Counters need not fit in f64's exact-integer range. Subtract before conversion
+        // so a small span remains observable even late in the process lifetime.
+        let current = AllocationTotals {
+            bytes: u64::MAX,
+            count: u64::MAX,
+        };
+
+        assert_eq!(
+            process_deltas(u64::MAX - 37, u64::MAX - 7, current),
+            (37, 7)
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn process_deltas_reject_decreasing_bytes() {
+        let current = AllocationTotals { bytes: 0, count: 1 };
+
+        _ = process_deltas(1, 0, current);
+    }
+
+    #[test]
+    #[should_panic]
+    fn process_deltas_reject_decreasing_count() {
+        let current = AllocationTotals { bytes: 1, count: 0 };
+
+        _ = process_deltas(0, 1, current);
+    }
 
     #[test]
     fn iterations_zero_is_accepted() {
