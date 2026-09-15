@@ -404,9 +404,9 @@ mod tests {
 
     use super::*;
     use crate::Session;
+    use crate::pal::{FakePlatform, PlatformFacade};
 
     fn create_test_session() -> Session {
-        use crate::pal::{FakePlatform, PlatformFacade};
         let fake_platform = FakePlatform::new();
         let platform_facade = PlatformFacade::fake(fake_platform);
         Session::with_platform(platform_facade)
@@ -416,6 +416,78 @@ mod tests {
     fn new_report_is_empty() {
         let report = Report::new();
         assert!(report.is_empty());
+    }
+
+    #[test]
+    fn processor_time_is_absent_without_spans() {
+        let session = create_test_session();
+        let _operation = session.operation("unmeasured");
+        let report = session.to_report();
+        let (_, operation) = report.operations().next().unwrap();
+
+        assert_eq!(operation.processor_time(), None);
+        assert!(operation.statistics().is_none());
+    }
+
+    #[test]
+    fn processor_time_is_zero_for_measured_zero_time() {
+        let session = create_test_session();
+        drop(session.operation("zero").measure_process().iterations(3));
+        let report = session.to_report();
+        let (_, operation) = report.operations().next().unwrap();
+
+        assert_eq!(operation.processor_time(), Some(Duration::ZERO));
+        assert_eq!(operation.total_iterations(), 3);
+        assert_eq!(operation.statistics().unwrap().span_count, 1);
+    }
+
+    #[test]
+    fn processor_time_is_absent_for_zero_iterations() {
+        let mut metrics = OperationMetrics::default();
+        // Work can consume processor time even when the harness reports no completed iterations.
+        metrics.add_span(0, 17);
+        let operation = ReportOperation { metrics };
+
+        assert_eq!(operation.processor_time(), None);
+        assert!(operation.statistics().unwrap().slope_nanos.is_nan());
+        assert_eq!(operation.total_processor_time(), Duration::from_nanos(17));
+    }
+
+    #[test]
+    fn processor_time_reports_nonzero_process_delta_per_iteration() {
+        let clock = FakePlatform::new();
+        let session = Session::with_platform(PlatformFacade::fake(clock.clone()));
+        let operation = session.operation("process");
+        clock.set_process_time(Duration::from_nanos(100));
+        let span = operation.measure_process().iterations(3);
+        clock.set_process_time(Duration::from_nanos(163));
+        drop(span);
+        let report = session.to_report();
+        let (_, operation) = report.operations().next().unwrap();
+
+        assert_eq!(operation.processor_time(), Some(Duration::from_nanos(21)));
+        assert_eq!(operation.total_processor_time(), Duration::from_nanos(63));
+        assert_eq!(operation.total_iterations(), 3);
+    }
+
+    #[test]
+    fn processor_time_reports_weighted_slope_after_merge() {
+        // Unequal rates and iteration counts distinguish the through-origin slope from both
+        // the pooled mean and an average of per-span rates. The slope is an exact nanosecond.
+        let mut first = OperationMetrics::default();
+        first.add_span(2, 100);
+        let mut second = OperationMetrics::default();
+        second.add_span(4, 120);
+        let first = Report::from_operation_data(&HashMap::from([("work".to_owned(), first)]));
+        let second = Report::from_operation_data(&HashMap::from([("work".to_owned(), second)]));
+
+        let report = Report::merge(&first, &second);
+        let (_, operation) = report.operations().next().unwrap();
+
+        assert_eq!(operation.processor_time(), Some(Duration::from_nanos(34)));
+        assert_eq!(operation.total_processor_time(), Duration::from_nanos(220));
+        assert_eq!(operation.total_iterations(), 6);
+        assert_eq!(operation.statistics().unwrap().span_count, 2);
     }
 
     #[test]
@@ -576,8 +648,6 @@ mod tests {
 
     #[test]
     fn report_mean_with_fake_platform() {
-        use crate::pal::{FakePlatform, PlatformFacade};
-
         // Create fake platform that we can modify during the test
         let fake_platform = FakePlatform::new();
         let platform_facade = PlatformFacade::fake(fake_platform.clone());
@@ -631,8 +701,6 @@ mod tests {
 
     #[test]
     fn report_operation_display_shows_robust_per_iteration_estimate() {
-        use crate::pal::{FakePlatform, PlatformFacade};
-
         let fake_platform = FakePlatform::new();
         let platform_facade = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform_facade);
