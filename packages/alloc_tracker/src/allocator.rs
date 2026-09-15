@@ -528,9 +528,10 @@ mod tests {
                     .output()
                     .unwrap();
 
-                let stdout = String::from_utf8(output.stdout).unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
                 print!("{stdout}");
-                eprint!("{}", String::from_utf8(output.stderr).unwrap());
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                eprintln!("Child exit status: {}", output.status);
                 assert!(output.status.success());
                 assert!(stdout.lines().any(|line| line == COMPLETED));
                 return;
