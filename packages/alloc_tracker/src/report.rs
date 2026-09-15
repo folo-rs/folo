@@ -818,6 +818,100 @@ mod tests {
     }
 
     #[test]
+    fn per_iteration_accessors_withhold_unavailable_rates() {
+        let mut metrics = OperationMetrics::default();
+        let operation = ReportOperation {
+            metrics: metrics.clone(),
+        };
+        assert_eq!(operation.bytes(), None);
+        assert_eq!(operation.allocations(), None);
+
+        // A zero-iteration span can still contain allocator activity. Its totals are
+        // retained, but neither per-iteration rate is defined.
+        metrics.add_span(SpanMeasurement {
+            iterations: 0,
+            bytes: 37,
+            count: 7,
+            peak_outstanding_bytes: None,
+        });
+        let operation = ReportOperation { metrics };
+
+        assert_eq!(operation.bytes(), None);
+        assert_eq!(operation.allocations(), None);
+        assert_eq!(operation.total_bytes_allocated(), 37);
+        assert_eq!(operation.total_allocations_count(), 7);
+        assert_eq!(operation.total_iterations(), 0);
+    }
+
+    #[test]
+    fn per_iteration_accessors_report_measured_zero() {
+        let operation = report_operation(0, 0, 3);
+
+        assert_eq!(operation.bytes(), Some(0.0));
+        assert_eq!(operation.allocations(), Some(0.0));
+    }
+
+    #[test]
+    fn per_iteration_accessors_preserve_fractional_rates() {
+        // Whole-span totals that are not divisible by the iteration count must not
+        // be truncated before the report exposes them.
+        let mut metrics = OperationMetrics::default();
+        metrics.add_span(SpanMeasurement {
+            iterations: 4,
+            bytes: 27,
+            count: 10,
+            peak_outstanding_bytes: None,
+        });
+        let operation = ReportOperation { metrics };
+
+        assert_eq!(operation.bytes(), Some(6.75));
+        assert_eq!(operation.allocations(), Some(2.5));
+        assert_eq!(operation.total_bytes_allocated(), 27);
+        assert_eq!(operation.total_allocations_count(), 10);
+        assert_eq!(operation.total_iterations(), 4);
+    }
+
+    #[test]
+    fn per_iteration_accessors_preserve_weighting_across_report_merges() {
+        // Unequal batch sizes and rates distinguish the through-origin regression
+        // from both a pooled mean and an unweighted average of the span rates.
+        let spans = [
+            SpanMeasurement {
+                iterations: 1,
+                bytes: 11,
+                count: 1,
+                peak_outstanding_bytes: None,
+            },
+            SpanMeasurement {
+                iterations: 3,
+                bytes: 13,
+                count: 8,
+                peak_outstanding_bytes: None,
+            },
+        ];
+        let mut combined = OperationMetrics::default();
+        let reports = spans.map(|span| {
+            let mut metrics = OperationMetrics::default();
+            metrics.add_span(span);
+            combined.add_span(span);
+            Report::from_operation_data(&HashMap::from([("work".to_owned(), metrics)]))
+        });
+        let merged = Report::merge(&reports[0], &reports[1]);
+        let combined = Report::from_operation_data(&HashMap::from([("work".to_owned(), combined)]));
+
+        for report in [&combined, &merged] {
+            let operation = report.operations.get("work").unwrap();
+
+            // sum(iterations * span_total) / sum(iterations^2), with exact binary results.
+            assert_eq!(operation.bytes(), Some(5.0));
+            assert_eq!(operation.allocations(), Some(2.5));
+            assert_eq!(operation.total_bytes_allocated(), 24);
+            assert_eq!(operation.total_allocations_count(), 9);
+            assert_eq!(operation.total_iterations(), 4);
+        }
+    }
+
+    #[test]
     fn report_operation_total_allocations_count_consistency_with_session() {
         let session = Session::new().no_stdout().no_file();
         {
