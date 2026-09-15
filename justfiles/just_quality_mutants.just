@@ -21,7 +21,8 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
     # and execution. Integration targets do not participate. See docs/testing.md,
     # "Mutation testing target selection". Within that scope:
     #   * Path/package exclusions (the `-e` args from Get-MutantsExcludeArgument) drop whole files
-    #     cargo-mutants should never mutate.
+    #     cargo-mutants should never mutate, including binary-only source that --lib
+    #     does not compile. Cargo target selection alone does not filter source discovery.
     #   * Individual tests that carry no mutation signal opt out at the test site with
     #     `#[cfg_attr(mutants, ignore = "<why>")]`. This keeps them running under normal
     #     `cargo test`/coverage while skipping them under mutation. cargo-mutants defines
