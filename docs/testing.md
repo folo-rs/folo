@@ -234,6 +234,12 @@ CLI applications keep their implementation and its unit tests in a library crate
 with a thin binary entry point. This lets their implementation participate in
 library-only mutation testing without testing the binary shell.
 
+Binary-only code belongs in `src/main.rs` or `src/bin/`; shared implementation
+belongs outside those paths and is compiled by the library target. The mutation
+recipe excludes these binary source locations from discovery because Cargo's
+`--lib` flag alone does not stop cargo-mutants from generating uncompiled mutants.
+This exclusion covers helpers in the binary source, not just functions named `main`.
+
 Integration tests remain part of ordinary testing and coverage. They protect
 real-system behavior independently of mutation testing; they do not need to run
 against every mutant. The unmutated baseline still runs the selected unit-test
