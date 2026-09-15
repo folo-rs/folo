@@ -437,7 +437,7 @@ impl Storage for AzureBlobStorage {
 /// assertions (see [`github_oidc`]), which keeps a long collection run authenticated
 /// past the first hourly access-token refresh — a single `azure/login` session
 /// cannot, because the assertion it caches expires within minutes. Everywhere else
-/// (local development, and the `test-azure` CI job that signs in with `azure/login`)
+/// (local development, and CI's developer-credential pass after `azure/login`)
 /// it falls back to [`DeveloperToolsCredential`], which discovers the existing
 /// Azure CLI session.
 ///
@@ -445,7 +445,7 @@ impl Storage for AzureBlobStorage {
 /// [`entra_credential_from`] seam; it is coverage- and mutation-excluded because its
 /// sole behavior — reading ambient OS environment variables — cannot be driven from a
 /// unit test without mutating the global process environment (which this crate's tests
-/// avoid). The `test-azure-gh` job exercises it end to end in a real federated job.
+/// avoid). Real-Azure integration tests exercise both credential paths end to end.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(test, mutants::skip)]
 fn entra_credential(
@@ -1919,9 +1919,9 @@ mod tests {
     ///
     /// That mode validates a token's structure and time claims (`iss` prefix,
     /// `aud`, `nbf`/`iat`/`exp`) but never verifies the signature, so a locally
-    /// crafted token stands in for a real Entra token. Real signature validation
-    /// stays covered by the `test-azure` / `test-azure-gh` jobs against a real
-    /// Entra-only account.
+    /// crafted token stands in for a real Entra token. Real-Azure integration tests
+    /// cover signature validation with both developer and self-minting credentials
+    /// against an Entra-only account.
     #[derive(Debug)]
     struct FakeEntraCredential;
 

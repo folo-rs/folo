@@ -1,8 +1,7 @@
 #requires -Version 7
 
-# Plans non-Cargo Standard validation before any toolchain is installed, using only Git and
-# the runner's PowerShell. Bootstrapping Rust here would defeat the lightweight selection of
-# workflow lint and script analysis. Cargo dependency impact is added by the existing delta job.
+# Plans non-Cargo Standard validation in the prepare job before toolchain setup, using only
+# Git and the runner's PowerShell. The same job adds Cargo dependency impact after setup.
 # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -158,7 +157,7 @@ function Read-ScriptDomain {
 }
 
 function Get-ValidationScriptDomain {
-    # The delta job adds dependency-aware selection for native helpers exercised by Pester.
+    # Preparation adds dependency-aware selection for native helpers exercised by Pester.
     # In particular, an unrelated Cargo.lock edit is not a reason to run every script suite.
     [CmdletBinding()]
     [OutputType([string])]

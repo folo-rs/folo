@@ -35,10 +35,17 @@ target are exactly `required-checks`.
 
 ## Standard validation structure
 
-`standard-validation.yml` assigns each independently useful check to a separate job so GitHub reports the
-outcomes in parallel. Cargo-package jobs consume the affected-package set from the `delta`
-job. Non-Cargo checks use the independent path plan, supplemented by native-helper package
-impact for script integration tests. Release validation remains unconditional.
+`standard-validation.yml` groups related checks into shared environments, with sequential
+steps that stop on the first failure. Independent jobs and platform legs retain parallel execution.
+The `prepare` job publishes the affected-package set and the independent path plan, supplemented by native-helper package
+impact for script integration tests. Release validation remains unconditional and independent
+of preparation, with separately reported steps in one environment.
+
+The `clippy-dev` matrix runs dev-profile Clippy followed by minimum-dependency compilation;
+its Ubuntu leg first checks workspace formatting. `check-frozen` runs last because it
+rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
+Each platform proceeds independently rather than waiting for other platforms' Clippy results.
+The `docs` matrix builds all-feature and default-feature documentation and then runs doctests.
 
 Pull requests and merge-queue entries use the pruned validation set. Pushes to `main` use the
 full set. Queue delta analysis takes the event's base commit so its comparison cannot drift
@@ -51,12 +58,24 @@ adapter tests with a required emulator. Selecting only the CLI package would exe
 production storage through commands but omit the adapter unit tests, which cover additional
 network paths. The combined selection contributes their coverage to the same Azure upload.
 
+### Real-Azure authentication
+
+`test-azure` runs `just test-azure` with the developer credential and then with the application's
+self-minting GitHub OIDC credential. Setup, compilation and `azure/login` are shared.
+An empty step-local `AZURE_CLIENT_ID` selects the developer credential; the self-minting
+step sets it to `AZURE_TEST_CLIENT_ID`. The latter ignores the Azure CLI session for application
+storage access, while test-container cleanup still uses that session.
+
+The job retains the same-repository and non-merge-queue gates required by the test identity.
+Each scenario creates its own container, and an always-run cleanup sweep collects older leaks.
+The age guard preserves recently written containers used by concurrent workflow runs.
+
 ### Non-Cargo change planning
 
-The `changes` job runs `scripts/build/ValidationPlan.psm1` with Git and preinstalled
-PowerShell, before preparing a development environment. Rust is impractical at this boundary:
-installing its toolchains and build prerequisites merely to decide whether standalone lint
-should run would impose the setup cost this planner is intended to avoid.
+The `prepare` job runs `scripts/build/ValidationPlan.psm1` with Git and preinstalled
+PowerShell before setting up the development environment for Cargo delta. Rust is impractical
+at this boundary because setup has not run; the path planner also supports callers without
+a prepared Rust environment. Both planners share one full-history checkout and runner.
 
 The planner reads immutable event SHAs from a full-history checkout. Pull requests compare
 their head with its merge base against the event's base SHA, covering all PR commits without
@@ -71,13 +90,17 @@ Setup, shared utility, planner and fan-in changes select every tooling check. Fi
 their owning tests; workflow changes also select Pester dependency-relationship and helper tests. Analyzer
 configuration and script files select static analysis independently of the Pester scope.
 
-The `delta` job combines the path-selected domains with affected native helpers used by
+After Cargo delta, the same job combines the path-selected domains with affected native helpers used by
 script integration tests. Dependency impact comes from Cargo delta rather than treating
 every lockfile change as a full-script-suite trip wire. Live manifest changes also select the
 scheduled tests that read workspace metadata. The resulting domain array is explicit even
 when empty. `test-scripts` runs that union once; `just test-scripts "book release"` is the local
 equivalent, while an omitted argument retains full discovery. Unknown domains or explicit
 directories containing no tests fail rather than producing a successful empty run.
+
+The `test-scripts` job also runs static analysis in the same environment. It is selected when
+either analysis or tests are needed, while each step keeps its own path/domain condition.
+Analysis runs first; diagnostics are uploaded even after a failure.
 
 Recipe files follow their automation responsibility: benchmark history and release commands
 have separate imports, while setup installers live beside the setup module. Workflow
@@ -92,6 +115,13 @@ does not replace declared dependencies.
 The workflow invokes `actionlint -color` directly, matching `just validate-workflows` without
 installing Just solely to dispatch that command. Local full setup continues to install these
 same binaries. Keep the command and cache keys aligned when editing these entry points.
+
+The PR benchmark collection queue uses GitHub's
+[`queue: max` concurrency setting](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-queueing-multiple-pending-runs)
+so waiting PRs are retained instead of replacing one another. The pinned actionlint does not
+recognize this key ([upstream issue](https://github.com/rhysd/actionlint/issues/657)).
+`.github/actionlint.yaml` excludes only that exact diagnostic for `pr-bench-history.yml`;
+other concurrency diagnostics and other workflows remain checked.
 
 ## Release validation
 
@@ -131,10 +161,13 @@ read-only, with no hidden preparation or dependency refresh.
 There is no separate version-approval prompt. The complete pull request and its
 Version/release plan section carry the human review of release impact.
 
-The unconditional `validate-versions` job also runs `validate-binstall` against the live
-workspace. Release-target and archive-shape obligations follow Cargo's discovered binary
-targets, including source additions that do not edit a manifest. The version report still runs
-after a binstall failure so semantic-version analysis can consume its output in the same run.
+The unconditional `validate-versions` job shares one full-history checkout and environment
+across live binstall metadata validation, version readiness and semantic-version analysis.
+Release-target and archive-shape obligations follow Cargo's discovered binary targets,
+including source additions that do not edit a manifest. Steps run in order: binstall validation,
+version readiness, the SemVer canary and the scoped comparison. The comparison consumes the
+version step's consumer-contract targets directly. Any failed step ends further validation
+and fails the combined job.
 
 Rust plan-generation tests assert properties of the generated plan over a matrix of report
 states, not only by testing individual guards. The properties are that every entry is well formed
@@ -192,10 +225,10 @@ every merge-blocking Standard validation job. `scripts/build/RequiredChecks.psm1
 cancelled, missing, and unknown dependency results. It permits `skipped` only for jobs whose
 event, platform, or package scope legitimately excludes them.
 
-For tooling checks it reads the explicit `changes` plan and reconstructs script selection
-using `delta`'s affected-package output. The execution-domain output must agree with that
+For tooling checks it reads `prepare`'s explicit path plan and reconstructs script selection
+using its affected-package output. The execution-domain output must agree with that
 selection. Every selected tooling job must succeed; every tooling dependency must be present,
-even when not selected. Both planners remain must-succeed dependencies, so a failed planner
+even when not selected. Preparation remains a must-succeed dependency, so a failed planner
 cannot turn downstream skips into merge approval.
 
 The classifier only observes what `needs` supplies, so it also rejects an unconditional gate
@@ -259,10 +292,11 @@ reconstruct a test invocation or claim that a baseline ran.
 The full workflow executes every night, without persistent coverage receipts or
 successful-run reuse. Ordinary dependency/build caches remain available.
 
-The separate release-build, example, dependency-policy, feature-powerset,
+The release-build, example, dependency-policy, feature-powerset,
 unused-dependency and ARM test jobs depend on the same main-only plan
 gate and run their Just recipes over the full workspace. They retain their own
-platform matrices; the ARM test job also provisions Valgrind for benchmark smoke
+platform matrices; the release-build job runs release-profile Clippy before building in the
+same environment. The ARM test job also provisions Valgrind for benchmark smoke
 tests and uploads its JUnit results to Codecov. Their failures are reported from
 Actions job logs rather than the deep-check wrapper's summary artifacts.
 

@@ -1,7 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for Delta.psm1. The parsing, shaping, and workflow-output logic used by the
-# `just delta*` recipes and the CI `delta` job is exercised directly here: Read-DeltaAffectedPackage
+# `just delta*` recipes and CI preparation is exercised directly here: Read-DeltaAffectedPackage
 # against realistic `cargo delta run` JSON (including the "nothing affected" and
 # malformed-but-tolerated shapes that must not throw under strict mode), Get-DeltaOutput against
 # the three CI step outputs it produces, and Get-DeltaWorkflowOutput against workflow branching.

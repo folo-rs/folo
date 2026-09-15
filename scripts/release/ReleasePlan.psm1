@@ -430,7 +430,7 @@ function Invoke-ApplyReleasePlan {
 }
 
 function Invoke-ValidateVersions {
-    # Publish CI targets before checking so downstream validation also runs on a rejected plan.
+    # Publish report-selected CI targets alongside the version-readiness verdict.
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
         Justification = 'Names the plural just validate-versions entry point.')]
     [CmdletBinding()]
