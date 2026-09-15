@@ -72,6 +72,12 @@ Step summaries fit GitHub's upload limit including the authoritative final resul
 and exit code. Diagnostic truncation is visible and retains references to complete
 artifacts; it does not change the check verdict.
 
+Failed-run issues retain a bounded excerpt and direct diagnostic links for every
+unsuccessful job, not whole verbose summaries. Omitted diagnostic text is explicit.
+Publication is paced and resumable: retries retain the same attempt's report and
+already-published sections, even if the original logs later expire. Known throttling
+receives bounded backoff; an ambiguous write is not blindly repeated.
+
 An empty mutation shard is explicitly reported as no work, not a passing baseline.
 The shared mutation recipe runs cargo-mutants' baseline for nonempty shards.
 Missing output is not proof of an empty shard. Reproduction instructions preserve
