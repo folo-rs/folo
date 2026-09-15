@@ -902,7 +902,7 @@ mod tests {
         for report in [&combined, &merged] {
             let operation = report.operations.get("work").unwrap();
 
-            // sum(iterations * total) / sum(iterations^2), with exact binary results.
+            // sum(iterations * span_total) / sum(iterations^2), with exact binary results.
             assert_eq!(operation.bytes(), Some(5.0));
             assert_eq!(operation.allocations(), Some(2.5));
             assert_eq!(operation.total_bytes_allocated(), 24);
