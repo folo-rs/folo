@@ -308,11 +308,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
 
             // A missing -C directory fails inside Git, after the process has spawned.
-            assert!(
-                run_git(&dir.path().join("missing"), &["status"])
-                    .await
-                    .is_err()
-            );
+            _ = run_git(&dir.path().join("missing"), &["status"])
+                .await
+                .unwrap_err();
         });
     }
 
@@ -368,11 +366,9 @@ mod tests {
 
             // An empty stream avoids a broken-pipe write racing with Git's rejection of the
             // missing -C directory. The error must come from the completed subprocess.
-            assert!(
-                import_stream(&dir.path().join("missing"), &dir.path().join("marks"), b"")
-                    .await
-                    .is_err()
-            );
+            _ = import_stream(&dir.path().join("missing"), &dir.path().join("marks"), b"")
+                .await
+                .unwrap_err();
         });
     }
 
@@ -410,7 +406,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let marks_path = dir.path().join("marks");
 
-            assert!(read_marks(&marks_path).await.is_err());
+            _ = read_marks(&marks_path).await.unwrap_err();
             tokio::fs::write(&marks_path, "").await.unwrap();
             assert!(read_marks(&marks_path).await.unwrap().is_empty());
         });
