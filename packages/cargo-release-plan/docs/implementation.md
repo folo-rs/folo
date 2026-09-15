@@ -447,6 +447,13 @@ candidate again. Classification uses the same pinned release baseline throughout
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
 
+The convergence loop is separate from the callback that rewrites manifests,
+resolves offline, classifies and captures each pass. It returns only when both
+version consequences and captured file contents are unchanged. Library tests
+drive successive resolver outputs through this same loop, including changing
+files with unchanged version decisions, before any final evidence verification.
+The stable pass supplies both the retained artifacts and their classification.
+
 Cycle history retains a Git object digest for each complete version/artifact
 state rather than retaining serialized lockfiles and manifests for every pass.
 Input fingerprint fields use fixed-width little-endian lengths so changing the

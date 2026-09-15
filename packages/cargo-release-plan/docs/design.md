@@ -281,7 +281,9 @@ describe that prepared state.
 Preview applies candidate versions and requirement rewrites in a disposable
 workspace and resolves there under the same offline policy. It classifies the
 prospective tree against the fixed release baseline and expands release effects
-until versions and resolution agree. Transitive binary lockfile effects and
+until versions and captured manifest/lockfile contents are both stable.
+A repeated non-final state is a resolution error, not a completed preview.
+Transitive binary lockfile effects and
 re-selection among already-locked dependency versions therefore appear before
 application, not as a request for a second versioning pass.
 

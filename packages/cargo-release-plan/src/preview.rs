@@ -86,29 +86,25 @@ pub(crate) fn run_preview(
         inputs.verify(manifest, None).map(|_| ())
     })?;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let initial = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
-    let mut resolved = resolve_plan(
+    let mut classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+    let resolved = resolve_plan(
         &plan,
-        &initial.work_tree.groups,
-        &initial.work_tree.target_versions(),
+        &classification.work_tree.groups,
+        &classification.work_tree.target_versions(),
         verbose,
     )?;
-    require_semantic_decisions(&initial.packages, &resolved)?;
+    require_semantic_decisions(&classification.packages, &resolved)?;
 
-    // Each pass must either add a version consequence or change the resolved artifact.
-    // Remember actual states, rather than imposing an arbitrary iteration deadline.
-    let mut visited = BTreeSet::new();
-    let mut previous_files = Vec::new();
-    loop {
+    let (resolved, files) = resolve_until_stable(resolved, &prospective.root, |resolved| {
         let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
-        for edit in compute_edits(&work_tree, &resolved, verbose)? {
+        for edit in compute_edits(&work_tree, resolved, verbose)? {
             if edit.original != edit.updated {
                 fs::write(&edit.path, edit.updated)
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
             }
         }
         prospective.resolve(verbose)?;
-        let classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+        classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
         let files = prospective.artifacts(&prepared.inputs)?;
         let mut expanded = resolved.clone();
         add_consequences(
@@ -117,41 +113,58 @@ pub(crate) fn run_preview(
             &classification.work_tree,
             &mut expanded,
         )?;
+        Ok((expanded, files))
+    })?;
+    let (passed, message, _) = run_check(
+        Some(&prepared.inputs.base),
+        &prospective.manifest,
+        CheckFormat::Text,
+        false,
+        verbose,
+    )?;
+    require_complete_preview(passed, message)?;
+    prepared.inputs.verify(manifest, None)?;
+    let final_digest = prepared.inputs.final_digest(&files)?;
+    let evidence_manifest_path = prospective.retain(&output, prepared.inputs.root())?;
+    prepared
+        .inputs
+        .verify_candidate(&evidence_manifest_path, &final_digest)?;
+    let mut plan = explicit_plan(&resolved);
+    plan.resolved = Some(ResolvedState {
+        final_digest,
+        versions: resolved
+            .packages
+            .iter()
+            .map(|(name, version)| (name.clone(), version.to_string()))
+            .collect(),
+        inputs: prepared.inputs,
+        files,
+        evidence_manifest_path,
+    });
+    write_report(&output, &classification)?;
+    write_json(&output.join("plan.json"), &plan)?;
+    Ok(format!(
+        "Wrote complete resolved plan to {}",
+        output.join("plan.json").display()
+    ))
+}
+
+fn resolve_until_stable(
+    mut resolved: ResolvedVersions,
+    root: &Path,
+    mut resolve: impl FnMut(&ResolvedVersions) -> Result<(ResolvedVersions, Vec<Artifact>), AppError>,
+) -> Result<(ResolvedVersions, Vec<Artifact>), AppError> {
+    // The callback owns rewriting, offline resolution and recapture; this loop owns convergence.
+    // Ref: docs/implementation.md, "Prepared and prospective resolution".
+    let mut visited = BTreeSet::new();
+    let mut previous_files = Vec::new();
+    loop {
+        let (expanded, files) = resolve(&resolved)?;
         if expanded == resolved && files == previous_files {
-            let (passed, message, _) = run_check(
-                Some(&prepared.inputs.base),
-                &prospective.manifest,
-                CheckFormat::Text,
-                false,
-                verbose,
-            )?;
-            require_complete_preview(passed, message)?;
-            prepared.inputs.verify(manifest, None)?;
-            let final_digest = prepared.inputs.final_digest(&files)?;
-            let evidence_manifest_path = prospective.retain(&output, prepared.inputs.root())?;
-            prepared
-                .inputs
-                .verify_candidate(&evidence_manifest_path, &final_digest)?;
-            let mut plan = explicit_plan(&resolved);
-            plan.resolved = Some(ResolvedState {
-                final_digest,
-                versions: resolved
-                    .packages
-                    .iter()
-                    .map(|(name, version)| (name.clone(), version.to_string()))
-                    .collect(),
-                inputs: prepared.inputs,
-                files,
-                evidence_manifest_path,
-            });
-            write_report(&output, &classification)?;
-            write_json(&output.join("plan.json"), &plan)?;
-            return Ok(format!(
-                "Wrote complete resolved plan to {}",
-                output.join("plan.json").display()
-            ));
+            return Ok((resolved, files));
         }
-        record_state(&mut visited, &expanded, &files, &prospective.root)?;
+        // Remember actual states rather than imposing an arbitrary iteration deadline.
+        record_state(&mut visited, &expanded, &files, root)?;
         previous_files = files;
         resolved = expanded;
     }
@@ -398,6 +411,7 @@ struct ResolutionCycle;
 mod tests {
     use std::cell::Cell;
     use std::collections::HashSet;
+    use std::iter;
     use std::path::PathBuf;
 
     use serde_json::{Value, json};
@@ -410,6 +424,148 @@ mod tests {
     use crate::lockfile::InstallationGraph;
     use crate::metadata::{DepKind, ExactDependency, ReportedDep, VersionTarget};
     use crate::resolved::StaleInputs;
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "captures owned files and hashes convergence states with Git"
+    )]
+    fn resolution_waits_for_stable_captured_files_without_changing_versions() {
+        let directory = tempdir().unwrap();
+        let lockfile = directory.path().join("Cargo.lock");
+        let initial = ResolvedVersions {
+            packages: BTreeMap::from([("tool".to_owned(), Version::new(1, 0, 1))]),
+        };
+        // Model successive offline resolver writes, including a lockfile-only change.
+        // Exhausting these expected passes fails immediately rather than timing out.
+        let mut writes = [
+            "first resolution",
+            "reselected dependency",
+            "reselected dependency",
+        ]
+        .into_iter();
+        let (resolved, files) =
+            resolve_until_stable(initial.clone(), directory.path(), |resolved| {
+                assert_eq!(resolved, &initial);
+                fs::write(&lockfile, writes.next().unwrap()).unwrap();
+                Ok((
+                    resolved.clone(),
+                    vec![Artifact {
+                        path: "Cargo.lock".into(),
+                        contents: fs::read_to_string(&lockfile).unwrap(),
+                    }],
+                ))
+            })
+            .unwrap();
+        assert!(writes.next().is_none());
+        assert_eq!(resolved, initial);
+        assert_eq!(
+            files,
+            [Artifact {
+                path: "Cargo.lock".into(),
+                contents: "reselected dependency".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
+    fn resolution_applies_new_versions_even_when_captured_files_are_stable() {
+        let directory = tempdir().unwrap();
+        let initial = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        let expanded = ResolvedVersions {
+            packages: BTreeMap::from([("tool".to_owned(), Version::new(1, 0, 1))]),
+        };
+        let files = vec![Artifact {
+            path: "Cargo.lock".into(),
+            contents: "resolved dependency".to_owned(),
+        }];
+        let mut passes = [
+            (&initial, &initial),
+            (&initial, &expanded),
+            (&expanded, &expanded),
+        ]
+        .into_iter();
+        let (resolved, captured) =
+            resolve_until_stable(initial.clone(), directory.path(), |resolved| {
+                let (expected, next) = passes.next().unwrap();
+                assert_eq!(resolved, expected);
+                Ok((next.clone(), files.clone()))
+            })
+            .unwrap();
+        assert!(passes.next().is_none());
+        assert_eq!(resolved, expanded);
+        assert_eq!(captured, files);
+    }
+
+    #[test]
+    fn resolution_accepts_an_unchanged_empty_artifact_set() {
+        let initial = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        let mut passes = iter::once(());
+        let (resolved, files) =
+            resolve_until_stable(initial.clone(), Path::new("unused"), |resolved| {
+                passes.next().unwrap();
+                Ok((resolved.clone(), Vec::new()))
+            })
+            .unwrap();
+        assert!(passes.next().is_none());
+        assert_eq!(resolved, initial);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
+    fn resolution_rejects_a_captured_file_cycle_without_accepting_stable_versions() {
+        let directory = tempdir().unwrap();
+        let initial = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        let mut contents = ["first resolution", "other resolution", "first resolution"].into_iter();
+        let error = resolve_until_stable(initial.clone(), directory.path(), |resolved| {
+            assert_eq!(resolved, &initial);
+            Ok((
+                resolved.clone(),
+                vec![Artifact {
+                    path: "Cargo.lock".into(),
+                    contents: contents.next().unwrap().to_owned(),
+                }],
+            ))
+        })
+        .unwrap_err();
+        assert!(error.find_source::<ResolutionCycle>().is_some());
+        assert!(contents.next().is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
+    fn resolution_propagates_a_failed_pass_instead_of_accepting_previous_files() {
+        let directory = tempdir().unwrap();
+        let initial = ResolvedVersions {
+            packages: BTreeMap::new(),
+        };
+        let mut passes = [
+            Ok(vec![Artifact {
+                path: "Cargo.lock".into(),
+                contents: "incomplete resolution".to_owned(),
+            }]),
+            Err(StaleInputs::new().into()),
+        ]
+        .into_iter();
+        let error = resolve_until_stable(initial.clone(), directory.path(), |resolved| {
+            assert_eq!(resolved, &initial);
+            passes
+                .next()
+                .unwrap()
+                .map(|files| (resolved.clone(), files))
+        })
+        .unwrap_err();
+        assert!(error.find_source::<StaleInputs>().is_some());
+        assert!(passes.next().is_none());
+    }
 
     fn work_tree(packages: &[PackageClass]) -> WorkTree {
         WorkTree {
