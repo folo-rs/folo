@@ -87,6 +87,14 @@ Use normal prose, not API blobs, hidden records or mandatory JSON. Preserve enou
 useful diagnostics on GitHub that log expiry does not erase the explanation.
 Triage need not solve the repair or prescribe a speculative patch.
 
+When evidence supports it, note likely repair packages separately from the wider
+failed-check scope, including known version-group or dependent-package effects.
+Link any prerequisite issue/PR and explain the dependency; sharing a package alone
+does not establish one. Mark tentative scope and relationships as uncertain.
+These ordinary notes support intake's overlap/stacking assessment, not package
+reservations, version assignments or authorization to start a repair. Do not
+require a complete release plan or invent dependencies to fill a template.
+
 Add `needs-human` for permissions, policy decisions or external intervention,
 explaining the needed action. Infrastructure recovery may resolve a problem with
 an explanation and applicable successful rerun; do not manufacture a source patch.
