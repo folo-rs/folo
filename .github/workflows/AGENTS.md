@@ -43,7 +43,9 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 - Keep `validate-versions` unconditional, including its live binstall metadata and SemVer checks.
   It generates release state for every publishable package against its version anchor, so the
   PR's changed package set cannot skip a package that already needed an increment.
-- Azure OIDC jobs (`test-azure`, `test-azure-gh`) must not run on `merge_group`. The test
+- Use sequential steps for checks sharing a job and stop at the first failure. Keep
+  failure-time artifact uploads and resource cleanup, not additional validation passes.
+- The Azure OIDC job (`test-azure`) must not run on `merge_group`. The test
   identity's federated subjects are `pull_request` and the `main` branch ref only.
 - A workflow edit must consume the consumer-contract package set from the release-plan report
   rather than restating it in YAML. A package states this in its own manifest by declaring

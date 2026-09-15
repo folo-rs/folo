@@ -34,7 +34,7 @@ GitHub-hosted workflows do not invoke AI. Final approval and merge remain human.
 **Standard validation** runs the ordinary shallow PR, push and merge-queue checks.
 **Deep validation** runs the full deep suite at the main commit selected by its event.
 Deep validation covers ordinary Miri, many-seed Miri, mutation testing and careful checks.
-It also runs release-profile Clippy (`clippy-release`), release builds (`build-release`),
+It also runs release-profile Clippy and builds (`build-release`),
 example execution (`run-examples`),
 dependency default-feature policy checks (`default-features-check`), feature-powerset
 compilation (`hack`), unused-dependency checks (`machete`) and ARM64 tests and benchmark
@@ -95,9 +95,9 @@ Validation groups short, related checks that share a runner environment into nam
 avoiding queue and setup costs that outweigh the checks themselves. Preparation shares a
 checkout and runner; version readiness and API compatibility share their release-validation
 environment. Independent expensive checks retain parallel jobs when that improves feedback
-time. Separate steps preserve failure attribution, and a failed check must not suppress
-independent diagnostics within its job. The local recipes define the local
-check suites, while workflow jobs own execution cadence, platform selection,
+time. Separate steps preserve failure attribution, and each job stops checking at its first
+failure. Artifact collection and resource cleanup still run after failure. The local recipes
+define the local check suites, while workflow jobs own execution cadence, platform selection,
 prerequisites and evidence capture. Clippy stands in for a bare `cargo check` here: Clippy compiles the code as a
 prerequisite to linting it, so a standalone `check` job would only re-prove what a green
 Clippy already guarantees.
@@ -126,8 +126,8 @@ before downstream checks can run or be accepted as intentionally skipped.
 Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
 base. Live binstall metadata validation accompanies it because Cargo target discovery can
-change release obligations without a manifest edit. API compatibility runs in the same job
-using the report's consumer-contract selection, including after a version-readiness failure.
+change release obligations without a manifest edit. API compatibility follows successful
+version readiness in the same job using the report's consumer-contract selection.
 
 ## Platform strategy
 
@@ -157,7 +157,7 @@ validation's pruned checks can fail,
 that event — unlike a PR — files a tracking issue (see Failure alerting).
 
 The event split uses a `fromJSON` conditional matrix keyed on `github.event_name == 'push'`
-for doctests and docs: the full set on push, the pruned set on a PR.
+for the combined docs/doctest job: the full set on push, the pruned set on a PR.
 A `merge_group` (merge queue) run uses that same pruned set: the condition is false for
 anything that is not `push`. Do not rewrite them as `!= 'pull_request'`, or a queue entry
 would take the full matrix. Push to `main` remains the backstop.
@@ -363,6 +363,11 @@ can never silently pass by testing nothing. All Azure authentication uses GitHub
 workload-identity federation — no long-lived secret is stored — and is gated to same-repo
 runs, since a fork cannot federate into the tenant.
 
+Real-Azure authentication modes share a job and run sequentially against independently
+created test containers. Each pass selects its credential through step-local configuration;
+the application's self-minting mode does not use the developer session for storage access.
+The shared login remains available for test cleanup.
+
 ## Federated identity
 
 Every Azure sign-in in these workflows uses GitHub OIDC workload-identity federation, so no
@@ -391,11 +396,11 @@ Two managed identities exist, each registered with exactly the subjects its even
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
 
-`merge_group` is not a trusted subject. Queue runs skip `test-azure` and `test-azure-gh`
+`merge_group` is not a trusted subject. Queue runs skip `test-azure`
 rather than attempting an exchange that cannot succeed.
 
 The **prod** identity backs history collection and the PR benchmark workflow; the **test**
-identity backs the Azure-backend test jobs against a throwaway account. Both trust `main` and
+identity backs the Azure-backend test job against a throwaway account. Both trust `main` and
 `pull_request` so each identity's on-main and on-PR consumers can sign in. Granting the prod
 identity a `pull_request` credential is a deliberate tradeoff: it widens prod's write surface
 from "only pushes to `main`" to "any same-repo PR run", accepting a larger blast radius in

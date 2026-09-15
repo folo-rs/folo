@@ -591,14 +591,9 @@ closure means this set is not always small, so the job runs in parallel with the
 validation rather than gating it. An empty `semver_targets` is a successful skip, not a
 workspace-wide comparison.
 
-The compatibility steps run inside `validate-versions` after successful environment setup.
-Their `!cancelled()` guards allow execution after earlier validation failures, so a failing
-version check still surfaces insufficient-increment findings in the same round trip rather than
-hiding them behind a second push, while a cancelled run stops here instead of holding a runner.
-`always()` is reserved
-for the `required-checks` fan-in, where classifying failed and cancelled dependencies is the
-job's entire purpose. The comparison additionally requires a successful canary; no step uses
-`continue-on-error`, so earlier failures remain failures of the combined job.
+The compatibility steps run inside `validate-versions` after binstall validation and version
+readiness succeed. The canary precedes the comparison, and any failure stops later checks.
+The `required-checks` fan-in still classifies the combined job even when it fails or is cancelled.
 
 `cargo-release-plan` checks that an increment *happened*; `cargo-semver-checks` checks that it was
 *big enough* — it compares against the latest crates.io release and fails when the declared version

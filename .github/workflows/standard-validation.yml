@@ -122,11 +122,12 @@ jobs:
           "domains=$(ConvertTo-Json -InputObject $domains -Compress)" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
-  # Run the union of selected domains once. An empty Cargo delta cannot discard script inputs.
+  # Script tests and static analysis share setup, retaining their independent input selections.
+  # An empty Cargo delta cannot discard script inputs.
   # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
   test-scripts:
     needs: prepare
-    if: needs.prepare.outputs.script_domains != '[]'
+    if: needs.prepare.outputs.script_domains != '[]' || fromJSON(needs.prepare.outputs.plan).script_analysis
     runs-on: ubuntu-latest
 
     steps:
@@ -136,7 +137,17 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
+      - name: Validate scripts (PSScriptAnalyzer)
+        if: fromJSON(needs.prepare.outputs.plan).script_analysis
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just validate-scripts
+
       - name: Run script test suites
+        if: needs.prepare.outputs.script_domains != '[]'
         shell: pwsh
         env:
           SCRIPT_DOMAINS: ${{ needs.prepare.outputs.script_domains }}
@@ -147,17 +158,6 @@ jobs:
           $domains = @(ConvertFrom-Json -InputObject $env:SCRIPT_DOMAINS)
           just test-scripts ($domains -join ' ')
 
-  # Static analysis has script/configuration inputs, not Cargo-package inputs.
-  # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
-  validate-scripts:
-    needs: prepare
-    if: fromJSON(needs.prepare.outputs.plan).script_analysis
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-environment
-      - name: Validate scripts (PSScriptAnalyzer)
-        run: just validate-scripts
       - name: Retain script-analysis diagnostics
         # Preserve native engine/inner exceptions and file/rule context without relaxing the gate.
         # Setup failures may occur before the analyzer creates any diagnostic files.
@@ -193,8 +193,7 @@ jobs:
 
   # Workspace-wide release-plan generation: every publishable package's released content
   # versus its version anchor. Delta cannot narrow that set, so this job is not gated on
-  # skip_all. Version readiness and compatibility share setup but retain separate failing
-  # steps, so an insufficient increment is reported even when version readiness fails.
+  # skip_all. Version readiness and compatibility share setup and stop at the first failure.
   # Ref: .github/workflows/implementation.md#release-validation.
   validate-versions:
     runs-on: ubuntu-latest
@@ -208,7 +207,6 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
-        id: setup
         uses: ./.github/actions/setup-environment
 
       # Live Cargo metadata belongs with unconditional release validation: target autodiscovery
@@ -223,7 +221,6 @@ jobs:
           just validate-binstall
 
       - name: Check package versions
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         id: check
         env:
           # The release baseline is the tip of the branch releases are made from, which is
@@ -239,12 +236,9 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just validate-versions
 
-      # A rejected version plan still supplies consumer-contract targets. Run the canary
-      # after earlier validation failures, but never compare APIs with a broken tool.
+      # Never interpret a broken compatibility tool as evidence of no breaking changes.
       # Ref: .github/workflows/implementation.md#release-validation.
       - name: Verify cargo-semver-checks can run
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        id: semver-tool
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -255,7 +249,6 @@ jobs:
       # The report owns consumer-contract selection, including version-group closure.
       # The recipe checks all features and treats an empty selection as no comparison.
       - name: Run cargo-semver-checks on releasing packages
-        if: ${{ !cancelled() && steps.semver-tool.outcome == 'success' }}
         shell: pwsh
         env:
           SEMVER_TARGETS: ${{ steps.check.outputs.semver_targets }}
@@ -264,22 +257,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           just package="$env:SEMVER_TARGETS" semver-checks
-
-  # Formatting is platform-agnostic, so run only on Ubuntu for efficiency.
-  format-check:
-    needs: [prepare]
-    if: needs.prepare.outputs.skip_all != 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run format-check
-        run: just format-check
 
   # Fails when a library's public API exposes an external type that is not on its allow-list, so an
   # accidental addition to the external surface is caught in review. Uses an
@@ -305,6 +282,8 @@ jobs:
       - name: Run check-external-types on ${{ matrix.platform }}
         run: just package="${{ needs.prepare.outputs.packages }}" check-external-types
 
+  # Formatting, dev Clippy and minimum-dependency compilation share each platform's environment.
+  # Ref: .github/workflows/implementation.md#standard-validation-structure.
   clippy-dev:
     needs: [prepare]
     if: needs.prepare.outputs.skip_all != 'true'
@@ -322,8 +301,33 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
+      # Formatting is platform-independent; the Ubuntu leg performs the workspace-wide check.
+      - name: Run format-check
+        if: matrix.platform == 'ubuntu-latest'
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just format-check
+
       - name: Run clippy dev on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" clippy dev
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" clippy dev
+
+      # Freezing rewrites manifests and the lockfile, so nothing using the original inputs follows.
+      # Ref: .github/workflows/implementation.md#standard-validation-structure.
+      - name: Run check-frozen on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" check-frozen
 
   # The x86_64 test pass (ubuntu-latest and windows-latest - both x86_64). Runs the full
   # test suite (unit, integration and example tests) with coverage instrumentation, so the
@@ -403,30 +407,9 @@ jobs:
       - name: Run benchmark targets on ${{ matrix.platform }}
         run: just package="${{ needs.prepare.outputs.packages }}" test-benches
 
-  # macOS is dropped on PRs (a doctest pass on macOS is rarely informative); the full
-  # three-platform matrix runs on push to `main`.
-  test-docs:
-    needs: [prepare]
-    if: needs.prepare.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run test-docs on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" test-docs
-
-  # macOS is dropped on PRs (rustdoc output does not vary by platform, so a macOS docs build
-  # is rarely informative); the full three-platform matrix runs on push to `main`.
+  # Documentation builds and doctests share setup. The macOS leg adds little on PRs, so
+  # the full three-platform matrix runs only on push to main.
+  # Ref: .github/workflows/implementation.md#standard-validation-structure.
   docs:
     needs: [prepare]
     if: needs.prepare.outputs.skip_all != 'true'
@@ -445,36 +428,28 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run docs on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" docs
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" docs
 
       - name: Run docs-default-features on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" docs-default-features
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" docs-default-features
 
-  # Verifies the workspace still compiles at the minimum dependency versions declared in
-  # Cargo.toml (our published minimum-version promises), rather than the higher versions
-  # pinned in Cargo.lock. The `check-frozen` recipe freezes every workspace dependency to
-  # its declared minimum, regenerates the lockfile, and runs `check`. Gated behind clippy-dev
-  # because checking the frozen minimums is pointless if the code does not even build with
-  # the normal lockfile versions.
-  check-frozen:
-    needs: [prepare, clippy-dev]
-    if: needs.prepare.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run check-frozen on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" check-frozen
+      - name: Run test-docs on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" test-docs
 
   # Azure Blob storage backend tests against the Azurite emulator.
   #
@@ -540,36 +515,10 @@ jobs:
           flags: azure
           fail_ci_if_error: true
 
-  # Azure Blob storage backend tests against a real Azure Storage account.
-  #
-  # Complements `test-azurite` by exercising the Microsoft Entra ID authentication
-  # path that the emulator (account-key/SAS) never touches: a real Storage account
-  # with shared-key access disabled, reached over HTTPS, authenticated through
-  # GitHub OIDC workload identity federation - no stored secret. Each test creates a
-  # fresh blob container and deletes it when it finishes (even on panic); the final
-  # `if: always()` sweep is a backstop for a container a crashed run might leave.
-  #
-  # Gated so it only runs when federation can succeed:
-  #   * package-gated to cargo-bench-history (same gate as test-azurite);
-  #   * same-repo only - a fork PR cannot mint an OIDC token for our tenant, so it
-  #     would fail federation; the condition lets fork PRs skip cleanly instead;
-  #   * not merge_group - the test identity's federated subjects are pull_request and
-  #     the main branch ref, so a queue OIDC token cannot exchange.
-  # The Azure identifiers it needs are committed (non-secret) in constants.env, the
-  # same source `just test-azure` reads locally, so local and CI target the same
-  # account. The `just test-azure` recipe sets ENABLE_AZURE=1, which is what actually
-  # opts the real-Azure tests in (they self-skip without it) and turns a missing
-  # account into a hard failure, so once the job runs it can never silently degrade
-  # into skipping every test.
-  #
-  # Single-platform (Linux) by choice, not limitation: the Azure Blob backend is
-  # OS-agnostic network I/O, so one platform fully covers it and Linux is the
-  # cheapest runner. Unlike test-azurite it collects no coverage (azurite already
-  # covers azure.rs); its value is proving the real Entra + real Blob endpoint
-  # round-trip end to end.
-  #
-  # The account, managed identity and federated credentials are scripted/Bicep'd in
-  # infra/azure-bench-history-test/ - see that directory's README to deploy or re-create.
+  # The same real-Azure scenarios exercise developer credentials and self-minted GitHub OIDC
+  # credentials sequentially, sharing compilation and login. Only same-repository PR/main
+  # subjects can federate; queue and fork runs skip. Azurite supplies coverage separately.
+  # Ref: .github/workflows/implementation.md#real-azure-authentication.
   test-azure:
     needs: prepare
     if: >-
@@ -578,14 +527,7 @@ jobs:
       && github.event_name != 'merge_group'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed
-    # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v3` hands
-    # that token to Azure, which matches it against the managed identity's federated
-    # credentials (see infra/azure-bench-history-test/main.bicep) and issues an access
-    # token - so CI authenticates with no stored secret. The default GITHUB_TOKEN
-    # cannot request an OIDC token unless this permission is granted explicitly (and
-    # fork PRs cannot get it at all, hence the same-repo gate above). `contents: read`
-    # is the minimum the checkout needs.
+    # Both azure/login and the application's self-minting credential need GitHub OIDC access.
     permissions:
       id-token: write
       contents: read
@@ -597,13 +539,16 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      # Surface the non-secret AZURE_* identity values and the account name from
-      # constants.env (the same source `just test-azure` reads) as job env vars, so
-      # the azure/login inputs and the cleanup step can reference them without
-      # duplicating values in repo Variables. Each line is `KEY=value`; comments skip.
+      # Reuse the committed identity/account values consumed by local test recipes.
       - name: Load Azure identifiers from constants.env
-        shell: bash
-        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Get-Content constants.env |
+            Where-Object { $_ -match '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' } |
+            Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 
       - name: Sign in to Azure (OIDC workload identity federation)
         uses: azure/login@v3
@@ -612,94 +557,38 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Run real-Azure storage tests
-        run: just test-azure
-
-      - name: Delete leaked test containers
-        if: always()
+      - name: Run real-Azure storage tests via the developer credential
+        env:
+          AZURE_CLIENT_ID: ""
         shell: pwsh
-        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
-        # which the load step above put into the job env. Each test already deletes its
-        # own container when it finishes, so this backstop only needs to sweep containers
-        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
-        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
-        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
-        # leak is older than the cutoff and gets swept here or on a later run.
-        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just test-azure
 
-  # Variant of test-azure that exercises cargo-bench-history's SELF-MINTING GitHub
-  # OIDC credential - the exact credential the prod collection (bench-history.yml)
-  # depends on - against the real test account. The unit tests in storage/github_oidc.rs
-  # stub the HTTP exchange, and test-azure above takes the local-az DeveloperToolsCredential
-  # fallback, so without this job nothing would prove the self-minting path actually
-  # round-trips real GitHub OIDC -> Entra -> Blob until the post-merge collection run.
-  #
-  # The only difference from test-azure is exporting AZURE_CLIENT_ID: setting it is the
-  # switch that makes from_config build a ClientAssertionCredential (which mints a fresh
-  # OIDC JWT per token exchange) instead of the DeveloperToolsCredential it would use
-  # otherwise. azure/login is retained ONLY so the test harness's container cleanup
-  # (which shells out to `az`) works; the code under test ignores the az session once
-  # AZURE_CLIENT_ID is set.
-  test-azure-gh:
-    needs: prepare
-    if: >-
-      needs.prepare.outputs.skip_all != 'true'
-      && (needs.prepare.outputs.packages == '' || contains(fromJson(needs.prepare.outputs.packages_json), 'cargo-bench-history'))
-      && github.event_name != 'merge_group'
-      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    # `id-token: write` injects the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN values that the
-    # tool itself reads to mint OIDC assertions on demand (the prod-critical path), and
-    # the test identity's `pull_request` federated credential lets same-repo PR runs
-    # federate in. Fork PRs cannot get an OIDC token for our tenant, hence the same-repo
-    # gate above. merge_group is skipped for the same reason as test-azure: the
-    # federated subjects do not cover queue refs. `contents: read` is the minimum the
-    # checkout needs.
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Load Azure identifiers from constants.env
-        shell: bash
-        run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
-
-      # Setting AZURE_CLIENT_ID (to the test identity's client id) is what makes
-      # cargo-bench-history take its self-minting OIDC path. AZURE_TEST_CLIENT_ID was
-      # placed in the job env by the previous step, so it is readable here.
-      - name: Select the self-minting OIDC credential
-        shell: bash
-        run: echo "AZURE_CLIENT_ID=$AZURE_TEST_CLIENT_ID" >> "$GITHUB_ENV"
-
-      # The tool self-mints regardless of this login; it exists only so the test
-      # harness's `az`-based container cleanup has a session to use.
-      - name: Sign in to Azure (for harness container cleanup only)
-        uses: azure/login@v3
-        with:
-          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
+      # This step opts into the production credential; the Azure CLI login serves cleanup only.
+      # Ref: .github/workflows/implementation.md#real-azure-authentication.
       - name: Run real-Azure storage tests via the self-minting OIDC credential
-        run: just test-azure
+        env:
+          AZURE_CLIENT_ID: ${{ env.AZURE_TEST_CLIENT_ID }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just test-azure
 
       - name: Delete leaked test containers
         if: always()
         shell: pwsh
-        # cleanup-containers.ps1 defaults its account to BENCH_HISTORY_TEST_AZURE_ACCOUNT,
-        # which the load step above put into the job env. Each test already deletes its
-        # own container when it finishes, so this backstop only needs to sweep containers
-        # leaked by a crashed or timed-out run. test-azure and test-azure-gh run
-        # concurrently against the same account, so -MinAgeMinutes keeps this sweep from
-        # deleting the sibling job's still-in-use (freshly written) containers; a genuine
-        # leak is older than the cutoff and gets swept here or on a later run.
-        run: ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
+        # Concurrent workflow runs share the account; preserve their recently written containers.
+        # Ref: .github/workflows/implementation.md#real-azure-authentication.
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          ./infra/azure-bench-history-test/cleanup-containers.ps1 -MinAgeMinutes 180
 
   # Releases Codecov's coverage notifications once every coverage upload for this
   # commit has landed.
@@ -715,7 +604,7 @@ jobs:
   # full rationale and why this is preferred over a hardcoded `after_n_builds`).
   #
   # It depends on `test-x64` and `test-azurite` (the only coverage producers;
-  # `test-azure` / `test-azure-gh` upload none). The `!cancelled()` status function lets
+  # `test-azure` uploads none). The `!cancelled()` status function lets
   # it run even when `test-azurite` is skipped - without a status function a skipped
   # dependency would skip this job too. It releases notifications only when every expected
   # upload actually landed: `test-x64` must have succeeded, and `test-azurite` must have
@@ -764,19 +653,14 @@ jobs:
     needs:
       - prepare
       - test-scripts
-      - validate-scripts
       - validate-workflows
       - validate-versions
-      - format-check
       - check-external-types
       - clippy-dev
       - test-x64
-      - test-docs
       - docs
-      - check-frozen
       - test-azurite
       - test-azure
-      - test-azure-gh
     runs-on: ubuntu-latest
     steps:
       # No setup-environment: this job only classifies `needs` results. Installing the
@@ -819,19 +703,14 @@ jobs:
     needs:
       - prepare
       - test-scripts
-      - validate-scripts
       - validate-workflows
       - validate-versions
-      - format-check
       - check-external-types
       - clippy-dev
       - test-x64
-      - test-docs
       - docs
-      - check-frozen
       - test-azurite
       - test-azure
-      - test-azure-gh
       - coverage-notify
     if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

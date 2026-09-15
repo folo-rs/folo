@@ -35,11 +35,17 @@ target are exactly `required-checks`.
 
 ## Standard validation structure
 
-`standard-validation.yml` groups short preparation and release-validation work into shared
-jobs while retaining parallel execution for independent checks. The `prepare` job publishes
-the affected-package set and the independent path plan, supplemented by native-helper package
+`standard-validation.yml` groups related checks into shared environments, with sequential
+steps that stop on the first failure. Independent jobs and platform legs retain parallel execution.
+The `prepare` job publishes the affected-package set and the independent path plan, supplemented by native-helper package
 impact for script integration tests. Release validation remains unconditional and independent
 of preparation, with separately reported steps in one environment.
+
+The `clippy-dev` matrix runs dev-profile Clippy followed by minimum-dependency compilation;
+its Ubuntu leg first checks workspace formatting. `check-frozen` runs last because it
+rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
+Each platform proceeds independently rather than waiting for other platforms' Clippy results.
+The `docs` matrix builds all-feature and default-feature documentation and then runs doctests.
 
 Pull requests and merge-queue entries use the pruned validation set. Pushes to `main` use the
 full set. Queue delta analysis takes the event's base commit so its comparison cannot drift
@@ -51,6 +57,18 @@ The Azurite coverage job runs both the CLI integration suite and the storage par
 adapter tests with a required emulator. Selecting only the CLI package would exercise
 production storage through commands but omit the adapter unit tests, which cover additional
 network paths. The combined selection contributes their coverage to the same Azure upload.
+
+### Real-Azure authentication
+
+`test-azure` runs `just test-azure` with the developer credential and then with the application's
+self-minting GitHub OIDC credential. Setup, compilation and `azure/login` are shared.
+An empty step-local `AZURE_CLIENT_ID` selects the developer credential; the self-minting
+step sets it to `AZURE_TEST_CLIENT_ID`. The latter ignores the Azure CLI session for application
+storage access, while test-container cleanup still uses that session.
+
+The job retains the same-repository and non-merge-queue gates required by the test identity.
+Each scenario creates its own container, and an always-run cleanup sweep collects older leaks.
+The age guard preserves recently written containers used by concurrent workflow runs.
 
 ### Non-Cargo change planning
 
@@ -79,6 +97,10 @@ scheduled tests that read workspace metadata. The resulting domain array is expl
 when empty. `test-scripts` runs that union once; `just test-scripts "book release"` is the local
 equivalent, while an omitted argument retains full discovery. Unknown domains or explicit
 directories containing no tests fail rather than producing a successful empty run.
+
+The `test-scripts` job also runs static analysis in the same environment. It is selected when
+either analysis or tests are needed, while each step keeps its own path/domain condition.
+Analysis runs first; diagnostics are uploaded even after a failure.
 
 Recipe files follow their automation responsibility: benchmark history and release commands
 have separate imports, while setup installers live beside the setup module. Workflow
@@ -142,11 +164,10 @@ Version/release plan section carry the human review of release impact.
 The unconditional `validate-versions` job shares one full-history checkout and environment
 across live binstall metadata validation, version readiness and semantic-version analysis.
 Release-target and archive-shape obligations follow Cargo's discovered binary targets,
-including source additions that do not edit a manifest. After successful setup, the version
-report still runs after a binstall failure. The SemVer canary and comparison likewise run
-after a version-check failure, consuming that step's consumer-contract targets directly.
-The comparison requires a successful canary, and cancellation stops further validation.
-Each failing step fails the combined job; no continuation converts a failure into success.
+including source additions that do not edit a manifest. Steps run in order: binstall validation,
+version readiness, the SemVer canary and the scoped comparison. The comparison consumes the
+version step's consumer-contract targets directly. Any failed step ends further validation
+and fails the combined job.
 
 Rust plan-generation tests assert properties of the generated plan over a matrix of report
 states, not only by testing individual guards. The properties are that every entry is well formed
@@ -271,10 +292,11 @@ reconstruct a test invocation or claim that a baseline ran.
 The full workflow executes every night, without persistent coverage receipts or
 successful-run reuse. Ordinary dependency/build caches remain available.
 
-The separate release-Clippy, release-build, example, dependency-policy, feature-powerset,
+The release-build, example, dependency-policy, feature-powerset,
 unused-dependency and ARM test jobs depend on the same main-only plan
 gate and run their Just recipes over the full workspace. They retain their own
-platform matrices; the ARM test job also provisions Valgrind for benchmark smoke
+platform matrices; the release-build job runs release-profile Clippy before building in the
+same environment. The ARM test job also provisions Valgrind for benchmark smoke
 tests and uploads its JUnit results to Codecov. Their failures are reported from
 Actions job logs rather than the deep-check wrapper's summary artifacts.
 

@@ -147,7 +147,6 @@ Describe 'Planned tooling results' {
         $script:needs = @{
             prepare = @{ result = 'success'; outputs = @{ packages_json = '[]'; script_domains = '[]' } }
             'test-scripts' = @{ result = 'skipped' }
-            'validate-scripts' = @{ result = 'skipped' }
             'validate-workflows' = @{ result = 'skipped' }
         }
         function Assert-PlannedResult {
@@ -162,13 +161,6 @@ Describe 'Planned tooling results' {
         $plan.workflows = $true
         { Assert-PlannedResult } | Should -Throw
         $needs['validate-workflows'].result = 'success'
-        { Assert-PlannedResult } | Should -Not -Throw
-    }
-
-    It 'requires script analysis when selected' {
-        $plan.script_analysis = $true
-        { Assert-PlannedResult } | Should -Throw
-        $needs['validate-scripts'].result = 'success'
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
@@ -190,8 +182,30 @@ Describe 'Planned tooling results' {
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
+    It 'requires the combined script job for analysis=<Analysis> and tests=<Tests>' -ForEach @(
+        @{ Analysis = $false; Tests = $false },
+        @{ Analysis = $true; Tests = $false },
+        @{ Analysis = $false; Tests = $true },
+        @{ Analysis = $true; Tests = $true }
+    ) {
+        $plan.script_analysis = $Analysis
+        if ($Tests) {
+            $plan.script_domains = @('book')
+            $needs.prepare.outputs.script_domains = '["book"]'
+        }
+        if ($Analysis -or $Tests) {
+            { Assert-PlannedResult } | Should -Throw
+        } else {
+            { Assert-PlannedResult } | Should -Not -Throw
+        }
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+        $needs['test-scripts'].result = 'failure'
+        { Assert-PlannedResult } | Should -Throw
+    }
+
     It 'rejects omitted conditional jobs even for a no-work plan' -ForEach @(
-        'test-scripts', 'validate-scripts', 'validate-workflows'
+        'test-scripts', 'validate-workflows'
     ) {
         $needs.Remove($_)
         { Assert-PlannedResult } | Should -Throw
