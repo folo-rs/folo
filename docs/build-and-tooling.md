@@ -67,9 +67,10 @@ Scheduled checks invoke the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes used locally. Recipes own the toolchains, test runners,
 helper preparation and check behavior; scheduling only selects platform, packages
 and shards and captures diagnostics.
-CI composes these commands into separately reported jobs
-and diagnostic-producing matrix entries rather than running one monolithic local
-recipe. Repair authors also run the particular deep checks needed to verify
+CI groups related commands into sequential steps in shared jobs and diagnostic-producing
+matrix entries rather than running one monolithic local recipe. A job stops checking on its
+first failure, while diagnostic collection and resource cleanup remain available.
+Repair authors also run the particular deep checks needed to verify
 their repair locally and link the results for review. Scheduling belongs to workflow orchestration, not
 to the definitions of the local recipes. To run just mutation testing, use
 `just package="foo bar" mutants`. It runs the unmutated baseline before testing
@@ -268,7 +269,7 @@ over everything under `scripts/`, gating on Error/Warning findings. The rule set
 `PSScriptAnalyzerSettings.psd1`, supplemented by repo-local custom rules in
 `scripts/analyzer/FoloAnalyzerRules.psm1` - which catch classes the built-in rules (and strict
 mode) miss, such as a `foreach` whose loop variable case-insensitively collides with the
-collection it enumerates. It runs as part of `just validate-local` and the CI `validate-scripts` job.
+collection it enumerates. It runs as part of `just validate-local` and the CI `test-scripts` job.
 Silence a genuine false positive with a justified
 `[Diagnostics.CodeAnalysis.SuppressMessageAttribute(...)]`, never by relaxing the gate; the tree
 is expected to be finding-free.

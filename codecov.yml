@@ -6,8 +6,8 @@
 #   * `test-azurite` — one extra `azure`-flagged upload, but ONLY when the
 #                      cargo-bench-history package is affected by the change.
 # The number of coverage uploads per commit therefore varies (one per platform,
-# plus the conditional azure upload). The `test-azure` / `test-azure-gh` jobs
-# upload no coverage, so they do not factor in here.
+# plus the conditional azure upload). The `test-azure` job uploads no coverage,
+# so it does not factor in here.
 #
 # By default Codecov re-computes and re-posts its commit status / PR comment after
 # every upload it receives. With several uploads trickling in, an early upload

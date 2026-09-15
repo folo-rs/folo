@@ -456,8 +456,9 @@ release set.
    best-effort `just check-never-published` advisory. When cargo-semver-checks fails to *run* —
    classically an installed copy too old for the toolchain's rustdoc JSON format — the result must
    never be read as "no breaking changes". `verify-semver-checks` is the canary for the skill and
-   for the CI `semver-checks` job. Before application, `check-increment-published` performs the exact
-   fail-closed publication check over the expanded plan before anything is applied.
+   for CI's compatibility step in `validate-versions`. Before application,
+   `check-increment-published` performs the exact fail-closed publication check over the expanded
+   plan before anything is applied.
 2. **Prepare and collect.** `just release-prepare <dir>` prepares offline dependency resolution,
    records its inputs, writes the release report, and then runs
    `cargo semver-checks --all-features` for affected publishable packages that declare a
@@ -523,34 +524,19 @@ close-companion stays pull-request-only.
 
 ### `validate-versions`
 
-The `validate-versions` job in `standard-validation.yml`. Its inputs are git history and manifests, not
-Cargo packages, so
-per the workflow conventions it runs **unconditionally**. `cargo-delta`'s changed-package scoping
-must not be applied to it — the whole point is to catch packages the current pull request did not
-touch.
+The `validate-versions` job in `standard-validation.yml` runs live binstall validation,
+version readiness and scoped API compatibility in one environment. Its release-plan inputs
+are git history and manifests, not a changed-package selection, so it runs **unconditionally**.
+`cargo-delta`'s changed-package scoping must not be applied to it — the whole point is to catch
+packages the current pull request did not touch.
 
-```yaml
-validate-versions:
-  runs-on: ubuntu-latest
-  outputs:
-    semver_targets: ${{ steps.check.outputs.semver_targets }}
-  steps:
-    - uses: actions/checkout@v7
-      with:
-        # A truncated clone can hide the commit that last changed a version, which
-        # would report that package as unchanged.
-        fetch-depth: 0
-    - uses: ./.github/actions/setup-environment
-    - id: check
-      env:
-        RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.event.repository.default_branch) }}
-      run: just validate-versions
-      shell: pwsh
-```
+The job uses a full-history checkout because a truncated clone can hide the commit that last
+changed a version and report a package as unchanged. Its version step receives
+`RELEASE_PLAN_BASE` from the merge-group base SHA or the default release branch.
 
 The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
-also emits `semver_targets` for the next job. The PowerShell side stays thin — it invokes the
-tool, writes the step output, and owns the valid-empty skip — because the classification logic is
+also emits `semver_targets` for the compatibility step. The PowerShell side stays thin — it
+invokes the tool, writes the step output, and owns the valid-empty skip — because the classification logic is
 the Rust tool's job and is tested there. The job joins `alert`'s `needs:` list and the
 `required-checks` fan-in.
 
@@ -577,8 +563,8 @@ on `Expected — Waiting for status to be reported` forever if they are listed a
 Dynamically generated names have the same problem.
 
 The ruleset therefore requires **only** `required-checks`. That job is a fan-in: `if: always()`,
-`needs:` every merge-blocking job in Standard validation (including `validate-versions` and
-`semver-checks`), succeeds when every dependency reports `success` or an allowed `skipped`, and
+`needs:` every merge-blocking job in Standard validation (including `prepare` and
+`validate-versions`), succeeds when every dependency reports `success` or an allowed `skipped`, and
 fails on `failure`, `cancelled`, or any other result. Unconditional gates may not skip. Advisory
 jobs stay off that list. `alert` stays off it — it files issues on a failed push to `main`, it is
 not a merge gate.
@@ -600,21 +586,17 @@ with a supported consumer contract that carry unreleased content changes. That s
 than what a merge publishes, because published implementation and test-support packages declare
 themselves private and have no consumer contract to compare, and it is not limited to the current
 pull request, because a package whose increment landed in an earlier pull request still carries
-unreleased content. It runs with `--all-features`, for the same reason the skill does. Group
-closure means this set is not always small, so the job runs in parallel with the rest of
-validation rather than gating it. An empty `semver_targets` is a successful skip, not a
-workspace-wide comparison.
+unreleased content. It runs with `--all-features`, for the same reason the skill does.
+An empty `semver_targets` is a successful skip, not a workspace-wide comparison.
 
-It runs with `if: !cancelled()` on `needs: [validate-versions]`, so a failing version check still
-surfaces insufficient-increment findings in the same round trip rather than hiding them behind a
-second push, while a cancelled run stops here instead of holding a runner. `always()` is reserved
-for the `required-checks` fan-in, where classifying failed and cancelled dependencies is the
-job's entire purpose.
+The compatibility steps run inside `validate-versions` after binstall validation and version
+readiness succeed. The canary precedes the comparison, and any failure stops later checks.
+The `required-checks` fan-in still classifies the combined job even when it fails or is cancelled.
 
 `cargo-release-plan` checks that an increment *happened*; `cargo-semver-checks` checks that it was
 *big enough* — it compares against the latest crates.io release and fails when the declared version
 is an inadequate increment. Neither substitutes for the other. The canary preflight guards this
-job as well.
+comparison as well.
 
 ```mermaid
 flowchart TD
@@ -634,7 +616,7 @@ flowchart TD
 
 Version increments are applied by `just apply-release-plan` (the `increment-versions`
 skill's wrapper over `cargo-release-plan apply`). `verify-semver-checks` is the skill's
-and the CI `semver-checks` job's canary.
+and CI compatibility validation's canary.
 
 `release-plz release` is the publish half. It is idempotent, and nothing downstream of it
 reads release-plz state — `plan-binaries` reconciles against `cargo metadata` and

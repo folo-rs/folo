@@ -7,7 +7,7 @@
 audit:
     cargo audit
 
-# Canary for the `increment-versions` skill and the CI `semver-checks` job: proves that
+# Canary for the `increment-versions` skill and CI compatibility validation: proves that
 # `cargo semver-checks` can actually run on this machine before either trusts its output. When the
 # tool fails to *run* - most commonly because the installed cargo-semver-checks is too old for the
 # current toolchain's rustdoc JSON format (e.g. "unsupported rustdoc format v57 ... supported
