@@ -19,6 +19,12 @@ hide a failure or claim success for blocked work.
 
 # Stage 1: Verify the claim and current work
 
+On a completion-cleanup request, first inspect the issue and PR's final disposition.
+If the repair is merged, resolved without a PR or explicitly abandoned, reconcile
+any remaining local work and leave the final handoff described below. Do not revive
+a released claim, rerun completed checks or start another repair merely to keep
+the session active.
+
 Read the issue's current discussion, assignees and linked PRs, and confirm this
 session and branch match its plain ownership comment. Follow the
 [ownership convention](../../../docs/scheduled-validation.md#ownership-and-handoff).
@@ -172,3 +178,18 @@ A merged linked PR closes the issue through ordinary GitHub behavior. A PR close
 without merging does not resolve the issue: explain the disposition and explicitly
 release or block the claim rather than restarting automatically. No post-merge
 confirmation service or copied local state is needed.
+
+Ready for human review is still an incomplete repair for the repository's
+[repair-session limit](../../../docs/scheduled-validation.md#repair-session-capacity-and-cleanup).
+It retains its slot until merged or explicitly abandoned; idling the session or
+adding `needs-human` does not release capacity.
+
+Once the repair has a final disposition, leave a concise handoff with the issue/PR
+links and identify any unpublished or unmerged work, ongoing operation, active
+Agent merge or attached session automation that prevents safe archival. For a
+repair without a PR, link its documented resolution or explicit abandonment.
+Do not discard work to make cleanup possible. When nothing remains, end the worker
+turn instead of leaving a wait or watcher active. The intake coordinator verifies
+completion and archives the session where authorized; a session cannot archive
+itself. If archival requires its owning parent or the operator, report that action
+without claiming archival succeeded.
