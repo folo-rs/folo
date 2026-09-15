@@ -142,3 +142,10 @@ The human-readable table is rendered from a fixed column set with widths compute
 formatted cell contents, so adding a column does not require touching the layout logic. The
 JSON output omits the peak fields entirely when the peak is unavailable, which keeps them
 additive for existing consumers.
+
+Session lifecycle tests record synthetic thread-local allocations so emptiness and output
+selection do not depend on global allocator traffic. The library harness runs its output
+probe in a child process with a private Cargo target directory and captured stdout. This
+exercises the real drop and target-resolution paths without mutating the parent process's
+environment or substituting test-only output behavior. In-memory lifecycle cases also run
+under Miri; the process and filesystem probes run natively.
