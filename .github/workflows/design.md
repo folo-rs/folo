@@ -34,9 +34,14 @@ GitHub-hosted workflows do not invoke AI. Final approval and merge remain human.
 **Standard validation** runs the ordinary shallow PR, push and merge-queue checks.
 **Deep validation** runs the full deep suite at the main commit selected by its event.
 Deep validation covers ordinary Miri, many-seed Miri, mutation testing and careful checks.
-It also runs feature-powerset compilation (`hack`), unused-dependency checks (`machete`)
-and ARM64 tests and benchmark smoke checks (`test-arm`). These lower-yield checks run
+It also runs release builds (`build-release`), example execution (`run-examples`),
+dependency default-feature policy checks (`default-features-check`), feature-powerset
+compilation (`hack`), unused-dependency checks (`machete`) and ARM64 tests and benchmark
+smoke checks (`test-arm`). These lower-yield checks run
 nightly or on manual dispatch rather than on every push.
+Release builds add little beyond dev-profile Clippy, examples rarely change or break,
+and dependency default-feature policy mistakes have limited impact and can be repaired
+asynchronously. These checks therefore do not block merging.
 Planning, check jobs and failure reporting belong to that same workflow.
 The local entry points have fixed meanings: `validate-local` is shallow and
 `validate-deep-local` is deep. Repair authors run relevant local deep checks against the
@@ -139,7 +144,7 @@ test and docs suites only on the x86_64 Windows and Linux runners. The macOS doc
 docs jobs wait for a push to `main`, because re-running these platform-independent
 suites on macOS is rarely informative.
 The release-profile Clippy pass is also main-only. The
-compile-oriented passes (dev Clippy, release build, frozen-minimum check)
+compile-oriented passes (dev Clippy and frozen-minimum check)
 deliberately keep their macOS leg on PRs, because a cheap macOS cross-compile still catches
 macOS-specific build breaks that the pruned runtime passes would not. MSRV *compilation*
 therefore stays covered on every PR by `check-frozen`, which compiles all targets on the

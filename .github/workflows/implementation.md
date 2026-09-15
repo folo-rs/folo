@@ -259,8 +259,9 @@ reconstruct a test invocation or claim that a baseline ran.
 The full workflow executes every night, without persistent coverage receipts or
 successful-run reuse. Ordinary dependency/build caches remain available.
 
-The separate `hack`, `machete` and `test-arm` jobs depend on the same main-only plan
-gate and run their Just recipes over the full workspace. They retain independent
+The separate release-build, example, dependency-policy, feature-powerset,
+unused-dependency and ARM test jobs depend on the same main-only plan
+gate and run their Just recipes over the full workspace. They retain their own
 platform matrices; the ARM test job also provisions Valgrind for benchmark smoke
 tests and uploads its JUnit results to Codecov. Their failures are reported from
 Actions job logs rather than the deep-check wrapper's summary artifacts.
