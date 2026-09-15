@@ -26,17 +26,22 @@ const CLOCK_LEAD_SECONDS: i64 = 60 * 60;
 /// harness runs.
 const ANCHOR_UNIX: i64 = 1_750_000_000;
 
-/// Runs the harness end to end, rendering any failure as one diagnostic line and
-/// mapping it to a process exit code.
+/// Runs the harness, reporting failures and returning a process exit code.
 ///
-/// This orchestration drives real git, filesystem, and subprocess IO, so it is
-/// covered by the integration tests through the spawned binary rather than by
-/// in-process unit tests; `llvm-cov` cannot instrument that subprocess, so the
-/// binary-only orchestration carries `coverage(off)`.
+/// Reads the process arguments and measures the requested analysis modes.
+// Only the process-argument/runtime wrapper requires a spawned binary. Its execution
+// and exit mapping stay in library-tested functions; see docs/implementation.md.
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(test, mutants::skip)]
 #[must_use]
-pub fn run() -> ExitCode {
-    match run_harness() {
+#[tokio::main]
+pub async fn run() -> ExitCode {
+    exit_code(run_harness(Cli::parse()).await)
+}
+
+/// Reports the harness outcome without changing its success/failure status.
+fn exit_code(result: Result<(), Error>) -> ExitCode {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -47,25 +52,12 @@ pub fn run() -> ExitCode {
 
 /// Builds the dataset, seeds it, and measures each mode. Split out from [`run`] so
 /// every failure path renders one diagnostic and yields a non-zero exit.
+// Successful execution drives real Git, storage and timed analysis and belongs to
+// the seeded binary integration tests. Library tests exercise pre-I/O rejection.
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[tokio::main]
-async fn run_harness() -> Result<(), Error> {
-    let cli = Cli::parse();
+async fn run_harness(cli: Cli) -> Result<(), Error> {
     let logger = Logger::new(cli.verbose);
-
-    let scenario = Scenario {
-        benchmarks: cli.benchmarks,
-        commits: cli.commits,
-        branch_commits: cli.branch_commits,
-        dirty_runs: cli.dirty_runs,
-        seed: cli.seed,
-    };
-    if scenario.benchmarks == 0 {
-        return Err(fail("--benchmarks must be at least 1"));
-    }
-    if scenario.commits == 0 {
-        return Err(fail("--commits must be at least 1"));
-    }
+    let scenario = build_scenario(&cli)?;
 
     let anchor = Timestamp::from_second(ANCHOR_UNIX)
         .map_err(|error| fail(format!("invalid dataset anchor: {error}")))?;
@@ -173,6 +165,23 @@ async fn run_harness() -> Result<(), Error> {
     Ok(())
 }
 
+/// Validates the scenario before any repository or storage resources are created.
+fn build_scenario(cli: &Cli) -> Result<Scenario, Error> {
+    if cli.benchmarks == 0 {
+        return Err(fail("--benchmarks must be at least 1"));
+    }
+    if cli.commits == 0 {
+        return Err(fail("--commits must be at least 1"));
+    }
+    Ok(Scenario {
+        benchmarks: cli.benchmarks,
+        commits: cli.commits,
+        branch_commits: cli.branch_commits,
+        dirty_runs: cli.dirty_runs,
+        seed: cli.seed,
+    })
+}
+
 /// Resolves the `now` instant the analysis is anchored to: just after the newest
 /// seeded commit, so the default look-back window covers the whole history and no
 /// commit is dated in the analysis's future.
@@ -243,10 +252,7 @@ fn resolve_cache(cli: &Cli) -> Result<Option<PathBuf>, Error> {
     }
 }
 
-/// Writes the seeded configuration into the workspace's `.cargo/` directory. A
-/// filesystem IO edge reached only through the binary, so it carries
-/// `coverage(off)`.
-#[cfg_attr(coverage_nightly, coverage(off))]
+/// Writes the seeded configuration into the workspace's `.cargo/` directory.
 async fn write_config(
     workspace: &Path,
     target: &StorageTarget,
@@ -266,8 +272,139 @@ async fn write_config(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::fs;
+
+    use futures::executor::block_on;
+
     use super::*;
+
+    #[test]
+    fn successful_execution_returns_success() {
+        assert_eq!(exit_code(Ok(())), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn failed_execution_returns_failure() {
+        assert_eq!(exit_code(Err(fail("execution failed"))), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn scenario_preserves_requested_sizes_and_seed() {
+        // Distinct values expose crossed fields; they are ordinary scenario inputs.
+        let cli = Cli::parse_from([
+            "cargo-bench-history-stress",
+            "--benchmarks",
+            "2",
+            "--commits",
+            "3",
+            "--branch-commits",
+            "4",
+            "--dirty-runs",
+            "5",
+            "--seed",
+            "6",
+        ]);
+        let scenario = build_scenario(&cli).unwrap();
+        assert_eq!(scenario.benchmarks, cli.benchmarks);
+        assert_eq!(scenario.commits, cli.commits);
+        assert_eq!(scenario.branch_commits, cli.branch_commits);
+        assert_eq!(scenario.dirty_runs, cli.dirty_runs);
+        assert_eq!(scenario.seed, cli.seed);
+    }
+
+    #[test]
+    fn scenario_allows_minimal_main_history_without_feature_or_dirty_runs() {
+        let cli = Cli::parse_from([
+            "cargo-bench-history-stress",
+            "--benchmarks",
+            "1",
+            "--commits",
+            "1",
+            "--branch-commits",
+            "0",
+            "--dirty-runs",
+            "0",
+        ]);
+        let scenario = build_scenario(&cli).unwrap();
+        assert_eq!(scenario.benchmarks, 1);
+        assert_eq!(scenario.commits, 1);
+        assert_eq!(scenario.branch_commits, 0);
+        assert_eq!(scenario.dirty_runs, 0);
+    }
+
+    #[test]
+    fn scenario_rejects_zero_benchmarks() {
+        let cli = Cli::parse_from(["cargo-bench-history-stress", "--benchmarks", "0"]);
+        assert!(build_scenario(&cli).is_err());
+    }
+
+    #[test]
+    fn scenario_rejects_zero_commits() {
+        let cli = Cli::parse_from(["cargo-bench-history-stress", "--commits", "0"]);
+        assert!(build_scenario(&cli).is_err());
+    }
+
+    #[test]
+    fn execution_rejects_invalid_scenarios_before_io() {
+        for flag in ["--benchmarks", "--commits"] {
+            let cli = Cli::parse_from(["cargo-bench-history-stress", flag, "0"]);
+            // No Tokio runtime is needed: validation must finish before the I/O path.
+            assert!(block_on(run_harness(cli)).is_err());
+        }
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore = "uses the real filesystem and Tokio runtime")]
+    async fn config_write_creates_parents_and_replaces_existing_contents() {
+        let dir = TempDir::new().unwrap();
+        let workspace = dir.path().join("workspace");
+        let path = workspace.join(".cargo").join("bench_history.toml");
+        let local = StorageTarget::local(None).unwrap();
+        let azure = StorageTarget::azure("account".to_owned(), "container".to_owned()).unwrap();
+
+        // Constructing an Azure target only creates staging storage, not a cloud resource.
+        // Different backend configurations prove the existing file is replaced.
+        for target in [local, azure] {
+            write_config(&workspace, &target, Logger::new(false))
+                .await
+                .unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), target.config_toml());
+        }
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore = "uses the real filesystem and Tokio runtime")]
+    async fn config_write_reports_parent_creation_failure() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join(".cargo");
+        fs::write(&parent, "not a directory").unwrap();
+        let target = StorageTarget::local(None).unwrap();
+
+        assert!(
+            write_config(dir.path(), &target, Logger::new(false))
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read_to_string(parent).unwrap(), "not a directory");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore = "uses the real filesystem and Tokio runtime")]
+    async fn config_write_reports_file_write_failure() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".cargo").join("bench_history.toml");
+        fs::create_dir_all(&path).unwrap();
+        let target = StorageTarget::local(None).unwrap();
+
+        assert!(
+            write_config(dir.path(), &target, Logger::new(false))
+                .await
+                .is_err()
+        );
+        assert!(path.is_dir());
+    }
 
     #[test]
     fn clock_lead_is_one_hour() {
