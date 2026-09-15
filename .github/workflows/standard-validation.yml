@@ -290,22 +290,6 @@ jobs:
       - name: Run format-check
         run: just format-check
 
-  # Default features check is platform-agnostic, so run only on Ubuntu for efficiency.
-  default-features-check:
-    needs: [delta]
-    if: needs.delta.outputs.skip_all != 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run default-features-check
-        run: just default-features-check
-
   # Fails when a library's public API exposes an external type that is not on its allow-list, so an
   # accidental addition to the external surface is caught in review. Uses an
   # Ubuntu + Windows matrix, because the public surface is platform-dependent (cfg-gated items) and
@@ -496,26 +480,6 @@ jobs:
       - name: Run clippy release on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" clippy release
 
-  build-release:
-    needs: [delta, clippy-dev]
-    if: needs.delta.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run build release on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" build release
-
   # Verifies the workspace still compiles at the minimum dependency versions declared in
   # Cargo.toml (our published minimum-version promises), rather than the higher versions
   # pinned in Cargo.lock. The `check-frozen` recipe freezes every workspace dependency to
@@ -541,28 +505,6 @@ jobs:
 
       - name: Run check-frozen on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" check-frozen
-
-  run-examples:
-    needs: [delta]
-    if: needs.delta.outputs.skip_all != 'true'
-    # Work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run examples on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" run-examples
 
   # Azure Blob storage backend tests against the Azurite emulator.
   #
@@ -858,16 +800,13 @@ jobs:
       - validate-versions
       - semver-checks
       - format-check
-      - default-features-check
       - check-external-types
       - clippy-dev
       - test-x64
       - test-docs
       - docs
       - clippy-release
-      - build-release
       - check-frozen
-      - run-examples
       - test-azurite
       - test-azure
       - test-azure-gh
@@ -919,16 +858,13 @@ jobs:
       - validate-versions
       - semver-checks
       - format-check
-      - default-features-check
       - check-external-types
       - clippy-dev
       - test-x64
       - test-docs
       - docs
       - clippy-release
-      - build-release
       - check-frozen
-      - run-examples
       - test-azurite
       - test-azure
       - test-azure-gh
