@@ -37,4 +37,9 @@ exclude_re = [
     # reconstructs the same family and is rejected there too. Replacing either `||`
     # with `&&` changes the amount of work but not the selected family.
     'packages/cbh_detect/src/detect/branch\.rs:\d+:\d+: replace \|\| with && in consider_family_seed',
+
+    # Equivalent: hexadecimal parsing bounds each nibble to disjoint bits after
+    # shifting the high nibble, so OR and XOR produce the same byte for every input.
+    # Keep the AND replacement and all parsing/validation mutations enabled.
+    'packages/cargo-release-plan/src/manifest\.rs:\d+:\d+: replace \| with \^ in decode_git_reference',
 ]
