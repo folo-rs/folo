@@ -236,8 +236,9 @@ pushes to `main`. Pull requests and merge-queue entries select affected packages
 tooling checks; pushes to `main` run the full shallow set.
 
 **Deep validation** runs the full deep suite against merged `main` nightly and on manual
-dispatch. It covers Miri, many-seed Miri, mutation testing, careful checking, feature
-combinations, unused dependencies, and ARM64 tests and benchmark smoke checks.
+dispatch. It covers Miri, many-seed Miri, mutation testing, careful checking, release
+builds, example execution, dependency default-feature policy, feature combinations,
+unused dependencies, and ARM64 tests and benchmark smoke checks.
 
 Checks apply according to package, tool and platform support. Our quality practices include:
 
