@@ -538,6 +538,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "testing",
  "tick",
  "tokio",
 ]
