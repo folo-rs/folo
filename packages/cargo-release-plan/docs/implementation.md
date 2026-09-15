@@ -165,6 +165,20 @@ formatting changes do not masquerade as inherited-value changes. Dependency
 table kinds are retained so versionless dev dependencies omitted by Cargo do not
 create false inherited-value changes.
 
+Exact dependencies are discovered from effective raw declarations, not Cargo's
+normalized requirements. Both package identity and resolved member directory
+must match. Parsing the entire suffix after `=` as a SemVer version enforces a
+complete triplet and rejects compound requirements; separate prerelease and
+build-metadata checks retain the plain-release-only rule.
+
+Dependency unit tests use synthetic metadata and parsed manifests for declaration
+and exposure decisions. Small shared Git fixtures cover tracked-member selection
+and historical path acquisition without Cargo resolution. Canonical fallback
+tests use equivalent filesystem paths without requiring symlink privileges.
+Exposure tests retain propagation through private intermediaries, revisit
+earlier dependents until closure settles, and distinguish normal edges from
+build and development edges at every hop.
+
 ## Classification
 
 Classification combines one current work-tree model with package-specific
