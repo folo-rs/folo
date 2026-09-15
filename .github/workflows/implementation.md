@@ -322,8 +322,40 @@ a job rerun, and collects available check summaries and failed-job log excerpts.
 It does not require the overall workflow to finish before reporting. Missing artifacts or
 inaccessible logs are explicit gaps in the report, not reasons to omit a failure.
 Issue content contains observed failures and direct links, not serialized API
-inventories. Ordinary continuation comments can retain long diagnostic lists
-without an encoding or reassembly protocol.
+inventories. The renderer bounds diagnostic text per unsuccessful job, retaining
+the start and end of the job-log and check-summary excerpts, visible omission
+notices, and structured artifact destinations outside the clipped text. Short
+metadata receives its allocation first, then verbose sources share the remaining
+budget and are each clipped once; assembly does not discard another source's
+opening or final context. Artifact destinations come from the Actions inventory,
+not from matching wording inside a check summary. Full diagnostics
+remain in the linked logs and artifacts. Fixed-size failed-job inventory pages
+and complete diagnostic sections are packed into size-limited Markdown messages;
+source verbosity cannot create an unlimited continuation sequence.
+
+The visible attempt prefix and inventory/job headings identify completed sections
+on resumption. A section is never split between messages, so an observed heading
+means its entire snapshot was published. Existing snapshots remain unchanged when
+the run completes, diagnostics become unavailable or packing of missing sections
+changes. Human reports and partial reports without these headings receive the
+bounded sections in their existing discussion rather than a replacement issue.
+
+All reporter mutations are serial and paced, including label creation and duplicate
+reconciliation. Explicit HTTP rate-limit refusals permit finite exponential retries
+after the longer of the secondary-limit cooldown and server-provided retry/reset
+deadlines. No reconciliation reads happen during that cooldown. Other write
+failures, including lost responses and malformed successful JSON, are ambiguous:
+the reporter reads back the expected effect, continues only if it is observed, and
+otherwise fails without replaying that write. An unavailable reconciliation also
+fails. A later invocation searches the existing issue and all comment pages before
+publishing missing sections. Duplicate explanations are likewise reused if their
+subsequent closure fails.
+
+The publication limits and cooldowns are implemented in `ScheduledReport.psm1` and
+`ScheduledGitHub.psm1`. They follow GitHub's
+[REST API best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api).
+Pester exercises large reports and partial, throttled and ambiguous publication
+against fake GitHub responses with mocked waits, never live content-creation bursts.
 
 An exact visible attempt link identifies an existing report in open or closed
 issues. The current workflow attempt identifies the report, while each job's
