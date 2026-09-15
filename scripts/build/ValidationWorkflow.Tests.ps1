@@ -25,15 +25,34 @@ BeforeAll {
         return [regex]::Matches($jobs.Groups['body'].Value, '(?m)^  ([a-z][a-z0-9-]*):\r?$') |
             ForEach-Object { $_.Groups[1].Value }
     }
+
+    function Get-WorkflowJobDependency([string] $Job) {
+        $inline = [regex]::Match($Job, '(?m)^    needs: \[(?<jobs>[^\]]+)\]')
+        if ($inline.Success) {
+            return $inline.Groups['jobs'].Value -split ',' | ForEach-Object { $_.Trim() }
+        }
+
+        $block = [regex]::Match($Job, '(?m)^    needs:\r?\n(?<jobs>(?:      - [^\r\n]+\r?\n)+)')
+        $block.Success | Should -BeTrue
+        return [regex]::Matches($block.Groups['jobs'].Value, '(?m)^      - ([^\r\n]+)') |
+            ForEach-Object { $_.Groups[1].Value.Trim() }
+    }
+}
+
+Describe 'Workflow dependency extraction' {
+    It 'accepts equivalent inline and block lists' {
+        $inline = @(Get-WorkflowJobDependency "    needs: [plan, checks]`n")
+        $block = @(Get-WorkflowJobDependency "    needs:`n      - plan`n      - checks`n")
+        $inline | Should -Be @('plan', 'checks')
+        $block | Should -Be $inline
+    }
 }
 
 Describe 'Deep validation dependency relationships' {
     It 'reports failures from every planning and check job without stale dependencies' {
         $jobNames = @(Get-WorkflowJobName $deep | Where-Object { $_ -ne 'report' })
         $report = Get-WorkflowJob $deep 'report'
-        $dependencyBlock = [regex]::Match($report, '(?m)^    needs: \[(?<jobs>[^\]]+)\]')
-        $dependencyBlock.Success | Should -BeTrue
-        $dependencies = $dependencyBlock.Groups['jobs'].Value -split ',\s*'
+        $dependencies = @(Get-WorkflowJobDependency $report)
         foreach ($job in $jobNames) { $dependencies | Should -Contain $job }
         foreach ($job in $dependencies) { $jobNames | Should -Contain $job }
     }
@@ -43,10 +62,7 @@ Describe 'Standard validation dependency relationships' {
     It 'keeps every must-succeed job in the fan-in and every dependency in the workflow' {
         $jobNames = @(Get-WorkflowJobName $standard)
         $fanIn = Get-WorkflowJob $standard 'required-checks'
-        $dependencyBlock = [regex]::Match($fanIn, '(?m)^    needs:\r?\n(?<jobs>(?:      - [^\r\n]+\r?\n)+)')
-        $dependencyBlock.Success | Should -BeTrue
-        $dependencies = @([regex]::Matches($dependencyBlock.Groups['jobs'].Value, '(?m)^      - ([^\r\n]+)') |
-            ForEach-Object { $_.Groups[1].Value })
+        $dependencies = @(Get-WorkflowJobDependency $fanIn)
         $mustSucceed = [regex]::Match($fanIn, '(?m)^\s+MUST_SUCCEED_JOBS: ([^\r\n]+)').Groups[1].Value -split '\s+'
         foreach ($job in $mustSucceed) { $dependencies | Should -Contain $job }
         foreach ($job in $dependencies) { $jobNames | Should -Contain $job }
