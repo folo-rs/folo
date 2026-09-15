@@ -17,18 +17,18 @@ delta saturates at the capacity of `u64` before accumulation into wider totals.
 These are defensive arithmetic choices, not promises about clock resolution or
 elapsed execution time. Unit fixtures exercise them without waiting for a clock.
 
-Mutation testing excludes only the real platform's clock-forwarding methods:
+Mutation testing excludes the real platform's clock-forwarding methods:
 distinguishing their constant replacements would require real-time assertions.
-The facade and measurement arithmetic remain subject to deterministic mutation
-coverage. Introducing another mock layer inside the forwarders would test that
-layer rather than the operating-system boundary.
+Deterministic tests above that boundary cover clock selection and measurement
+arithmetic. Introducing another mock layer inside the forwarders would test
+that layer rather than the operating-system boundary.
 
 ## Metrics and reports
 
-Each operation folds complete spans into running totals and the shared
-`folo_utils::SpanAccumulator`. The accumulator owns the through-origin fit,
-weighted by squared iteration counts, and its confidence interval. Span duration
-is not divided by the iteration count before accumulation.
+Each operation folds complete spans into running totals and a shared statistics
+accumulator. The accumulator owns the through-origin fit, weighted by squared
+iteration counts, and its confidence interval. Span duration is not divided by
+the iteration count before accumulation.
 
 Reports clone accumulated metrics instead of retaining live measurement state.
 Merging combines the accumulators as well as totals; report accessors expose the
