@@ -39,6 +39,10 @@ use crate::{
     ReadFileError, UnsupportedExactRequirementError,
 };
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod dependency_tests;
+
 /// Work-tree snapshot from `cargo metadata --no-deps`.
 #[derive(Debug)]
 pub(crate) struct WorkTree {
@@ -982,9 +986,8 @@ fn validated_exact_requirement(requirement: &str) -> Result<Option<Version>, ()>
         return Err(());
     };
     let version = version.trim();
-    if parsed.comparators.len() != 1 || version.split('.').count() != 3 {
-        return Err(());
-    }
+    // Parsing the entire suffix as a version enforces a complete triplet and
+    // rejects additional comparators without separate syntax-counting guards.
     let version = Version::parse(version).map_err(|_error| ())?;
     if !version.pre.is_empty() || !version.build.is_empty() {
         return Err(());
@@ -1619,6 +1622,9 @@ mod tests {
             "=1.2.3-alpha",
             "=1.2.3+build",
             "=1.2.3, <2.0.0",
+            "=1.2.3, =1.2.3",
+            "=1.2.*",
+            "=01.2.3",
             "^1.0.0, =1.2.3",
             "=not-a-version",
         ] {

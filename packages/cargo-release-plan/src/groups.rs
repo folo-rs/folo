@@ -252,6 +252,26 @@ mod tests {
     }
 
     #[test]
+    fn edges_with_missing_endpoints_do_not_change_membership() {
+        let groups = Groups::from_edges(
+            ["a", "b", "solo"].map(str::to_string),
+            [
+                ("a", "b"),
+                ("missing-left", "a"),
+                ("b", "missing-right"),
+                ("missing-left", "missing-right"),
+                ("solo", "solo"),
+            ]
+            .map(|(left, right)| (left.to_string(), right.to_string())),
+        );
+
+        assert_eq!(groups.members("a"), ["a", "b"]);
+        assert_eq!(groups.closure("solo"), ["solo"]);
+        assert_eq!(groups.group_of("missing-left"), None);
+        assert_eq!(groups.group_of("missing-right"), None);
+    }
+
+    #[test]
     fn removing_a_redundant_edge_does_not_split_a_component() {
         let targets = ["a", "b", "c"].map(str::to_string);
         let groups = Groups::from_edges(
