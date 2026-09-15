@@ -519,7 +519,7 @@ mod write_tests {
 
     fn assert_object(root: &Path, key: &str, body: &str) -> u64 {
         let stored = fs::read(root.join(key)).unwrap();
-        // Reject plain JSON too, which the tolerant decoder accepts.
+        // Use the current storage codec as the oracle instead of pinning compressed fixture bytes.
         assert_eq!(stored, codec::compress(body.as_bytes()));
         assert_eq!(codec::decompress(&stored).unwrap(), body.as_bytes());
         u64::try_from(stored.len()).unwrap()
