@@ -1,12 +1,14 @@
 ---
 name: scheduled-repair
-description: Repair one claimed scheduled-finding issue in its native Local App issue/PR session, including normal version planning, relevant deep checks and PR follow-up until human disposition.
+description: Repair one claimed scheduled-finding issue in its Local App session, coordinating package scope and any stable stacked prerequisite, with complete version planning, relevant deep checks and PR follow-up until human disposition.
 ---
 
 # Scope
 
 Work on one claimed issue in its native issue/PR-linked Local App session. Read
 repository/package instructions and [scheduled validation](../../../docs/scheduled-validation.md).
+An admitted stacked layer uses the session identified by its issue ownership
+comment until its own PR supplies the native link; do not create another executor.
 The issue, branch and linked PR contain the handoff; do not require private state,
 schema markers or access to a prior conversation. Preserve the selected personal
 account/model and existing worktree.
@@ -41,6 +43,25 @@ This correction is not permission to waive checks. Retain the claim. On
 continuation, inspect the existing PR and current branch/head, previous
 resolutions and human changes; do not reset or force-push unexpected work.
 
+Read the issue's package-scope and prerequisite notes, related active repair PRs
+and their current release plans. Before edits, confirm the
+[package-overlap policy](../../../docs/scheduled-validation.md#package-overlap-and-stacked-repairs)
+still permits this work. Read-only investigation may clarify uncertain scope.
+If a likely collision was missed or the scope expands into another repair,
+publish the evidence and coordinate through the existing owners/intake before
+making conflicting changes. Retain ownership and existing work while deferred;
+routine package waiting is not `needs-human` and needs no timer.
+Existing ancestors and descendants in the agreed stack are coordinated work,
+not competing repairs; necessary parent fixes proceed with downstream handoff.
+
+For an admitted stack, verify the recorded parent issue/PR, branch and head commit,
+its pushed version increments and settled release plan, and this branch's ancestry.
+The repair must genuinely build on that prerequisite, not merely share a package.
+On initial work, require the agreed parent snapshot; on continuation, reconcile
+parent updates as described below. If the parent is still changing the relevant
+scope or versions, defer dependent edits rather than guessing a base. Never
+rebase or modify another owner's branch, spawn layers or merge.
+
 # Stage 2: Confirm and repair the actual problem
 
 Read relevant source and current main before fixing a historical failure.
@@ -48,6 +69,12 @@ Reproduce the recorded failure with the applicable toolchain, target, flags,
 mutant and seed details where feasible. Establish the unmutated baseline when
 testing mutations. Preserve the full affected scope; interleaved Miri output or a
 post-suite diagnostic does not justify inventing a single failing test or seed.
+
+Publish likely edited and version-moving packages as soon as the diagnosis
+supports them, distinguishing estimates from confirmed scope. Include known
+version-group/dependent effects and any prerequisite reason and issue/PR links.
+Update these ordinary GitHub notes when the diagnosis or expanded release plan
+materially changes. A failed check's package list is not itself a release plan.
 
 Investigate independently actionable causes, make a scoped correction and add
 regression coverage. Follow repository testing rules: mutation timeouts are not
@@ -102,6 +129,38 @@ concrete findings. Invoke `increment-versions` to apply the full current version
 plan without a separate approval gate; human PR review is that gate. Refresh the
 plan after relevant source, baseline or decision changes.
 
+## Version planning for a stacked layer
+
+Keep `increment-versions` evidence anchored to fresh main, as that skill requires;
+do not treat the unreleased parent as a release anchor. Separately assess this
+layer's released-content and dependency effects relative to the recorded parent
+head. Each package requiring release for this layer that exists in the parent
+must advance above the parent's declared version, sufficiently for this layer's
+own semantic change level as well as the combined main-based assessment. Include
+group alignment and dependent releases; do not add increments for changes merely
+inherited unchanged. New packages retain the normal first-publication handoff.
+
+The normal planner retains sufficient pending increments, so running it alone
+can leave this layer at the parent's version. Compare the resulting versions with
+the parent explicitly. If an additional increment is still required, use a
+separate authored proposal in the documented
+[proposed-plan schema](../../../packages/cargo-release-plan/README.md#apply),
+with explicit version targets satisfying those parent-relative requirements.
+Follow `increment-versions`' preparation, preview, prospective semantic assessment,
+publication checks, application and verification procedure for that proposal.
+Prepare from the current tree against fresh main; preserve the normal plan's
+requirements, expand groups/dependents and respect every SemVer floor. Do not
+edit generated plans or captured evidence, apply a manifest-only proposal, or
+change the release baseline to manufacture the extra step.
+Recheck newly reached packages for overlap before applying the additional plan.
+
+Verify the expanded result against the same parent again. Repeated follow-up
+retains an already sufficient child increment rather than adding a step per run.
+A changed parent head, plan or release baseline requires fresh assessment, not
+blind arithmetic or reserving distant versions.
+
+## Publish this repair's PR
+
 Use `create_pull_request` for a new PR and `update_pull_request` for its description.
 Keep the same PR and branch for continuation. Start the body with `[Copilot speaking]`,
 explain motivation and substantive behavior, and include `Fixes #<issue>`.
@@ -109,6 +168,16 @@ Maintain the full **Version/release plan**: every affected package/group, previo
 and proposed versions, change levels and reasons, including dependent/group
 movements; explicitly state when released content and versions do not change.
 Do not replace this with an attestation, registry entry or managed-repair marker.
+
+For a stacked repair, create the PR from this session against its verified parent
+branch and verify the actual base/head relationship. Invoke `pr-stack` only for
+registration/extension of these existing PRs and later in-place synchronization;
+do not let its layer-creation flow spawn another session. Preserve existing stack
+membership, including merged ancestors. Link the prerequisite and explain the
+dependency in the PR. In the release plan, retain normal release-anchor versions
+and additionally show parent-to-child version movements for this layer. A native
+stack requires supported same-repository heads; where registration is unsupported,
+retain the explicit dependent-PR chain and disclose that limitation.
 
 Link the PR from the issue. Put validation evidence in a PR comment, not a
 changed-file or validation-log inventory in the description. Record the **tested
@@ -137,6 +206,20 @@ top-level comments, review summaries and inline threads. Include low-confidence
 agent feedback when valid. Check earlier discussion and commits for already
 addressed findings. Fix straightforward problems and preserve human changes;
 request a human decision before design changes or unsafe ambiguity.
+
+For stacked work, also follow the parent's live head, release plan and disposition.
+Have changes synchronized bottom to top in the owning sessions using `pr-stack`;
+retain the same child session, PR and native stack membership. After a parent
+merge, verify the child's effective base and sync with current main as appropriate.
+Reassess package overlap and regenerate version evidence so child releases remain
+above the parent's actual versions, then refresh affected local validation and
+the PR plan. A parent closed without merging requires an explicit disposition;
+do not silently detach the child or claim readiness. Parent changes that invalidate
+the dependency or settled plan require coordination before more dependent work.
+When this repair is itself a prerequisite, publish changed scope, release plan
+and pushed head on GitHub and notify its existing child owners. Record each
+reconciled parent snapshot in the child's handoff so intake can distinguish
+handled changes from new input without repeatedly waking it.
 
 Reserve `needs-human` for a concrete impediment requiring a specific human action,
 such as an explicit approval requirement or a diagnosed permission/configuration
@@ -167,6 +250,8 @@ findings are addressed, state that the PR awaits human review/approval/merge,
 with links and any limitations. A genuine human blocker instead needs its
 specific unresolved action, not a ready claim. Post only substantive progress;
 put decision diagnostics in a collapsible section of a summary.
+For a stack, identify the prerequisite PR and required bottom-to-top order;
+readiness for review is not permission to merge a child independently.
 
 A session becoming idle is not completion. If foreground work is interrupted,
 leave a pending handoff that retains ownership and the next check/review action;
