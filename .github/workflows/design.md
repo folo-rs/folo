@@ -206,6 +206,14 @@ duplicating hours of benchmarking. Keeping it out of collection's SHA-keyed grou
 the same reason — a scheduled run's SHA is the current tip, so a shared group would let the
 nightly and that tip's own collection cancel each other.
 
+PR benchmark collection additionally runs at most one job per platform across the repository.
+Linux and Windows use separate worker pools, so they do not block each other. Other PRs wait
+in the platform's concurrency queue without cancelling running or pending collection, up to
+GitHub's queue capacity. Ref-keyed workflow supersession and the close companion still cancel
+outdated work, including collection waiting for a platform slot. This limit applies only to PR
+collection; delta analysis and comment maintenance do not wait for a collection slot, and main
+history collection and backfill retain their independent concurrency policies.
+
 ## Thin steps
 
 Workflow steps stay thin so their logic can be exercised locally. Nonpublished Rust utilities
@@ -555,7 +563,7 @@ Because a full benchmark run takes hours and a new push *cancels* the in-flight 
 Concurrency), on a PR's first push there is nothing on display yet, and on later pushes the comment
 on display can lag the PR tip by a long way with no way for a reader to tell current numbers from
 hours-old ones. A lightweight **`mark-stale` job** runs at the *start* of each new run (right after
-the short delta preflight, in parallel with the multi-hour collect) and keeps the comment honest
+the short delta preflight, without waiting for a collection slot) and keeps the comment honest
 about the run just begun. When the PR has **no comment yet**, it seeds a *"benchmarking in
 progress"* placeholder — carrying the same hidden dedup marker and disclosing the collection scope,
 so the author knows results are coming rather than seeing nothing for hours; it refreshes that

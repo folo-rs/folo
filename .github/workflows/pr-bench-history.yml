@@ -119,7 +119,7 @@ jobs:
   # far HEAD is ahead, which needs no clone and still resolves a commit orphaned by a force-push. Gated on
   # skip_all != 'true' for the same reason collect is: when the PR now touches nothing benchmarkable the
   # `cleanup` job DELETES the comment instead, and posting or marking a comment about to be deleted would
-  # only race that delete. Runs in parallel with collect (both `needs: delta`), and mirrors collect's
+  # only race that delete. Runs independently of collect (both `needs: delta`), and mirrors collect's
   # gating exactly - no `always()`, so a FAILED or skipped delta skips this job too rather than acting on
   # a comment for a run that will never collect; the same-repo gate rides along from delta, which is
   # skipped on forks (skipping this dependent with it).
@@ -200,6 +200,14 @@ jobs:
   collect:
     needs: delta
     if: needs.delta.outputs.skip_all != 'true'
+
+    # Serialize PR collection per platform to protect each worker pool without making Linux wait
+    # for Windows. Queue other PRs rather than replacing pending work; workflow-level concurrency
+    # still cancels this PR's outdated or closed runs. See design.md#concurrency.
+    concurrency:
+      group: pr-bench-history-collect-${{ matrix.platform }}
+      cancel-in-progress: false
+      queue: max
 
     strategy:
       # One platform's benchmarks failing must not abandon the others for this PR head; each
