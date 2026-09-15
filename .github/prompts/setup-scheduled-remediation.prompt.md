@@ -36,6 +36,12 @@ retaining follow-up and cleanup. Reject invalid or conflicting settings rather
 than silently replacing them. This repository-wide limit includes repairs waiting
 for human review or merge.
 
+Confirm that the Local App exposes its bundled `pr-stack` skill for stacked
+repair admission and native stack operations. It is supplied by the App rather
+than this repository. If unavailable, report that stacked admissions must be
+deferred; ordinary independent repairs remain supported. Do not install tooling
+or copy a substitute skill into the repository as part of setup.
+
 Review the App's available schedule description, timezone and next-run preview.
 If timezone or next-run information is not exposed, ask the operator to confirm
 the intended local-time interpretation and report that confirmation separately
@@ -49,7 +55,7 @@ The entries are:
 | Suggested name | Saved prompt |
 |---|---|
 | Folo scheduled failure triage | Run the repository's `scheduled-triage` skill in this Local App project. Process open run reports oldest first using the selected model. Do not edit source, start repairs or change automation/account/billing settings. |
-| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Follow existing repairs and PRs, reconcile completion and archive finished sessions before checking capacity. Start at most one new repair session when below the maximum incomplete repair sessions: {{MAX_INCOMPLETE_REPAIR_SESSIONS}}. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
+| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Follow existing repairs and PRs, reconcile completion and archive finished sessions before checking capacity. Start at most one new repair session when below the maximum incomplete repair sessions: {{MAX_INCOMPLETE_REPAIR_SESSIONS}}. Defer likely package overlaps except for stable, naturally dependent stacked repairs admitted under the same limit. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
 
 Expand the repair prompt's model/effort sentence with the actual operator choice
 and replace `{{MAX_INCOMPLETE_REPAIR_SESSIONS}}` with the selected or preserved
@@ -57,10 +63,11 @@ limit. Do not save unresolved placeholders. Include a shared model selection,
 not an inferred setting. For explicit
 overrides, instruct `scheduled-intake` in that saved prompt to pass them through
 `kickoff.model` and `kickoff.reasoning_effort` when opening a new repair session
-with `open_issue_session` or `open_pr_session`, following the skill's waiting
-bootstrap rules. For App defaults, instruct it to omit kickoff. Setup itself must
-not open repair sessions. Keep the prompts short and refer to the checked-in
-skills rather than copying their procedures. There is no installation marker,
+with `open_issue_session`, `open_pr_session` or `create_session` for an admitted
+stacked layer, following the skill's waiting bootstrap rules. For App defaults,
+instruct it to omit kickoff. Setup itself must not open repair sessions.
+Keep the prompts short and refer to the checked-in skills rather than copying
+their procedures. There is no installation marker,
 enrollment, policy file, profile registration or local-state migration.
 
 Repair work uses ordinary branches and local native/WSL deep checks. Hosted
