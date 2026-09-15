@@ -232,11 +232,13 @@ not indicate ongoing work.
 
 The [scheduled-intake skill](../.github/skills/scheduled-intake/SKILL.md) coordinates
 repairs. It follows existing claimed issues and PRs first, then starts at most one
-new unclaimed repair per invocation. Intake considers only open findings; closure
-ends intake responsibility, including follow-up of linked PRs. Keep the issue open
+new repair session per invocation, subject to the
+[repair-session limit](#repair-session-capacity-and-cleanup) after completion cleanup.
+Only open findings are repair candidates; closure ends automatic repair follow-up,
+including follow-up of linked PRs. Known sessions linked to closed findings remain
+in scope for completion reconciliation and safe archival. Keep the issue open
 while its repair is ongoing. Closing it with an open PR requires an explicit
-disposition of that PR, not continued automatic intake follow-up. Independent PRs
-awaiting review do not block the entire backlog.
+disposition of that PR, not continued automatic intake follow-up.
 The [scheduled-repair skill](../.github/skills/scheduled-repair/SKILL.md)
 works on one issue in its native issue/PR-linked Local App session.
 
@@ -284,21 +286,75 @@ not resolve the issue: record the disposition and explicitly release or block th
 claim. No post-merge confirmation service is needed; later scheduled failures are
 triaged normally.
 
+### Repair-session capacity and cleanup
+
+The maximum incomplete repair sessions defaults to `5`. An operator can override
+it with a nonnegative integer in the intake invocation or saved repair automation
+prompt. `0` pauses new admissions while preserving follow-up and cleanup. Invalid
+or conflicting values require clarification, not a silent fallback. The limit
+applies to this repository's scheduled repairs across intake invocations and
+parent sessions; unrelated human work, triage/coordinator sessions and other
+repositories do not consume its capacity.
+
+Count distinct repair sessions, reconciling native issue/PR links with GitHub
+ownership comments. Running, paused, idle, unavailable and `needs-human` repairs
+remain incomplete. A ready PR waiting only for human review or merge still counts
+until merged or explicitly abandoned. Neither an idle status nor an archive flag
+proves completion. Do not double-count a session because both an issue and a PR
+refer to it.
+
+Every intake invocation follows existing work and reconciles completion before
+checking capacity, even when at the limit or the open backlog is empty. Inspect
+known sessions linked to closed issues and merged or closed PRs for cleanup,
+without scanning the closed backlog for new work. A merged PR or an explicitly
+abandoned repair with its PR closed and claim released establishes a final
+disposition. A repair without a PR needs a documented resolution or explicit
+abandonment. Closing an issue while its PR remains open does not make the session
+archivable. Already archived sessions with a verified final disposition need no
+further cleanup.
+
+Finish remaining actionable handoff work through the existing owner. Archive a
+finished session only after verifying it has no unpublished or unmerged work to
+preserve, open PR, ongoing operation, active Agent merge or attached session
+automation. A worker left active after its repair is finished receives a focused
+completion-handoff request; verify it has ended before archiving it. Do not force
+genuinely ongoing work to finish or discard local changes to free capacity.
+
+Use supported native archival and verify the outcome. `archive_session` is
+restricted to sessions created by its caller and cannot archive the caller itself.
+Cleanup outside that authority requires the owning parent or operator; report the
+needed action and defer new admissions when required cleanup is blocked or
+uncertain. Do not substitute session/worktree deletion. Completion handoffs stay
+on the issue/PR and in native sessions, not in a private lifecycle registry.
+
+After cleanup, refresh the incomplete count. At or above the limit, continue
+existing repairs but do not claim another repair or create a session. The same
+gate applies to a replacement executor after an explicit handoff; resuming an
+existing incomplete session does not consume another slot. Below the limit,
+prioritize handed-off work needing an executor, then the oldest actionable
+unclaimed finding, and start at most one new session. Refresh capacity immediately
+before opening a new session or claiming a new repair in an existing session.
+Creating the admitted executor occupies its slot; claiming and starting that same
+executor do not require another slot. Incomplete discovery or uncertain
+ownership/completion defers admission rather than implying free capacity. Keep
+intake invocations nonoverlapping; these observations are not an atomic reservation
+or a financial cap.
+
 ## Local App setup and operation
 
 Use separate repository-level **Local** App automations for triage and repair.
 Inference uses the operator-selected personal account and model, not GitHub
 Actions or a cloud coding agent. Keep one enabled entry per role and avoid
 overlapping invocations. Starting at most one new repair per invocation is pacing,
-not a hard financial cap.
+and the incomplete-session limit bounds outstanding repair work, not spending.
 
 Run the checked-in [setup prompt](../.github/prompts/setup-scheduled-remediation.prompt.md)
 when installing or updating the entries. It uses `list_projects`, `list_workflows`,
 `save_workflow` and the supported native editor. It lists existing entries,
 updates the operator-selected disabled ones rather than blindly duplicating them,
 and defaults to disabled until enabling is explicitly authorized. Model/effort,
-personal account, Local environment and schedule are ordinary operator choices.
-Setup neither installs tooling nor runs an automation.
+personal account, Local environment, schedule and repair-session limit are ordinary
+operator choices. Setup neither installs tooling nor runs an automation.
 
 | Role | Suggested App name | Skill |
 |---|---|---|
@@ -308,9 +364,11 @@ Setup neither installs tooling nor runs an automation.
 The coordinator uses native session lookup and `open_issue_session` or
 `open_pr_session` to open/resume visible linked sessions. It preserves the
 existing executor when available. GitHub remains the source of truth; native
-runtime metadata locates the executor, not the work record.
+runtime metadata locates executors and verifies session cleanup, not repair
+correctness or ownership.
 
-Empty scans exit without posting or preparing Rust/WSL. Routine waiting does not
+Empty scans still reconcile known repair sessions for cleanup, then exit without
+posting empty-scan updates or preparing Rust/WSL. Routine waiting does not
 trigger duplicate worker turns or heartbeat posts and does not cancel an active
 worker's requested foreground follow-up. Subsequent intake runs read current
 checks and reviews and route actionable results to the existing owner. New
@@ -320,4 +378,4 @@ the repository repair automation, never per-PR timers or hidden watchers.
 A paused machine leaves the backlog intact. After an explicit handoff, a human
 or another machine can resume from GitHub without copying coordination state.
 There are no Local state stores, enrollment files, profiles, dispatch tokens,
-admission counters, health ledgers or mandatory issue schemas.
+persisted admission counters, health ledgers or mandatory issue schemas.
