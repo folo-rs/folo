@@ -35,14 +35,14 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 
 ## Job gating
 
-- Gate non-Cargo checks on the explicit change plan, never on `delta.skip_all`.
+- Gate non-Cargo checks on the explicit change plan, never on Cargo delta's `skip_all`.
   Maintain script-domain inputs and shared consumers in `scripts/build/ValidationPlan.psm1`;
   native-helper impact comes from Cargo delta and is unioned with path-selected domains.
   New test domains must join the full-suite selection. Preserve full tooling validation on
   pushes to `main`, and update the planner/fan-in tests when selection changes.
-- Keep `validate-versions` unconditional, including its live binstall metadata check. It generates
-  release state for every publishable package against its version anchor, so the PR's changed
-  package set cannot skip a package that already needed an increment.
+- Keep `validate-versions` unconditional, including its live binstall metadata and SemVer checks.
+  It generates release state for every publishable package against its version anchor, so the
+  PR's changed package set cannot skip a package that already needed an increment.
 - Azure OIDC jobs (`test-azure`, `test-azure-gh`) must not run on `merge_group`. The test
   identity's federated subjects are `pull_request` and the `main` branch ref only.
 - A workflow edit must consume the consumer-contract package set from the release-plan report
@@ -58,8 +58,8 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   (`coverage-notify`) and `alert` stay off that list. If the new job has no skip
   condition, also add its id to `MUST_SUCCEED_JOBS` in that job so a skipped result cannot
   green the fan-in. Change-selected jobs stay in `needs:` and must succeed whenever the plan
-  selects them; update `RequiredChecks.psm1` when adding a new planned job. Keep `changes` and
-  `delta` in the must-succeed list so unavailable plans cannot authorize skips.
+  selects them; update `RequiredChecks.psm1` when adding a new planned job. Keep `prepare`
+  in the must-succeed list so unavailable plans cannot authorize skips.
 - Add the new job to the `alert` job's `needs:` list as well. That list covers everything worth
   an issue after a failed push to `main`, including the advisory jobs the fan-in excludes, so the
   two lists are maintained together rather than derived from each other. Never add

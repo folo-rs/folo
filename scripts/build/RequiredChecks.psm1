@@ -83,16 +83,16 @@ function Get-RequiredCheckFailure {
         [System.StringComparer]::Ordinal)
 
     $failure = [System.Collections.Generic.List[string]]::new()
-    if ($mustSucceed.Contains('changes')) {
-        # Reconstruct the selection from both planners rather than allowing every conditional
+    if ($mustSucceed.Contains('prepare')) {
+        # Reconstruct selection from the preparation outputs rather than allowing every conditional
         # job to skip. Missing outputs, lost domains, or an omitted conditional dependency fail.
         # Ref: .github/workflows/implementation.md#merge-blocking-result.
-        $planJson = [string] $needs.changes.outputs.plan
+        $planJson = [string] $needs.prepare.outputs.plan
         $plan = Read-ValidationPlan -Json $planJson
         $expectedDomains = @(Get-ValidationScriptDomain -PlanJson $planJson `
-                -AffectedPackageJson $needs.delta.outputs.packages_json)
+                -AffectedPackageJson $needs.prepare.outputs.packages_json)
         $actualDomains = @(Read-ScriptDomain -Value (
-                ConvertFrom-Json -InputObject $needs.delta.outputs.script_domains -NoEnumerate))
+                ConvertFrom-Json -InputObject $needs.prepare.outputs.script_domains -NoEnumerate))
         if (($expectedDomains -join ' ') -cne ($actualDomains -join ' ')) {
             throw 'The script execution selection does not match the validation plan and Cargo delta.'
         }
