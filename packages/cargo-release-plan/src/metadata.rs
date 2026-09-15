@@ -1336,6 +1336,10 @@ mod discovery_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+mod installation_tests;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
 

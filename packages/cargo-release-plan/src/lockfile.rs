@@ -1243,6 +1243,56 @@ source = "registry+https://example.invalid"
     }
 
     #[test]
+    fn explicit_patch_origins_do_not_require_named_registry_configuration() {
+        let dependency = LockEntry {
+            name: "foo".to_owned(),
+            version: Version::new(1, 0, 0),
+            source: None,
+            dependencies: Vec::new(),
+        };
+        for (origin, index) in [
+            ("crates-io", "https://github.com/rust-lang/crates.io-index"),
+            (
+                "https://example.invalid/index",
+                "https://example.invalid/index",
+            ),
+        ] {
+            let installation = InstallationGraph {
+                patches: vec![DependencyPatch {
+                    origin: origin.to_owned(),
+                    name: "foo".to_owned(),
+                    replacement: Ok(InstallationDependency {
+                        name: "foo".to_owned(),
+                        requirement: None,
+                        source: DependencySource::Path(PackageIdentity {
+                            name: "foo".to_owned(),
+                            version: Version::new(1, 0, 0),
+                        }),
+                    }),
+                }],
+                registry_error: Some(installation_error(
+                    ReadFileError::new("unrelated named registry configuration").into(),
+                )),
+                ..InstallationGraph::default()
+            };
+            assert_eq!(
+                installation
+                    .allows(
+                        &[InstallationDependency {
+                            name: "foo".to_owned(),
+                            requirement: None,
+                            source: DependencySource::Registry(index.to_owned()),
+                        }],
+                        &dependency,
+                        "tool",
+                    )
+                    .unwrap(),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
     fn named_patch_origins_require_configuration_even_for_direct_registry_declarations() {
         let lockfile = Lockfile::parse(
             "[[package]]\nname = \"tool\"\nversion = \"0.1.0\"\ndependencies = [\"foo\"]\n\
