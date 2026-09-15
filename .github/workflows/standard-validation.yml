@@ -471,7 +471,7 @@ jobs:
   # job is only relevant when cargo-bench-history is affected.
   #
   # Named `test-azurite` because it runs against the Azurite emulator, not a real
-  # Azure account; `test-azure` is reserved for a future job that targets real Azure.
+  # Azure account; `test-azure` covers real Azure with both credential modes.
   test-azurite:
     needs: [prepare]
     if: >-

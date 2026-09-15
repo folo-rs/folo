@@ -586,10 +586,8 @@ with a supported consumer contract that carry unreleased content changes. That s
 than what a merge publishes, because published implementation and test-support packages declare
 themselves private and have no consumer contract to compare, and it is not limited to the current
 pull request, because a package whose increment landed in an earlier pull request still carries
-unreleased content. It runs with `--all-features`, for the same reason the skill does. Group
-closure means this set is not always small, so the job runs in parallel with the rest of
-validation rather than gating it. An empty `semver_targets` is a successful skip, not a
-workspace-wide comparison.
+unreleased content. It runs with `--all-features`, for the same reason the skill does.
+An empty `semver_targets` is a successful skip, not a workspace-wide comparison.
 
 The compatibility steps run inside `validate-versions` after binstall validation and version
 readiness succeed. The canary precedes the comparison, and any failure stops later checks.
