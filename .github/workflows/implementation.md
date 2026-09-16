@@ -11,17 +11,19 @@ the installed App's scheduling controls.
 
 | Workflow | What starts it | Responsibility |
 |---|---|---|
-| `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Plan and execute the full main-branch suite, preserve diagnostics and report failures within one run. |
-| `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, and merge-queue events. | Shallow checks feeding the single required `required-checks` result. |
+| `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
+| `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
+| `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
 | `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened. | Advisory production-backed benchmark feedback for same-repository PRs. |
 
 ```text
-Deep validation on main: plan -> check matrices -> report failures -> run report issue
+Deep validation on main: plan -> standard + deep checks -> report failures -> run report issue
 
 Local App triage -> run report -> existing or new problem issues
 Local App repair -> claimed problem issue -> PR -> human review and merge
 
-PR / main push / merge queue -> Standard validation -> required-checks
+PR / main push -> Standard validation -> required-checks
+Merge queue -> Merge queue validation -> required-checks
 ```
 
 Hosted reporting does not invoke AI or wait for triage. App automations discover
@@ -47,9 +49,8 @@ rewrites the manifests and lockfile, so later checks cannot accidentally use fro
 Each platform proceeds independently rather than waiting for other platforms' Clippy results.
 The `docs` matrix builds all-feature and default-feature documentation and then runs doctests.
 
-Pull requests and merge-queue entries use the pruned validation set. Pushes to `main` use the
-full set. Queue delta analysis takes the event's base commit so its comparison cannot drift
-from the queued merge candidate.
+Only pull requests use the pruned validation set. Pushes to `main` and scheduled/manual
+main runs use the full set without invoking delta.
 
 ### Azure emulator coverage
 
@@ -66,7 +67,8 @@ An empty step-local `AZURE_CLIENT_ID` selects the developer credential; the self
 step sets it to `AZURE_TEST_CLIENT_ID`. The latter ignores the Azure CLI session for application
 storage access, while test-container cleanup still uses that session.
 
-The job retains the same-repository and non-merge-queue gates required by the test identity.
+The job retains the same-repository PR gate required by the test identity. Scheduled main
+runs use its existing main-branch federated subject; queue validation has no Azure job.
 Each scenario creates its own container, and an always-run cleanup sweep collects older leaks.
 The age guard preserves recently written containers used by concurrent workflow runs.
 
@@ -79,10 +81,11 @@ a prepared Rust environment. Both planners share one full-history checkout and r
 
 The planner reads immutable event SHAs from a full-history checkout. Pull requests compare
 their head with its merge base against the event's base SHA, covering all PR commits without
-including unrelated base-branch changes. Merge groups compare their exact base and combined
-head directly. Git emits NUL-delimited paths with rename detection disabled, so a move
-contributes both its removed path and its added path without filename quoting ambiguity.
-Unavailable revisions fail. Main pushes explicitly select the full suite.
+including unrelated base-branch changes. Git emits NUL-delimited paths with rename detection
+disabled, so a move contributes both its removed path and its added path without filename
+quoting ambiguity.
+Unavailable revisions fail. Main pushes and scheduled/manual main runs explicitly select
+the full suite without reading change-set revisions.
 
 Script directories are coarse test domains. The module declares recipe ownership and
 cross-domain consumers, and defaults unfamiliar script/recipe locations to the full suite.
@@ -123,12 +126,27 @@ recognize this key ([upstream issue](https://github.com/rhysd/actionlint/issues/
 `.github/actionlint.yaml` excludes only that exact diagnostic for `pr-bench-history.yml`;
 other concurrency diagnostics and other workflows remain checked.
 
+## Merge queue validation
+
+The queue workflow is independent of Standard validation and has no preparation/delta job.
+Its Clippy matrix runs `just clippy dev` with no package selector on the same platforms as
+standard dev Clippy. The Ubuntu leg first runs `just format-check`, sharing setup.
+A separate full-history job runs only `just validate-versions` with
+`RELEASE_PLAN_BASE` set to the event's immutable `merge_group.base_sha`. This prevents a
+moving `origin/main` from changing the candidate's release baseline.
+
+The queue does not inherit minimum-dependency, binstall or SemVer steps from the similarly
+named standard jobs. Its fan-in names every dependency as must-succeed and retains the
+literal `required-checks` check name. Queue-ref concurrency is independent of Standard
+validation and its PR-close companion.
+
 ## Release validation
 
 `cargo-release-plan` compares released content with version anchors and owns the report schema
 and version-readiness verdict. Its release baseline is the tip of the branch releases are made
 from, which is not the branch a pull request targets, so the workflow passes the release branch
-on a pull request and the merge-group base commit on a queue run.
+on a pull request, the merge-group base commit on a queue run, and the tested main commit
+on main pushes and scheduled/manual runs.
 
 `scripts/release/ReleasePlan.psm1` is the PowerShell boundary between that report and hosted
 validation. Rust artifact commands validate the report and distinguish publishable release
@@ -220,8 +238,8 @@ identity contract and credential rationale.
 
 ## Merge-blocking result
 
-The `required-checks` job is the intended single ruleset target. Its `needs` graph contains
-every merge-blocking Standard validation job. `scripts/build/RequiredChecks.psm1` rejects failed,
+The `required-checks` job is the intended single ruleset target. Each validation workflow's
+fan-in contains every one of its merge-blocking jobs. `scripts/build/RequiredChecks.psm1` rejects failed,
 cancelled, missing, and unknown dependency results. It permits `skipped` only for jobs whose
 event, platform, or package scope legitimately excludes them.
 
@@ -235,15 +253,34 @@ The classifier only observes what `needs` supplies, so it also rejects an uncond
 that its must-succeed list names but the payload omits. A name that drifts out of the `needs:`
 list therefore fails the fan-in instead of silently disappearing from it.
 
-Azure OIDC test jobs are among the legitimate queue skips because their federated identity
-trusts pull-request and `main` subjects, not merge-group subjects. Repair branches
-use the same repository/event conditions as other branches.
+The queue fan-in uses the same classifier with every dependency in its must-succeed list
+and no `prepare` dependency. No queue job may skip. Repair branches use the same
+repository/event conditions as other branches.
 
 ## Scheduled validation implementation
 
 The scheduled scripts own planning, check invocation and readable reporting.
 The App skills own diagnosis and ordinary issue/PR work. There is no shared state
 machine connecting these components; their handoffs are GitHub reports and issues.
+
+### Scheduled standard validation
+
+The `standard` job calls `standard-validation.yml` after the main-only plan gate. Reusing
+the workflow includes its complete check graph and platform matrices instead of maintaining
+a nightly copy. GitHub preserves the caller's `schedule` or `workflow_dispatch` event in
+the reusable workflow. Both scope planners select full-workspace/full-tooling outputs for
+these events, and only pull requests select the reduced docs matrix. All jobs check out the
+same event commit; main release validation uses that immutable commit as its baseline.
+
+The caller forwards the Codecov secret and grants the permissions declared by the called
+jobs, including the test identity's OIDC permission. Main-branch federation works for these
+events without an additional Azure credential. The standard push-only `alert` does not
+publish a second issue during a scheduled run. The parent `report` depends on `standard`
+alongside every deep job and collects failed nested jobs from the same Actions run.
+
+Standard validation's scheduled/manual concurrency group includes the run ID, so frequent
+main pushes cannot cancel nightly standard checks. The scheduled suite does not reuse
+previous successful results or skip unchanged packages.
 
 ### Deep execution
 

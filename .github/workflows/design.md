@@ -11,7 +11,7 @@ The [scheduled validation contract](../../docs/scheduled-validation.md) separate
 check execution, failure triage and repair. Each handoff is an ordinary GitHub issue
 that a human or Local Copilot App agent can understand and act on.
 
-The **Deep validation** workflow runs the full suite against merged `main` on its
+The **Deep validation** workflow runs the full standard and deep suites against merged `main` on its
 schedule, or when started manually on `main`. It is not triggered by PRs or forks.
 Its failure-reporting job files a readable **Scheduled validation failed on &lt;date&gt;**
 issue when planning or checks fail. A triager investigates all reported
@@ -31,8 +31,11 @@ GitHub-hosted workflows do not invoke AI. Final approval and merge remain human.
 
 ### Shallow and deep validation
 
-**Standard validation** runs the ordinary shallow PR, push and merge-queue checks.
-**Deep validation** runs the full deep suite at the main commit selected by its event.
+**Standard validation** runs the ordinary shallow PR and push checks.
+**Merge queue validation** runs a lightweight full-workspace gate for combined candidates.
+**Deep validation** runs the full standard and deep suites at the main commit selected by its event,
+without affected-package or PR-platform pruning. It reuses Standard validation rather than
+maintaining a separate copy of its checks.
 Deep validation covers ordinary Miri, many-seed Miri, mutation testing and careful checks.
 It also runs release-profile Clippy and builds (`build-release`),
 example execution (`run-examples`),
@@ -59,7 +62,7 @@ Each selected package runs its full seed budget in one shard by default. Additio
 shards are reserved for packages approaching the job timeout; scheduled validation
 does not need extra horizontal scaling solely to shorten already-small jobs.
 
-Nightly runs execute the entire deep suite even on unchanged source. Build caches
+Nightly runs execute the entire standard and deep suites even on unchanged source. Build caches
 remain ordinary performance aids, not receipts used to skip validation. Hosted
 execution and reporting do not depend on the availability of a Local App.
 
@@ -121,10 +124,10 @@ native helpers. Domain selection includes fixtures, configuration and shared con
 just the file containing a test. Shared validation machinery changes exercise every tooling
 check. Ordinary Rust source changes do not by themselves select unrelated tooling checks.
 
-Selection covers the complete pull request or merge-queue candidate, including deleted and
-renamed inputs. An unavailable change set is an error, not an empty selection. Pushes to
-`main` run the full set as a backstop. The workflow itself always starts, so required-check
-reporting does not depend on GitHub's workflow-level path filters.
+Selection covers the complete pull request, including deleted and renamed inputs.
+An unavailable change set is an error, not an empty selection. Pushes to `main` and
+scheduled/manual main runs use the full set as a backstop. The workflow itself always starts,
+so required-check reporting does not depend on GitHub's workflow-level path filters.
 
 The `prepare` job publishes both Cargo and non-Cargo scope. Its complete outputs are required
 before downstream checks can run or be accepted as intentionally skipped.
@@ -162,16 +165,28 @@ pass runs in Deep validation. Because a push to `main` is the first place Standa
 validation's pruned checks can fail,
 that event — unlike a PR — files a tracking issue (see Failure alerting).
 
-The event split uses a `fromJSON` conditional matrix keyed on `github.event_name == 'push'`
-for the combined docs/doctest job: the full set on push, the pruned set on a PR.
-A `merge_group` (merge queue) run uses that same pruned set: the condition is false for
-anything that is not `push`. Do not rewrite them as `!= 'pull_request'`, or a queue entry
-would take the full matrix. Push to `main` remains the backstop.
+Only pull-request events select the pruned docs/doctest matrix. Main pushes and
+scheduled/manual main runs use the full matrix and skip delta. Pull-request delta analysis
+uses `origin/main`.
 
-Delta analysis on a queue run uses `merge_group.base_sha` (the commit the queue rebased
-onto) rather than a freshly fetched `origin/main`, so the affected-package set cannot
-drift from the version check's base. Pull requests keep today's `origin/main` baseline.
-Push to `main` still skips delta and validates the whole workspace.
+## Merge queue validation
+
+The merge queue checks the combined candidate with full-workspace dev-profile Clippy,
+formatting and version readiness. Clippy compiles all targets and features on Linux,
+Windows and macOS. No affected-package selection precedes these checks. Minimum-dependency,
+SemVer, binstall, runtime and other standard checks remain in PR and full main validation,
+not in the queue gate.
+
+This gate trades repeated pre-merge validation for earlier merges. Passing PRs do not
+prove that their combined changes pass runtime tests. Full Standard validation on main
+pushes provides early detection; scheduled validation repeats both the full standard and
+deep suites and reports failures even when no new commits arrive. Neither backstop gates
+publication: publish-on-merge can release a combined-change regression before detection.
+
+The dedicated queue workflow handles `merge_group` exclusively and reports the same
+`required-checks` name as PR validation. Enabling the queue also requires changing the
+repository ruleset from strict branch-up-to-date checks to required merge-queue checks.
+Workflow changes alone do not change that live repository policy.
 
 ## External type surface
 
@@ -205,9 +220,10 @@ arrives on the branch, so closing or merging a PR — which pushes nothing to th
 would otherwise leave its in-flight Standard validation run to burn to completion. A dedicated
 companion workflow closes that gap: it triggers on the PR-close event and joins the target
 workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Standard validation
-workflow and the PR benchmark-history workflow pair with such a close companion. Standard validation's
-group (`github.head_ref || github.ref`) already distinguishes merge-queue entries: `head_ref`
-is empty there and `github.ref` is the unique queue ref. The close companion stays
+workflow and the PR benchmark-history workflow pair with such a close companion.
+Merge queue validation has its own queue-ref-specific group. Standard validation uses
+run-specific groups when called by scheduled/manual validation, so neither main pushes nor
+other scheduled runs cancel that full-scope backstop. The close companion stays
 pull-request-only. The exception
 is history collection on `main`, which is keyed on the commit **SHA**: each commit is a distinct
 measurement, so distinct commits must run in parallel and only a redundant re-trigger of the
@@ -302,7 +318,8 @@ corrected by editing the requirement.
 
 ## Required checks fan-in
 
-Standard validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
+Standard and Merge queue validation post a fan-in job whose GitHub check name is the ruleset string.
+Their event triggers are disjoint, so each PR or queue candidate receives one merge gate. GitHub's
 required-checks field is a string match on that name: it cannot express "this matrix
 job, but only the legs that actually ran", and it cannot see a check that was skipped
 rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
@@ -322,6 +339,9 @@ When a new merge-blocking job is added to Standard validation it is added to thi
 is never added to the GitHub ruleset. Unconditional gates are also named in the fan-in's
 must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
 required through this fan-in.
+
+The queue fan-in requires every queue check to succeed; none may skip. It uses the
+same result classifier without a change plan, because queue scope is unconditional.
 
 `alert` keeps a `needs:` list of its own, which also names the advisory jobs the fan-in excludes,
 so a new job joins both. The two lists answer different questions — what blocks a merge, and what
@@ -400,10 +420,11 @@ Two managed identities exist, each registered with exactly the subjects its even
 | schedule on `main` | `…:ref:refs/heads/main` | prod | `bench-history-backfill.yml` |
 | pull request | `…:pull_request` | prod | `pr-bench-history.yml` |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
+| schedule/manual dispatch on `main` | `…:ref:refs/heads/main` | test | Scheduled `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
 
-`merge_group` is not a trusted subject. Queue runs skip `test-azure`
-rather than attempting an exchange that cannot succeed.
+`merge_group` is not a trusted subject. Queue validation does not include `test-azure`,
+avoiding an exchange that cannot succeed.
 
 The **prod** identity backs history collection and the PR benchmark workflow; the **test**
 identity backs the Azure-backend test job against a throwaway account. Both trust `main` and
