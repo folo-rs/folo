@@ -400,6 +400,37 @@ round-trip per write and leaves history mutable); building the cache into the Az
 to cache raw wire bytes (cheaper on a miss but not testable with in-memory fakes and
 couples concerns — a storage decorator is fake-driven instead).
 
+### 6.3 Additional local input for read-only queries
+
+`analyze`, `list`, and `examine` accept `--local-input <directory>` to read locally
+collected results together with the selected baseline store. The baseline is still chosen
+normally: configured Azure storage, or `--local` for a filesystem baseline. Collection uses
+the existing `collect --local=<directory>` path; reading the combined data does not upload it.
+This lets a PR measure its head without write access to the shared history.
+
+The directory uses the ordinary stored-object layout and must already exist. Listings contain
+the union of matching keys, with each key appearing once. When both stores contain a key,
+the local input supplies its contents: the current run's measurements take precedence over
+an older stored measurement. Only an absent local object falls back to the baseline; an
+unreadable or malformed local object is an error, not permission to use different data.
+Baseline read failures likewise remain errors rather than producing a partial baseline.
+
+The combined view is read-only. Mutating commands do not accept `--local-input`; writes,
+overwrites, deletions, and cache-invalidation publication never reach either input store
+through this view. The standard project, topology, discriminant, and metric selection
+semantics apply to the combined data, including blessing sidecars.
+
+`--cache` can still mirror the Azure baseline, independently of the local input. Cache
+invalidation and population concern only that mirror; local measurements never populate it.
+The input and effective cache-mirror directories must be disjoint, including filesystem
+aliases, so invalidation cannot delete input data and cached baseline objects cannot be
+mistaken for current measurements. Neither directory may contain the other.
+
+The input path is supplied at run time, like other machine-dependent paths, and resolves
+relative to the command's working directory. There is no additional input-path environment
+variable or committed configuration field. A workflow may assemble a matrix's local result
+artifacts into this one input directory before querying.
+
 ## 7. Commands
 
 Every option is filed under a named help heading so `--help` reads as a small set of

@@ -1733,6 +1733,16 @@ collection receipts, report artifacts, run ownership and isolated publication jo
 monorepo workflows. The companion result handoff and lifecycle guard work is implemented in
 this branch; it does not itself perform that workflow cutover.
 
+**Storage-unit contract.** Collection keeps using `--local=<run-results>`. Read-only queries
+gain `--local-input <run-results>` alongside the ordinary baseline selection, with optional
+`--cache` for Azure. Matching keys are deduplicated and local contents take precedence;
+failures are never treated as absent objects or partial success. The combined view rejects
+mutations, and the local input is kept separate from cache invalidation and population.
+The query siblings `analyze`, `list`, and `examine` share this input; `prune` and other
+mutating commands do not accept it. Filesystem-baseline coverage makes the full composition
+testable without Azure credentials. Workflow artifact assembly and credential separation
+remain the next unit rather than being implied by this CLI addition.
+
 **Phase 3 — Cut the monorepo over to the companion.** Replace the report-sink PowerShell
 modules with calls to the companion, preserving the benchmark triggers, collection and analysis
 semantics while separating credentialed analysis from publication. This is the highest-value
