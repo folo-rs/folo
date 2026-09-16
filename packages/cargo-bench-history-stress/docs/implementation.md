@@ -51,6 +51,21 @@ or cloud resources. Only the thin Tokio delegation carries a mutation exclusion;
 configuration rendering, destination selection, sequencing and error forwarding remain
 library mutation targets.
 
+## Measurement
+
+Each analysis attempt owns a fresh process-CPU measurement session and pairs its
+recorded duration with that attempt's wall time. The real-system coordinator passes
+the report's operation durations to an in-memory selector. Selection preserves the
+first operation's duration exactly, including zero, and returns zero for an empty
+report. Fastest-attempt selection carries the corresponding CPU duration with the
+wall time and keeps the incumbent on ties.
+
+Library tests supply controlled durations to exercise empty reports, measured zero,
+exact nonzero forwarding and paired attempt selection without sampling OS clocks.
+The seeded binary integration tests exercise real measurement and report acquisition
+without asserting elapsed times. No published clock or report-construction testing
+API is needed at this boundary.
+
 ## Validation boundaries
 
 Library tests exercise scenario validation, its use by parsed-input execution,
