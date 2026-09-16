@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "clap",
  "criterion",
