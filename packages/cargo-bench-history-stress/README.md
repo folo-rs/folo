@@ -14,10 +14,12 @@ it by hand (`just bench-history-stress` / `just bench-history-stress-azure`) whe
 want to know how `analyze`
 scales, so it never runs automatically in `just test` or CI. The package's own small
 unit and integration tests, which exercise the harness at tiny sizes, do run as a
-normal workspace member under `just test`, CI, and coverage. Mutation testing runs
-only library unit tests, including tiny real-Git tests of repository construction;
+normal workspace member under `just test`, CI, and coverage. Mutation testing builds
+and runs only library unit tests, including tiny real-Git tests of repository construction;
 it does not run the end-to-end stress scenarios. Tests requiring real Git or
 filesystem I/O are excluded from Miri, not from native mutation testing.
+See the [design](docs/design.md) and [implementation guide](docs/implementation.md)
+for the execution and validation boundaries.
 
 ## What it builds
 
