@@ -15,6 +15,7 @@ mod marker;
 mod message;
 mod model;
 mod operations;
+mod result;
 
 pub use cli::Cli;
 pub use operations::run;

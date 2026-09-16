@@ -1259,13 +1259,18 @@ unconditionally in branch mode, so there is no direction input.
 and intended/contributing platforms. `publish-issue` takes `issue-title`; the history workflow
 gates it with `issue-on-regression` (default `false`). `publish-pr-comment` additionally takes
 `pr-number`, `packages`, and the comment identity. These commands hold no storage inputs.
-The companion's `--body-file` supplies the rendered summary; outcome/platform handoff and
-the configurable comment marker remain interface work described in §11.
+The companion's `--body-file` supplies the rendered summary and `--report-file` the same
+analysis pass's JSON metadata. `--analyzed-sha` must match the report's clean commit.
+`--expected-platforms` and `--completed-platforms` carry nonempty CSV matrix identifiers;
+the latter lists only successful legs. `--comment-marker` optionally selects an existing
+PR comment identity. The predefined workflows assemble these inputs from the artifact handoff.
 
 **Lifecycle-command inputs:** `pr-comment-preflight` / `pr-comment-cleanup` /
 `pr-comment-finalize` take `pr-number` and `comment-marker`, plus (preflight) the `packages`
-scope to disclose and (finalize) the failed run's URL; `issue-preflight` identifies the
-regression issue from `instance`; `issue-cleanup` additionally takes **`auto-close`**
+scope to disclose and (finalize) the failed run's URL. PR commands use the frozen `head`;
+preflight and finalize also share `run-id` to bind placeholder ownership. `issue-preflight`
+identifies the regression issue from `instance`; `issue-cleanup` consumes the same JSON and
+platform evidence, checked against `clean-commit`, and additionally takes **`auto-close`**
 (default `false`, §4.4); `alert` takes the failure issue's displayed title; and
 `resolve-alert` identifies that issue from `instance`.
 
@@ -1412,12 +1417,12 @@ verdict, banner text), so a formatting regression fails here first — and becau
 composition sits beside the data model it renders, a newly added census reason cannot slip
 through unrendered.
 
-**Fake lifecycle coverage is not HTTP-adapter coverage.** The companion's current tests
-exercise lifecycle operations through an in-memory `GitHub` fake, with small pure tests for
-status classification, response conversion and token redaction. They do not exercise the real
-REST request loop, pagination, response decoding, retry/backoff or HTTP create reconciliation.
-Deterministic adapter tests remain required before cutover, alongside the real-GitHub
-validation below; a green fake-driven suite is not evidence that either was executed.
+**Fake lifecycle coverage is not HTTP-adapter coverage.** The companion also exercises its
+REST adapter through injected HTTP and delay boundaries: serialized requests, pagination,
+response decoding, retry/backoff, invalid responses and ambiguous-create reconciliation all
+run without sockets or real-time waits. These tests cover the concrete adapter's policies,
+not GitHub's live authorization or API behavior. Real-GitHub validation remains a distinct
+layer below; neither fake-driven suite substitutes for it.
 
 **Layer 2 — local-storage end-to-end on the CI matrix (every push, minutes, no secrets).** `test.yml` runs the *real* action against **local filesystem storage**
 (`local-path` under `${RUNNER_TEMP}`) across the platform matrix and across *each* real
@@ -1563,19 +1568,21 @@ The working design must distinguish those capabilities from the integration prer
   to JSON. `analyze` exposes the named verdict in JSON and via `--outcome <path>`, with
   `notable` retained in JSON as the findings convenience. No additional coverage formatter
   or standalone `--notable` flag is needed. Nothing GitHub-shaped enters the tool.
-* **The companion exists, but its result-input contract is incomplete for this design.**
-  `cargo-bench-history-github` has the lifecycle commands, marker-based identity, standard
-  envelopes and fakeable transport. Its publication commands currently accept a rendered
-  `--body-file`, not the named outcome or intended/contributing platforms. Passing a summary
-  alone therefore cannot implement the full standard catalogue: outcome/coverage handoff,
-  missing-platform disclosure in both sinks, and safe all-clear gating remain cutover
-  prerequisites. `issue-cleanup` accepts a clean commit but does not itself establish that
-  all intended platforms succeeded. The optional custom comment marker also needs interface
-  support; current identity is derived from `instance`.
-* **Empty-scope cleanup must create the explanatory note when no comment exists.** The
-  companion currently only updates an existing comment or deletes it on request. Its
-  no-comment no-op does not meet §4.4; this is remaining lifecycle work, not a reason to
-  weaken the decided empty-scope behavior.
+* **The companion validates publication evidence.** Publication consumes `--report-file`
+  from the tool's JSON output alongside the rendered `--body-file`, and comma-separated
+  `--expected-platforms` / `--completed-platforms`. The report must name the requested clean
+  commit, the correct analysis mode, and consistent outcome/coverage facts. Missing platforms
+  are disclosed in both sinks without hiding findings. `issue-cleanup` requires the same
+  evidence and refuses all-clear unless the outcome is clean and collection is complete.
+  The command's explicit expected commit prevents silently using a report for another run.
+* **PR lifecycle operations retain ownership.** Preflight records the frozen `--head` and
+  workflow `--run-id`; finalization only retires its own placeholder. Cleanup creates the
+  explanatory empty-scope note even when there is no previous comment, and terminal notes
+  become fresh placeholders when work resumes. Publication checks live-head freshness after
+  comment lookup and preserves a newer current-head report. History publication and cleanup
+  likewise preserve newer issue content when commit ordering cannot be established.
+  `--comment-marker` supports an existing PR comment's identity without changing the
+  instance-scoped lifecycle markers.
 * **The companion requires an independent first publication.** It has not yet been published
   on crates.io. Follow the first-publication handoff in
   [`RELEASING.md`](../../../RELEASING.md), then configure Trusted Publishing for subsequent
@@ -1698,16 +1705,21 @@ Nothing consumes it yet.
 
 **Implementation checkpoint and cutover gate.** Phase 1 is implemented on this branch:
 `analyze` exposes the named verdict through JSON, `--outcome` and its in-process result.
-The Phase 2 foundation is also implemented: the companion has issue/comment lifecycle
-commands, marker identities, message rendering and a REST adapter. This is not yet evidence
-that every approved action contract is ready for production cutover. Before Phase 3:
+Phase 2's companion contracts are implemented: validated result and platform evidence,
+issue/comment lifecycle safeguards, marker identities, standard messages and deterministic
+REST-adapter coverage. This is not yet evidence that the action's job graph is ready for
+production cutover. Before completing Phase 3:
 
-* Wire the analysis verdict and missing-platform information into publication, and prevent an
-  all-clear update from a failed, unjudged or incomplete run.
-* Complete the empty-scope and stale-run lifecycle cases described in the sink contracts.
-* Exercise REST request/response handling, pagination, retry and ambiguous-create behavior
-  through a controllable HTTP boundary. Fake lifecycle tests do not test the concrete adapter;
-  its mutation exclusions are not proof that the excluded paths work.
+* Pass the validated analysis verdict and intended/completed platform information through
+  workflow artifacts to the companion. The companion enforces safe all-clear and partial
+  coverage; the workflow must supply actual successful collection legs, not just configured
+  platform names.
+* Wire frozen heads and run IDs through the empty-scope, preflight and finalization paths.
+  The companion implements their state and ownership guards; workflow event routing remains
+  part of the cutover.
+* Exercise the companion against the monorepo's real GitHub workflow before replacing the
+  existing implementation. In-process tests cover REST construction, parsing, retry and
+  reconciliation, but do not establish live token permissions or event-routing correctness.
 * Reconcile the composite command surface with separate analysis and publication jobs. Data
   exchanged between jobs is an artifact contract, not a local filesystem path.
 
@@ -1715,13 +1727,11 @@ These are completion criteria for the existing phases, not additional features. 
 continue to use their current implementation until the cutover gate is satisfied. Neither
 first publication nor a green unit suite substitutes for that gate.
 
-**Next implementation unit.** Complete the companion's result handoff and lifecycle safeguards
-before migrating workflows: consume the tool's JSON verdict and rendered summary, validate
-intended/completed platform sets, disclose missing platforms in both sinks, and require a
-fully judged, complete clean result for all-clear. Empty-scope cleanup creates its explanatory
-note even on a PR with no previous comment. Cover the actual HTTP request/response and retry
-logic through a controllable transport without live GitHub writes. The temporary-PR-results
-plus Azure-baseline storage view is the next separate unit after this companion work.
+**Next implementation unit.** Add the temporary-PR-results plus Azure-baseline storage view,
+with tests proving PR data can be read with the baseline without mutating Azure. Then wire
+collection receipts, report artifacts, run ownership and isolated publication jobs into the
+monorepo workflows. The companion result handoff and lifecycle guard work is implemented in
+this branch; it does not itself perform that workflow cutover.
 
 **Phase 3 — Cut the monorepo over to the companion.** Replace the report-sink PowerShell
 modules with calls to the companion, preserving the benchmark triggers, collection and analysis

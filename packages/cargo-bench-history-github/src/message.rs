@@ -1,5 +1,6 @@
 use crate::marker;
 use crate::model::{CommitSha, Instance, IssueKind};
+use crate::result::{Coverage, Evidence, Outcome};
 
 const REGRESSION_HEADING: &str = "# Benchmark history";
 const PR_HEADING: &str = "## Benchmark history";
@@ -15,17 +16,21 @@ pub(crate) struct Envelope<'a> {
 
 pub(crate) fn regression_issue(
     instance: &Instance,
-    analyzed_sha: &CommitSha,
+    evidence: &Evidence,
     summary: &str,
     envelope: Envelope<'_>,
 ) -> String {
     let mut sections = vec![
         marker::issue(instance, IssueKind::Regression),
-        marker::analyzed_sha(instance, analyzed_sha),
+        marker::analyzed_sha(instance, &evidence.report.commit),
         REGRESSION_HEADING.to_owned(),
     ];
     push_optional(&mut sections, envelope.intro);
-    sections.push(format!("Analyzed commit: {}", analyzed_sha.as_str()));
+    push_result_status(&mut sections, evidence);
+    sections.push(format!(
+        "Analyzed commit: {}",
+        evidence.report.commit.as_str()
+    ));
     sections.push(summary.trim().to_owned());
     push_links(&mut sections, envelope);
     join_sections(sections)
@@ -68,45 +73,59 @@ pub(crate) fn resolved_failure_issue(existing: &str, run_url: &str) -> String {
 
 pub(crate) fn pr_result(
     instance: &Instance,
-    analyzed_sha: &CommitSha,
+    identity: &str,
+    evidence: &Evidence,
     packages: &str,
     summary: &str,
     envelope: Envelope<'_>,
 ) -> String {
     let mut sections = vec![
-        marker::pr_comment(instance),
-        marker::analyzed_sha(instance, analyzed_sha),
+        identity.to_owned(),
+        marker::analyzed_sha(instance, &evidence.report.commit),
         PR_HEADING.to_owned(),
     ];
     push_optional(&mut sections, envelope.intro);
+    push_result_status(&mut sections, evidence);
     sections.push(format_scope(packages));
-    sections.push(format!("Analyzed commit: {}", analyzed_sha.as_str()));
+    sections.push(format!(
+        "Analyzed commit: {}",
+        evidence.report.commit.as_str()
+    ));
     sections.push(summary.trim().to_owned());
     push_links(&mut sections, envelope);
     join_sections(sections)
 }
 
-pub(crate) fn pr_in_progress(instance: &Instance, packages: &str) -> String {
+pub(crate) fn pr_in_progress(
+    instance: &Instance,
+    identity: &str,
+    packages: &str,
+    head: &CommitSha,
+    run_id: u64,
+) -> String {
     join_sections(vec![
-        marker::pr_comment(instance),
+        identity.to_owned(),
         marker::in_progress(instance),
+        marker::run_owner(instance, run_id, head),
         PR_HEADING.to_owned(),
         "Benchmarking is in progress.".to_owned(),
         format_scope(packages),
     ])
 }
 
-pub(crate) fn pr_nothing_in_scope(instance: &Instance) -> String {
+pub(crate) fn pr_nothing_in_scope(instance: &Instance, identity: &str) -> String {
     join_sections(vec![
-        marker::pr_comment(instance),
+        identity.to_owned(),
+        marker::empty_scope(instance),
         PR_HEADING.to_owned(),
         "No benchmarkable package is affected by this pull request.".to_owned(),
     ])
 }
 
-pub(crate) fn pr_failed(instance: &Instance, run_url: &str) -> String {
+pub(crate) fn pr_failed(instance: &Instance, identity: &str, run_url: &str) -> String {
     join_sections(vec![
-        marker::pr_comment(instance),
+        identity.to_owned(),
+        marker::failed(instance),
         PR_HEADING.to_owned(),
         "Benchmarking did not complete successfully.".to_owned(),
         format!("Failed run: {run_url}"),
@@ -153,7 +172,13 @@ pub(crate) fn insert_stale_banner(body: &str, instance: &Instance, warning: &str
         }
     }
 
-    let banner = [start.as_str(), WARNING_HEADING, warning, end.as_str()];
+    let quoted_warning = format!("> {warning}");
+    let banner = [
+        start.as_str(),
+        WARNING_HEADING,
+        quoted_warning.as_str(),
+        end.as_str(),
+    ];
     let insertion = without_old
         .iter()
         .position(|line| line.starts_with("<!-- cargo-bench-history:"))
@@ -166,6 +191,40 @@ pub(crate) fn insert_stale_banner(body: &str, instance: &Instance, warning: &str
 pub(crate) fn is_in_progress(body: &str, instance: &Instance) -> bool {
     body.lines()
         .any(|line| line == marker::in_progress(instance))
+}
+
+pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
+    body.lines()
+        .any(|line| line == marker::empty_scope(instance) || line == marker::failed(instance))
+}
+
+fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
+    let outcome = evidence.report.outcome;
+    if !evidence.platforms.is_complete() {
+        sections.push(format!(
+            "{WARNING_HEADING}\n> Partial platform coverage. Completed: {}. Missing: {}.\n\
+             > Findings and absence-of-findings statements apply only to completed platforms.",
+            evidence.platforms.completed().join(", "),
+            evidence.platforms.missing().join(", ")
+        ));
+    }
+    if evidence.report.coverage == Coverage::Partial {
+        sections.push(format!(
+            "{WARNING_HEADING}\n> Some in-scope metric series could not be judged. \
+             See the report for coverage details."
+        ));
+    }
+    let headline = match outcome {
+        Outcome::Findings => "Notable benchmark changes detected.",
+        Outcome::Clean if evidence.platforms.is_complete() => {
+            "No notable changes detected across the completed collection."
+        }
+        Outcome::Clean => "No notable changes detected on the completed platforms only.",
+        Outcome::InsufficientBaseline => "Insufficient evidence to judge the in-scope series.",
+        Outcome::NothingInScope => "No metric series was analyzed at this commit.",
+        Outcome::Partial => "No notable changes detected among the series that could be judged.",
+    };
+    sections.push(headline.to_owned());
 }
 
 fn format_scope(packages: &str) -> String {
@@ -206,6 +265,8 @@ fn join_sections(sections: Vec<String>) -> String {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::result::AnalysisMode;
+    use crate::result::tests::evidence;
 
     fn instance() -> Instance {
         "default".parse().unwrap()
@@ -219,7 +280,7 @@ mod tests {
     fn regression_issue_embeds_domain_summary_without_interpreting_it() {
         let body = regression_issue(
             &instance(),
-            &sha(),
+            &evidence(AnalysisMode::History, Outcome::Findings, true),
             "DOMAIN SUMMARY",
             Envelope {
                 intro: Some("Advisory."),
@@ -240,7 +301,8 @@ mod tests {
         let instance = instance();
         let body = pr_result(
             &instance,
-            &sha(),
+            &marker::pr_comment(&instance),
+            &evidence(AnalysisMode::Branch, Outcome::Findings, true),
             "foo, bar",
             "summary",
             Envelope::default(),
@@ -260,7 +322,7 @@ mod tests {
         let body = format!("{}\nbody", marker::pr_comment(&instance));
         let refreshed = insert_stale_banner(&body, &instance, "warning");
         let expected = format!(
-            "{}\n{}\n{}\nwarning\n{}\nbody",
+            "{}\n{}\n{}\n> warning\n{}\nbody",
             marker::pr_comment(&instance),
             marker::stale_start(&instance),
             WARNING_HEADING,
@@ -285,11 +347,17 @@ mod tests {
 
     #[test]
     fn scope_is_trimmed_and_rendered_consistently() {
-        let body = pr_in_progress(&instance(), "foo, bar");
+        let body = pr_in_progress(
+            &instance(),
+            &marker::pr_comment(&instance()),
+            "foo, bar",
+            &sha(),
+            1,
+        );
         assert!(body.contains("Packages benchmarked: `foo`, `bar`"));
         assert!(is_in_progress(&body, &instance()));
         assert!(!is_in_progress(
-            &pr_nothing_in_scope(&instance()),
+            &pr_nothing_in_scope(&instance(), &marker::pr_comment(&instance())),
             &instance()
         ));
     }
@@ -301,5 +369,63 @@ mod tests {
             body,
             "failure body\n\nResolved by successful run: https://example.test/run"
         );
+    }
+
+    #[test]
+    fn partial_series_do_not_hide_findings_or_missing_platforms() {
+        let mut result = evidence(AnalysisMode::Branch, Outcome::Findings, false);
+        result.report.coverage = Coverage::Partial;
+        let body = pr_result(
+            &instance(),
+            &marker::pr_comment(&instance()),
+            &result,
+            "foo",
+            "exact tool summary",
+            Envelope::default(),
+        );
+        assert!(body.contains("Notable benchmark changes detected."));
+        assert!(body.contains("Some in-scope metric series could not be judged."));
+        assert!(body.contains("Missing: windows."));
+        assert!(body.contains("exact tool summary"));
+    }
+
+    #[test]
+    fn silent_outcomes_select_distinct_qualified_messages() {
+        let cases = [
+            (
+                Outcome::Clean,
+                "No notable changes detected across the completed collection.",
+            ),
+            (
+                Outcome::InsufficientBaseline,
+                "Insufficient evidence to judge",
+            ),
+            (Outcome::NothingInScope, "No metric series was analyzed"),
+            (Outcome::Partial, "among the series that could be judged"),
+        ];
+        for (outcome, expected) in cases {
+            let result = evidence(AnalysisMode::Branch, outcome, true);
+            let body = pr_result(
+                &instance(),
+                &marker::pr_comment(&instance()),
+                &result,
+                "foo",
+                "tool summary",
+                Envelope::default(),
+            );
+            assert!(body.contains(expected), "{body}");
+            assert!(!body.contains("Missing:"));
+        }
+        let result = evidence(AnalysisMode::Branch, Outcome::Clean, false);
+        let body = pr_result(
+            &instance(),
+            &marker::pr_comment(&instance()),
+            &result,
+            "foo",
+            "tool summary",
+            Envelope::default(),
+        );
+        assert!(body.contains("completed platforms only"));
+        assert!(!body.contains("across the completed collection"));
     }
 }
