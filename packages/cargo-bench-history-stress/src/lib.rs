@@ -22,6 +22,7 @@
 //! [`run_with_overrides`]: cargo_bench_history::run_with_overrides
 
 mod cli;
+mod config;
 mod error;
 mod logging;
 mod measure;
@@ -32,4 +33,5 @@ mod scenario;
 mod seed;
 mod target;
 
+pub use config::*;
 pub use run::run;

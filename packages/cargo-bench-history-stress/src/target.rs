@@ -481,19 +481,15 @@ mod tests {
         // carries only the project section and no storage table.
         let local = local_target(PathBuf::from("store"));
         let local_config = local.config_toml();
-        assert!(local_config.contains("[project]"), "got: {local_config}");
-        assert!(!local_config.contains("[storage"), "got: {local_config}");
+        assert_eq!(local_config, "[project]\nid = \"stress\"\n");
 
         let fake = Arc::new(FakeRunner::default());
         let azure = fake_azure_target(&fake, PathBuf::from("staging"));
         let azure_config = azure.config_toml();
-        assert!(
-            azure_config.contains("[storage.azure]"),
-            "got: {azure_config}"
-        );
-        assert!(
-            azure_config.contains("account = \"acct\""),
-            "got: {azure_config}"
+        assert_eq!(
+            azure_config,
+            "[project]\nid = \"stress\"\n\n[storage.azure]\naccount = \"acct\"\n\
+             container = \"cont\"\nendpoint = \"https://acct.blob.core.windows.net\"\n"
         );
     }
 
