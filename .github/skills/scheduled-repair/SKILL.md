@@ -21,11 +21,11 @@ hide a failure or claim success for blocked work.
 
 # Stage 1: Verify the claim and current work
 
-On a completion-cleanup request, first inspect the final disposition of the issue
-and any linked PR. If the repair is merged, resolved without a PR or explicitly
-abandoned, reconcile any remaining local work and leave the final handoff described
-below. Do not revive a released claim, rerun completed checks or start another
-repair merely to keep the session active.
+On continuation, first inspect the disposition of the issue and any linked PR.
+If the repair is merged, resolved without a PR or explicitly abandoned, preserve
+any remaining local work for the operator and end the worker turn. Do not revive
+a released claim, rerun completed checks or start another repair merely to keep
+the session active.
 
 Read the issue's current discussion, assignees and linked PRs, and confirm this
 session and branch match its plain ownership comment. Follow the
@@ -195,17 +195,29 @@ validation still apply.
 
 # Stage 4: Follow checks, review and conflicts
 
+This session owns its PR follow-up. Intake coordinates new repair relationships
+and admissions; it does not monitor this PR or relay check/review feedback.
+
+Apply the [check-waiting policy](../../../docs/git-workflow.md#check-waiting-and-merge-queue-readiness)
+to the current diff. Required checks, relevant optional checks, local deep
+verification and automated review retain their readiness requirements. Do not
+wait solely for low-signal optional checks, such as benchmark comparisons when
+no performance-relevant inputs changed. They may continue after the ready handoff;
+record what was not awaited and why, without claiming a pass. This does not
+authorize merging or bypassing required checks.
+
 Queued, pending and in-progress checks or automated reviews are normal ongoing
 work, not failures or human-action blockers. Queue age, a runner not yet being
 assigned, absent steps/logs before execution, or other queued repository runs do
 not establish an outage. Do not add `needs-human`, request a check waiver, or end
-requested foreground follow-up on that basis.
+requested foreground follow-up merely because a result worth awaiting is delayed.
 
-Keep following the same PR in the foreground while execution or automated review
-is pending. Wait between status reads rather than busy-polling; foreground waits
-do not require a per-PR automation or hidden watcher. Recheck the current head
-after pushes and refresh reviews as well as checks. Passing checks alone do not
-finish follow-up while an automated review is still pending.
+Keep following the same PR in the foreground while required checks, relevant
+optional checks or automated review are pending. Wait between status reads rather
+than busy-polling; foreground waits do not require a per-PR automation or hidden
+watcher. Recheck the current head after pushes and reassess optional-check relevance;
+refresh reviews as well as checks. Passing checks alone do not finish follow-up
+while an automated review is still pending.
 
 Read all current-head check failures, relevant deep failures, conflicts with main,
 top-level comments, review summaries and inline threads. Include low-confidence
@@ -231,8 +243,8 @@ do not silently detach the child or claim readiness. Parent changes that invalid
 the dependency or settled plan require coordination before more dependent work.
 When this repair is itself a prerequisite, publish changed scope, release plan
 and pushed head on GitHub and notify its existing child owners. Record each
-reconciled parent snapshot in the child's handoff so intake can distinguish
-handled changes from new input without repeatedly waking it.
+reconciled parent snapshot in the child's handoff so related owners and intake
+can assess the current dependency without requesting status.
 
 Reserve `needs-human` for a concrete impediment requiring a specific human action,
 such as an explicit approval requirement or a diagnosed permission/configuration
@@ -253,24 +265,25 @@ After pushing a fix for an authorized inline thread, use
 substitute a disconnected top-level comment. Record evidenced human blockers and
 needed decisions on the issue with `needs-human`; keep ownership unless
 explicitly releasing it. Do not claim readiness while required checks, relevant
-deep verification or automated review remain pending, or failures and actionable
-feedback remain unresolved.
+optional checks, relevant deep verification or automated review remain pending,
+or failures and actionable feedback remain unresolved.
 
 # Stage 5: Leave a reviewable handoff
 
-After current-head checks and automated review have concluded and actionable
-findings are addressed, state that the PR awaits human review/approval/merge,
-with links and any limitations. A genuine human blocker instead needs its
-specific unresolved action, not a ready claim. Post only substantive progress;
-put decision diagnostics in a collapsible section of a summary.
+After current-head required checks, relevant optional checks and automated review
+have concluded and actionable findings are addressed, state that the PR awaits
+human review/approval/merge, with links and any limitations. Pending low-signal
+optional checks do not prevent this handoff. A genuine human blocker instead
+needs its specific unresolved action, not a ready claim. Post only substantive
+progress; put decision diagnostics in a collapsible section of a summary.
 For a stack, identify the prerequisite PR and required bottom-to-top order;
 readiness for review is not permission to merge a child independently.
 
 A session becoming idle is not completion. If foreground work is interrupted,
-leave a pending handoff that retains ownership and the next check/review action;
-do not convert unfinished waiting into `needs-human`. Repository-level
-`scheduled-intake` supplies future follow-up without replacing the requested
-foreground work; do not start a timer or hidden watcher.
+leave a pending handoff that retains ownership and the next check/review action
+for continuation in this session; do not convert unfinished waiting into
+`needs-human`. Do not rely on `scheduled-intake` to restart or monitor this work,
+and do not start a timer or hidden watcher.
 
 A merged linked PR closes the issue through ordinary GitHub behavior. A PR closed
 without merging does not resolve the issue: explain the disposition and explicitly
@@ -278,16 +291,13 @@ release or block the claim rather than restarting automatically. No post-merge
 confirmation service or copied local state is needed.
 
 Ready for human review is still an incomplete repair for the repository's
-[repair-session limit](../../../docs/scheduled-validation.md#repair-session-capacity-and-cleanup).
-It retains its slot until merged or explicitly abandoned; idling the session or
-adding `needs-human` does not release capacity.
+[repair-session limit](../../../docs/scheduled-validation.md#repair-session-capacity).
+Idling an unmerged repair or adding `needs-human` does not release capacity.
+A merged repair no longer consumes a slot once its session stops executing work,
+regardless of retained labels, local work or a final handoff.
 
-Once the repair has a final disposition, leave a concise handoff with the issue/PR
-links and identify any unpublished or unmerged work, ongoing operation, active
-Agent merge or attached session automation that prevents safe archival. For a
-repair without a PR, link its documented resolution or explicit abandonment.
-Do not discard work to make cleanup possible. When nothing remains, end the worker
-turn instead of leaving a wait or watcher active. The intake coordinator verifies
-completion and archives the session where authorized; a session cannot archive
-itself. If archival requires its owning parent or the operator, report that action
-without claiming archival succeeded.
+Once the repair has a final disposition, preserve any unpublished or unmerged work
+and identify it for the operator when a handoff is needed. For a repair without a
+PR, link its documented resolution or explicit abandonment. End the worker turn
+instead of leaving a wait or watcher active. Session archival and retained-worktree
+housekeeping belong to the operator, not intake, and are not capacity prerequisites.

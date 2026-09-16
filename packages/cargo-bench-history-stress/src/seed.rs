@@ -6,9 +6,10 @@
 //! upload source for Azure. Generation is CPU-bound (millions of small records
 //! serialized to JSON), so it is fanned out across the available cores.
 
+use std::num::NonZero;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::thread;
+use std::{fs, thread};
 
 use cbh_codec as codec;
 use cbh_model::{
@@ -107,7 +108,8 @@ pub(crate) fn seed(
             .to_owned()
     });
 
-    let bytes = write_tasks(root, scenario, sets, &tasks)?;
+    let workers = thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN);
+    let bytes = write_tasks(root, scenario, sets, &tasks, workers, &write_file)?;
     let stats = SeedStats {
         objects: tasks.len(),
         bytes,
@@ -173,18 +175,21 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
     tasks
 }
 
-/// Writes every planned task, fanned out across the available cores.
+/// Writes every planned task using the supplied worker limit and storage operation.
+///
+/// The process boundary supplies OS parallelism and filesystem writes; unit tests
+/// supply in-memory storage. See docs/implementation.md, "Validation boundaries".
 fn write_tasks(
     root: &Path,
     scenario: Scenario,
     sets: &[DiscriminantSet],
     tasks: &[Task],
+    workers: NonZero<usize>,
+    write: &(impl Fn(&Path, &[u8]) -> Result<(), Error> + Sync),
 ) -> Result<u64, Error> {
     let next = AtomicUsize::new(0);
     let total_bytes = AtomicU64::new(0);
-    let worker_count = thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(tasks.len().max(1));
+    let worker_count = workers.get().min(tasks.len().max(1));
 
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
@@ -197,7 +202,7 @@ fn write_tasks(
                     let Some(task) = tasks.get(index) else {
                         return Ok(());
                     };
-                    let written = write_one(root, scenario, sets, task)?;
+                    let written = write_one(root, scenario, sets, task, write)?;
                     total_bytes.fetch_add(written, Ordering::Relaxed);
                 }
             }));
@@ -219,6 +224,7 @@ fn write_one(
     scenario: Scenario,
     sets: &[DiscriminantSet],
     task: &Task,
+    write: &impl Fn(&Path, &[u8]) -> Result<(), Error>,
 ) -> Result<u64, Error> {
     let set = sets
         .get(set_index(task))
@@ -285,18 +291,28 @@ fn write_one(
         }
     };
 
-    let path = root.join(&key);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| fail(format!("failed to create {}: {error}", parent.display())))?;
-    }
     // Mirror the storage layer's encoding by calling the same codec it uses, so
     // the seeded tree is byte-for-byte what a real `put` would have written and
     // the reported volume is the real on-disk/wire size #260 is about.
     let stored = codec::compress(body.as_bytes());
-    std::fs::write(&path, &stored)
-        .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
+    write(&root.join(&key), &stored)?;
     Ok(stored.len() as u64)
+}
+
+/// Persists an encoded object and creates its containing directories.
+// Real filesystem access belongs to the binary integration tests. The in-process
+// tests exercise generation, dispatch, accounting and propagated storage failures.
+// Ref: docs/implementation.md, "Validation boundaries".
+#[cfg_attr(test, mutants::skip)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn write_file(path: &Path, stored: &[u8]) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| fail(format!("failed to create {}: {error}", parent.display())))?;
+    }
+    fs::write(path, stored)
+        .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
+    Ok(())
 }
 
 /// Builds a [`Run`] whose every benchmark's primary metric comes from `value`.
@@ -366,6 +382,377 @@ fn i64_from(value: usize) -> i64 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod write_tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::slice;
+    use std::sync::Mutex;
+
+    use cbh_model::{Engine, MachineKey, TargetTriple};
+
+    use super::*;
+
+    // Native runs cover every family; Miri needs one metric to verify each stored-object format.
+    const SCENARIO: Scenario = Scenario {
+        benchmarks: if cfg!(miri) { 1 } else { 5 },
+        commits: 4,
+        branch_commits: 1,
+        dirty_runs: 2,
+        // Arbitrary fixed seed: contents must be reproducible, not statistically representative.
+        seed: 37,
+    };
+
+    // Distinct fixed timestamps and IDs expose routing mistakes without a real clock or Git.
+    const MAIN_TIME: i64 = 1_000;
+    const FEATURE_TIME: i64 = 2_000;
+    const OBSERVATION: i64 = 2_001;
+    const ISSUED: i64 = 1_060;
+    const MAIN_COMMIT: &str = "main-commit";
+    const FEATURE_COMMIT: &str = "feature-commit";
+
+    // Exercise shared accounting across workers without querying OS parallelism.
+    const WORKERS: NonZero<usize> = NonZero::new(2).unwrap();
+
+    fn sets() -> [DiscriminantSet; 2] {
+        // Contrast noisy and exact metrics, as well as the zero and nonzero set indices.
+        [Engine::Criterion, Engine::Callgrind].map(|engine| {
+            DiscriminantSet::new(
+                engine,
+                &TargetTriple::from("x86_64-unknown-linux-gnu"),
+                &MachineKey::from("write-test-rig"),
+            )
+        })
+    }
+
+    fn tasks() -> [Task; 4] {
+        [
+            Task::CleanMain {
+                set: 1,
+                index: SCENARIO.bless_index(),
+                commit_id: MAIN_COMMIT.to_owned(),
+                time: ts(MAIN_TIME),
+            },
+            Task::CleanFeature {
+                set: 0,
+                commit_id: FEATURE_COMMIT.to_owned(),
+                time: ts(FEATURE_TIME),
+            },
+            Task::Dirty {
+                set: 1,
+                k: 1,
+                commit_id: FEATURE_COMMIT.to_owned(),
+                time: ts(FEATURE_TIME),
+                observation: OBSERVATION,
+            },
+            Task::Bless {
+                set: 0,
+                commit_id: MAIN_COMMIT.to_owned(),
+                issued: ISSUED,
+            },
+        ]
+    }
+
+    fn ts(second: i64) -> Timestamp {
+        Timestamp::from_second(second).unwrap()
+    }
+
+    fn expected_run(
+        set: &DiscriminantSet,
+        time: i64,
+        commit: &str,
+        branch: &str,
+        dirty: bool,
+        value: impl Fn(usize) -> f64,
+    ) -> String {
+        // Use the model and scenario, not the writer's clean_run/run_context.
+        Run::new(
+            RunContext::new(
+                ts(time),
+                GitInfo {
+                    commit: Some(commit.to_owned()),
+                    branch: Some(branch.to_owned()),
+                    dirty,
+                },
+                EnvironmentInfo::default(),
+                ToolchainInfo {
+                    target_triple: set.target_triple.clone(),
+                    rustc_version: None,
+                },
+                TOOL_VERSION.to_owned(),
+            ),
+            (0..SCENARIO.benchmarks)
+                .map(|b| {
+                    BenchmarkResult::new(
+                        benchmark_id(b),
+                        vec![scenario::metric_for(set.engine, value(b))],
+                    )
+                })
+                .collect(),
+        )
+        .to_json()
+        .unwrap()
+    }
+
+    fn expected_objects(sets: &[DiscriminantSet; 2]) -> [(String, String); 4] {
+        [
+            (
+                sets[1].clean_key(PROJECT, MAIN_COMMIT),
+                expected_run(&sets[1], MAIN_TIME, MAIN_COMMIT, BRANCH_MAIN, false, |b| {
+                    SCENARIO.main_clean_value(b, 1, SCENARIO.bless_index())
+                }),
+            ),
+            (
+                sets[0].clean_key(PROJECT, FEATURE_COMMIT),
+                expected_run(
+                    &sets[0],
+                    FEATURE_TIME,
+                    FEATURE_COMMIT,
+                    BRANCH_FEATURE,
+                    false,
+                    |b| SCENARIO.feature_clean_value(b, 0),
+                ),
+            ),
+            (
+                sets[1].dirty_key(PROJECT, FEATURE_COMMIT, OBSERVATION),
+                expected_run(
+                    &sets[1],
+                    FEATURE_TIME,
+                    FEATURE_COMMIT,
+                    BRANCH_FEATURE,
+                    true,
+                    |b| SCENARIO.dirty_value(b, 1, 1),
+                ),
+            ),
+            (
+                sets[0].bless_key(PROJECT, MAIN_COMMIT, ISSUED),
+                expected_blessing(ISSUED),
+            ),
+        ]
+    }
+
+    fn expected_blessing(issued: i64) -> String {
+        BlessingRecord::new(
+            MAIN_COMMIT.to_owned(),
+            ts(issued),
+            vec![BenchmarkIdPrefix::new(scenario::blessable_family_prefix()).unwrap()],
+            TOOL_VERSION.to_owned(),
+        )
+        .to_json()
+        .unwrap()
+    }
+
+    fn collect_objects(
+        objects: &Mutex<BTreeMap<PathBuf, Vec<u8>>>,
+    ) -> impl Fn(&Path, &[u8]) -> Result<(), Error> + '_ {
+        move |path, stored| {
+            let previous = objects
+                .lock()
+                .unwrap()
+                .insert(path.to_owned(), stored.to_vec());
+            assert!(previous.is_none());
+            Ok(())
+        }
+    }
+
+    fn assert_object(stored: &[u8], body: &str) -> u64 {
+        // Use the current storage codec as the oracle instead of pinning compressed fixture bytes.
+        assert_eq!(stored, codec::compress(body.as_bytes()));
+        u64::try_from(stored.len()).unwrap()
+    }
+
+    fn assert_one(index: usize) {
+        let root = Path::new("storage");
+        let objects = Mutex::new(BTreeMap::new());
+        let sets = sets();
+        let tasks = tasks();
+        let task = tasks.get(index).unwrap();
+        let expected = expected_objects(&sets);
+        let (key, body) = expected.get(index).unwrap();
+        let bytes = write_one(root, SCENARIO, &sets, task, &collect_objects(&objects)).unwrap();
+        let objects = objects.into_inner().unwrap();
+        assert_eq!(
+            bytes,
+            assert_object(objects.get(&root.join(key)).unwrap(), body)
+        );
+        assert_eq!(objects.len(), 1);
+    }
+
+    #[test]
+    fn write_one_stores_clean_main_content_and_byte_count() {
+        assert_one(0);
+    }
+
+    #[test]
+    fn write_one_stores_clean_feature_content_and_byte_count() {
+        assert_one(1);
+    }
+
+    #[test]
+    fn write_one_stores_dirty_content_and_byte_count() {
+        assert_one(2);
+    }
+
+    #[test]
+    fn write_one_stores_blessing_content_and_byte_count() {
+        assert_one(3);
+    }
+
+    #[test]
+    fn write_tasks_stores_every_object_and_sums_compressed_bytes() {
+        let root = Path::new("storage");
+        let objects = Mutex::new(BTreeMap::new());
+        let sets = sets();
+        let (tasks, expected): (Vec<_>, Vec<_>) = if cfg!(miri) {
+            // Compact sidecars exercise shared accounting without repeating the full format
+            // matrix's compression workload. Distinct issue times give them distinct keys.
+            [ISSUED, ISSUED + 1]
+                .map(|issued| {
+                    (
+                        Task::Bless {
+                            set: 0,
+                            commit_id: MAIN_COMMIT.to_owned(),
+                            issued,
+                        },
+                        (
+                            sets[0].bless_key(PROJECT, MAIN_COMMIT, issued),
+                            expected_blessing(issued),
+                        ),
+                    )
+                })
+                .into_iter()
+                .unzip()
+        } else {
+            (tasks().into(), expected_objects(&sets).into())
+        };
+        let bytes = write_tasks(
+            root,
+            SCENARIO,
+            &sets,
+            &tasks,
+            WORKERS,
+            &collect_objects(&objects),
+        )
+        .unwrap();
+        let objects = objects.into_inner().unwrap();
+        assert_eq!(objects.len(), tasks.len());
+        let expected_bytes: u64 = expected
+            .iter()
+            .map(|(key, body)| assert_object(objects.get(&root.join(key)).unwrap(), body))
+            .sum();
+        assert_eq!(bytes, expected_bytes);
+    }
+
+    #[test]
+    fn write_tasks_without_tasks_writes_nothing() {
+        let bytes = write_tasks(
+            Path::new("unused"),
+            SCENARIO,
+            &[],
+            &[],
+            WORKERS,
+            &|_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(bytes, 0);
+    }
+
+    #[test]
+    fn write_one_rejects_an_unknown_set() {
+        _ = write_one(
+            Path::new("unused"),
+            SCENARIO,
+            &[],
+            &tasks()[0],
+            &|_, _| unreachable!(),
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn write_one_rejects_an_invalid_blessing_timestamp() {
+        let task = Task::Bless {
+            set: 0,
+            commit_id: MAIN_COMMIT.to_owned(),
+            issued: i64::MAX,
+        };
+        _ = write_one(
+            Path::new("unused"),
+            SCENARIO,
+            &sets(),
+            &task,
+            &|_, _| unreachable!(),
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn write_tasks_propagates_a_worker_error() {
+        _ = write_tasks(
+            Path::new("unused"),
+            SCENARIO,
+            &[],
+            &tasks(),
+            WORKERS,
+            &|_, _| unreachable!(),
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn write_one_propagates_a_storage_error() {
+        let calls = AtomicUsize::new(0);
+        _ = write_one(
+            Path::new("storage"),
+            SCENARIO,
+            &sets(),
+            &tasks()[0],
+            &|_, _| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(fail("injected storage failure"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn write_tasks_propagates_a_storage_error() {
+        let calls = AtomicUsize::new(0);
+        let tasks = tasks();
+        // A compact sidecar suffices: this case checks failure propagation, not object formats.
+        let tasks = slice::from_ref(tasks.last().unwrap());
+        _ = write_tasks(
+            Path::new("storage"),
+            SCENARIO,
+            &sets(),
+            tasks,
+            WORKERS,
+            &|_, _| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(fail("injected storage failure"))
+            },
+        )
+        .unwrap_err();
+        assert_ne!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn write_tasks_returns_an_error_when_a_worker_panics() {
+        _ = write_tasks(
+            Path::new("storage"),
+            SCENARIO,
+            &sets(),
+            &tasks()[..1],
+            NonZero::<usize>::MIN,
+            &|_, _| panic!(),
+        )
+        .unwrap_err();
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
     use jiff::Timestamp;
