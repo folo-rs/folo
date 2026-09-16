@@ -13,6 +13,7 @@ fn inspection_selects_only_publishable_members_and_never_edits_the_workspace() {
     let fixture = Fixture::new("");
     write_package(&fixture, "api", "1.0.0", "");
     write_package(&fixture, "helper", "1.0.0", "publish = false\n");
+    write_package(&fixture, "unselected", "1.0.0", "");
     fixture.commit("members");
     let path = fixture.path().join("expanded.json");
     fs::write(

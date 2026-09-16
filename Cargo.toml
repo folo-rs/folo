@@ -28,7 +28,7 @@ azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.13", path = "packages/cargo-freeze-deps", default-features = false }
-cargo-release-plan = { version = "0.3.12", path = "packages/cargo-release-plan", default-features = false }
+cargo-release-plan = { version = "0.3.13", path = "packages/cargo-release-plan", default-features = false }
 cbh_analyze = { version = "=0.2.13", path = "packages/cbh_analyze", default-features = false }
 cbh_cli = { version = "=0.2.13", path = "packages/cbh_cli", default-features = false }
 cbh_codec = { version = "=0.2.13", path = "packages/cbh_codec", default-features = false }
@@ -96,8 +96,8 @@ negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.9", path = "packages/new_zealand", default-features = false }
 nm = { version = "0.1.50", path = "packages/nm", default-features = false }
 nm_impl = { version = "=0.1.50", path = "packages/nm_impl", default-features = false }
-nm_otel = { version = "0.4.22", path = "packages/nm_otel", default-features = false }
-nm_otel_impl = { version = "=0.4.22", path = "packages/nm_otel_impl", default-features = false }
+nm_otel = { version = "0.4.23", path = "packages/nm_otel", default-features = false }
+nm_otel_impl = { version = "=0.4.23", path = "packages/nm_otel_impl", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }

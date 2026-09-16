@@ -195,8 +195,10 @@ validation still apply.
 
 # Stage 4: Follow checks, review and conflicts
 
-This session owns its PR follow-up. Intake coordinates new repair relationships
-and admissions; it does not monitor this PR or relay check/review feedback.
+This session owns its PR follow-up. Intake coordinates new repair relationships,
+admissions and recovery of unexpectedly stopped execution; it does not monitor
+this PR or relay check/review feedback. A recovery message continues the existing
+request: recheck the claim and disposition under Stage 1 before resuming.
 
 Apply the [check-waiting policy](../../../docs/git-workflow.md#check-waiting-and-merge-queue-readiness)
 to the current diff. Required checks, relevant optional checks, local deep
@@ -282,8 +284,10 @@ readiness for review is not permission to merge a child independently.
 A session becoming idle is not completion. If foreground work is interrupted,
 leave a pending handoff that retains ownership and the next check/review action
 for continuation in this session; do not convert unfinished waiting into
-`needs-human`. Do not rely on `scheduled-intake` to restart or monitor this work,
-and do not start a timer or hidden watcher.
+`needs-human`. Intake may request continuation after an evidenced unexpected stop,
+but this best-effort recovery does not replace the owner's foreground follow-up
+or authorize overriding an operator pause or human gate. Do not end work expecting
+an intake wake-up, and do not start a timer or hidden watcher.
 
 A merged linked PR closes the issue through ordinary GitHub behavior. A PR closed
 without merging does not resolve the issue: explain the disposition and explicitly

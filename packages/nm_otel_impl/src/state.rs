@@ -168,6 +168,9 @@ pub struct EventState {
 #[cfg(any(test, feature = "private-test-util"))]
 impl EventState {
     /// Computes streaming cumulative histogram values and deltas.
+    // Trivial private-test-util forwarder for allocation tests and benchmarks.
+    // Mutation coverage belongs to EventDeltaState and its streaming iterator.
+    #[cfg_attr(test, mutants::skip)]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn histogram_deltas<'a>(
         &'a mut self,

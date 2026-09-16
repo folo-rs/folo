@@ -17,6 +17,14 @@ Production collection remains private to the publisher. The implementation crate
 driver, and histogram delta state only to in-workspace tests and benchmarks. The shell does not
 forward this feature.
 
+Mutation testing targets the production exporter, delta state and streaming iterator, not
+the trivial histogram-state forwarder used by allocation tests and benchmarks. The metric
+lookup assertion helper is also excluded: it consumes populated SDK snapshots that have no
+public in-memory constructors and are obtained through the SDK collection pipeline. Its
+consumers remain integration tests rather than running real SDK collection solely to test
+an assertion helper in the library harness. These exclusions are function-local and do not
+exclude the production algorithms or the rest of the test-reader support.
+
 ## Recording pipeline
 
 On each publisher interval, the implementation obtains an aggregated report from `nm`, associates
