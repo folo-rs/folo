@@ -26,20 +26,26 @@ function Invoke-WorkspaceScriptAnalysis {
         module_path = $env:PSModulePath; repository = $RepositoryRoot
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $directory environment.json)
     try {
-        # Parallel rules share lazily initialized Export-ModuleMember parameter metadata.
-        # Initialize it through one rule first so PowerShell's runspace event setup is serial.
-        # The real scan below still runs every configured default/custom rule.
-        # Ref: docs/build-and-tooling.md#powershell-linting.
-        $initialization = @(Invoke-ScriptAnalyzer `
-            -ScriptDefinition "function Get-AnalysisInitialization { }`nExport-ModuleMember -Function Get-AnalysisInitialization" `
-            -IncludeRule PSReservedCmdletChar -Verbose 4> $trace)
-        if ($initialization.Count -gt 0) {
-            throw 'Script analyzer metadata initialization returned unexpected diagnostics.'
+        $customRules = Join-Path $RepositoryRoot 'scripts\analyzer\FoloAnalyzerRules.psm1'
+        $rules = @(
+            Get-ScriptAnalyzerRule
+            Get-ScriptAnalyzerRule -CustomRulePath $customRules
+        )
+        $names = @($rules | Select-Object -ExpandProperty RuleName | Sort-Object -Unique)
+        if ($names.Count -eq 0) {
+            throw 'PSScriptAnalyzer did not discover any rules.'
         }
-        $results = @(Invoke-ScriptAnalyzer -Path (Join-Path $RepositoryRoot scripts) -Recurse `
-            -Settings (Join-Path $RepositoryRoot PSScriptAnalyzerSettings.psd1) `
-            -CustomRulePath (Join-Path $RepositoryRoot 'scripts\analyzer\FoloAnalyzerRules.psm1') `
-            -IncludeDefaultRules -Verbose 4>> $trace)
+        # CommandInfo parameter resolution is unsafe across concurrent analyzer rules.
+        # Each pass excludes only its peers; the unchanged settings still decide whether
+        # its rule runs. No IncludeRule override can accidentally enable an opt-in rule.
+        # Ref: ../../docs/build-and-tooling.md#powershell-linting.
+        $results = @(foreach ($name in $names) {
+            "Rule pass: $name" | Add-Content -LiteralPath $trace
+            $peers = @($names | Where-Object { $_ -cne $name })
+            Invoke-ScriptAnalyzer -Path (Join-Path $RepositoryRoot scripts) -Recurse `
+                -Settings (Join-Path $RepositoryRoot PSScriptAnalyzerSettings.psd1) `
+                -CustomRulePath $customRules -IncludeDefaultRules -ExcludeRule $peers -Verbose 4>> $trace
+        })
     } catch [System.Management.Automation.RuntimeException], [System.NullReferenceException] {
         # Preserve the original failure. The normal formatter omits managed/inner stacks,
         # while the trace identifies the last files and rules the engine started.
