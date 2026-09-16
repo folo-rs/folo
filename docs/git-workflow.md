@@ -8,6 +8,33 @@ When creating PRs with `gh pr create`, do not pass the `--body` flag with an
 inline string because PowerShell mangles backticks and special characters.
 Instead, write the PR body to a temporary file and use `--body-file path/to/file.md`.
 
+## Check waiting and merge-queue readiness
+
+Distinguish required checks from optional advisory checks using the applicable
+GitHub rules, not a check's name or duration. Preserve required validation, review
+and approval obligations and any verification explicitly requested by the user.
+Do not use "every check has finished" as a readiness condition.
+
+Wait for an optional check only when its result could plausibly change the
+readiness decision for the actual diff. Benchmark comparisons are normally
+low-signal for documentation or test-only changes that leave benchmarked code,
+dependencies, build settings and benchmark machinery unchanged. Changes to those
+inputs can make benchmark results relevant, including changes outside production
+source files. Assess the affected behavior and the check's scope, not filenames
+alone. Being queued, slow or asynchronous does not itself make a check irrelevant.
+
+When only low-signal optional checks remain pending, do not delay the ready-for-review
+handoff or keep polling solely for their completion. If merge-queue submission is
+already authorized and otherwise allowed, submit without waiting for those checks;
+let them continue asynchronously. This policy does not grant merge authority or
+bypass GitHub's required checks, reviews or queue rules.
+
+Briefly identify any optional results not awaited and the diff-based reason in
+the existing handoff, without claiming they passed. Inspect available failures
+and actionable findings even from optional checks, and handle relevant later
+results during normal authorized follow-up. Low expected signal is not a reason
+to dismiss an observed problem, cancel workflows or weaken validation.
+
 ## Addressing pull request review comments
 
 When addressing PR review comments, reply to each comment thread with the

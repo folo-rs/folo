@@ -195,17 +195,26 @@ validation still apply.
 
 # Stage 4: Follow checks, review and conflicts
 
+Apply the [check-waiting policy](../../../docs/git-workflow.md#check-waiting-and-merge-queue-readiness)
+to the current diff. Required checks, relevant optional checks, local deep
+verification and automated review retain their readiness requirements. Do not
+wait solely for low-signal optional checks, such as benchmark comparisons when
+no performance-relevant inputs changed. They may continue after the ready handoff;
+record what was not awaited and why, without claiming a pass. This does not
+authorize merging or bypassing required checks.
+
 Queued, pending and in-progress checks or automated reviews are normal ongoing
 work, not failures or human-action blockers. Queue age, a runner not yet being
 assigned, absent steps/logs before execution, or other queued repository runs do
 not establish an outage. Do not add `needs-human`, request a check waiver, or end
-requested foreground follow-up on that basis.
+requested foreground follow-up merely because a result worth awaiting is delayed.
 
-Keep following the same PR in the foreground while execution or automated review
-is pending. Wait between status reads rather than busy-polling; foreground waits
-do not require a per-PR automation or hidden watcher. Recheck the current head
-after pushes and refresh reviews as well as checks. Passing checks alone do not
-finish follow-up while an automated review is still pending.
+Keep following the same PR in the foreground while required checks, relevant
+optional checks or automated review are pending. Wait between status reads rather
+than busy-polling; foreground waits do not require a per-PR automation or hidden
+watcher. Recheck the current head after pushes and reassess optional-check relevance;
+refresh reviews as well as checks. Passing checks alone do not finish follow-up
+while an automated review is still pending.
 
 Read all current-head check failures, relevant deep failures, conflicts with main,
 top-level comments, review summaries and inline threads. Include low-confidence
@@ -253,16 +262,17 @@ After pushing a fix for an authorized inline thread, use
 substitute a disconnected top-level comment. Record evidenced human blockers and
 needed decisions on the issue with `needs-human`; keep ownership unless
 explicitly releasing it. Do not claim readiness while required checks, relevant
-deep verification or automated review remain pending, or failures and actionable
-feedback remain unresolved.
+optional checks, relevant deep verification or automated review remain pending,
+or failures and actionable feedback remain unresolved.
 
 # Stage 5: Leave a reviewable handoff
 
-After current-head checks and automated review have concluded and actionable
-findings are addressed, state that the PR awaits human review/approval/merge,
-with links and any limitations. A genuine human blocker instead needs its
-specific unresolved action, not a ready claim. Post only substantive progress;
-put decision diagnostics in a collapsible section of a summary.
+After current-head required checks, relevant optional checks and automated review
+have concluded and actionable findings are addressed, state that the PR awaits
+human review/approval/merge, with links and any limitations. Pending low-signal
+optional checks do not prevent this handoff. A genuine human blocker instead
+needs its specific unresolved action, not a ready claim. Post only substantive
+progress; put decision diagnostics in a collapsible section of a summary.
 For a stack, identify the prerequisite PR and required bottom-to-top order;
 readiness for review is not permission to merge a child independently.
 

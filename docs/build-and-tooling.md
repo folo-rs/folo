@@ -91,6 +91,11 @@ applicable rather than on every polling-session creation.
 We operate under a **zero warnings allowed** requirement - fix all warnings that
 validation generates.
 
+For asynchronous GitHub results, follow the
+[check-waiting policy](git-workflow.md#check-waiting-and-merge-queue-readiness).
+Low-signal optional checks do not delay readiness or authorized queue submission;
+this does not reduce required validation or relevant local checks.
+
 ### Mutation target selection
 
 `just mutants` selects Cargo library unit-test targets with `--lib`.

@@ -17,6 +17,11 @@ directly:
 
 * **Zero warnings allowed.** Fix all warnings that validation generates. Never
   silence a warning without a `reason` field justifying it.
+* **Wait for useful checks, not every check.** Do not delay an otherwise ready PR
+  or authorized merge-queue submission for low-signal optional checks, such as
+  benchmarks when no performance-relevant inputs changed. Required checks and
+  review obligations still apply. Follow the
+  [check-waiting policy](docs/git-workflow.md#check-waiting-and-merge-queue-readiness).
 * **ARM64 is best-effort, minimally supported.** ARM64 validation may be skipped
   without separate approval when the change should logically work on that target,
   especially when the same logic passes on other platforms. Record the reasoning
@@ -331,10 +336,12 @@ dev-dependencies for tests or benches that need internal surface.
 
 ### [docs/git-workflow.md](docs/git-workflow.md)
 
-Conventions for PRs: version/release-plan presentation, using `--body-file` with
-`gh pr create`, and replying to and resolving review comment threads.
+Conventions for PRs: check waiting and merge-queue readiness, version/release-plan
+presentation, using `--body-file` with `gh pr create`, and replying to and resolving
+review comment threads.
 
-**Open this when**: creating a pull request; addressing review comments.
+**Open this when**: creating a pull request; deciding which checks to await or
+whether to submit to the merge queue; addressing review comments.
 
 ### [docs/scheduled-validation.md](docs/scheduled-validation.md)
 
