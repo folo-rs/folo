@@ -280,8 +280,8 @@ to optional GitHub checks. Do not wait for low-signal optional results, such as
 benchmark comparisons when no performance-relevant inputs changed, solely to
 finish every check. They may continue after a ready handoff; record what was not
 awaited and why, without claiming success. Intake does not wake a worker merely
-to wait for those results, but still routes actionable findings through normal
-follow-up.
+to wait for those results. Repair owners handle actionable findings during their
+normal authorized follow-up.
 
 Queued, pending and in-progress checks or automated reviews are normal ongoing
 work. Queue age, no assigned runner, absent steps/logs before execution and other

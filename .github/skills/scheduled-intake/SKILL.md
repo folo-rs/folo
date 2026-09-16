@@ -82,9 +82,9 @@ existing owner so it can correct the discussion and remove a mistaken label
 without dismissing a separate unresolved human requirement.
 
 Apply the [check-waiting policy](../../../docs/git-workflow.md#check-waiting-and-merge-queue-readiness).
-Pending low-signal optional checks do not invalidate a ready handoff. Do not wake
-an owner solely to wait for them; continue routing actionable results through
-normal follow-up. Required checks and review obligations remain unchanged.
+Pending low-signal optional checks do not invalidate a ready handoff or justify
+waking an owner solely to wait for them. Required checks and review obligations
+remain unchanged.
 
 Queued, pending and in-progress checks or automated reviews are ongoing work, not
 human blockers. Queue age, unassigned runners, absent pre-execution diagnostics
