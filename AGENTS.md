@@ -32,6 +32,9 @@ directly:
   thing to one instance of a problem in a file, check for other instances. You
   must solve the entire class of problems at once, not expect each instance to
   be pointed out to you in instructions.
+* **Unit tests stay inside the process.** Real filesystem, network, child-process
+  and OS-service interactions belong in integration tests, not elaborate unit-test
+  harnesses. Follow [the test boundary](docs/testing.md#unit-tests-stay-inside-the-process).
 * **Evaluate review feedback, do not implement it reflexively.** Automated review
   comments can be incorrect or have a low signal-to-noise ratio. Establish the
   concrete defect or useful improvement before acting, and weigh that benefit

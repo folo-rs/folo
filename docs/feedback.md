@@ -105,11 +105,13 @@ keep making*, not a replacement for the rules.
 * **Never use the `#[path]` attribute.** It is a sign of mis-structured files. To
   share test helpers, put them in a real package (the `testing` package or a
   dedicated crate), not a `#[path]`-included file.
-* **Tests should be unit tests unless they have a real need to be integration
-  tests.** CLI-argument parsing, pure mapping, and similar belong in in-module
-  `#[cfg(test)]` unit tests. Reserve integration tests for things that must drive
-  the binary from the outside. Mixing unit-test concerns into integration tests
-  often forces extra `pub` exports (see "Public API surface").
+* **Unit tests exercise logic inside the process.** CLI-argument parsing, pure
+  mapping and in-memory serialization belong in `#[cfg(test)]` modules. Real
+  filesystem, network, child-process and OS-service interactions belong in
+  integration tests, even when they use temporary directories or local emulators.
+  Do not build subprocess harnesses to disguise those boundaries as unit tests.
+  Follow [the unit-test boundary](testing.md#unit-tests-stay-inside-the-process);
+  do not widen the public API merely to relocate tests.
 * **Keep test files approachable.** A single enormous test file is unreadable even
   if a single binary is wanted for fixture reuse. Split into a `main.rs` plus
   topic submodules, and separate helper/harness code from the tests themselves.
