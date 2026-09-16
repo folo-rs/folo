@@ -3108,10 +3108,12 @@ name = "release-target-check"
 version = "0.0.0"
 dependencies = [
  "cargo-release-plan",
+ "mutants",
  "ohno",
  "semver",
  "serde",
  "serde_json",
+ "static_assertions",
  "tempfile",
  "testing",
 ]

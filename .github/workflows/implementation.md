@@ -119,11 +119,11 @@ The workflow invokes `actionlint -color` directly, matching `just validate-workf
 installing Just solely to dispatch that command. Local full setup continues to install these
 same binaries. Keep the command and cache keys aligned when editing these entry points.
 
-The PR benchmark collection queue uses GitHub's
+The push-to-main and PR benchmark collection queues use GitHub's
 [`queue: max` concurrency setting](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-queueing-multiple-pending-runs)
-so waiting PRs are retained instead of replacing one another. The pinned actionlint does not
+so waiting commits and PRs are retained instead of replacing one another. The pinned actionlint does not
 recognize this key ([upstream issue](https://github.com/rhysd/actionlint/issues/657)).
-`.github/actionlint.yaml` excludes only that exact diagnostic for `pr-bench-history.yml`;
+`.github/actionlint.yaml` excludes only that exact diagnostic for `bench-history.yml` and `pr-bench-history.yml`;
 other concurrency diagnostics and other workflows remain checked.
 
 ## Merge queue validation
