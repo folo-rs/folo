@@ -21,11 +21,11 @@ hide a failure or claim success for blocked work.
 
 # Stage 1: Verify the claim and current work
 
-On a completion-cleanup request, first inspect the final disposition of the issue
-and any linked PR. If the repair is merged, resolved without a PR or explicitly
-abandoned, reconcile any remaining local work and leave the final handoff described
-below. Do not revive a released claim, rerun completed checks or start another
-repair merely to keep the session active.
+On continuation, first inspect the disposition of the issue and any linked PR.
+If the repair is merged, resolved without a PR or explicitly abandoned, preserve
+any remaining local work for the operator and end the worker turn. Do not revive
+a released claim, rerun completed checks or start another repair merely to keep
+the session active.
 
 Read the issue's current discussion, assignees and linked PRs, and confirm this
 session and branch match its plain ownership comment. Follow the
@@ -195,6 +195,9 @@ validation still apply.
 
 # Stage 4: Follow checks, review and conflicts
 
+This session owns its PR follow-up. Intake coordinates new repair relationships
+and admissions; it does not monitor this PR or relay check/review feedback.
+
 Queued, pending and in-progress checks or automated reviews are normal ongoing
 work, not failures or human-action blockers. Queue age, a runner not yet being
 assigned, absent steps/logs before execution, or other queued repository runs do
@@ -231,8 +234,8 @@ do not silently detach the child or claim readiness. Parent changes that invalid
 the dependency or settled plan require coordination before more dependent work.
 When this repair is itself a prerequisite, publish changed scope, release plan
 and pushed head on GitHub and notify its existing child owners. Record each
-reconciled parent snapshot in the child's handoff so intake can distinguish
-handled changes from new input without repeatedly waking it.
+reconciled parent snapshot in the child's handoff so related owners and intake
+can assess the current dependency without requesting status.
 
 Reserve `needs-human` for a concrete impediment requiring a specific human action,
 such as an explicit approval requirement or a diagnosed permission/configuration
@@ -267,10 +270,10 @@ For a stack, identify the prerequisite PR and required bottom-to-top order;
 readiness for review is not permission to merge a child independently.
 
 A session becoming idle is not completion. If foreground work is interrupted,
-leave a pending handoff that retains ownership and the next check/review action;
-do not convert unfinished waiting into `needs-human`. Repository-level
-`scheduled-intake` supplies future follow-up without replacing the requested
-foreground work; do not start a timer or hidden watcher.
+leave a pending handoff that retains ownership and the next check/review action
+for continuation in this session; do not convert unfinished waiting into
+`needs-human`. Do not rely on `scheduled-intake` to restart or monitor this work,
+and do not start a timer or hidden watcher.
 
 A merged linked PR closes the issue through ordinary GitHub behavior. A PR closed
 without merging does not resolve the issue: explain the disposition and explicitly
@@ -278,16 +281,13 @@ release or block the claim rather than restarting automatically. No post-merge
 confirmation service or copied local state is needed.
 
 Ready for human review is still an incomplete repair for the repository's
-[repair-session limit](../../../docs/scheduled-validation.md#repair-session-capacity-and-cleanup).
-It retains its slot until merged or explicitly abandoned; idling the session or
-adding `needs-human` does not release capacity.
+[repair-session limit](../../../docs/scheduled-validation.md#repair-session-capacity).
+Idling an unmerged repair or adding `needs-human` does not release capacity.
+A merged repair no longer consumes a slot once its session stops executing work,
+regardless of retained labels, local work or a final handoff.
 
-Once the repair has a final disposition, leave a concise handoff with the issue/PR
-links and identify any unpublished or unmerged work, ongoing operation, active
-Agent merge or attached session automation that prevents safe archival. For a
-repair without a PR, link its documented resolution or explicit abandonment.
-Do not discard work to make cleanup possible. When nothing remains, end the worker
-turn instead of leaving a wait or watcher active. The intake coordinator verifies
-completion and archives the session where authorized; a session cannot archive
-itself. If archival requires its owning parent or the operator, report that action
-without claiming archival succeeded.
+Once the repair has a final disposition, preserve any unpublished or unmerged work
+and identify it for the operator when a handoff is needed. For a repair without a
+PR, link its documented resolution or explicit abandonment. End the worker turn
+instead of leaving a wait or watcher active. Session archival and retained-worktree
+housekeeping belong to the operator, not intake, and are not capacity prerequisites.
