@@ -27,7 +27,9 @@ static PANIC_ON_NEXT_ALLOCATION: AtomicBool = AtomicBool::new(false);
 ///
 /// # Examples
 ///
-/// ```rust
+/// This debugging example arms the global allocator and is compile-checked only.
+///
+/// ```no_run
 /// use alloc_tracker::{Allocator, panic_on_next_alloc};
 ///
 /// #[global_allocator]
@@ -200,9 +202,12 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Allocator<A> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::hint::black_box;
-    use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::panic::{RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
+    use std::sync::Mutex;
     use std::{ptr, thread};
 
+    #[cfg(feature = "panic_on_next_alloc")]
+    use testing::assert_panics;
     use testing::with_watchdog;
 
     use super::*;
@@ -277,191 +282,222 @@ mod tests {
         Layout::from_size_align(size, 8).unwrap()
     }
 
+    // Every test calling an allocating wrapper method or its panic check shares this lock. The
+    // library harness uses the system allocator, so unrelated tests cannot consume the armed flag.
+    // Restore the flag and unlock before propagating a failure, including a caught mutant.
+    // Ref: docs/implementation.md, "Allocation tripwire".
+    fn with_allocator_test(test: impl FnOnce() + Send + UnwindSafe + 'static) {
+        with_watchdog(move || {
+            static LOCK: Mutex<()> = Mutex::new(());
+
+            let guard = LOCK.lock().unwrap();
+            let result = catch_unwind(test);
+            #[cfg(feature = "panic_on_next_alloc")]
+            PANIC_ON_NEXT_ALLOCATION.store(false, atomic::Ordering::Relaxed);
+            drop(guard);
+            if let Err(payload) = result {
+                resume_unwind(payload);
+            }
+        });
+    }
+
     #[test]
     fn allocation_and_deallocation_move_outstanding() {
-        const SIZE: usize = 1024;
+        with_allocator_test(|| {
+            const SIZE: usize = 1024;
 
-        let allocator = Allocator::new(std::alloc::System);
-        let layout = test_layout(SIZE);
-        let counters = get_or_init_thread_counters();
+            let allocator = Allocator::new(std::alloc::System);
+            let layout = test_layout(SIZE);
+            let counters = get_or_init_thread_counters();
 
-        let before = counters.outstanding();
+            let before = counters.outstanding();
 
-        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-        let block = unsafe { allocator.alloc(layout) };
-        assert!(!block.is_null());
+            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+            let block = unsafe { allocator.alloc(layout) };
+            assert!(!block.is_null());
 
-        let after_alloc = counters.outstanding();
+            let after_alloc = counters.outstanding();
 
-        // SAFETY: The block was just obtained from this allocator with this exact layout.
-        unsafe {
-            allocator.dealloc(block, layout);
-        }
-        let after_dealloc = counters.outstanding();
+            // SAFETY: The block was just obtained from this allocator with this exact layout.
+            unsafe {
+                allocator.dealloc(block, layout);
+            }
+            let after_dealloc = counters.outstanding();
 
-        assert_eq!(
-            after_alloc.wrapping_sub(before),
-            i64::try_from(SIZE).unwrap()
-        );
-        assert_eq!(after_dealloc, before);
+            assert_eq!(
+                after_alloc.wrapping_sub(before),
+                i64::try_from(SIZE).unwrap()
+            );
+            assert_eq!(after_dealloc, before);
+        });
     }
 
     #[test]
     fn zeroed_allocation_zeroes_memory_and_moves_every_counter() {
-        const SIZE: usize = 1024;
+        with_allocator_test(|| {
+            const SIZE: usize = 1024;
 
-        let allocator = Allocator::new(std::alloc::System);
-        let layout = test_layout(SIZE);
-        let counters = get_or_init_thread_counters();
+            let allocator = Allocator::new(std::alloc::System);
+            let layout = test_layout(SIZE);
+            let counters = get_or_init_thread_counters();
 
-        let before_bytes = counters.bytes();
-        let before_count = counters.count();
-        let before_outstanding = counters.outstanding();
+            let before_bytes = counters.bytes();
+            let before_count = counters.count();
+            let before_outstanding = counters.outstanding();
 
-        // Drop the watermark to the current level so the rise this allocation causes is
-        // attributable to it rather than to whatever ran earlier on this thread.
-        counters.set_watermark(before_outstanding);
+            // Drop the watermark to the current level so the rise this allocation causes is
+            // attributable to it rather than to whatever ran earlier on this thread.
+            counters.set_watermark(before_outstanding);
 
-        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-        let block = unsafe { allocator.alloc_zeroed(layout) };
-        assert!(!block.is_null());
+            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+            let block = unsafe { allocator.alloc_zeroed(layout) };
+            assert!(!block.is_null());
 
-        // SAFETY: The allocator just returned this block for a layout of SIZE bytes, so
-        // that many bytes are initialized and readable.
-        let contents = unsafe { std::slice::from_raw_parts(block, SIZE) };
-        assert!(contents.iter().all(|&byte| byte == 0));
+            // SAFETY: The allocator just returned this block for a layout of SIZE bytes, so
+            // that many bytes are initialized and readable.
+            let contents = unsafe { std::slice::from_raw_parts(block, SIZE) };
+            assert!(contents.iter().all(|&byte| byte == 0));
 
-        let size = i64::try_from(SIZE).unwrap();
-        assert_eq!(counters.bytes(), before_bytes.wrapping_add(SIZE as u64));
-        assert_eq!(counters.count(), before_count.wrapping_add(1));
-        assert_eq!(
-            counters.outstanding().wrapping_sub(before_outstanding),
-            size
-        );
-        assert_eq!(counters.watermark().wrapping_sub(before_outstanding), size);
+            let size = i64::try_from(SIZE).unwrap();
+            assert_eq!(counters.bytes(), before_bytes.wrapping_add(SIZE as u64));
+            assert_eq!(counters.count(), before_count.wrapping_add(1));
+            assert_eq!(
+                counters.outstanding().wrapping_sub(before_outstanding),
+                size
+            );
+            assert_eq!(counters.watermark().wrapping_sub(before_outstanding), size);
 
-        // SAFETY: The block was just obtained from this allocator with this exact layout.
-        unsafe {
-            allocator.dealloc(block, layout);
-        }
+            // SAFETY: The block was just obtained from this allocator with this exact layout.
+            unsafe {
+                allocator.dealloc(block, layout);
+            }
 
-        assert_eq!(counters.outstanding(), before_outstanding);
+            assert_eq!(counters.outstanding(), before_outstanding);
+        });
     }
 
     #[test]
     fn failed_allocation_does_not_move_counters() {
-        let allocator = Allocator::new(FailingAllocator);
-        let layout = test_layout(1024);
-        let counters = get_or_init_thread_counters();
+        with_allocator_test(|| {
+            let allocator = Allocator::new(FailingAllocator);
+            let layout = test_layout(1024);
+            let counters = get_or_init_thread_counters();
 
-        let before_bytes = counters.bytes();
-        let before_outstanding = counters.outstanding();
+            let before_bytes = counters.bytes();
+            let before_outstanding = counters.outstanding();
 
-        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-        let block = unsafe { allocator.alloc(layout) };
-        assert!(block.is_null());
+            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+            let block = unsafe { allocator.alloc(layout) };
+            assert!(block.is_null());
 
-        assert_eq!(counters.bytes(), before_bytes);
-        assert_eq!(counters.outstanding(), before_outstanding);
+            assert_eq!(counters.bytes(), before_bytes);
+            assert_eq!(counters.outstanding(), before_outstanding);
+        });
     }
 
     #[test]
     fn failed_zeroed_allocation_does_not_move_counters() {
-        let allocator = Allocator::new(FailingAllocator);
-        let layout = test_layout(1024);
-        let counters = get_or_init_thread_counters();
+        with_allocator_test(|| {
+            let allocator = Allocator::new(FailingAllocator);
+            let layout = test_layout(1024);
+            let counters = get_or_init_thread_counters();
 
-        let before_bytes = counters.bytes();
-        let before_count = counters.count();
-        let before_outstanding = counters.outstanding();
-        let before_watermark = counters.watermark();
+            let before_bytes = counters.bytes();
+            let before_count = counters.count();
+            let before_outstanding = counters.outstanding();
+            let before_watermark = counters.watermark();
 
-        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-        let block = unsafe { allocator.alloc_zeroed(layout) };
-        assert!(block.is_null());
+            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+            let block = unsafe { allocator.alloc_zeroed(layout) };
+            assert!(block.is_null());
 
-        assert_eq!(counters.bytes(), before_bytes);
-        assert_eq!(counters.count(), before_count);
-        assert_eq!(counters.outstanding(), before_outstanding);
-        assert_eq!(counters.watermark(), before_watermark);
+            assert_eq!(counters.bytes(), before_bytes);
+            assert_eq!(counters.count(), before_count);
+            assert_eq!(counters.outstanding(), before_outstanding);
+            assert_eq!(counters.watermark(), before_watermark);
+        });
     }
 
     #[test]
     fn successful_reallocation_moves_counters() {
-        const INITIAL: usize = 64;
-        const GROWN: usize = 256;
+        with_allocator_test(|| {
+            const INITIAL: usize = 64;
+            const GROWN: usize = 256;
 
-        let allocator = Allocator::new(std::alloc::System);
-        let layout = test_layout(INITIAL);
-        let counters = get_or_init_thread_counters();
+            let allocator = Allocator::new(std::alloc::System);
+            let layout = test_layout(INITIAL);
+            let counters = get_or_init_thread_counters();
 
-        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-        let block = unsafe { allocator.alloc(layout) };
-        assert!(!block.is_null());
+            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+            let block = unsafe { allocator.alloc(layout) };
+            assert!(!block.is_null());
 
-        let before_bytes = counters.bytes();
-        let before_count = counters.count();
-        let before_outstanding = counters.outstanding();
+            let before_bytes = counters.bytes();
+            let before_count = counters.count();
+            let before_outstanding = counters.outstanding();
 
-        // SAFETY: The block was just obtained from this allocator with this exact layout, and
-        // the new size is non-zero and does not overflow when rounded up to the alignment.
-        let grown = unsafe { allocator.realloc(block, layout, GROWN) };
-        assert!(!grown.is_null());
+            // SAFETY: The block was just obtained from this allocator with this exact layout, and
+            // the new size is non-zero and does not overflow when rounded up to the alignment.
+            let grown = unsafe { allocator.realloc(block, layout, GROWN) };
+            assert!(!grown.is_null());
 
-        let after_bytes = counters.bytes();
-        let after_count = counters.count();
-        let after_outstanding = counters.outstanding();
+            let after_bytes = counters.bytes();
+            let after_count = counters.count();
+            let after_outstanding = counters.outstanding();
 
-        // SAFETY: The grown block came from this allocator, whose layout is now the new size.
-        unsafe {
-            allocator.dealloc(grown, test_layout(GROWN));
-        }
+            // SAFETY: The grown block came from this allocator, whose layout is now the new size.
+            unsafe {
+                allocator.dealloc(grown, test_layout(GROWN));
+            }
 
-        // A reallocation is one allocator request of the new size, so the cumulative totals
-        // grow by the whole new size while outstanding grows only by the difference.
-        assert_eq!(
-            after_bytes.wrapping_sub(before_bytes),
-            u64::try_from(GROWN).unwrap()
-        );
-        assert_eq!(after_count.wrapping_sub(before_count), 1);
-        assert_eq!(
-            after_outstanding.wrapping_sub(before_outstanding),
-            i64::try_from(GROWN - INITIAL).unwrap()
-        );
+            // A reallocation is one allocator request of the new size, so the cumulative totals
+            // grow by the whole new size while outstanding grows only by the difference.
+            assert_eq!(
+                after_bytes.wrapping_sub(before_bytes),
+                u64::try_from(GROWN).unwrap()
+            );
+            assert_eq!(after_count.wrapping_sub(before_count), 1);
+            assert_eq!(
+                after_outstanding.wrapping_sub(before_outstanding),
+                i64::try_from(GROWN - INITIAL).unwrap()
+            );
+        });
     }
 
     #[test]
     fn failed_reallocation_does_not_move_counters() {
-        const INITIAL: usize = 64;
-        const GROWN: usize = 256;
+        with_allocator_test(|| {
+            const INITIAL: usize = 64;
+            const GROWN: usize = 256;
 
-        let allocator = Allocator::new(FailingReallocator);
-        let layout = test_layout(INITIAL);
-        let counters = get_or_init_thread_counters();
+            let allocator = Allocator::new(FailingReallocator);
+            let layout = test_layout(INITIAL);
+            let counters = get_or_init_thread_counters();
 
-        // SAFETY: The layout has a non-zero size and a power-of-two alignment.
-        let block = unsafe { allocator.alloc(layout) };
-        assert!(!block.is_null());
+            // SAFETY: The layout has a non-zero size and a power-of-two alignment.
+            let block = unsafe { allocator.alloc(layout) };
+            assert!(!block.is_null());
 
-        let before_bytes = counters.bytes();
-        let before_outstanding = counters.outstanding();
+            let before_bytes = counters.bytes();
+            let before_outstanding = counters.outstanding();
 
-        // SAFETY: The block was just obtained from this allocator with this exact layout, and
-        // the new size is non-zero and does not overflow when rounded up to the alignment.
-        let grown = unsafe { allocator.realloc(block, layout, GROWN) };
-        assert!(grown.is_null());
+            // SAFETY: The block was just obtained from this allocator with this exact layout, and
+            // the new size is non-zero and does not overflow when rounded up to the alignment.
+            let grown = unsafe { allocator.realloc(block, layout, GROWN) };
+            assert!(grown.is_null());
 
-        let after_bytes = counters.bytes();
-        let after_outstanding = counters.outstanding();
+            let after_bytes = counters.bytes();
+            let after_outstanding = counters.outstanding();
 
-        // SAFETY: The failed reallocation left the block allocated by this allocator with its
-        // original layout.
-        unsafe {
-            allocator.dealloc(block, layout);
-        }
+            // SAFETY: The failed reallocation left the block allocated by this allocator with its
+            // original layout.
+            unsafe {
+                allocator.dealloc(block, layout);
+            }
 
-        assert_eq!(after_bytes, before_bytes);
-        assert_eq!(after_outstanding, before_outstanding);
+            assert_eq!(after_bytes, before_bytes);
+            assert_eq!(after_outstanding, before_outstanding);
+        });
     }
 
     #[test]
@@ -499,13 +535,50 @@ mod tests {
 
     #[test]
     #[cfg(feature = "panic_on_next_alloc")]
-    fn panic_on_next_alloc_can_be_enabled_and_disabled() {
-        assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+    fn panic_on_next_alloc_is_one_shot() {
+        // Direct calls exercise the actual check without unwinding through GlobalAlloc.
+        with_allocator_test(|| {
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
 
-        panic_on_next_alloc(true);
-        assert!(PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            panic_on_next_alloc(true);
+            assert!(PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            assert_panics(check_and_panic_if_enabled);
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
 
-        panic_on_next_alloc(false);
-        assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            // Arming on another thread must affect this thread's check as well.
+            thread::spawn(|| panic_on_next_alloc(true)).join().unwrap();
+            assert_panics(check_and_panic_if_enabled);
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+
+            panic_on_next_alloc(true);
+            panic_on_next_alloc(false);
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "panic_on_next_alloc")]
+    fn allocator_test_restores_flag_after_panic() {
+        assert_panics(|| {
+            with_allocator_test(|| {
+                // Model a failing checker assertion while the flag remains armed.
+                PANIC_ON_NEXT_ALLOCATION.store(true, atomic::Ordering::Relaxed);
+                panic!("simulated assertion failure");
+            });
+        });
+        with_allocator_test(|| {
+            assert!(!PANIC_ON_NEXT_ALLOCATION.load(atomic::Ordering::Relaxed));
+            check_and_panic_if_enabled();
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "panic_on_next_alloc"))]
+    fn panic_check_without_feature_is_noop() {
+        check_and_panic_if_enabled();
     }
 }

@@ -84,6 +84,22 @@ also consume the one-shot flag used by the panic-on-next-allocation debugging fe
 Recording happens after the inner allocator call and only when it succeeded, so a failed
 allocation moves no counters.
 
+## Allocation tripwire
+
+The optional panic check consumes a process-global atomic flag before entering the inner
+allocator. Consuming it before raising the panic prevents the panic machinery's own
+allocations from retriggering the check.
+
+Library tests exercise this private check directly without installing the tracking allocator
+globally. Tests that call allocating methods of the tracking wrapper or arm the flag share a
+test-only mutex, so another test cannot consume an armed flag. The test helper catches failures,
+resets the flag and releases the lock before resuming unwind, preventing both flag leakage and
+lock poisoning. This synchronization does not change production code.
+
+Direct calls verify triggering, one-shot consumption, cross-thread arming and explicit
+disabling without unwinding through a `GlobalAlloc` method, which Rust does not permit.
+The scenarios remain inside the process and run under Miri as well as native test runners.
+
 ## Watermark protocol
 
 The watermark is per-thread state, but the metric it feeds is per-span, so spans hand the
