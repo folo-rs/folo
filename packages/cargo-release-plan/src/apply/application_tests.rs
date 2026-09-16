@@ -1,7 +1,6 @@
 //! In-process application dispatch, manifest transformation and write ordering.
 
 use std::cell::{Cell, RefCell};
-use std::fmt::Write as _;
 
 use serde_json::json;
 
@@ -34,7 +33,7 @@ fn expanded_or_captured_plans_dispatch_without_manifest_only_operations() {
                         assert!(!captured);
                         Ok(work_tree())
                     },
-                    |path| Ok(manifests()[path].clone()),
+                    |path| Ok(manifests().get(path).unwrap().clone()),
                     |_| Ok(()),
                 )
                 .unwrap();
@@ -75,7 +74,7 @@ fn edits_include_root_and_unique_members_with_complete_rewritten_contents() {
     let reads = RefCell::new(Vec::new());
     let edits = compute_edits_with(&tree, &versions("0.2.0"), Verbose::new(false), |path| {
         reads.borrow_mut().push(path.to_path_buf());
-        Ok(originals[path].clone())
+        Ok(originals.get(path).unwrap().clone())
     })
     .unwrap();
 
@@ -87,8 +86,8 @@ fn edits_include_root_and_unique_members_with_complete_rewritten_contents() {
     );
     let expected = updated_manifests();
     for edit in edits {
-        assert_eq!(edit.original, originals[&edit.path]);
-        assert_eq!(edit.updated, expected[&edit.path]);
+        assert_eq!(&edit.original, originals.get(&edit.path).unwrap());
+        assert_eq!(&edit.updated, expected.get(&edit.path).unwrap());
     }
 }
 
@@ -99,14 +98,14 @@ fn matching_versions_and_unselected_content_survive_byte_for_byte() {
         &work_tree(),
         &versions("0.1.0"),
         Verbose::new(false),
-        |path| Ok(originals[path].clone()),
+        |path| Ok(originals.get(path).unwrap().clone()),
     )
     .unwrap();
 
     assert_eq!(edits.len(), originals.len());
     for edit in &edits {
-        assert_eq!(edit.original, originals[&edit.path]);
-        assert_eq!(edit.updated, originals[&edit.path]);
+        assert_eq!(&edit.original, originals.get(&edit.path).unwrap());
+        assert_eq!(&edit.updated, originals.get(&edit.path).unwrap());
     }
     assert_eq!(changed_edit_count(&edits), 0);
 }
@@ -126,11 +125,11 @@ fn application_reads_every_manifest_before_writing_only_changed_contents() {
         |path| {
             assert!(reads.get() < originals.len());
             reads.set(reads.get() + 1);
-            Ok(originals[path].clone())
+            Ok(originals.get(path).unwrap().clone())
         },
         |edit| {
             assert_eq!(reads.get(), originals.len());
-            assert_eq!(edit.original, originals[&edit.path]);
+            assert_eq!(&edit.original, originals.get(&edit.path).unwrap());
             assert_ne!(edit.updated, edit.original);
             assert!(
                 writes
@@ -147,7 +146,7 @@ fn application_reads_every_manifest_before_writing_only_changed_contents() {
         writes,
         expected
             .into_iter()
-            .filter(|(path, updated)| originals[path] != *updated)
+            .filter(|(path, updated)| originals.get(path).unwrap() != updated)
             .collect()
     );
 }
@@ -164,7 +163,7 @@ fn dry_run_computes_the_full_edit_set_without_writing() {
         || Ok(work_tree()),
         |path| {
             reads.push(path.to_path_buf());
-            Ok(originals[path].clone())
+            Ok(originals.get(path).unwrap().clone())
         },
         |_| panic!(),
     )
@@ -185,7 +184,7 @@ fn unchanged_application_does_not_write() {
         Verbose::new(false),
         |_, _| panic!(),
         || Ok(work_tree()),
-        |path| Ok(manifests()[path].clone()),
+        |path| Ok(manifests().get(path).unwrap().clone()),
         |_| panic!(),
     )
     .unwrap();
@@ -211,7 +210,7 @@ fn workspace_and_plan_failures_precede_manifest_acquisition() {
     assert!(error.find_source::<ApplicationFailure>().is_some());
 
     let mut plan = plan;
-    plan.increments[0].name = "absent".to_owned();
+    plan.increments.first_mut().unwrap().name = "absent".to_owned();
     let error = apply_plan(
         &plan,
         false,
@@ -247,7 +246,7 @@ fn read_and_parse_failures_discard_earlier_computed_edits_without_writes() {
                         Err(ApplicationFailure::new().into())
                     }
                 } else {
-                    Ok(originals[path].clone())
+                    Ok(originals.get(path).unwrap().clone())
                 }
             },
             |_| panic!(),
@@ -271,7 +270,7 @@ fn write_failure_stops_subsequent_writes_and_is_not_reported_as_success() {
         Verbose::new(false),
         |_, _| panic!(),
         || Ok(work_tree()),
-        |path| Ok(manifests()[path].clone()),
+        |path| Ok(manifests().get(path).unwrap().clone()),
         |edit| {
             writes.push(edit.path.clone());
             Err(ApplicationFailure::new().into())
@@ -321,11 +320,9 @@ fn versions(version: &str) -> ResolvedVersions {
     }
 }
 
-fn unique_paths() -> Vec<PathBuf> {
+fn unique_paths() -> [PathBuf; 4] {
     ["", "api", "helper", "untouched"]
-        .into_iter()
         .map(|member| PathBuf::from("workspace").join(member).join("Cargo.toml"))
-        .collect()
 }
 
 fn work_tree() -> WorkTree {
