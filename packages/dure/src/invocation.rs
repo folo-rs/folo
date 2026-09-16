@@ -102,3 +102,28 @@ pub enum Outcome {
     /// The attached app exited; the process should exit with this status.
     AppExit(i32),
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_store_root_preserves_override() {
+        // These are path values only; no store is opened. An empty override must remain
+        // distinct from absence at this forwarding boundary, not select the user's store.
+        for root in [
+            None,
+            Some(PathBuf::new()),
+            Some(PathBuf::from(r"C:\dure-test-store")),
+        ] {
+            let input = Invocation {
+                verbose: false,
+                store_root: root.clone(),
+                command: Command::List,
+            };
+
+            assert_eq!(input.session_store_root(), root);
+        }
+    }
+}
