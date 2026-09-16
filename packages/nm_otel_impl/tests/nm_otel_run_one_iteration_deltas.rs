@@ -41,6 +41,17 @@ fn run_one_iteration_computes_deltas_across_collections() {
         .clock(Clock::new_frozen())
         .build();
 
+    // Recording an nm event alone must not publish it to this provider.
+    assert_eq!(find_u64_sum(&reader.collect(), EVENT_NAME), None);
+
+    publisher.run_one_iteration_for_test();
+    let metrics = reader.collect();
+    assert_eq!(
+        find_u64_sum(&metrics, EVENT_NAME),
+        Some((true, u64::try_from(INITIAL_EVENT_COUNT).unwrap()))
+    );
+
+    // A fresh collection without new observations must not replay cumulative counts.
     publisher.run_one_iteration_for_test();
     let metrics = reader.collect();
     assert_eq!(

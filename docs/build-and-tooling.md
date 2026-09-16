@@ -288,9 +288,33 @@ The wrapper retains runtime/module metadata, full managed/inner exception diagno
 and the analyzer's file/rule trace under `target/script-analysis/`. Standard validation
 uploads those diagnostics even when the analyzer itself fails. Diagnostic collection
 does not retry, suppress rules or turn an engine failure into a successful result.
-Before the full scan, one rule initializes the analyzer's shared exported-command
-metadata serially. This avoids concurrent lazy initialization in PowerShell's
-runspace event manager; every configured rule still runs on the repository.
+The runner discovers the built-in and custom rules and analyzes the tree in
+sequential rule passes. Each pass excludes its peers while retaining the original
+settings, including severity, exclusions and opt-in rule configuration. Every
+configured rule still runs; only concurrency changes. This trades repeated parsing
+for reliable analysis using the analyzer's supported command interface. The custom
+module is loaded only for its own passes: loading excluded external rules would
+otherwise create an unnecessary runspace pool for every file in every built-in pass.
+
+PSScriptAnalyzer runs script rules concurrently and caches PowerShell `CommandInfo`
+objects from a runspace pool. Off-pipeline parameter resolution can return missing
+metadata while other rules use that runspace, causing a null reference in
+`CommandInfo.ResolveParameter`. This is not an invalid export in the analyzed
+module. Initializing a command in advance is insufficient: `ResolveParameter`
+requests merged metadata on every call, so even a warmed command-info cache still
+accesses runspace state. The pinned analyzer reuses its helper and command cache;
+that reuse does not make concurrent metadata access safe.
+See [PowerShell/PowerShell#27842](https://github.com/PowerShell/PowerShell/issues/27842)
+and [PowerShell/PSScriptAnalyzer#1538](https://github.com/PowerShell/PSScriptAnalyzer/issues/1538).
+`scripts/build/tests/CommandMetadataProbe.ps1 -Concurrent` provides a bounded
+runtime-level reproducer using real pooled command lookups, exported-command
+parameter resolution and dynamic parameters. It reports every observed failure
+and fails the invocation; a passing concurrent run does not disprove the race.
+Without `-Concurrent` it exercises the serial control. The Pester integration
+suite also checks actual built-in/custom findings and settings behavior through
+the workspace runner. Repeated fresh-process `just validate-scripts` runs cover
+the full repository; retain each invocation's diagnostics when investigating
+intermittency rather than retrying a failed gate.
 
 PSScriptAnalyzer can only see `.ps1`/`.psm1` files, so **nontrivial** inline PowerShell
 is not linted where it sits. Keep justfile `[script]` blocks and workflow `pwsh`
