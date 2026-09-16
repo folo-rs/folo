@@ -11,7 +11,7 @@ use crate::workflow::files::{
     read_artifacts, read_file, read_results, write_new,
 };
 use crate::workflow::projection::{
-    machine_key_files, matrix_outputs, preparation_outputs, report_outputs,
+    machine_key_files, matrix_outputs, preparation_diagnostics, preparation_outputs, report_outputs,
 };
 use crate::workflow::receipt::{
     InvalidMachineKey, Receipt, expected_platforms, machine_key, validate_platform,
@@ -148,30 +148,9 @@ fn select_receipts(
         receipts,
     )?;
     if context.verbose {
-        eprintln!(
-            "Selected {} successful platforms from {} expected platforms using {} job records across all attempts; complete={}.",
-            selection.receipt_indices.len(),
-            expected.len(),
-            jobs.len(),
-            selection.complete
-        );
-        for index in &selection.receipt_indices {
-            let receipt = receipts
-                .get(*index)
-                .expect("selection indices come from these receipts");
-            eprintln!(
-                "Platform {} contributes machine key {} from run {} attempt {}: its latest collection job succeeded and its receipt matches repository, instance and frozen head {}.",
-                receipt.platform,
-                receipt.machine_key,
-                receipt.run_id,
-                receipt.run_attempt,
-                receipt.head.as_str()
-            );
-        }
-        if !selection.complete {
-            eprintln!(
-                "Platforms not selected have terminal non-success conclusions on their latest collection attempts; older successful receipts do not restore their coverage."
-            );
+        for diagnostic in preparation_diagnostics(&selection, receipts, expected.len(), jobs.len())
+        {
+            eprintln!("{diagnostic}");
         }
     }
     Ok(selection)

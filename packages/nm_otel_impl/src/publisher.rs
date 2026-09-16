@@ -267,6 +267,11 @@ impl Publisher {
         }
     }
 
+    // Real collection-to-export adapter. Recording nm events initializes platform clocks,
+    // and the SDK provider detects OS resources, so this connection is integration-tested.
+    // Supplied-report tests cover export logic, not collection. See the owning nm_otel
+    // implementation guide, "Collection boundary".
+    #[cfg_attr(test, mutants::skip)]
     fn run_one_iteration(&mut self) {
         let report = Report::collect();
         self.export(&report);
@@ -281,6 +286,8 @@ impl Publisher {
     #[cfg(any(test, feature = "private-test-util"))]
     #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
+    // Trivial forwarder for integration tests of the real collection-to-export adapter.
+    #[cfg_attr(test, mutants::skip)]
     pub fn run_one_iteration_for_test(&mut self) {
         self.run_one_iteration();
     }

@@ -41,6 +41,38 @@ pub(crate) fn preparation_outputs(selection: &Selection, receipts: &[Receipt]) -
     )
 }
 
+pub(crate) fn preparation_diagnostics(
+    selection: &Selection,
+    receipts: &[Receipt],
+    expected_count: usize,
+    job_count: usize,
+) -> Vec<String> {
+    let mut messages = vec![format!(
+        "Selected {} successful platforms from {} expected platforms using {} job records across all attempts; complete={}.",
+        selection.receipt_indices.len(),
+        expected_count,
+        job_count,
+        selection.complete
+    )];
+    messages.extend(selected_receipts(selection, receipts).map(|receipt| {
+        format!(
+            "Platform {} contributes machine key {} from run {} attempt {}: its latest collection job succeeded and its receipt matches repository, instance and frozen head {}.",
+            receipt.platform,
+            receipt.machine_key,
+            receipt.run_id,
+            receipt.run_attempt,
+            receipt.head.as_str()
+        )
+    }));
+    if !selection.complete {
+        messages.push(
+            "Platforms not selected have terminal non-success conclusions on their latest collection attempts; older successful receipts do not restore their coverage."
+                .to_owned(),
+        );
+    }
+    messages
+}
+
 pub(crate) fn machine_key_files(
     selection: &Selection,
     receipts: &[Receipt],
@@ -154,6 +186,35 @@ mod tests {
             ),
             "completed-platforms=linux,windows\nmachine-keys=0123456789abcdef\ncomplete=true\n"
         );
+    }
+
+    #[test]
+    fn complete_collection_diagnostics_have_no_failure_qualification() {
+        let receipts = [receipt("linux", 1)];
+        let selection = Selection {
+            receipt_indices: vec![0],
+            complete: true,
+        };
+        let messages = preparation_diagnostics(&selection, &receipts, 1, 1);
+        assert_eq!(messages.len(), 2);
+        assert!(messages.first().unwrap().contains("complete=true"));
+        let platform = messages.get(1).unwrap();
+        assert!(platform.contains(&receipts[0].platform));
+        assert!(platform.contains(&receipts[0].machine_key));
+    }
+
+    #[test]
+    fn partial_collection_diagnostics_include_a_failure_qualification() {
+        let receipts = [receipt("linux", 1)];
+        let selection = Selection {
+            receipt_indices: vec![0],
+            complete: false,
+        };
+        let messages = preparation_diagnostics(&selection, &receipts, 2, 2);
+        assert_eq!(messages.len(), 3);
+        assert!(messages.first().unwrap().contains("complete=false"));
+        assert!(messages.get(1).unwrap().contains(&receipts[0].platform));
+        assert!(!messages.last().unwrap().is_empty());
     }
 
     #[test]

@@ -32,7 +32,6 @@ pub(crate) fn reconcile(
     receipts: &[Receipt],
 ) -> Result<Selection, AppError> {
     let mut attempts = BTreeMap::new();
-    let mut latest = BTreeMap::<&str, &WorkflowJob>::new();
     let mut ids = BTreeSet::new();
     let prefix = format!("{}:", collection_job_prefix(instance));
     for job in jobs {
@@ -51,12 +50,6 @@ pub(crate) fn reconcile(
             return Err(
                 InvalidCollectionJobs::new("duplicate platform jobs in one attempt").into(),
             );
-        }
-        if latest
-            .get(platform)
-            .is_none_or(|old| old.run_attempt < job.run_attempt)
-        {
-            latest.insert(platform, job);
         }
     }
 
@@ -81,8 +74,13 @@ pub(crate) fn reconcile(
 
     let mut receipt_indices = Vec::new();
     for platform in expected {
-        let job = latest
-            .get(platform.as_str())
+        // Unique attempts are ordered by platform then attempt, so the last entry
+        // in this platform's range is its latest job without a separate latest-job index.
+        let (_, job) = attempts
+            .range(
+                (platform.as_str(), NonZero::<u64>::MIN)..=(platform.as_str(), NonZero::<u64>::MAX),
+            )
+            .next_back()
             .ok_or_else(|| InvalidCollectionJobs::new("expected platform has no collection job"))?;
         if !successful(job)? {
             // A failed retry invalidates older success. A platform not rerun still selects
@@ -206,6 +204,39 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn a_wrong_run_is_rejected_even_when_every_job_id_is_unique() {
+        let mut linux = job("linux", 1, true);
+        linux.run_id = NonZero::new(43).unwrap();
+        let error = select(&[linux, job("windows", 1, false)], &[receipt("linux", 1)]).unwrap_err();
+        assert!(error.find_source::<InvalidCollectionJobs>().is_some());
+    }
+
+    #[test]
+    fn duplicate_job_ids_are_rejected_across_distinct_platform_attempts() {
+        let linux = job("linux", 1, true);
+        let mut windows = job("windows", 1, false);
+        windows.id = linux.id;
+        let error = select(&[linux, windows], &[receipt("linux", 1)]).unwrap_err();
+        assert!(error.find_source::<InvalidCollectionJobs>().is_some());
+    }
+
+    #[test]
+    fn latest_attempt_lookup_includes_the_full_positive_attempt_range() {
+        let mut latest = job("linux", 1, true);
+        latest.run_attempt = NonZero::<u64>::MAX;
+        latest.id = NonZero::new(99).unwrap();
+        let mut latest_receipt = receipt("linux", 1);
+        latest_receipt.run_attempt = NonZero::<u64>::MAX;
+        let selected = select(
+            &[latest, job("windows", 1, false), job("linux", 1, false)],
+            &[latest_receipt],
+        )
+        .unwrap();
+        assert_eq!(selected.receipt_indices, [0]);
+        assert!(!selected.complete);
     }
 
     #[test]

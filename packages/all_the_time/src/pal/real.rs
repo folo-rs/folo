@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use cpu_time::{ProcessTime, ThreadTime};
 
+use crate::Report;
 use crate::pal::abstractions::Platform;
 
 /// Real implementation of the platform abstraction using the `cpu_time` package.
@@ -23,5 +24,17 @@ impl Platform for RealPlatform {
     #[cfg_attr(test, mutants::skip)]
     fn process_time(&self) -> Duration {
         ProcessTime::now().as_duration()
+    }
+
+    // External-output forwarding is covered by integration tests, not the library harness.
+    #[cfg_attr(test, mutants::skip)]
+    fn print_to_stdout(&self, report: &Report) {
+        report.print_to_stdout();
+    }
+
+    // External-output forwarding is covered by integration tests, not the library harness.
+    #[cfg_attr(test, mutants::skip)]
+    fn write_to_target(&self, report: &Report) {
+        report.write_to_target();
     }
 }

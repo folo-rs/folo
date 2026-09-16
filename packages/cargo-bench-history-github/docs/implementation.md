@@ -89,6 +89,11 @@ identities and latest-attempt decisions have been validated. Local object mergin
 before writing anything, preserving ordinary relative store paths without a second storage format.
 Filesystem operations do not retry writes or clean existing destinations.
 
+One ordered platform/attempt index owns both receipt association and latest-job lookup.
+Duplicate attempts are rejected before selection, so there is no equal-attempt tie-breaker.
+Verbose diagnostics are projected in memory before the stderr adapter emits them, allowing
+complete and partial collection qualifications to be exercised without capturing process output.
+
 Job listing uses `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` with `filter=all`,
 `per_page` and `page` on every request. Its `{total_count, jobs}` envelope differs from issue and
 comment lists. Stable counts, unique job IDs and complete pagination are required. Job identity

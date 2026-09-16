@@ -16,7 +16,7 @@ rust-version = "1.95"
 include = ["src/**/*"]
 
 [workspace.dependencies]
-all_the_time = { version = "0.6.8", path = "packages/all_the_time", default-features = false }
+all_the_time = { version = "0.6.9", path = "packages/all_the_time", default-features = false }
 alloc_tracker = { version = "0.7.10", path = "packages/alloc_tracker", default-features = false }
 anyspawn = { version = "0.8.0", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
@@ -96,8 +96,8 @@ negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.9", path = "packages/new_zealand", default-features = false }
 nm = { version = "0.1.50", path = "packages/nm", default-features = false }
 nm_impl = { version = "=0.1.50", path = "packages/nm_impl", default-features = false }
-nm_otel = { version = "0.4.23", path = "packages/nm_otel", default-features = false }
-nm_otel_impl = { version = "=0.4.23", path = "packages/nm_otel_impl", default-features = false }
+nm_otel = { version = "0.4.24", path = "packages/nm_otel", default-features = false }
+nm_otel_impl = { version = "=0.4.24", path = "packages/nm_otel_impl", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
