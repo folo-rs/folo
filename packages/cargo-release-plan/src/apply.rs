@@ -1,5 +1,10 @@
 // Manifest rewrites for prospective resolution and proposed manifest-only edits.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules organize orchestration tests."
+)]
+
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -19,6 +24,10 @@ use crate::resolved::{apply_resolved, read_json};
 use crate::text::plural;
 use crate::verbose::Verbose;
 use crate::{ReadFileError, WriteFileError, quote_path};
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod application_tests;
 
 /// One on-disk manifest after an in-memory rewrite, waiting to be written.
 pub(crate) struct ManifestEdit {
@@ -79,6 +88,9 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
+// Connects the unit-tested orchestration to real artifact, Git and filesystem operations.
+// Integration tests own these adapters. See docs/implementation.md, "Test boundaries".
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_apply(
     plan_path: &Path,
     dry_run: bool,
@@ -87,16 +99,39 @@ pub(crate) fn run_apply(
 ) -> Result<String, AppError> {
     let plan: PlanFile = read_json(plan_path)?;
 
+    apply_plan(
+        &plan,
+        dry_run,
+        verbose,
+        |plan, dry_run| apply_resolved(plan, manifest_path, dry_run, verbose),
+        || load_tracked_work_tree(manifest_path).map(|(work_tree, _)| work_tree),
+        read_manifest,
+        |edit| {
+            fs::write(&edit.path, edit.updated.as_bytes())
+                .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
+        },
+    )
+}
+
+fn apply_plan(
+    plan: &PlanFile,
+    dry_run: bool,
+    verbose: Verbose,
+    apply_captured: impl FnOnce(&PlanFile, bool) -> Result<String, AppError>,
+    load_work_tree: impl FnOnce() -> Result<WorkTree, AppError>,
+    read: impl FnMut(&Path) -> Result<String, AppError>,
+    mut write: impl FnMut(&ManifestEdit) -> Result<(), AppError>,
+) -> Result<String, AppError> {
     if plan.stage() == PlanStage::Expanded || plan.resolved.is_some() {
-        return apply_resolved(&plan, manifest_path, dry_run, verbose);
+        return apply_captured(plan, dry_run);
     }
-    let (work_tree, _) = load_tracked_work_tree(manifest_path)?;
+    let work_tree = load_work_tree()?;
     // Git-tracked members decide which plan targets are valid and supply their
     // increment bases. All Cargo-visible member manifests remain
     // available below for dependent-pin rewrites.
     // Ref: docs/implementation.md, "Plan resolution and application".
     let target_versions = work_tree.target_versions();
-    let resolved = resolve_plan(&plan, &work_tree.groups, &target_versions, verbose)?;
+    let resolved = resolve_plan(plan, &work_tree.groups, &target_versions, verbose)?;
     verbose.note(|| {
         format!(
             "plan expands to {}; every tracked group member is included even when the plan named \
@@ -105,7 +140,7 @@ pub(crate) fn run_apply(
         )
     });
 
-    let edits = compute_edits(&work_tree, &resolved, verbose)?;
+    let edits = compute_edits_with(&work_tree, &resolved, verbose, read)?;
     let changed = changed_edit_count(&edits);
 
     if dry_run {
@@ -116,8 +151,7 @@ pub(crate) fn run_apply(
         if edit.original == edit.updated {
             continue;
         }
-        fs::write(&edit.path, edit.updated.as_bytes())
-            .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
+        write(edit)?;
         verbose.note(|| format!(
             "wrote {} after computing the full edit set in memory; remaining writes can still fail",
             quote_path(&edit.path.to_string_lossy())
@@ -130,10 +164,21 @@ pub(crate) fn run_apply(
     ))
 }
 
+// The prospective resolver uses the same edit computation with real manifest acquisition.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn compute_edits(
     work_tree: &WorkTree,
     resolved: &ResolvedVersions,
     verbose: Verbose,
+) -> Result<Vec<ManifestEdit>, AppError> {
+    compute_edits_with(work_tree, resolved, verbose, read_manifest)
+}
+
+fn compute_edits_with(
+    work_tree: &WorkTree,
+    resolved: &ResolvedVersions,
+    verbose: Verbose,
+    mut read: impl FnMut(&Path) -> Result<String, AppError>,
 ) -> Result<Vec<ManifestEdit>, AppError> {
     let mut edits = Vec::new();
     let root = work_tree.workspace_root.join("Cargo.toml");
@@ -141,7 +186,7 @@ pub(crate) fn compute_edits(
         manifest_dir: work_tree.workspace_root.clone(),
         members_by_dir: &work_tree.members_by_dir,
     };
-    edits.push(edit_path(&root, |doc| {
+    edits.push(edit_manifest(&root, read(&root)?, |doc| {
         rewrite_workspace_dependencies(doc, &root_targets, resolved, verbose);
         rewrite_package_version(doc, resolved, verbose);
         rewrite_dependency_tables(doc, &root_targets, resolved, verbose);
@@ -163,7 +208,7 @@ pub(crate) fn compute_edits(
                 .to_path_buf(),
             members_by_dir: &work_tree.members_by_dir,
         };
-        edits.push(edit_path(manifest_path, |doc| {
+        edits.push(edit_manifest(manifest_path, read(manifest_path)?, |doc| {
             rewrite_package_version(doc, resolved, verbose);
             rewrite_dependency_tables(doc, &targets, resolved, verbose);
         })?);
@@ -191,12 +236,17 @@ fn changed_edit_count(edits: &[ManifestEdit]) -> usize {
         .count()
 }
 
-fn edit_path(
+// Real filesystem acquisition is covered by integration tests, not library mutation targets.
+#[cfg_attr(test, mutants::skip)]
+fn read_manifest(path: &Path) -> Result<String, AppError> {
+    fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error).into())
+}
+
+fn edit_manifest(
     path: &Path,
+    original: String,
     rewrite: impl FnOnce(&mut DocumentMut),
 ) -> Result<ManifestEdit, AppError> {
-    let original =
-        fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error))?;
     let mut doc: DocumentMut = parse_document(path, &original)?;
     rewrite(&mut doc);
     Ok(ManifestEdit {
@@ -249,8 +299,6 @@ fn rewrite_workspace_dependencies(
     rewrite_dep_table(deps, targets, resolved, verbose, "workspace.dependencies");
 }
 
-// Walks every dependency table; entry-level rewrite is tested separately.
-#[cfg_attr(test, mutants::skip)]
 fn rewrite_dependency_tables(
     doc: &mut DocumentMut,
     targets: &DepTargets<'_>,
@@ -462,27 +510,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::UnsupportedPlanSchemaError;
-
-    #[test]
-    #[cfg_attr(miri, ignore = "writes a plan file through the host filesystem")]
-    fn unsupported_proposed_and_expanded_schemas_fail_before_workspace_access() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("plan.json");
-        for stage in [PlanStage::Proposed, PlanStage::Expanded] {
-            let mut plan = PlanFile::new(stage, Vec::new());
-            plan.schema_version = 3;
-            fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
-            let error = run_apply(
-                &path,
-                false,
-                &directory.path().join("absent").join("Cargo.toml"),
-                Verbose::new(false),
-            )
-            .unwrap_err();
-            assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
-        }
-    }
 
     fn v(text: &str) -> Version {
         text.parse().unwrap()
