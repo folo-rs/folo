@@ -244,17 +244,17 @@ not indicate ongoing work.
 ## Repair and PR completion
 
 The [scheduled-intake skill](../.github/skills/scheduled-intake/SKILL.md) coordinates
-repairs. It follows existing claimed issues and PRs first, then starts at most one
-new repair session per invocation, subject to the
-[repair-session limit](#repair-session-capacity-and-cleanup) after completion cleanup
+admission and newly discovered relationships between repairs. It reads existing
+ownership, package scope and disposition before starting at most one new repair
+session per invocation, subject to the [repair-session limit](#repair-session-capacity)
 and the [package-overlap policy](#package-overlap-and-stacked-repairs).
-Only open findings are repair candidates; closure ends automatic repair follow-up,
-including follow-up of linked PRs. Known sessions linked to closed findings remain
-in scope for completion reconciliation and safe archival. Keep the issue open
+Only open findings are repair candidates. Known sessions linked to closed findings
+remain relevant only to establish disposition and capacity. Keep the issue open
 while its repair is ongoing. Closing it with an open PR requires an explicit
-disposition of that PR, not continued automatic intake follow-up.
+disposition of that PR, not an intake request to resume automatic PR follow-up.
 The [scheduled-repair skill](../.github/skills/scheduled-repair/SKILL.md)
-works on one issue in its native issue/PR-linked Local App session.
+works on one issue in its native issue/PR-linked Local App session and owns that
+repair's PR follow-up.
 
 Confirm the failure, implement the correction and create a normal PR with
 `Fixes #<issue>`. Follow repository conventions, including `increment-versions`
@@ -268,8 +268,8 @@ local results at the reviewed head; unrelated green checks do not establish the
 fix. Reviewers assess these results and limitations alongside ordinary required
 checks and version validation.
 
-Follow the same PR through CI/deep failures, conflicts and review feedback. Read
-top-level discussion, review summaries and inline threads, including valid
+The repair owner follows the same PR through CI/deep failures, conflicts and review
+feedback. Read top-level discussion, review summaries and inline threads, including valid
 low-confidence agent comments. Follow repository communication policy, including
 the exception permitting responses to the original user's own human comments.
 Every authored post begins with `[Copilot speaking]`. Request human decisions for
@@ -310,59 +310,56 @@ not resolve the issue: record the disposition and explicitly release or block th
 claim. No post-merge confirmation service is needed; later scheduled failures are
 triaged normally.
 
-### Repair-session capacity and cleanup
+### Repair-session capacity
 
 The maximum incomplete repair sessions defaults to `5`. An operator can override
 it with a nonnegative integer in the intake invocation or saved repair automation
-prompt. `0` pauses new admissions while preserving follow-up and cleanup. Invalid
-or conflicting values require clarification, not a silent fallback. The limit
+prompt. `0` pauses new admissions while preserving new relationship coordination.
+Invalid or conflicting values require clarification, not a silent fallback. The limit
 applies to this repository's scheduled repairs across intake invocations and
 parent sessions; unrelated human work, triage/coordinator sessions and other
 repositories do not consume its capacity.
 
-Count distinct repair sessions, reconciling native issue/PR links with GitHub
-ownership comments. Running, paused, idle, unavailable and `needs-human` repairs
-remain incomplete. A ready PR waiting only for human review or merge still counts
-until merged or explicitly abandoned. Neither an idle status nor an archive flag
-proves completion. Do not double-count a session because both an issue and a PR
-refer to it.
+Count distinct incomplete repair sessions, reconciling native issue/PR links with
+GitHub ownership comments. A merged PR whose session is no longer executing work
+consumes no slot and reserves no package scope. Exclude it regardless of retained
+issue labels or assignments, stale checks/reviews/checklists, missing final
+handoffs or local work. GitHub merge state and native inactivity suffice; intake
+does not inspect its worktree or ask the owner to confirm completion.
 
-Every intake invocation follows existing work and reconciles completion before
-checking capacity, even when at the limit or the open backlog is empty. Inspect
-known sessions linked to closed issues and merged or closed PRs for cleanup,
-without scanning the closed backlog for new work. A merged PR or an explicitly
-abandoned repair with its PR closed and claim released establishes a final
-disposition. A repair without a PR needs a documented resolution or explicit
-abandonment. Closing an issue while its PR remains open does not make the session
-archivable. Already archived sessions with a verified final disposition need no
-further cleanup.
+Use native activity, not the existence of a session, running CLI process or retained
+worktree, to determine whether work is executing. A session still executing repair
+work remains counted until inactive, even after merge. Do not interrupt or wake
+workers to free capacity. If execution state cannot be established, report that
+specific uncertainty rather than infer free capacity.
 
-Finish remaining actionable handoff work through the existing owner. Archive a
-finished session only after verifying it has no unpublished or unmerged work to
-preserve, open PR, ongoing operation, active Agent merge or attached session
-automation. A worker left active after its repair is finished receives a focused
-completion-handoff request; verify it has ended before archiving it. Do not force
-genuinely ongoing work to finish or discard local changes to free capacity.
+An inactive repair also leaves capacity after explicit abandonment with its PR
+closed and claim released, or documented resolution or explicit abandonment on an
+issue without a PR. Unmerged repairs remain incomplete while running, paused,
+idle, unavailable, blocked or awaiting human review/merge. A missing worktree does
+not release a retained claim, and an unresolved `needs-human` requirement remains
+in force. An issue closed with an open PR still needs a PR disposition. Do not
+double-count an executor because both an issue and a PR refer to it.
 
-Use supported native archival and verify the outcome. `archive_session` is
-restricted to sessions created by its caller and cannot archive the caller itself.
-Cleanup outside that authority requires the owning parent or operator; report the
-needed action and defer new admissions when required cleanup is blocked or
-uncertain. Do not substitute session/worktree deletion. Completion handoffs stay
-on the issue/PR and in native sessions, not in a private lifecycle registry.
+Every intake invocation reconciles disposition before comparing the count with
+the limit, including on an empty queue. Session archival and retained-worktree
+housekeeping belong to the operator, not intake. They are never admission
+prerequisites: lack of cleanup authority, leftover artifacts or an unarchived
+finished session does not block another repair. Intake neither deletes local work
+nor wakes finished owners to prepare it for cleanup.
 
-After cleanup, refresh the incomplete count. At or above the limit, continue
-existing repairs but do not claim another repair or create a session. The same
-gate applies to a replacement executor after an explicit handoff; resuming an
-existing incomplete session does not consume another slot. Below the limit,
-prioritize handed-off work needing an executor, then the oldest actionable
-unclaimed finding, and start at most one new session. Refresh capacity immediately
-before opening a new session or claiming a new repair in an existing session.
-Creating the admitted executor occupies its slot; claiming and starting that same
-executor do not require another slot. Incomplete discovery or uncertain
-ownership/completion defers admission rather than implying free capacity. Keep
-intake invocations nonoverlapping; these observations are not an atomic reservation
-or a financial cap.
+After reconciliation, refresh the incomplete count. At or above the limit,
+coordinate newly discovered relationships but do not claim another repair or
+create a session. The same gate applies to a replacement executor after an explicit
+handoff; an explicitly requested continuation in an existing incomplete session
+does not consume another slot. Below the limit, prioritize handed-off work needing
+an executor, then the oldest actionable unclaimed finding, and start at most one
+new session. Refresh capacity immediately before opening a new session or claiming
+a new repair in an existing session. Creating the admitted executor occupies its
+slot; claiming and starting that same executor do not require another slot.
+Incomplete discovery or uncertain ownership/completion defers admission rather
+than implying free capacity. Keep intake invocations nonoverlapping; these
+observations are not an atomic reservation or a financial cap.
 
 ### Package overlap and stacked repairs
 
@@ -398,8 +395,8 @@ known overlapping repair; a stack does not excuse a collision with unrelated
 work. Record the dependency reason, parent issue/PR, branch and exact head commit
 on GitHub. Recheck the parent and package scope immediately before admission and
 again before the worker edits. If the parent merged, reassess against current main;
-if it moved, was abandoned or is no longer suitable, defer or reconcile through
-the existing owners rather than silently changing the base.
+if it moved, was abandoned or is no longer suitable, defer the new admission while
+the existing owners reconcile their work rather than silently changing the base.
 
 Each layer has its own session, claim, branch and PR, consumes a normal incomplete
 slot, and counts toward the one-new-session-per-invocation limit. The coordinator
@@ -464,16 +461,28 @@ The coordinator uses native session lookup and `open_issue_session` or
 `open_pr_session` to open/resume visible linked sessions, and `create_session` with
 the verified parent branch for an admitted stacked layer. It preserves the
 existing executor when available. GitHub remains the source of truth; native
-runtime metadata locates executors and verifies session cleanup, not repair
-correctness or ownership.
+runtime metadata locates executors and establishes activity, not repair correctness
+or ownership.
 
-Empty scans still reconcile known repair sessions for cleanup, then exit without
-posting empty-scan updates or preparing Rust/WSL. Routine waiting does not
-trigger duplicate worker turns or heartbeat posts and does not cancel an active
-worker's requested foreground follow-up. Subsequent intake runs read current
-checks and reviews and route actionable results to the existing owner. New
-decisions or other material information can resume blocked work. Follow-up uses
-the repository repair automation, never per-PR timers or hidden watchers.
+Empty scans reconcile known repair dispositions for capacity, then exit without
+posting empty-scan updates or preparing Rust/WSL. Existing workers monitor their
+own PR checks, reviews, conflicts, blockers and readiness. Intake does not repeat
+that monitoring or relay feedback, reminders, blocker-label corrections or
+completion requests. An idle or paused owner is not an invitation to resume it.
+Interrupted work retains its owner's pending handoff for continuation in the same
+session; intake is not a fallback PR monitor.
+
+Intake contacts an existing owner only for a newly discovered cross-repair
+relationship or an explicit operator handoff. Examples are an admitted stacked
+layer, a previously unknown prerequisite or newly evidenced package overlap.
+Publish the relationship and notify the affected active owners with issue/PR and
+session links so they can coordinate directly. Do not repeat relationships already
+known to them. Changes in a recorded parent's head, release plan or disposition
+belong to the related workers' own follow-up; intake still reads the live state
+when assessing a new admission. Finished owners are not woken for a relationship
+that can instead use their merged result. Surface unresolved operator inputs
+without guessing approval. Neither coordination nor worker follow-up uses per-PR
+timers or hidden watchers.
 
 A paused machine leaves the backlog intact. After an explicit handoff, a human
 or another machine can resume from GitHub without copying coordination state.
