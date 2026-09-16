@@ -36,6 +36,8 @@ retaining coordination of newly discovered repair relationships and recovery in
 existing sessions. Reject invalid or conflicting settings rather than silently
 replacing them. This repository-wide limit includes repairs waiting
 for human review or merge, but excludes merged repairs whose sessions are inactive.
+Related unclaimed findings can share one repair session and PR; the limit counts
+that executor once, not once per issue.
 Session housekeeping belongs to the operator and is not an admission prerequisite.
 
 Confirm that the Local App exposes its bundled `pr-stack` skill for stacked
@@ -57,7 +59,7 @@ The entries are:
 | Suggested name | Saved prompt |
 |---|---|
 | Folo scheduled failure triage | Run the repository's `scheduled-triage` skill in this Local App project. Process open run reports oldest first using the selected model. Do not edit source, start repairs or change automation/account/billing settings. |
-| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Check ownership and capacity, ignoring inactive merged repairs, coordinate newly discovered repair relationships or explicit operator handoffs, and recover unexpectedly stopped repair sessions under the skill's evidence and duplicate-suppression rules. Do not wake owners merely for inactivity or override operator pauses or human gates. Existing owners monitor their own PRs; leave session housekeeping to the operator. Start at most one new repair session when below the maximum incomplete repair sessions: {{MAX_INCOMPLETE_REPAIR_SESSIONS}}. Defer likely package overlaps except for stable, naturally dependent stacked repairs admitted under the same limit. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
+| Folo scheduled repair | Run the repository's `scheduled-intake` skill in this Local App project. Check ownership and capacity, ignoring inactive merged repairs, coordinate newly discovered repair relationships or explicit operator handoffs, and recover unexpectedly stopped repair sessions under the skill's evidence and duplicate-suppression rules. Do not wake owners merely for inactivity or override operator pauses or human gates. Existing owners monitor their own PRs; leave session housekeeping to the operator. Group closely related unclaimed findings into one repair session and PR while retaining per-issue claims and acceptance criteria. Start at most one new repair session when below the maximum incomplete repair sessions: {{MAX_INCOMPLETE_REPAIR_SESSIONS}}, counting a grouped repair once. Screen the group's combined package scope against other repairs; defer likely overlaps except for stable, naturally dependent stacked repairs admitted under the same limit. Use the operator-selected repair-session model and reasoning effort described below; preserve existing session settings. Do not create per-PR automations or change automation/account/billing settings. |
 
 Expand the repair prompt's model/effort sentence with the actual operator choice
 and replace `{{MAX_INCOMPLETE_REPAIR_SESSIONS}}` with the selected or preserved
