@@ -263,6 +263,11 @@ Those tests cover command parsing, session discovery and garbage collection,
 the supervisor steal loop, and the client attach handshake, including failure
 paths that must not delete a live supervisor record.
 
+The private store override is forwarded as a path value without opening a store.
+Unit coverage distinguishes an absent override from an empty or explicit path;
+interpreting the filesystem location remains the PAL's responsibility. These
+checks need neither a real directory nor access to the user's session store.
+
 The in-memory PAL doubles are held to the same rule as the code they stand in
 for. The transport reads no clock: a test that wants a bounded wait to expire
 arms that expiry on the pipe it means, so a regression fails its assertion at
