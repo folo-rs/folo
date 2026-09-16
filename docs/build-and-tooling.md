@@ -292,7 +292,9 @@ The runner discovers the built-in and custom rules and analyzes the tree in
 sequential rule passes. Each pass excludes its peers while retaining the original
 settings, including severity, exclusions and opt-in rule configuration. Every
 configured rule still runs; only concurrency changes. This trades repeated parsing
-for reliable analysis using the analyzer's supported command interface.
+for reliable analysis using the analyzer's supported command interface. The custom
+module is loaded only for its own passes: loading excluded external rules would
+otherwise create an unnecessary runspace pool for every file in every built-in pass.
 
 PSScriptAnalyzer runs script rules concurrently and caches PowerShell `CommandInfo`
 objects from a runspace pool. Off-pipeline parameter resolution can return missing

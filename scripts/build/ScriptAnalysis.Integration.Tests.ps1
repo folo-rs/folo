@@ -102,8 +102,14 @@ Describe 'Workspace script-analysis diagnostics' {
         Should -Invoke Invoke-ScriptAnalyzer -ModuleName ScriptAnalysis -Exactly -Times 3 -ParameterFilter {
             $Path -ceq (Join-Path $root scripts) -and $Recurse -and $IncludeDefaultRules -and
             $Settings -ceq (Join-Path $root PSScriptAnalyzerSettings.psd1) -and
-            $CustomRulePath -ceq (Join-Path $root 'scripts\analyzer\FoloAnalyzerRules.psm1') -and
             $ExcludeRule.Count -eq 2 -and -not $IncludeRule
+        }
+        Should -Invoke Invoke-ScriptAnalyzer -ModuleName ScriptAnalysis -Exactly -Times 1 -ParameterFilter {
+            $CustomRulePath -ceq (Join-Path $root 'scripts\analyzer\FoloAnalyzerRules.psm1') -and
+            $ExcludeRule -notcontains 'CustomRule'
+        }
+        Should -Invoke Invoke-ScriptAnalyzer -ModuleName ScriptAnalysis -Exactly -Times 2 -ParameterFilter {
+            -not $CustomRulePath
         }
         $directory = @(Get-ChildItem -LiteralPath $diagnostics -Directory)[0].FullName
         $environment = Get-Content -LiteralPath (Join-Path $directory environment.json) -Raw | ConvertFrom-Json
@@ -115,7 +121,7 @@ Describe 'Workspace script-analysis diagnostics' {
     It 'fails on ordinary findings instead of converting them to diagnostic-only warnings' -ForEach @(
         @{ Count = 1 }, @{ Count = 2 }
     ) {
-        Mock Invoke-ScriptAnalyzer -ModuleName ScriptAnalysis -ParameterFilter { $Path } {
+        Mock Invoke-ScriptAnalyzer -ModuleName ScriptAnalysis -ParameterFilter { $Path -and $ExcludeRule -notcontains 'FirstRule' } {
             foreach ($index in 1..$Count) {
                 @{ ScriptName = if ($index -eq 1) { Join-Path $root 'scripts\bad.ps1' } else { 'other.ps1' }
                     Line = $index; Severity = 'Warning'; RuleName = 'ExampleRule'; Message = 'An actual finding' }

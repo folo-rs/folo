@@ -32,6 +32,7 @@ function Invoke-WorkspaceScriptAnalysis {
             Get-ScriptAnalyzerRule -CustomRulePath $customRules
         )
         $names = @($rules | Select-Object -ExpandProperty RuleName | Sort-Object -Unique)
+        $customNames = @($rules | Where-Object SourceType -EQ 'Module' | Select-Object -ExpandProperty RuleName)
         if ($names.Count -eq 0) {
             throw 'PSScriptAnalyzer did not discover any rules.'
         }
@@ -42,9 +43,13 @@ function Invoke-WorkspaceScriptAnalysis {
         $results = @(foreach ($name in $names) {
             "Rule pass: $name" | Add-Content -LiteralPath $trace
             $peers = @($names | Where-Object { $_ -cne $name })
+            # Loading external rules creates a runspace pool for every file even when
+            # they are all excluded. Load the custom module only for its own passes.
+            $customArguments = @{}
+            if ($name -in $customNames) { $customArguments.CustomRulePath = $customRules }
             Invoke-ScriptAnalyzer -Path (Join-Path $RepositoryRoot scripts) -Recurse `
                 -Settings (Join-Path $RepositoryRoot PSScriptAnalyzerSettings.psd1) `
-                -CustomRulePath $customRules -IncludeDefaultRules -ExcludeRule $peers -Verbose 4>> $trace
+                -IncludeDefaultRules -ExcludeRule $peers @customArguments -Verbose 4>> $trace
         })
     } catch [System.Management.Automation.RuntimeException], [System.NullReferenceException] {
         # Preserve the original failure. The normal formatter omits managed/inner stacks,
