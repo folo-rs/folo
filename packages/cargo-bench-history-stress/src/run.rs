@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use crate::logging::Logger;
 use crate::report::Phases;
 use crate::scenario::Scenario;
 use crate::target::StorageTarget;
-use crate::{measure, repo, report, scenario, seed};
+use crate::{measure, repo, report, scenario, seed, write_config};
 
 /// Environment variable supplying the default Azure storage account name.
 const ACCOUNT_ENV: &str = "BENCH_HISTORY_TEST_AZURE_ACCOUNT";
@@ -103,7 +103,8 @@ async fn run_harness(cli: Cli) -> Result<(), Error> {
     .await?;
     let repo_elapsed = repo_started.elapsed();
 
-    write_config(workspace_dir.path(), &target, logger).await?;
+    let config_path = write_config(workspace_dir.path(), &target.config_toml()).await?;
+    logger.detail_with(|| format!("wrote analyze configuration to {}", config_path.display()));
     target.provision(logger).await?;
 
     // The target is now provisioned (for Azure, the per-run container exists), so
@@ -252,30 +253,9 @@ fn resolve_cache(cli: &Cli) -> Result<Option<PathBuf>, Error> {
     }
 }
 
-/// Writes the seeded configuration into the workspace's `.cargo/` directory.
-async fn write_config(
-    workspace: &Path,
-    target: &StorageTarget,
-    logger: Logger,
-) -> Result<(), Error> {
-    let path = measure::config_path(workspace);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| fail(format!("failed to create {}: {error}", parent.display())))?;
-    }
-    tokio::fs::write(&path, target.config_toml())
-        .await
-        .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
-    logger.detail_with(|| format!("wrote analyze configuration to {}", path.display()));
-    Ok(())
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-
     use futures::executor::block_on;
 
     use super::*;
@@ -353,53 +333,6 @@ mod tests {
             // No Tokio runtime is needed: validation must finish before the I/O path.
             _ = block_on(run_harness(cli)).unwrap_err();
         }
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore = "uses the real filesystem and Tokio runtime")]
-    async fn config_write_creates_parents_and_replaces_existing_contents() {
-        let dir = TempDir::new().unwrap();
-        let workspace = dir.path().join("workspace");
-        let path = workspace.join(".cargo").join("bench_history.toml");
-        let local = StorageTarget::local(None).unwrap();
-        let azure = StorageTarget::azure("account".to_owned(), "container".to_owned()).unwrap();
-
-        // Constructing an Azure target only creates staging storage, not a cloud resource.
-        // Different backend configurations prove the existing file is replaced.
-        for target in [local, azure] {
-            write_config(&workspace, &target, Logger::new(false))
-                .await
-                .unwrap();
-            assert_eq!(fs::read_to_string(&path).unwrap(), target.config_toml());
-        }
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore = "uses the real filesystem and Tokio runtime")]
-    async fn config_write_reports_parent_creation_failure() {
-        let dir = TempDir::new().unwrap();
-        let parent = dir.path().join(".cargo");
-        fs::write(&parent, "not a directory").unwrap();
-        let target = StorageTarget::local(None).unwrap();
-
-        _ = write_config(dir.path(), &target, Logger::new(false))
-            .await
-            .unwrap_err();
-        assert_eq!(fs::read_to_string(parent).unwrap(), "not a directory");
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore = "uses the real filesystem and Tokio runtime")]
-    async fn config_write_reports_file_write_failure() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join(".cargo").join("bench_history.toml");
-        fs::create_dir_all(&path).unwrap();
-        let target = StorageTarget::local(None).unwrap();
-
-        _ = write_config(dir.path(), &target, Logger::new(false))
-            .await
-            .unwrap_err();
-        assert!(path.is_dir());
     }
 
     #[test]
