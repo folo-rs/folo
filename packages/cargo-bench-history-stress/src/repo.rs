@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 
 use jiff::Timestamp;
 use tokio::io::AsyncWriteExt;
@@ -151,7 +151,9 @@ fn append_commit(
 }
 
 /// Feeds the stream to `git fast-import`, writing SHAs to the marks file.
-#[cfg_attr(coverage_nightly, coverage(off))]
+// Process and pipe I/O is covered by stress_smoke; exit decisions remain unit-tested.
+// Ref: docs/implementation.md, "Repository construction".
+#[cfg_attr(test, mutants::skip)]
 async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(), Error> {
     let marks_arg = format!("--export-marks={}", marks_path.display());
     let mut child = Command::new("git")
@@ -184,21 +186,21 @@ async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(
         .wait_with_output()
         .await
         .map_err(|error| fail(format!("git fast-import did not complete: {error}")))?;
-    if !output.status.success() {
-        return Err(fail(format!(
-            "git fast-import failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(())
+    check_git_output("fast-import", &output)
 }
 
-/// Parses the export-marks file into a `mark -> commit ID` map.
-#[cfg_attr(coverage_nightly, coverage(off))]
+/// Reads Git's exported marks and delegates their interpretation.
+// File acquisition is an integration boundary; parsing remains a mutation target.
+#[cfg_attr(test, mutants::skip)]
 async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> {
     let text = tokio::fs::read_to_string(marks_path)
         .await
         .map_err(|error| fail(format!("failed to read the fast-import marks: {error}")))?;
+    Ok(parse_marks(&text))
+}
+
+/// Parses the export-marks contents into a `mark -> commit ID` map.
+fn parse_marks(text: &str) -> HashMap<usize, String> {
     let mut marks = HashMap::new();
     for line in text.lines() {
         // Each line is ":<mark> <commit_id>".
@@ -210,7 +212,7 @@ async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> 
             marks.insert(mark, commit_id.to_owned());
         }
     }
-    Ok(marks)
+    marks
 }
 
 /// Resolves the `mark -> commit ID` map back into per-branch commit lists.
@@ -248,7 +250,8 @@ fn resolve_commits(
 }
 
 /// Runs a `git` subcommand in `dir`, failing on a non-zero exit.
-#[cfg_attr(coverage_nightly, coverage(off))]
+// Subprocess acquisition is covered by stress_smoke; check_git_output owns exit decisions.
+#[cfg_attr(test, mutants::skip)]
 async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
     let output = Command::new("git")
         .arg("-C")
@@ -257,10 +260,14 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
         .output()
         .await
         .map_err(|error| fail(format!("failed to run git {}: {error}", args.join(" "))))?;
+    check_git_output(&args.join(" "), &output)
+}
+
+/// Applies Git's completion status independently of subprocess acquisition.
+fn check_git_output(subcommand: &str, output: &Output) -> Result<(), Error> {
     if !output.status.success() {
         return Err(fail(format!(
-            "git {} failed: {}",
-            args.join(" "),
+            "git {subcommand} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
     }
@@ -268,11 +275,80 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt as _;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+
     use super::*;
 
+    #[test]
+    fn successful_git_exit_accepts_diagnostic_output() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: Vec::new(),
+            stderr: b"progress on stderr".to_vec(),
+        };
+        check_git_output("fast-import", &output).unwrap();
+    }
+
+    #[test]
+    fn unsuccessful_git_exit_rejects_empty_diagnostics() {
+        // These represent nonzero Windows exits, or Unix signal and exit failures.
+        for raw in [1, 256] {
+            let output = Output {
+                status: ExitStatus::from_raw(raw),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            };
+            _ = check_git_output("fast-import", &output).unwrap_err();
+        }
+    }
+
+    #[test]
+    fn marks_preserve_identities_and_resolve_branch_order() {
+        // Distinct full IDs and out-of-order marks distinguish missing/substituted
+        // entries without depending on Git's export order.
+        let first = "0123456789abcdef0123456789abcdef01234567";
+        let second = "abcdef0123456789abcdef0123456789abcdef01";
+        let marks = parse_marks(&format!(":2 {second}\n:1 {first}\n"));
+        assert_eq!(
+            marks,
+            HashMap::from([(1, first.to_owned()), (2, second.to_owned())])
+        );
+        let repo = resolve_commits(&marks, &[ts(1_000)], &[ts(2_000)]).unwrap();
+        assert_eq!(repo.main.len(), 1);
+        assert_eq!(repo.feature.len(), 1);
+        let main = repo.main.first().unwrap();
+        let feature = repo.feature.first().unwrap();
+        assert_eq!(main.commit_id, first);
+        assert_eq!(main.time, ts(1_000));
+        assert_eq!(feature.commit_id, second);
+        assert_eq!(feature.time, ts(2_000));
+    }
+
+    #[test]
+    fn missing_marks_fail_commit_resolution() {
+        let marks = parse_marks(":1 main-id\n");
+        _ = resolve_commits(&HashMap::new(), &[ts(1_000)], &[]).unwrap_err();
+        _ = resolve_commits(&marks, &[ts(1_000)], &[ts(2_000)]).unwrap_err();
+    }
+
+    #[test]
+    fn marks_parse_empty_and_unrecognized_lines() {
+        assert!(parse_marks("").is_empty());
+        assert!(parse_marks("\nnot-a-mark\n:invalid ignored\n").is_empty());
+        assert_eq!(
+            parse_marks("3 commit-id\n"),
+            HashMap::from([(3, "commit-id".to_owned())])
+        );
+    }
+
     fn ts(second: i64) -> Timestamp {
-        Timestamp::from_second(second).expect("test second is in range")
+        Timestamp::from_second(second).unwrap()
     }
 
     #[test]
@@ -284,7 +360,7 @@ mod tests {
         let feature = vec![ts(3_000), ts(4_000), ts(5_000)];
 
         let stream = build_stream(&main, &feature);
-        let text = String::from_utf8(stream).expect("the fast-import stream is ASCII");
+        let text = String::from_utf8(stream).unwrap();
 
         let from_lines: Vec<&str> = text
             .lines()
