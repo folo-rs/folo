@@ -63,6 +63,11 @@ namespace Folo.ScriptAnalysis.Tests
                     throw new InvalidOperationException(lookup.Streams.Error[0].ToString());
             };
 
+            // Warm the same objects before overlapping access: ResolveParameter still
+            // requests merged metadata on every call, rather than caching that result.
+            resolveExport();
+            resolveDynamic();
+
             if (concurrent)
             {
                 // A busy pooled runspace routes metadata requests through its event manager.

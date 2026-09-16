@@ -298,8 +298,10 @@ PSScriptAnalyzer runs script rules concurrently and caches PowerShell `CommandIn
 objects from a runspace pool. Off-pipeline parameter resolution can return missing
 metadata while other rules use that runspace, causing a null reference in
 `CommandInfo.ResolveParameter`. This is not an invalid export in the analyzed
-module. Initializing a command in advance is insufficient: parameter resolution
-still accesses runspace state, and each analyzer invocation owns a fresh helper.
+module. Initializing a command in advance is insufficient: `ResolveParameter`
+requests merged metadata on every call, so even a warmed command-info cache still
+accesses runspace state. The pinned analyzer reuses its helper and command cache;
+that reuse does not make concurrent metadata access safe.
 See [PowerShell/PowerShell#27842](https://github.com/PowerShell/PowerShell/issues/27842)
 and [PowerShell/PSScriptAnalyzer#1538](https://github.com/PowerShell/PSScriptAnalyzer/issues/1538).
 `scripts/build/tests/CommandMetadataProbe.ps1 -Concurrent` provides a bounded
