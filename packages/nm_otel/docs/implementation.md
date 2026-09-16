@@ -25,6 +25,24 @@ consumers remain integration tests rather than running real SDK collection solel
 an assertion helper in the library harness. These exclusions are function-local and do not
 exclude the production algorithms or the rest of the test-reader support.
 
+### Collection boundary
+
+The single-iteration adapter connects `Report::collect()` to the exporter. Its real
+collection-to-export behavior belongs to integration tests: recording real `nm` events
+initializes platform clocks, and the SDK provider performs OS resource detection. The
+publisher uses a frozen clock and explicit iteration calls in these tests, with no waits
+or elapsed-time assertions. Separate test binaries isolate the process-wide event registry.
+They verify initial publication, unchanged observations and fresh observations across
+collections, including retention of counter delta state.
+
+Mutation exclusions cover only that adapter and its trivial integration-test forwarder.
+The supplied-report driver, exporter and delta algorithms remain mutation targets.
+Pre-built reports exercise export behavior but do not establish that real collection
+feeds it. Injecting a report supplier would test substitute wiring rather than this
+connection, so the publisher does not acquire a collection abstraction solely for mutation
+testing. The perpetual publishing loop has a separate no-hang exclusion because its mutants
+can stop yielding while mutation testing disables watchdogs.
+
 ## Recording pipeline
 
 On each publisher interval, the implementation obtains an aggregated report from `nm`, associates
