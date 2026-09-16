@@ -176,6 +176,9 @@ reusing a human issue. It needs an observed failure and affected scope, known ca
 or explicit uncertainty, useful diagnostics and report/job links, reproduction
 steps with applicable toolchain/target/seed details, and acceptance criteria.
 Triage need not finish the repair investigation or prescribe a speculative patch.
+Independently actionable problems remain separate issues even when they are
+closely related enough for intake to repair together. Link useful shared
+investigation or validation scope without asserting that the issues are duplicates.
 
 When supported by the evidence, distinguish packages likely to need repair edits
 or version movements from packages merely affected by a failed check. Note known
@@ -223,6 +226,12 @@ session link is helpful but not required for another person to understand the
 work. Session identity distinguishes agents sharing an account; an assignee alone
 does not authorize adopting another worker's task.
 
+For a grouped repair, claim every member separately with the same owner, session
+and branch. Each claim links the primary issue and all companions and explains
+the shared scope. The primary issue is the native App issue link, not authority
+to work on unclaimed companions; their ordinary GitHub claims identify the shared
+executor. Link the same PR from every member when available.
+
 Reread claims after posting and before work. If claims collide, the earlier
 unreleased claim takes precedence and the other worker withdraws without removing
 the winner's assignment. This is a human collaboration convention, not
@@ -254,13 +263,19 @@ remain relevant only to establish disposition and capacity. Keep the issue open
 while its repair is ongoing. Closing it with an open PR requires an explicit
 disposition of that PR, not an intake request to resume automatic PR follow-up.
 The [scheduled-repair skill](../.github/skills/scheduled-repair/SKILL.md)
-works on one issue in its native issue/PR-linked Local App session and owns that
+works on one issue or a coherent group in a shared Local App session and owns that
 repair's PR follow-up.
 
 Confirm the failure, implement the correction and create a normal PR with
-`Fixes #<issue>`. Follow repository conventions, including `increment-versions`
-and the complete current **Version/release plan**. There is no separate version
-attestation or managed-repair merge gate.
+`Fixes #<issue>` for each issue it actually resolves. A grouped repair shares one
+branch, PR and combined **Version/release plan**, not an increment per issue.
+Follow repository conventions, including `increment-versions`.
+Maintain per-issue acceptance and verification evidence; shared checks can cover
+several members, but passing one replay does not resolve untested failures.
+Explicitly resolve, release or hand off any member excluded after diagnosis,
+preserving its diagnostics, blockers and existing work. Membership is not a reason
+to close an issue or keep a closing reference for unresolved work.
+There is no separate version attestation or managed-repair merge gate.
 
 Normal required PR checks run. The worker also runs relevant deep checks locally
 at the current PR commit and records the tested commit, scope, commands, outcomes
@@ -305,11 +320,50 @@ ownership and the next follow-up action as pending work, not a human blocker.
 Repair branches follow ordinary repository conventions. Normal same-repository
 and fork job rules apply; branch names do not grant special treatment.
 
-Final approval and merge remain human actions. A merged linked PR closes its
-problem issue through normal GitHub behavior. A PR closed without merging does
-not resolve the issue: record the disposition and explicitly release or block the
-claim. No post-merge confirmation service is needed; later scheduled failures are
+Final approval and merge remain human actions. A merged linked PR closes the
+problem issues named in its closing references through normal GitHub behavior.
+A PR closed without merging does not resolve them: record the disposition and
+explicitly release or block each retained claim.
+No post-merge confirmation service is needed; later scheduled failures are
 triaged normally.
+
+### Grouping related findings
+
+Prefer one repair session and PR for closely related unclaimed findings when a
+common investigation, correction or regression-coverage effort can address them
+as a reviewable unit. Different missed mutants or mutation timeouts in one
+package's test-coverage work are typical candidates, even when they have distinct
+causes and acceptance criteria. Similar titles, a common checker or a shared
+package alone are not enough to combine unrelated repairs.
+
+Select the oldest eligible finding as the primary issue, then consider related
+eligible findings across the backlog. Do not require adjacency, identical logs or
+proven duplicate identity. Bound the group by coherent implementation and
+validation scope rather than an arbitrary issue count. Use a singleton when no
+suitable companions exist. Screen the union of likely edited and version-moving
+packages, including version groups and dependents, against other incomplete
+repairs. Internal overlap among issues in this session is not concurrent overlap.
+Every member of a stacked group must fit the same verified prerequisite chain.
+If a companion is ineligible, leave it unclaimed and reassess the remaining group
+rather than bypassing its blocker or unnecessarily deferring independent work.
+
+Only actionable unassigned and unclaimed findings can join a new group. Respect
+`needs-human`, retained claims and competing work. Preserve the agreed scope of
+explicit handoffs. Do not automatically append findings to existing owners or
+combine sessions, branches or PRs; scope changes need an explicit handoff.
+Membership is fixed at admission rather than held open for future failures.
+Triage's independently actionable issues remain the per-problem work record.
+
+Open only the primary issue's native session, or the group's admitted stacked
+session, and establish every member's claim before starting it. Reread all claims
+after posting; an earlier unreleased claim wins a collision. Remove an unavailable
+companion, record its withdrawal and release only this admission's uncontested
+claim on it, then reassess the repair and publish its final membership. If the
+primary claim fails or remaining eligibility is uncertain, leave the executor
+unstarted and reconcile or release only the admission's own claims. Never create
+companion sessions to obtain native links or another executor to avoid a partial
+claim. Record the issue list, rationale and combined scope in ordinary GitHub
+handoffs so later intake runs can reconstruct ownership without private state.
 
 ### Repair-session capacity
 
@@ -323,11 +377,17 @@ parent sessions; unrelated human work, triage/coordinator sessions and other
 repositories do not consume its capacity.
 
 Count distinct incomplete repair sessions, reconciling native issue/PR links with
-GitHub ownership comments. A merged PR whose session is no longer executing work
+GitHub ownership comments. A grouped repair counts once regardless of its issue
+count; follow companion claims as well as the primary native link.
+A merged PR covering the admitted repair whose session is no longer executing work
 consumes no slot and reserves no package scope. Exclude it regardless of retained
 issue labels or assignments, stale checks/reviews/checklists, missing final
 handoffs or local work. GitHub merge state and native inactivity suffice; intake
 does not inspect its worktree or ask the owner to confirm completion.
+Reconcile every admitted member: a merged shared PR accounts for the issues it
+fixes, while members resolved outside it need explicit dispositions. A retained
+unresolved member not covered by that merge keeps the session incomplete; closing
+only the primary issue does not release capacity or package scope.
 
 Use native activity, not the existence of a session, running CLI process or retained
 worktree, to determine whether work is executing. A session still executing repair
@@ -357,9 +417,10 @@ replacement executor after an explicit
 handoff; an explicitly requested continuation in an existing incomplete session
 does not consume another slot. Below the limit, prioritize handed-off work needing
 an executor, then the oldest actionable unclaimed finding, and start at most one
-new session. Refresh capacity immediately before opening a new session or claiming
-a new repair in an existing session. Creating the admitted executor occupies its
-slot; claiming and starting that same executor do not require another slot.
+new session, grouping related eligible companions into that admission. Refresh
+capacity immediately before opening a new session or claiming a new repair in an
+existing session. Creating the admitted executor occupies its slot; claiming and
+starting that same executor do not require another slot.
 Incomplete discovery or uncertain ownership/completion defers admission rather
 than implying free capacity. Keep intake invocations nonoverlapping; these
 observations are not an atomic reservation or a financial cap.
@@ -384,8 +445,11 @@ Never interrupt busy workers or ongoing retries. Intentional operator stops,
 unresolved input/approval gates, `needs-human`, documented prerequisite waiting
 and a completed handoff for human review/merge prevent automatic recovery.
 Elapsed time does not override them. Check current ownership and issue/PR
-disposition immediately before sending; closed findings and merged or
-closed-unmerged PRs are not automatic recovery candidates.
+disposition immediately before sending; closed findings and work covered by merged
+or closed-unmerged PRs are not automatic recovery candidates. For a grouped repair,
+recover only the remaining open, claimed and authorized work, without reviving
+resolved members or assuming that closure of the primary resolves its companions.
+A shared blocker still gates the common repair.
 
 Send one focused continuation request for the evidenced stopped request to its
 existing owner, preserving session settings and local work. The owner rechecks
@@ -435,9 +499,10 @@ again before the worker edits. If the parent merged, reassess against current ma
 if it moved, was abandoned or is no longer suitable, defer the new admission while
 the existing owners reconcile their work rather than silently changing the base.
 
-Each layer has its own session, claim, branch and PR, consumes a normal incomplete
-slot, and counts toward the one-new-session-per-invocation limit. The coordinator
-creates only the admitted upper layer from the verified pushed parent branch,
+Each layer has its own session, claims, branch and PR, consumes a normal incomplete
+slot even when grouping related issues, and counts toward the
+one-new-session-per-invocation limit. The coordinator creates only the admitted
+upper layer from the verified pushed parent branch,
 using `create_session` with an explicit `base_branch`. Its ordinary issue ownership
 comment identifies the session until its own app-native PR supplies the native
 link. Do not open a duplicate issue session to attach it. The Local App's bundled

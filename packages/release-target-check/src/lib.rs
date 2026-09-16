@@ -19,4 +19,8 @@ mod command;
 mod metadata;
 mod repository;
 mod run;
+mod verification_repository;
 mod verify;
+
+#[cfg(test)]
+mod verification_tests;
