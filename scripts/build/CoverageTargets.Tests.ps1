@@ -1,7 +1,8 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 # Protects coverage-measure's Cargo target selection with real nextest discovery on dependency-free
 # packages. Unit, integration and example tests must remain selected for binary-only, library-only
-# and mixed scopes; benchmark canaries must never compile. No coverage engine or hosted API is mocked
+# and mixed scopes; benchmark canaries must never compile. Also executes passing tests with the real
+# nextest configuration to verify retained stdout/stderr. No coverage engine or hosted API is mocked
 # into producing successful measurements. Ref: ../../docs/build-and-tooling.md#coverage-target-selection.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -10,14 +11,23 @@ $VerbosePreference = 'Continue'
 
 BeforeAll {
     $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    $script:coverageConfig = Join-Path $root '.config\coverage-nextest.toml'
     $recipes = (just --justfile (Join-Path $root 'justfile') --dump --dump-format json |
         ConvertFrom-Json -AsHashtable).recipes
     $measurement = @($recipes['coverage-measure'].body | Where-Object { $_ -contains ' llvm-cov nextest ' })
     $measurement.Count | Should -Be 1
-    $script:selectors = @([regex]::Matches($measurement[0][-1], '--(?:lib|bins|tests|examples|benches|all-targets)\b') |
+    $commandText = ($measurement[0] | Where-Object { $_ -is [string] }) -join ''
+    $script:selectors = @([regex]::Matches($commandText, '--(?:lib|bins|tests|examples|benches|all-targets)\b') |
         ForEach-Object { $_.Value })
     $script:workspace = Join-Path $TestDrive 'coverage-targets'
     $null = New-Item -ItemType Directory -Path $workspace
+    $null = New-Item -ItemType Directory -Path (Join-Path $workspace '.config')
+    # The fixture has no repository-specific package overrides. Its report path is
+    # ordinary runner setup; the coverage tool config supplies the behavior under test.
+    @'
+[profile.default.junit]
+path = "junit.xml"
+'@ | Set-Content -LiteralPath (Join-Path $workspace '.config\nextest.toml')
     @'
 [workspace]
 members = ["binary_only", "library_only", "mixed"]
@@ -40,7 +50,8 @@ publish = false
                 Set-Content -LiteralPath (Join-Path $directory 'src\lib.rs')
         }
         if ($name -ne 'library_only') {
-            'fn main() {}', '#[test] fn binary_case() {}' |
+            'fn main() {}',
+                '#[test] fn binary_case() { println!("stdout canary"); eprintln!("stderr canary"); }' |
                 Set-Content -LiteralPath (Join-Path $directory 'src\main.rs')
         }
         '#[test] fn integration_case() {}' |
@@ -86,5 +97,17 @@ Describe 'Coverage Cargo target selection' {
             }
         )
         @($actual | Sort-Object) | Should -Be @($expected | Sort-Object)
+    }
+
+    It 'retains successful-test stdout and stderr with the coverage tool configuration' {
+        cargo nextest run --manifest-path (Join-Path $workspace 'Cargo.toml') `
+            --tool-config-file "coverage:$coverageConfig" --target-dir (Join-Path $workspace 'target') `
+            --offline --all-features @selectors -p binary_only
+        $LASTEXITCODE | Should -Be 0
+        [xml] $report = Get-Content -LiteralPath (Join-Path $workspace 'target\nextest\default\junit.xml') -Raw
+        $test = @($report.testsuites.testsuite.testcase | Where-Object name -EQ 'binary_case')
+        $test.Count | Should -Be 1
+        $test[0].'system-out' | Should -Match 'stdout canary'
+        $test[0].'system-err' | Should -Match 'stderr canary'
     }
 }

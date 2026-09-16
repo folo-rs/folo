@@ -89,7 +89,8 @@ function Get-ValidationPlan {
             # The quality recipe owns both lint commands, including their arguments/settings.
             if ($recipe -ceq 'just_quality.just') { $workflows = $true; $analysis = $true }
         }
-        if ($path -cin @('delta.toml', '.cargo/mutants.toml', '.config/nextest.toml')) {
+        if ($path -cin @('delta.toml', '.cargo/mutants.toml', '.config/nextest.toml',
+            '.config/coverage-nextest.toml')) {
             $null = $domains.Add('build')
             Write-Verbose "'$path' configures build/check execution; selecting build-helper tests."
         }

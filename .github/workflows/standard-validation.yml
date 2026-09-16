@@ -376,6 +376,15 @@ jobs:
           $report = if (Test-Path lcov.info) { 'true' } else { 'false' }
           "report=$report" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
+      # Raw bytes and their matching instrumented binaries are needed to distinguish
+      # invalid producer output from reader failures; a green retry is not diagnostic evidence.
+      # Ref: .github/workflows/implementation.md#coverage-failure-evidence.
+      - name: Preserve failed coverage inputs
+        if: failure() && steps.coverage.outcome == 'failure'
+        uses: ./.github/actions/upload-coverage-inputs
+        with:
+          name: coverage-inputs-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+
       - name: Upload coverage to Codecov
         if: steps.coverage.outputs.report == 'true'
         uses: codecov/codecov-action@v7
@@ -485,6 +494,7 @@ jobs:
         uses: ./.github/actions/start-azurite
 
       - name: Generate azure coverage on ubuntu-latest
+        id: coverage
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -495,6 +505,14 @@ jobs:
           # Ref: .github/workflows/implementation.md#azure-emulator-coverage.
           just package="cargo-bench-history cbh_storage" coverage-measure
           just coverage-report-ci
+
+      # Apply the same evidence contract as the ordinary x64 coverage jobs.
+      # Ref: .github/workflows/implementation.md#coverage-failure-evidence.
+      - name: Preserve failed coverage inputs
+        if: failure() && steps.coverage.outcome == 'failure'
+        uses: ./.github/actions/upload-coverage-inputs
+        with:
+          name: coverage-inputs-azurite-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7

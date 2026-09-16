@@ -37,6 +37,7 @@ Describe 'Non-Cargo change domains' {
         @{ Path = 'justfiles/just_release.just'; Domains = @('release'); Analysis = $false; Workflows = $false },
         @{ Path = 'justfiles/just_quality.just'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $true },
         @{ Path = '.cargo/mutants.toml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = '.config/coverage-nextest.toml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = 'Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = 'packages/cpulist/Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = '.github/skills/scheduled-triage/SKILL.md'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },

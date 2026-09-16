@@ -52,6 +52,27 @@ The `docs` matrix builds all-feature and default-feature documentation and then 
 Only pull requests use the pruned validation set. Pushes to `main` and scheduled/manual
 main runs use the full set without invoking delta.
 
+### Coverage failure evidence
+
+When coverage measurement or reporting fails, the coverage job uploads raw profiles,
+the merge-input list when reporting reached that stage, instrumented executables and
+dynamic libraries, and the nextest JUnit report. Cargo's dependency and example output
+directories retain the matching binaries without intermediate archives or debug-symbol
+files. Artifact names distinguish platform, run and attempt.
+
+`coverage-measure` supplies `.config/coverage-nextest.toml` as a nextest tool configuration,
+retaining successful-test output in JUnit as well as failures. Other nextest entry points
+keep their own defaults, and repository/user configuration retains its normal precedence.
+LLVM's exit-time profile writer can report an error without changing the program's exit
+status, so a passing test does not establish that its coverage was written successfully.
+The native job log retains the coverage command and merge diagnostic.
+
+Keep the original raw bytes and binaries before another `coverage-measure` cleans the
+coverage tree. Profile filenames contain a workspace label, process ID and module
+signature, not a package identity; correlate the retained data with the actual binaries.
+The matching toolchain's reader must still reject corrupt input. Artifact preservation
+is diagnostic support, not a repair for an unexplained profile failure.
+
 ### Azure emulator coverage
 
 The Azurite coverage job runs both the CLI integration suite and the storage partition's

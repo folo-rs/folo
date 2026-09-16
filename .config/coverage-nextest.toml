@@ -1,0 +1,5 @@
+# Additional nextest defaults for coverage-measure. Profile writers can fail
+# during teardown without changing a passing test's exit status.
+# Ref: .github/workflows/implementation.md#coverage-failure-evidence.
+[profile.default.junit]
+store-success-output = true

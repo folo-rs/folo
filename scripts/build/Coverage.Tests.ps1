@@ -31,6 +31,17 @@ Describe 'Test-CoverageDataMissing' {
         Test-CoverageDataMissing -Output $output | Should -BeFalse
     }
 
+    It 'rejects a raw-profile merge failure reported as a warning' {
+        # llvm-profdata names the corrupt input in a warning, then reports the
+        # failed merge as an error even when the other profiles are valid.
+        $output = @(
+            'warning: workspace-9900-123_0.profraw: invalid instrumentation profile data (file header is corrupt)',
+            'error: no profile can be merged',
+            "error: failed to merge profile data: process didn't exit successfully (exit code: 1)"
+        )
+        Test-CoverageDataMissing -Output $output | Should -BeFalse
+    }
+
     It 'does not recognize a failure that also names an object without coverage mappings' {
         $output = @(
             "error: failed to generate report: process didn't exit successfully",

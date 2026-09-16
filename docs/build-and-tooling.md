@@ -151,6 +151,16 @@ such targets in `--tests`. Doctests retain their separate `test-docs` pass.
 The library-only selectors in many-seed Miri and exact library replays are deliberate
 scope restrictions, not general test or coverage selection.
 
+### Coverage failure investigation
+
+Do not rerun `coverage-measure` before preserving a failed run's raw profiles and
+matching instrumented binaries: its cleanup removes measurement evidence.
+Coverage jobs retain these inputs with the nextest JUnit report after failure; see
+[coverage failure evidence](../.github/workflows/implementation.md#coverage-failure-evidence).
+JUnit includes successful-test output because profile-write failures can occur without
+a failing test exit status. A successful retry does not identify or repair the producer,
+and corrupt profiles must remain reporting failures rather than empty coverage.
+
 ### Example execution
 
 `just run-examples` prebuilds the selected examples before starting their runtime

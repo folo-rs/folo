@@ -31,7 +31,9 @@ coverage-measure:
     # --examples additionally tests the examples. Do not use --all-targets: benchmark targets
     # belong to the separate test-benches smoke pass, not coverage measurement.
     # Ref: docs/build-and-tooling.md#coverage-target-selection.
-    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --tests --examples --no-report --all-features --locked
+    # Retain successful-test diagnostics without changing other nextest entry points.
+    # Ref: .github/workflows/implementation.md#coverage-failure-evidence.
+    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov nextest {{ target_package }} --no-fail-fast --tests --examples --no-report --all-features --locked --tool-config-file "coverage:{{ justfile_directory() }}/.config/coverage-nextest.toml"
 
 # This tool needs a different way to specify the package.
 coverage-package := if package == "" { "" } else { "-p " + replace(package, " ", " -p ") }

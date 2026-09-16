@@ -1,0 +1,33 @@
+# Shared failure-time evidence upload for Standard validation's coverage jobs.
+# Keep raw bytes and matching binaries without changing the failed check's result.
+# Ref: .github/workflows/implementation.md#coverage-failure-evidence.
+name: Preserve coverage inputs
+description: Upload raw profiles, instrumented binaries and test output after coverage fails
+
+inputs:
+  name:
+    description: Artifact name identifying the coverage job, run and attempt
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@v7
+      # The caller deliberately enters this composite after a failed check.
+      if: always()
+      with:
+        name: ${{ inputs.name }}
+        path: |
+          target/llvm-cov-target/*.profraw
+          target/llvm-cov-target/*.profdata
+          target/llvm-cov-target/*-profraw-list
+          target/llvm-cov-target/debug/deps/*
+          target/llvm-cov-target/debug/examples/*
+          target/nextest/default/junit.xml
+          !target/llvm-cov-target/**/*.d
+          !target/llvm-cov-target/**/*.rlib
+          !target/llvm-cov-target/**/*.rmeta
+          !target/llvm-cov-target/**/*.pdb
+          !target/llvm-cov-target/**/*.exp
+          !target/llvm-cov-target/**/*.lib
+          !target/llvm-cov-target/**/*.o

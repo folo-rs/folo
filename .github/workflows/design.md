@@ -82,6 +82,12 @@ Step summaries fit GitHub's upload limit including the authoritative final resul
 and exit code. Diagnostic truncation is visible and retains references to complete
 artifacts; it does not change the check verdict.
 
+Coverage failures retain the raw measurement inputs and matching instrumented binaries,
+including when every test passed. Passing-test output remains available because a
+profile writer's failure need not change the test's exit status. Evidence collection
+does not discard invalid profiles, retry a failed merge or classify corruption as an
+uninstrumented scope.
+
 Failed-run issues retain a bounded excerpt and direct diagnostic links for every
 unsuccessful job, not whole verbose summaries. Omitted diagnostic text is explicit.
 Publication is paced and resumable: retries retain the same attempt's report and
