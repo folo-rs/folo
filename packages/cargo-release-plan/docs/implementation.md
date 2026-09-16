@@ -100,6 +100,14 @@ operations is excluded from mutation discovery. Integration coverage verifies
 that inspection uses read-only application validation and rejects stale live or
 retained workspaces without resolving Cargo again.
 
+Manifest application injects captured-plan application, workspace acquisition,
+manifest reads and writes into its shared orchestration. Unit tests exercise
+dispatch, full edit computation before writes, unique root/member acquisition,
+package and dependency rewrites, dry-run output, and unchanged-write suppression.
+Prospective resolution uses the same edit computation. Only the adapters that
+connect these operations to real files and repository state are excluded from
+mutation discovery; integration tests retain the actual application boundary.
+
 Integration tests establish the real Git, Cargo, filesystem, and executable
 connections: history and index semantics, manifest discovery, offline resolution,
 captured-workspace identity, and a complete CLI release-plan round trip. A test

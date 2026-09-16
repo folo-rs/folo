@@ -11,6 +11,32 @@ use tempfile::tempdir;
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{apply_increment, check, seeded_package};
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "applies a plan through real Git, Cargo and filesystem boundaries"
+)]
+fn unsupported_schema_is_rejected_in_an_otherwise_applicable_plan() {
+    let fixture = seeded_package();
+    let plan = fixture.path().join("plan.json");
+    for schema in [4, 3] {
+        fs::write(
+            &plan,
+            format!(
+                r#"{{"schema_version":{schema},"increments":[{{"name":"demo","level":"patch"}}]}}"#
+            ),
+        )
+        .unwrap();
+        let result = run(&RunInput::Apply {
+            plan: plan.clone(),
+            dry_run: true,
+            manifest_path: fixture.manifest(),
+            verbose: false,
+        });
+        assert_eq!(result.is_ok(), schema == 4);
+    }
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_rewrites_exact_pins_and_expands_groups() {
