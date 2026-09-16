@@ -6,6 +6,8 @@
 //! upload source for Azure. Generation is CPU-bound (millions of small records
 //! serialized to JSON), so it is fanned out across the available cores.
 
+use std::fs;
+use std::num::NonZero;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
@@ -107,7 +109,8 @@ pub(crate) fn seed(
             .to_owned()
     });
 
-    let bytes = write_tasks(root, scenario, sets, &tasks)?;
+    let workers = thread::available_parallelism().unwrap_or(NonZero::MIN);
+    let bytes = write_tasks(root, scenario, sets, &tasks, workers, &write_file)?;
     let stats = SeedStats {
         objects: tasks.len(),
         bytes,
@@ -173,18 +176,21 @@ fn plan_tasks(scenario: Scenario, sets: &[DiscriminantSet], repo: &SeededRepo) -
     tasks
 }
 
-/// Writes every planned task, fanned out across the available cores.
+/// Writes every planned task using the supplied worker limit and storage operation.
+///
+/// The process boundary supplies OS parallelism and filesystem writes; unit tests
+/// supply in-memory storage. See docs/implementation.md, "Validation boundaries".
 fn write_tasks(
     root: &Path,
     scenario: Scenario,
     sets: &[DiscriminantSet],
     tasks: &[Task],
+    workers: NonZero<usize>,
+    write: &(impl Fn(&Path, &[u8]) -> Result<(), Error> + Sync),
 ) -> Result<u64, Error> {
     let next = AtomicUsize::new(0);
     let total_bytes = AtomicU64::new(0);
-    let worker_count = thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(tasks.len().max(1));
+    let worker_count = workers.get().min(tasks.len().max(1));
 
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
@@ -197,7 +203,7 @@ fn write_tasks(
                     let Some(task) = tasks.get(index) else {
                         return Ok(());
                     };
-                    let written = write_one(root, scenario, sets, task)?;
+                    let written = write_one(root, scenario, sets, task, write)?;
                     total_bytes.fetch_add(written, Ordering::Relaxed);
                 }
             }));
@@ -219,6 +225,7 @@ fn write_one(
     scenario: Scenario,
     sets: &[DiscriminantSet],
     task: &Task,
+    write: &impl Fn(&Path, &[u8]) -> Result<(), Error>,
 ) -> Result<u64, Error> {
     let set = sets
         .get(set_index(task))
@@ -285,18 +292,28 @@ fn write_one(
         }
     };
 
-    let path = root.join(&key);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| fail(format!("failed to create {}: {error}", parent.display())))?;
-    }
     // Mirror the storage layer's encoding by calling the same codec it uses, so
     // the seeded tree is byte-for-byte what a real `put` would have written and
     // the reported volume is the real on-disk/wire size #260 is about.
     let stored = codec::compress(body.as_bytes());
-    std::fs::write(&path, &stored)
-        .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
+    write(&root.join(&key), &stored)?;
     Ok(stored.len() as u64)
+}
+
+/// Persists an encoded object and creates its containing directories.
+// Real filesystem access belongs to the binary integration tests. The in-process
+// tests exercise generation, dispatch, accounting and propagated storage failures.
+// Ref: docs/implementation.md, "Validation boundaries".
+#[cfg_attr(test, mutants::skip)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn write_file(path: &Path, stored: &[u8]) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| fail(format!("failed to create {}: {error}", parent.display())))?;
+    }
+    fs::write(path, stored)
+        .map_err(|error| fail(format!("failed to write {}: {error}", path.display())))?;
+    Ok(())
 }
 
 /// Builds a [`Run`] whose every benchmark's primary metric comes from `value`.
@@ -368,10 +385,11 @@ fn i64_from(value: usize) -> i64 {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod write_tests {
-    use std::fs;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
 
     use cbh_model::{Engine, MachineKey, TargetTriple};
-    use tempfile::tempdir;
 
     use super::*;
 
@@ -392,6 +410,9 @@ mod write_tests {
     const ISSUED: i64 = 1_060;
     const MAIN_COMMIT: &str = "main-commit";
     const FEATURE_COMMIT: &str = "feature-commit";
+
+    // Exercise shared accounting across workers without querying OS parallelism.
+    const WORKERS: NonZero<usize> = NonZero::new(2).unwrap();
 
     fn sets() -> [DiscriminantSet; 2] {
         // Contrast noisy and exact metrics, as well as the zero and nonzero set indices.
@@ -517,56 +538,88 @@ mod write_tests {
         ]
     }
 
-    fn assert_object(root: &Path, key: &str, body: &str) -> u64 {
-        let stored = fs::read(root.join(key)).unwrap();
+    fn collect_objects(
+        objects: &Mutex<BTreeMap<PathBuf, Vec<u8>>>,
+    ) -> impl Fn(&Path, &[u8]) -> Result<(), Error> + '_ {
+        |path, stored| {
+            let previous = objects
+                .lock()
+                .unwrap()
+                .insert(path.to_owned(), stored.to_vec());
+            assert!(previous.is_none());
+            Ok(())
+        }
+    }
+
+    fn assert_object(stored: &[u8], body: &str) -> u64 {
         // Use the current storage codec as the oracle instead of pinning compressed fixture bytes.
         assert_eq!(stored, codec::compress(body.as_bytes()));
-        assert_eq!(codec::decompress(&stored).unwrap(), body.as_bytes());
+        assert_eq!(codec::decompress(stored).unwrap(), body.as_bytes());
         u64::try_from(stored.len()).unwrap()
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "writes compressed objects to the real filesystem")]
     fn write_one_stores_keyed_content_and_reports_compressed_bytes() {
-        let root = tempdir().unwrap();
+        let root = Path::new("storage");
+        let objects = Mutex::new(BTreeMap::new());
         let sets = sets();
         for (task, (key, body)) in tasks().iter().zip(expected_objects(&sets)) {
-            let bytes = write_one(root.path(), SCENARIO, &sets, task).unwrap();
-            assert_eq!(bytes, assert_object(root.path(), &key, &body));
+            let bytes = write_one(root, SCENARIO, &sets, task, &collect_objects(&objects)).unwrap();
+            assert_eq!(
+                bytes,
+                assert_object(&objects.lock().unwrap()[&root.join(key)], &body)
+            );
         }
+        assert_eq!(objects.into_inner().unwrap().len(), tasks().len());
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "uses OS parallelism discovery and real filesystem writes"
-    )]
     fn write_tasks_stores_every_object_and_sums_compressed_bytes() {
-        let root = tempdir().unwrap();
+        let root = Path::new("storage");
+        let objects = Mutex::new(BTreeMap::new());
         let sets = sets();
-        let bytes = write_tasks(root.path(), SCENARIO, &sets, &tasks()).unwrap();
+        let bytes = write_tasks(
+            root,
+            SCENARIO,
+            &sets,
+            &tasks(),
+            WORKERS,
+            &collect_objects(&objects),
+        )
+        .unwrap();
+        let objects = objects.into_inner().unwrap();
+        assert_eq!(objects.len(), tasks().len());
         let expected_bytes: u64 = expected_objects(&sets)
             .iter()
-            .map(|(key, body)| assert_object(root.path(), key, body))
+            .map(|(key, body)| assert_object(&objects[&root.join(key)], body))
             .sum();
         assert_eq!(bytes, expected_bytes);
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "uses OS parallelism discovery and real filesystem writes"
-    )]
     fn write_tasks_without_tasks_writes_nothing() {
-        let parent = tempdir().unwrap();
-        let root = parent.path().join("not-created");
-        assert_eq!(write_tasks(&root, SCENARIO, &[], &[]).unwrap(), 0);
-        assert!(!root.exists());
+        let bytes = write_tasks(
+            Path::new("unused"),
+            SCENARIO,
+            &[],
+            &[],
+            WORKERS,
+            &|_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(bytes, 0);
     }
 
     #[test]
     fn write_one_rejects_an_unknown_set() {
-        _ = write_one(Path::new("unused"), SCENARIO, &[], &tasks()[0]).unwrap_err();
+        _ = write_one(
+            Path::new("unused"),
+            SCENARIO,
+            &[],
+            &tasks()[0],
+            &|_, _| unreachable!(),
+        )
+        .unwrap_err();
     }
 
     #[test]
@@ -576,40 +629,75 @@ mod write_tests {
             commit_id: MAIN_COMMIT.to_owned(),
             issued: i64::MAX,
         };
-        _ = write_one(Path::new("unused"), SCENARIO, &sets(), &task).unwrap_err();
+        _ = write_one(
+            Path::new("unused"),
+            SCENARIO,
+            &sets(),
+            &task,
+            &|_, _| unreachable!(),
+        )
+        .unwrap_err();
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "uses OS parallelism discovery to run seeding workers")]
     fn write_tasks_propagates_a_worker_error() {
-        _ = write_tasks(Path::new("unused"), SCENARIO, &[], &tasks()).unwrap_err();
+        _ = write_tasks(
+            Path::new("unused"),
+            SCENARIO,
+            &[],
+            &tasks(),
+            WORKERS,
+            &|_, _| unreachable!(),
+        )
+        .unwrap_err();
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "creates a real filesystem obstruction to directory creation"
-    )]
-    fn write_one_propagates_directory_creation_failure() {
-        let parent = tempdir().unwrap();
-        let root = parent.path().join("file");
-        fs::write(&root, b"obstruction").unwrap();
-        _ = write_one(&root, SCENARIO, &sets(), &tasks()[0]).unwrap_err();
-        assert_eq!(fs::read(&root).unwrap(), b"obstruction");
+    fn write_one_propagates_a_storage_error() {
+        let calls = AtomicUsize::new(0);
+        _ = write_one(
+            Path::new("storage"),
+            SCENARIO,
+            &sets(),
+            &tasks()[0],
+            &|_, _| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(fail("injected storage failure"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "creates a real filesystem obstruction to an object write"
-    )]
-    fn write_one_propagates_file_write_failure() {
-        let root = tempdir().unwrap();
-        let sets = sets();
-        let path = root.path().join(sets[1].clean_key(PROJECT, MAIN_COMMIT));
-        fs::create_dir_all(&path).unwrap();
-        _ = write_one(root.path(), SCENARIO, &sets, &tasks()[0]).unwrap_err();
-        assert!(path.is_dir());
+    fn write_tasks_propagates_a_storage_error() {
+        let calls = AtomicUsize::new(0);
+        _ = write_tasks(
+            Path::new("storage"),
+            SCENARIO,
+            &sets(),
+            &tasks(),
+            WORKERS,
+            &|_, _| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Err(fail("injected storage failure"))
+            },
+        )
+        .unwrap_err();
+        assert_ne!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn write_tasks_returns_an_error_when_a_worker_panics() {
+        _ = write_tasks(
+            Path::new("storage"),
+            SCENARIO,
+            &sets(),
+            &tasks()[..1],
+            NonZero::MIN,
+            &|_, _| panic!(),
+        )
+        .unwrap_err();
     }
 }
 
