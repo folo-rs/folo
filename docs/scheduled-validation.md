@@ -275,20 +275,30 @@ the exception permitting responses to the original user's own human comments.
 Every authored post begins with `[Copilot speaking]`. Request human decisions for
 design changes or unsafe ambiguity; do not call blocked work complete.
 
+Apply the [check-waiting policy](git-workflow.md#check-waiting-and-merge-queue-readiness)
+to optional GitHub checks. Do not wait for low-signal optional results, such as
+benchmark comparisons when no performance-relevant inputs changed, solely to
+finish every check. They may continue after a ready handoff; record what was not
+awaited and why, without claiming success. Intake does not wake a worker merely
+to wait for those results. Repair owners handle actionable findings during their
+normal authorized follow-up.
+
 Queued, pending and in-progress checks or automated reviews are normal ongoing
 work. Queue age, no assigned runner, absent steps/logs before execution and other
 queued repository runs do not establish an outage or a need for human action.
-The worker continues requested foreground follow-up, waiting between current-head
-check and review reads rather than busy-polling. This requires no per-PR timer,
-automation or hidden watcher. Routine waiting is not a reason to end that work,
-add `needs-human` or request a check waiver.
+The worker continues requested foreground follow-up while required checks,
+relevant optional checks or automated review are pending, waiting between
+current-head check and review reads rather than busy-polling. This requires no
+per-PR timer, automation or hidden watcher. A delay in results worth awaiting is
+not a reason to end that work, add `needs-human` or request a check waiver.
 
 Human blockers require concrete evidence and a specific action outside the
 worker's authority, such as a required approval or a diagnosed permission failure.
 Diagnose failed execution and pursue authorized recovery before escalating.
-Only hand off as ready for human review/approval/merge after current-head checks
-and automated review have concluded and actionable findings are addressed.
-If foreground execution is interrupted while results are pending, retain
+Only hand off as ready for human review/approval/merge after current-head required
+checks, relevant optional checks and automated review have concluded and actionable
+findings are addressed. Relevant local deep verification remains necessary.
+If foreground execution is interrupted while results worth awaiting are pending, retain
 ownership and the next follow-up action as pending work, not a human blocker.
 
 Repair branches follow ordinary repository conventions. Normal same-repository

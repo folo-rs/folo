@@ -84,6 +84,11 @@ completion requests or resume turns merely because an owner is idle, paused or
 waiting for checks or human review. Routine waiting is not a human blocker and
 does not cancel the owner's requested foreground follow-up.
 
+Apply the [check-waiting policy](../../../docs/git-workflow.md#check-waiting-and-merge-queue-readiness).
+Pending low-signal optional checks do not invalidate a ready handoff or justify
+waking an owner solely to wait for them. Required checks and review obligations
+remain unchanged.
+
 Use the session inventory and refresh the claim's existing issue/PR-linked Local
 session with `get_session` and, when needed, `get_sessions_status`.
 Preserve its branch, worktree and selected model. Do not replace a running,
