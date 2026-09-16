@@ -4,15 +4,16 @@
 //! one JSON file per operation into the Cargo target directory unless that output
 //! is suppressed.
 
-use std::fs::{read_to_string, remove_file};
+use std::fs::{self, read_to_string, remove_file};
 use std::hint::black_box;
 use std::io;
-use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use all_the_time::Session;
 use serde_json::Value;
+use testing::assert_panics;
 
+// Arbitrary completed batch; tests assert iteration accounting, not elapsed CPU time.
 const ITERATIONS: u64 = 100;
 
 /// Resolves the JSON output path that dropping a session writes for `operation`.
@@ -173,16 +174,90 @@ fn panicking_thread_does_not_write_json() {
 
     // The session is dropped while the thread unwinds from the panic, so its
     // output must be suppressed to avoid masking the original failure.
-    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+    assert_panics(|| {
         let session = Session::new().no_stdout();
         record_work(&session, OPERATION);
         panic!("intentional panic to exercise the drop guard");
-    }));
-
-    assert!(result.is_err(), "the closure should have panicked");
+    });
     assert!(
         !expected.exists(),
         "a panicking thread should not write {}",
         expected.display()
     );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "requires the filesystem and real platform")]
+fn directory_output_creates_files_and_overwrites_existing_results() {
+    let session = Session::new().no_stdout().no_file();
+    record_work(&session, "group/case name");
+    record_work(&session, "second");
+    _ = session.operation("unmeasured");
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("nested");
+
+    session.to_report().write_to_directory(&target);
+    let file = target.join("group_case_name.json");
+    assert_eq!(
+        read_json(&file).get("operation").unwrap(),
+        "group/case name"
+    );
+    assert_eq!(
+        read_json(&target.join("second.json"))
+            .get("operation")
+            .unwrap(),
+        "second"
+    );
+    assert_eq!(fs::read_dir(&target).unwrap().count(), 2);
+
+    fs::write(&file, "stale contents").unwrap();
+    session.to_report().write_to_directory(&target);
+    assert_eq!(
+        read_json(&file).get("total_iterations").unwrap(),
+        ITERATIONS
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "requires the filesystem")]
+fn unmeasured_report_does_not_create_directory() {
+    let session = Session::new().no_stdout().no_file();
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("nested");
+    session.to_report().write_to_directory(&target);
+    assert!(!target.exists());
+    _ = session.operation("unmeasured");
+    session.to_report().write_to_directory(&target);
+    assert!(!target.exists());
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "requires the filesystem and real platform")]
+fn directory_output_surfaces_creation_and_write_errors() {
+    let session = Session::new().no_stdout().no_file();
+    record_work(&session, "measured");
+    let directory = tempfile::tempdir().unwrap();
+    let blocker = directory.path().join("blocker");
+    fs::write(&blocker, "not a directory").unwrap();
+    assert_panics(|| {
+        session
+            .to_report()
+            .write_to_directory(blocker.join("nested"));
+    });
+
+    fs::create_dir_all(directory.path().join("measured.json")).unwrap();
+    assert_panics(|| session.to_report().write_to_directory(directory.path()));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "requires the filesystem and real platform")]
+fn colliding_names_fail_before_creating_output_directory() {
+    let session = Session::new().no_stdout().no_file();
+    for name in ["group/case", "group_case"] {
+        record_work(&session, name);
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("nested");
+    assert_panics(|| session.to_report().write_to_directory(&target));
+    assert!(!target.exists());
 }

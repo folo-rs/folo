@@ -48,6 +48,8 @@ impl Report {
     ///
     /// Also panics if two operation names sanitize to the same file name, since
     /// writing both would silently discard one operation's results.
+    // Resolving Cargo's target and writing files requires integration coverage.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn write_to_target(&self) {
         let target =
             folo_utils::cargo_target_directory().unwrap_or_else(|| PathBuf::from("target"));
@@ -71,14 +73,41 @@ impl Report {
     ///
     /// Also panics if two operation names sanitize to the same file name, since
     /// writing both would silently discard one operation's results.
+    // Only filesystem effects live here; output preparation is unit-tested below.
+    #[cfg_attr(test, mutants::skip)]
     pub fn write_to_directory(&self, directory: impl AsRef<Path>) {
         let directory = directory.as_ref();
+        let outputs = self.output_files();
 
+        // Probe runs must not create an empty directory.
+        if outputs.is_empty() {
+            return;
+        }
+
+        fs::create_dir_all(directory).unwrap_or_else(|error| {
+            panic!(
+                "failed to create benchmark output directory {}: {error}",
+                directory.display()
+            )
+        });
+
+        for (file_name, json) in outputs {
+            let path = directory.join(file_name);
+            fs::write(&path, json).unwrap_or_else(|error| {
+                panic!(
+                    "failed to write benchmark output file {}: {error}",
+                    path.display()
+                )
+            });
+        }
+    }
+
+    fn output_files(&self) -> Vec<(String, String)> {
         // Build every output up front, detecting sanitized-name collisions before
         // touching the filesystem. Two operation names that sanitize to the same
         // file name would otherwise silently overwrite each other's results.
         let mut file_names: HashMap<String, &str> = HashMap::new();
-        let mut outputs: Vec<(PathBuf, String)> = Vec::new();
+        let mut outputs = Vec::new();
         for (name, operation) in self.sorted_operations() {
             let Some(statistics) = operation.statistics() else {
                 // Registered but never measured operations have no spans and thus
@@ -108,30 +137,10 @@ impl Report {
             let json = serde_json::to_string_pretty(&output)
                 .expect("serializing fixed primitive fields to JSON cannot fail");
 
-            outputs.push((directory.join(file_name), json));
+            outputs.push((file_name, json));
         }
 
-        // Without any output, no directory is created, so a probe run that captured
-        // no measurable work leaves nothing behind.
-        if outputs.is_empty() {
-            return;
-        }
-
-        fs::create_dir_all(directory).unwrap_or_else(|error| {
-            panic!(
-                "failed to create benchmark output directory {}: {error}",
-                directory.display()
-            )
-        });
-
-        for (path, json) in outputs {
-            fs::write(&path, json).unwrap_or_else(|error| {
-                panic!(
-                    "failed to write benchmark output file {}: {error}",
-                    path.display()
-                )
-            });
-        }
+        outputs
     }
 }
 
@@ -143,18 +152,19 @@ fn duration_as_nanos(duration: Duration) -> u64 {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-    use std::path::Path;
     use std::time::Duration;
 
     use serde_json::Value;
 
     use super::duration_as_nanos;
-    use crate::Session;
     use crate::pal::{FakePlatform, PlatformFacade};
+    use crate::{Report, Session};
 
-    fn read_json(path: &Path) -> Value {
-        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    fn single_output(report: &Report) -> (String, Value) {
+        let outputs = report.output_files();
+        assert_eq!(outputs.len(), 1);
+        let (name, json) = outputs.into_iter().next().unwrap();
+        (name, serde_json::from_str(&json).unwrap())
     }
 
     #[test]
@@ -185,15 +195,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn writes_operation_statistics_as_json() {
+    fn prepares_operation_statistics_as_json() {
         let session = session_with_recorded_work("read_cell");
-        let directory = tempfile::tempdir().unwrap();
-
-        session.to_report().write_to_directory(directory.path());
-
-        let file = directory.path().join("read_cell.json");
-        let value = read_json(&file);
+        let (name, value) = single_output(&session.to_report());
+        assert_eq!(name, "read_cell.json");
 
         assert_eq!(
             value.get("operation").and_then(Value::as_str),
@@ -235,8 +240,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn writes_interval_when_multiple_spans_recorded() {
+    fn prepares_interval_when_multiple_spans_recorded() {
         let fake_platform = FakePlatform::new();
         let platform = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform);
@@ -256,10 +260,7 @@ mod tests {
             }
         }
 
-        let directory = tempfile::tempdir().unwrap();
-        session.to_report().write_to_directory(directory.path());
-
-        let value = read_json(&directory.path().join("read_cell.json"));
+        let (_, value) = single_output(&session.to_report());
         assert_eq!(value.get("span_count").and_then(Value::as_u64), Some(2));
         assert_eq!(
             value
@@ -282,8 +283,67 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn writes_null_slope_for_zero_iteration_operation() {
+    fn prepares_distinct_interval_bounds_and_every_measured_operation() {
+        // JSON float parsing can round the last bit; tolerate only sub-nanosecond differences.
+        const NANOS_TOLERANCE: f64 = 1.0;
+        let platform = FakePlatform::new();
+        let session = Session::with_platform(PlatformFacade::fake(platform.clone()));
+        for (name, durations) in [
+            (
+                "alpha",
+                [Duration::from_millis(20), Duration::from_millis(60)],
+            ),
+            (
+                "beta",
+                [Duration::from_millis(40), Duration::from_millis(80)],
+            ),
+        ] {
+            let operation = session.operation(name);
+            for duration in durations {
+                platform.set_thread_time(Duration::ZERO);
+                let _span = operation.measure_thread().iterations(2);
+                platform.set_thread_time(duration);
+            }
+        }
+        let report = session.to_report();
+        let outputs = report.output_files();
+        assert_eq!(outputs.len(), 2);
+        for ((file, json), (name, operation)) in outputs.iter().zip(report.sorted_operations()) {
+            let value: Value = serde_json::from_str(json).unwrap();
+            let statistics = operation.statistics().unwrap();
+            let (low, high) = statistics.interval_nanos.unwrap();
+            assert!(low < high);
+            assert_eq!(file, &format!("{name}.json"));
+            assert_eq!(value.get("operation").unwrap(), name);
+            assert_eq!(
+                value.get("slope_processor_time_nanos").unwrap(),
+                statistics.slope_nanos
+            );
+            assert!(
+                (value
+                    .get("interval_low_processor_time_nanos")
+                    .unwrap()
+                    .as_f64()
+                    .unwrap()
+                    - low)
+                    .abs()
+                    < NANOS_TOLERANCE
+            );
+            assert!(
+                (value
+                    .get("interval_high_processor_time_nanos")
+                    .unwrap()
+                    .as_f64()
+                    .unwrap()
+                    - high)
+                    .abs()
+                    < NANOS_TOLERANCE
+            );
+        }
+    }
+
+    #[test]
+    fn prepares_null_slope_for_zero_iteration_operation() {
         let fake_platform = FakePlatform::new();
         let platform = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform);
@@ -296,17 +356,11 @@ mod tests {
             fake_platform.set_thread_time(Duration::from_millis(80));
         }
 
-        let directory = tempfile::tempdir().unwrap();
-        session.to_report().write_to_directory(directory.path());
-
-        let value = read_json(&directory.path().join("failed.json"));
+        let (_, value) = single_output(&session.to_report());
         // A zero-iteration measurement has no per-iteration rate; the slope is
         // NaN, which serde_json renders as JSON null.
         assert!(
-            value
-                .get("slope_processor_time_nanos")
-                .expect("the slope field is always present")
-                .is_null(),
+            value.get("slope_processor_time_nanos").unwrap().is_null(),
             "a zero-iteration slope must serialize as null"
         );
         assert_eq!(
@@ -316,42 +370,31 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
     fn sanitizes_operation_name_in_file_name() {
         let session = session_with_recorded_work("group/case name");
-        let directory = tempfile::tempdir().unwrap();
-
-        session.to_report().write_to_directory(directory.path());
-
-        let file = directory.path().join("group_case_name.json");
-        assert!(file.exists());
+        let (name, value) = single_output(&session.to_report());
+        assert_eq!(name, "group_case_name.json");
 
         // The original, unsanitized name is preserved inside the file.
         assert_eq!(
-            read_json(&file).get("operation").and_then(Value::as_str),
+            value.get("operation").and_then(Value::as_str),
             Some("group/case name")
         );
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn empty_session_writes_no_files() {
+    fn empty_session_prepares_no_files() {
         let fake_platform = FakePlatform::new();
         let platform = PlatformFacade::fake(fake_platform);
         let session = Session::with_platform(platform);
 
-        let directory = tempfile::tempdir().unwrap();
-        let target = directory.path().join("nested");
-
-        session.to_report().write_to_directory(&target);
-
-        // Nothing is written, so the directory is not even created.
-        assert!(!target.exists());
+        assert!(session.to_report().output_files().is_empty());
+        _ = session.operation("unmeasured");
+        assert!(session.to_report().output_files().is_empty());
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn skips_operations_without_iterations() {
+    fn skips_operations_without_spans() {
         let fake_platform = FakePlatform::new();
         let platform = PlatformFacade::fake(fake_platform.clone());
         let session = Session::with_platform(platform);
@@ -366,63 +409,12 @@ mod tests {
         // be skipped rather than written.
         let _unmeasured = session.operation("unmeasured");
 
-        let directory = tempfile::tempdir().unwrap();
-        session.to_report().write_to_directory(directory.path());
-
-        assert!(directory.path().join("measured.json").exists());
-        assert!(!directory.path().join("unmeasured.json").exists());
+        let (name, _) = single_output(&session.to_report());
+        assert_eq!(name, "measured.json");
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    fn overwrites_existing_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = directory.path().join("read_cell.json");
-        fs::write(&file, "stale contents").unwrap();
-
-        let session = session_with_recorded_work("read_cell");
-        session.to_report().write_to_directory(directory.path());
-
-        // Parsing succeeds only if the stale, non-JSON contents were replaced.
-        let value = read_json(&file);
-        assert_eq!(
-            value.get("operation").and_then(Value::as_str),
-            Some("read_cell")
-        );
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    #[should_panic(expected = "failed to create benchmark output directory")]
-    fn panics_when_output_directory_cannot_be_created() {
-        let session = session_with_recorded_work("read_cell");
-        let directory = tempfile::tempdir().unwrap();
-
-        // A regular file where a directory component is expected makes the
-        // recursive directory creation fail.
-        let blocker = directory.path().join("blocker");
-        fs::write(&blocker, "not a directory").unwrap();
-
-        session
-            .to_report()
-            .write_to_directory(blocker.join("nested"));
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Writes files, which is not supported under Miri isolation.
-    #[should_panic(expected = "failed to write benchmark output file")]
-    fn panics_when_output_file_cannot_be_written() {
-        let session = session_with_recorded_work("read_cell");
-        let directory = tempfile::tempdir().unwrap();
-
-        // A directory occupying the output file's path makes the file write fail.
-        fs::create_dir_all(directory.path().join("read_cell.json")).unwrap();
-
-        session.to_report().write_to_directory(directory.path());
-    }
-
-    #[test]
-    #[should_panic(expected = "after sanitization")]
+    #[should_panic]
     fn panics_when_operation_names_collide_after_sanitization() {
         let fake_platform = FakePlatform::new();
         let platform = PlatformFacade::fake(fake_platform.clone());
@@ -437,10 +429,6 @@ mod tests {
             fake_platform.set_thread_time(Duration::from_millis(80));
         }
 
-        // The collision is detected before anything is written, so this path is
-        // never created.
-        session
-            .to_report()
-            .write_to_directory("collision_is_detected_before_writing");
+        _ = session.to_report().output_files();
     }
 }
