@@ -1,5 +1,7 @@
 //! Report and check output: the JSON document and the failure renderings.
 
+use std::fs;
+
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use serde_json::{Value, json};
 
@@ -301,18 +303,26 @@ path_only_helper = { path = "../path_only_helper" }
 fn report_replaces_the_diffs_of_an_earlier_run() {
     let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write("packages/demo/src/lib.rs", "pub fn old() {}\n");
     fixture.commit("seed");
     let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/src/lib.rs", "pub fn new() {}\n");
     let out_dir = fixture.path().join("out");
     fixture.write("out/report.json", "previous completion marker");
     fixture.write("out/diffs/stale.diff", "leftover");
     let stale = out_dir.join("diffs").join("stale.diff");
 
-    report_json(&fixture, &base);
+    let report: Value = serde_json::from_str(&report_json(&fixture, &base)).unwrap();
 
     assert!(!stale.exists());
     assert!(out_dir.join("report.json").exists());
     assert!(!out_dir.join("report.json.tmp").exists());
+    let diff_path = report["packages"][0]["diff_path"].as_str().unwrap();
+    assert_eq!(diff_path, "diffs/demo.patch");
+    let patch = fs::read_to_string(out_dir.join(diff_path)).unwrap();
+    assert!(patch.contains("-pub fn old() {}"));
+    assert!(patch.contains("+pub fn new() {}"));
+    assert_eq!(fs::read_dir(out_dir.join("diffs")).unwrap().count(), 1);
 }
 
 /// A failed rerun removes the completion marker before changing patches.
@@ -338,4 +348,33 @@ fn a_failed_rerun_does_not_leave_the_previous_report_marker() {
 
     result.expect_err("report rerun must fail after deleting tracked content");
     assert!(!out_dir.join("report.json").exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "exercises Git/Cargo classification and filesystem staging"
+)]
+fn staging_failure_does_not_publish_a_completion_marker() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
+    fixture.write("out/report.json", "previous completion marker");
+    let out_dir = fixture.path().join("out");
+    fs::create_dir(out_dir.join("report.json.tmp")).unwrap();
+
+    let result = run(&RunInput::Report {
+        out_dir: out_dir.clone(),
+        base: Some(base),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    });
+
+    assert!(result.is_err());
+    assert!(!out_dir.join("report.json").exists());
+    assert!(
+        fs::read_to_string(out_dir.join("diffs/demo.patch"))
+            .unwrap()
+            .contains("+pub fn changed()")
+    );
 }

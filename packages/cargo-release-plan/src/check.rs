@@ -39,6 +39,9 @@ pub enum CheckFormat {
 /// must track that directory rather than any prose description of the recovery.
 const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
 
+// Classification and Cargo probing are real-system adapters. The shared check core below
+// owns their coordination, verdict and output; see docs/implementation.md, "Test boundaries".
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_check(
     base: Option<&str>,
     manifest_path: &Path,
@@ -46,7 +49,21 @@ pub(crate) fn run_check(
     verify_packaging: bool,
     verbose: Verbose,
 ) -> Result<(bool, String, String), AppError> {
-    let classification = classify(manifest_path, base, verbose)?;
+    check_workspace(
+        || classify(manifest_path, base, verbose),
+        format,
+        verify_packaging,
+        verify_packaging_rules,
+    )
+}
+
+fn check_workspace(
+    classify: impl FnOnce() -> Result<Classification, AppError>,
+    format: CheckFormat,
+    verify_packaging: bool,
+    packaging_warnings: impl FnOnce(&Classification) -> String,
+) -> Result<(bool, String, String), AppError> {
+    let classification = classify()?;
     // Every gating defect appends at least one diagnostic line, so the verdict is read back from
     // the rendered diagnostics. Recomputing it from the classification instead would let a rule
     // added to the rendering below be reported without ever failing the check.
@@ -60,7 +77,7 @@ pub(crate) fn run_check(
     );
 
     let warnings = if verify_packaging {
-        verify_packaging_rules(&classification)
+        packaging_warnings(&classification)
     } else {
         String::new()
     };
@@ -518,6 +535,7 @@ fn parse_package_list(stdout: &str) -> Vec<String> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
     use std::collections::HashSet;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::path::PathBuf;
@@ -526,12 +544,89 @@ mod tests {
 
     use super::*;
     use crate::anchor::Anchor;
+    use crate::classify::fixture::{classification, package};
     use crate::metadata::{DepKind, ReportedDep};
 
     assert_impl_all!(CheckFormat: UnwindSafe, RefUnwindSafe);
 
     /// Stands in for whichever revision a run classified against.
     const BASE: &str = "origin/main";
+
+    #[test]
+    fn command_derives_verdict_and_runs_only_selected_packaging_probe() {
+        for status in [PackageStatus::NeedsIncrement, PackageStatus::PendingRelease] {
+            for verify in [false, true] {
+                for format in [CheckFormat::Text, CheckFormat::Github] {
+                    let data = classification(vec![package("api", status, "")]);
+                    let expected = render_workspace_diagnostics(
+                        &data.packages,
+                        &data.groups,
+                        &data.base,
+                        format,
+                        &data.work_tree.version_targets,
+                        &data.work_tree.exact_dependencies,
+                    );
+                    let probed = Cell::new(false);
+                    let (passed, message, warnings) = check_workspace(
+                        || Ok(data),
+                        format,
+                        verify,
+                        |data| {
+                            assert!(!probed.replace(true));
+                            assert_eq!(data.packages[0].name, "api");
+                            "packaging observation".to_owned()
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(passed, status == PackageStatus::PendingRelease);
+                    assert_eq!(probed.get(), verify);
+                    assert_eq!(warnings, if verify { "packaging observation" } else { "" });
+                    if passed {
+                        assert!(!message.is_empty());
+                    } else {
+                        assert_eq!(message, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn command_fails_for_workspace_diagnostics_without_a_package_needing_increment() {
+        let mut data = classification(vec![
+            package("api", PackageStatus::Unchanged, ""),
+            package("implementation", PackageStatus::PendingRelease, ""),
+        ]);
+        let members = data
+            .packages
+            .iter()
+            .map(|package| package.name.clone())
+            .collect::<Vec<_>>();
+        let verdict =
+            GroupVerdict::new(&members, &data.work_tree.target_versions(), &HashSet::new());
+        data.groups.insert("api".to_owned(), verdict);
+        let (passed, message, warnings) =
+            check_workspace(|| Ok(data), CheckFormat::Text, false, |_| panic!()).unwrap();
+        assert!(!passed);
+        assert!(!message.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn command_propagates_classification_errors_before_optional_probes() {
+        let error = check_workspace(
+            || Err(CheckAcquisitionFailure::new().into()),
+            CheckFormat::Text,
+            true,
+            |_| panic!(),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<CheckAcquisitionFailure>().is_some());
+    }
+
+    /// Identifies acquisition failures independently of their rendered diagnostics.
+    #[ohno::error]
+    struct CheckAcquisitionFailure;
 
     /// Package-list parsing preserves whitespace that belongs to a path.
     #[test]

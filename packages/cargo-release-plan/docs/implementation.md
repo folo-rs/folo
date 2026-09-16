@@ -91,6 +91,29 @@ tests inject acquisition at its existing boundary so they exercise production
 ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
+Report and check share synthetic classification snapshots with inert repository
+handles; their in-process tests never acquire Git, Cargo or filesystem state.
+The check core owns classification failure propagation, diagnostic-derived
+verdicts and optional packaging coordination. Packaging observations remain
+non-gating regardless of the release verdict.
+
+Report publication separates artifact construction and sequencing from the
+filesystem adapter. The core selects publishable assessments and nonpublished
+version targets, emits the selected patches verbatim, and completes only after
+all patches succeed. The adapter owns invalidating the previous marker before
+replacing the patch tree and staging JSON beside its destination before promotion.
+Integration tests retain replacement and failed-staging coverage; library tests
+observe complete report contents, patch selection, publication order and errors.
+Only the real classification/publication adapters are excluded from mutation
+discovery.
+
+Analysis-order and semver-target command cores acquire a validated report through
+an injected loader and serialize the existing selection algorithms' results.
+Small unit fixtures connect acquisition and errors to actual JSON output rather
+than duplicating graph and group-selection matrices. The filesystem adapters
+retain integration coverage for path forms, malformed reports, read-only artifact
+consumption and execution without workspace discovery.
+
 Expanded-plan inspection injects captured-state validation, retained-candidate
 verification and workspace acquisition into the shared in-process orchestration.
 Unit tests observe validation selection and ordering, propagated failures, the
