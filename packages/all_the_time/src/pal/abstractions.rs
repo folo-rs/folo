@@ -3,11 +3,12 @@
 use std::fmt::Debug;
 use std::time::Duration;
 
-/// Provides processor time tracking functionality.
+use crate::Report;
+
+/// Provides processor clocks and external report output.
 ///
-/// This trait abstracts the underlying platform-specific processor time tracking
-/// mechanisms, allowing for both real implementations (using system calls)
-/// and fake implementations (for testing).
+/// Session lifecycle decisions stay above this boundary so fake clocks and
+/// captured reports can exercise them without operating-system interactions.
 pub(crate) trait Platform: Debug + Send + Sync + 'static {
     /// Gets the current thread processor time.
     ///
@@ -18,4 +19,10 @@ pub(crate) trait Platform: Debug + Send + Sync + 'static {
     ///
     /// This method returns the current process processor time as a duration.
     fn process_time(&self) -> Duration;
+
+    /// Prints a report to stdout.
+    fn print_to_stdout(&self, report: &Report);
+
+    /// Writes a report to the Cargo target directory.
+    fn write_to_target(&self, report: &Report);
 }

@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::Report;
 use crate::pal::abstractions::Platform;
 
 /// Internal state for the fake platform that can be shared between clones.
@@ -13,6 +14,8 @@ use crate::pal::abstractions::Platform;
 struct FakePlatformState {
     thread_time: Duration,
     process_time: Duration,
+    stdout_reports: Vec<Report>,
+    file_reports: Vec<Report>,
 }
 
 /// Fake implementation of the platform abstraction for testing.
@@ -21,6 +24,7 @@ struct FakePlatformState {
 /// instead of relying on actual system calls. Multiple clones of the same
 /// `FakePlatform` share the same underlying time state, allowing tests to
 /// modify time values after platform creation to simulate time progression.
+/// Emitted reports are retained separately for each destination.
 #[derive(Clone, Debug)]
 #[cfg(test)]
 pub(crate) struct FakePlatform {
@@ -35,6 +39,8 @@ impl FakePlatform {
             state: Arc::new(Mutex::new(FakePlatformState {
                 thread_time: Duration::ZERO,
                 process_time: Duration::ZERO,
+                stdout_reports: Vec::new(),
+                file_reports: Vec::new(),
             })),
         }
     }
@@ -54,6 +60,14 @@ impl FakePlatform {
     pub(crate) fn set_process_time(&self, time: Duration) {
         self.state.lock().unwrap().process_time = time;
     }
+
+    pub(crate) fn stdout_reports(&self) -> Vec<Report> {
+        self.state.lock().unwrap().stdout_reports.clone()
+    }
+
+    pub(crate) fn file_reports(&self) -> Vec<Report> {
+        self.state.lock().unwrap().file_reports.clone()
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +78,18 @@ impl Platform for FakePlatform {
 
     fn process_time(&self) -> Duration {
         self.state.lock().unwrap().process_time
+    }
+
+    fn print_to_stdout(&self, report: &Report) {
+        self.state
+            .lock()
+            .unwrap()
+            .stdout_reports
+            .push(report.clone());
+    }
+
+    fn write_to_target(&self, report: &Report) {
+        self.state.lock().unwrap().file_reports.push(report.clone());
     }
 }
 

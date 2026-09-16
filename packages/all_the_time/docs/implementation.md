@@ -36,3 +36,24 @@ finite fitted slope as a duration. Library fixtures cover this conversion
 independently of clocks, including absent, undefined, zero and nonzero rates.
 Unequal batch sizes and rates distinguish the fitted result from arithmetic
 averages.
+
+## Output boundary
+
+The session owns drop-time eligibility and independent destination selection.
+It builds one detached report after releasing measurement locks, then passes it
+to the platform's output adapters. Real and fake platforms share construction
+defaults and lifecycle logic; the fake retains reports by destination so unit
+tests observe actual session destruction without stdout or filesystem access.
+
+JSON preparation produces file names and serialized contents in memory,
+rejecting sanitized-name collisions before the filesystem adapter runs. Unit
+tests cover preparation, statistics and empty-output decisions; integration
+tests cover real directories, overwrite and failure behavior. An isolated child
+process captures session stdout and files without changing the parent's environment.
+
+Mutation exclusions cover only platform forwarding and external-output adapters.
+The Cargo target resolver and filesystem writes require integration tests, while
+session eligibility, destination choices and JSON preparation remain in the
+library mutation harness. Report wording is not used to distinguish lifecycle
+mutations: captured reports expose metrics and real-output assertions identify
+the caller's operation.
