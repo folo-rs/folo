@@ -91,6 +91,15 @@ tests inject acquisition at its existing boundary so they exercise production
 ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
+Expanded-plan inspection injects captured-state validation, retained-candidate
+verification and workspace acquisition into the shared in-process orchestration.
+Unit tests observe validation selection and ordering, propagated failures, the
+intersection of publishable and selected targets, and complete serialized output.
+Only the thin adapter that reads the artifact and connects real Git/filesystem
+operations is excluded from mutation discovery. Integration coverage verifies
+that inspection uses read-only application validation and rejects stale live or
+retained workspaces without resolving Cargo again.
+
 Integration tests establish the real Git, Cargo, filesystem, and executable
 connections: history and index semantics, manifest discovery, offline resolution,
 captured-workspace identity, and a complete CLI release-plan round trip. A test

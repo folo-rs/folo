@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 use serde::Serialize;
 
-use crate::metadata::load_tracked_work_tree;
+use crate::metadata::{WorkTree, load_tracked_work_tree};
 use crate::plan::{PlanFile, PlanStage, resolve_plan};
-use crate::resolved::{apply_resolved, read_json};
+use crate::resolved::{ResolvedState, apply_resolved, read_json};
 use crate::verbose::Verbose;
 
 /// Publication eligibility comes from tracked Cargo members, not package naming.
@@ -18,6 +18,9 @@ struct PlanInspection {
     evidence_manifest_path: Option<PathBuf>,
 }
 
+// Only the real filesystem/Git adapters are excluded; inspection decisions and serialization
+// run in the unit-tested core. See docs/implementation.md, "Test boundaries".
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_inspect_plan(
     path: &Path,
     require_resolved: bool,
@@ -25,17 +28,37 @@ pub(crate) fn run_inspect_plan(
     verbose: Verbose,
 ) -> Result<String, AppError> {
     let plan: PlanFile = read_json(path)?;
+    inspect_plan(
+        plan,
+        require_resolved,
+        verbose,
+        |plan| {
+            // Reuse application's captured-state validation without installing any files.
+            // The registry probe must see the same target set that application will accept.
+            apply_resolved(plan, manifest, true, verbose).map(|_| ())
+        },
+        |state| state.verify_candidate(&state.evidence_manifest_path),
+        || load_tracked_work_tree(manifest).map(|(work_tree, _)| work_tree),
+    )
+}
+
+fn inspect_plan(
+    plan: PlanFile,
+    require_resolved: bool,
+    verbose: Verbose,
+    validate_resolved: impl FnOnce(&PlanFile) -> Result<(), AppError>,
+    verify_candidate: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
+    load_work_tree: impl FnOnce() -> Result<WorkTree, AppError>,
+) -> Result<String, AppError> {
     validate_expanded(&plan)?;
     if require_resolved || plan.resolved.is_some() {
-        // Reuse application's captured-state validation without installing any files.
-        // The registry probe must see the same target set that application will accept.
-        _ = apply_resolved(&plan, manifest, true, verbose)?;
+        validate_resolved(&plan)?;
     }
     if let Some(state) = &plan.resolved {
         // Callers may run compatibility tooling immediately after consuming this path.
-        state.verify_candidate(&state.evidence_manifest_path)?;
+        verify_candidate(state)?;
     }
-    let (work_tree, _) = load_tracked_work_tree(manifest)?;
+    let work_tree = load_work_tree()?;
     let resolved = resolve_plan(
         &plan,
         &work_tree.groups,
@@ -81,8 +104,223 @@ struct ExpandedPlanRequired;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
+    use std::collections::BTreeMap;
+
+    use semver::Version;
+    use serde_json::{Value, json};
+
     use super::*;
+    use crate::groups::Groups;
+    use crate::lockfile::InstallationGraph;
+    use crate::metadata::VersionTarget;
     use crate::plan::PlanIncrement;
+    use crate::{UnknownPlanTargetError, UnsupportedPlanSchemaError};
+
+    #[test]
+    fn resolved_validation_is_required_by_either_the_flag_or_captured_state() {
+        for require_resolved in [false, true] {
+            for has_state in [false, true] {
+                let plan = plan(&[], has_state);
+                let expected = plan.clone();
+                let validated = Cell::new(false);
+                let result = inspect_plan(
+                    plan,
+                    require_resolved,
+                    Verbose::new(false),
+                    |plan| {
+                        assert_eq!(*plan, expected);
+                        validated.set(true);
+                        Err(InspectionFailure::new().into())
+                    },
+                    |_| panic!(),
+                    || Ok(work_tree(&[])),
+                );
+                match (require_resolved, has_state) {
+                    (false, false) => {
+                        assert!(!validated.get());
+                        assert_eq!(
+                            serde_json::from_str::<Value>(&result.unwrap()).unwrap(),
+                            json!({
+                                "publication_targets": [],
+                                "evidence_manifest_path": null
+                            })
+                        );
+                    }
+                    _ => {
+                        assert!(validated.get());
+                        assert!(
+                            result
+                                .unwrap_err()
+                                .find_source::<InspectionFailure>()
+                                .is_some()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inspection_verifies_evidence_before_loading_and_serializes_the_publication_intersection() {
+        let plan = plan(&["zeta", "helper", "api"], true);
+        let expected = plan.clone();
+        let order = Cell::new(0);
+        let output = inspect_plan(
+            plan,
+            false,
+            Verbose::new(false),
+            |plan| {
+                assert_eq!(order.replace(1), 0);
+                assert_eq!(*plan, expected);
+                Ok(())
+            },
+            |state| {
+                assert_eq!(order.replace(2), 1);
+                assert_eq!(state, expected.resolved.as_ref().unwrap());
+                Ok(())
+            },
+            || {
+                assert_eq!(order.replace(3), 2);
+                Ok(work_tree(&[
+                    ("zeta", true),
+                    ("helper", false),
+                    ("unselected-api", true),
+                    ("unselected-helper", false),
+                    ("api", true),
+                    ("api", true),
+                ]))
+            },
+        )
+        .unwrap();
+        assert_eq!(order.get(), 3);
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap(),
+            json!({
+                "publication_targets": ["api", "zeta"],
+                "evidence_manifest_path": expected.resolved.unwrap().evidence_manifest_path
+            })
+        );
+    }
+
+    #[test]
+    fn stale_candidate_and_workspace_acquisition_errors_propagate() {
+        let error = inspect_plan(
+            plan(&[], true),
+            false,
+            Verbose::new(false),
+            |_| Ok(()),
+            |_| Err(InspectionFailure::new().into()),
+            || panic!(),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<InspectionFailure>().is_some());
+
+        let error = inspect_plan(
+            plan(&[], false),
+            false,
+            Verbose::new(false),
+            |_| panic!(),
+            |_| panic!(),
+            || Err(InspectionFailure::new().into()),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<InspectionFailure>().is_some());
+    }
+
+    #[test]
+    fn invalid_artifacts_are_rejected_before_external_validation_or_acquisition() {
+        let error = inspect_plan(
+            PlanFile::new(PlanStage::Proposed, Vec::new()),
+            true,
+            Verbose::new(false),
+            |_| panic!(),
+            |_| panic!(),
+            || panic!(),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<ExpandedPlanRequired>().is_some());
+
+        let error = inspect_plan(
+            PlanFile::with_schema_version(0),
+            false,
+            Verbose::new(false),
+            |_| panic!(),
+            |_| panic!(),
+            || panic!(),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+    }
+
+    #[test]
+    fn selected_names_must_resolve_against_tracked_workspace_targets() {
+        let error = inspect_plan(
+            plan(&["absent"], false),
+            false,
+            Verbose::new(false),
+            |_| panic!(),
+            |_| panic!(),
+            || Ok(work_tree(&[("api", true)])),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UnknownPlanTargetError>().is_some());
+    }
+
+    fn plan(names: &[&str], resolved: bool) -> PlanFile {
+        let mut plan = PlanFile::new(
+            PlanStage::Expanded,
+            names
+                .iter()
+                .map(|name| PlanIncrement {
+                    name: (*name).to_owned(),
+                    level: None,
+                    version: Some("1.0.1".to_owned()),
+                })
+                .collect(),
+        );
+        if resolved {
+            // Capture contents are opaque to orchestration; its injected validators own them.
+            plan.resolved = Some(
+                serde_json::from_value(json!({
+                    "inputs": {
+                        "root": "workspace", "manifest": "Cargo.toml",
+                        "head": "head", "base": "base", "base_revision": "main",
+                        "index": "", "paths": [], "digest": "inputs"
+                    },
+                    "files": [], "final_digest": "candidate", "versions": {},
+                    "evidence_manifest_path": "candidate \"quoted\"\\Cargo.toml"
+                }))
+                .unwrap(),
+            );
+        }
+        plan
+    }
+
+    fn work_tree(targets: &[(&str, bool)]) -> WorkTree {
+        WorkTree {
+            workspace_root: PathBuf::from("workspace"),
+            packages: Vec::new(),
+            version_targets: targets
+                .iter()
+                .map(|(name, publishable)| VersionTarget {
+                    name: (*name).to_owned(),
+                    version: Version::new(1, 0, 0),
+                    manifest_path: PathBuf::from(name).join("Cargo.toml"),
+                    publishable: *publishable,
+                })
+                .collect(),
+            exact_dependencies: Vec::new(),
+            member_manifests: Vec::new(),
+            members_by_dir: BTreeMap::new(),
+            groups: Groups::default(),
+            installation: InstallationGraph::default(),
+        }
+    }
+
+    /// Identifies an injected external failure without relying on diagnostic wording.
+    #[ohno::error]
+    struct InspectionFailure;
 
     #[test]
     fn only_complete_explicit_unique_expansions_are_inspectable() {

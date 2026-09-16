@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use cargo_release_plan::{RunInput, run};
+use cargo_release_plan::{RunInput, RunOutcome, run};
 use serde_json::{Value, json};
 
 use crate::fixture::{Fixture, write_package};
@@ -144,6 +144,39 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
         fixture.read("preview/workspace/packages/core/src/new.rs"),
         "pub fn changed() {}\n"
     );
+    let inspection = RunInput::InspectPlan {
+        plan: plan.clone(),
+        require_resolved: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    };
+    let before = fixture.git(&["status", "--porcelain"]);
+    let RunOutcome::ArtifactQuery { message } = run(&inspection).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&message).unwrap(),
+        json!({
+            "publication_targets": ["bridge", "core", "tool"],
+            "evidence_manifest_path": document
+                .get("resolved")
+                .unwrap()
+                .get("evidence_manifest_path")
+                .unwrap()
+        })
+    );
+    assert_eq!(fixture.git(&["status", "--porcelain"]), before);
+    assert_eq!(fixture.read("Cargo.lock"), old_lock);
+    assert!(fixture.read("packages/core/Cargo.toml").contains("0.1.0"));
+    fixture.write(
+        "preview/workspace/packages/core/src/new.rs",
+        "pub fn stale_candidate() {}\n",
+    );
+    run(&inspection).unwrap_err();
+    fixture.write(
+        "preview/workspace/packages/core/src/new.rs",
+        "pub fn changed() {}\n",
+    );
     run(&RunInput::Apply {
         plan: plan.clone(),
         dry_run: true,
@@ -154,6 +187,7 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
     assert_eq!(fixture.read("Cargo.lock"), old_lock);
     assert!(fixture.read("packages/core/Cargo.toml").contains("0.1.0"));
     fixture.write("packages/core/src/new.rs", "pub fn stale() {}\n");
+    run(&inspection).unwrap_err();
     run(&RunInput::Apply {
         plan: plan.clone(),
         dry_run: false,
