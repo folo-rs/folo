@@ -55,7 +55,10 @@ forwarding and unexpected result rejection.
 Repository evidence decisions are pure functions over captured commit IDs, status,
 index entries, history and paths. Their unit tests cover acceptance and rejection,
 while an in-memory callback sequence verifies checks before and after either
-operation outcome. Only the real-system adapters and their trivial forwarding
+operation outcome. Metadata input selection likewise runs against in-memory
+tracking, existence and canonicalization callbacks, covering every manifest,
+optional lockfiles, error propagation and canonical-root containment. Only the
+real-system adapters and their trivial forwarding
 methods have function-level mutation exclusions; parsing and these decisions
 remain mutation targets. Integration tests cover the excluded queries and their
 composition with the same decisions.
@@ -82,10 +85,12 @@ share an execution slot before starting their individual last-chance watchdogs.
 Nextest enforces the slot across processes through its integration-binary group;
 the integration target enforces it across libtest threads with a shared mutex.
 This covers ordinary Cargo tests, all-target runs and careful checking as well as
-nextest. The slot protects no shared fixture data, so a panicking case does not
-invalidate subsequent fixtures. A queued case has not started executing and does
-not consume its watchdog budget. Running cases retain the unchanged shared
-watchdog and no retries.
+nextest. A panic poisons the slot and prevents subsequent cases from starting I/O:
+a watchdog timeout can leave its worker running even after the caller fails.
+Failing queued cases avoids both overlap with that worker and an indefinite wait
+for a hung worker to release an owned permit. A queued case has not started
+executing and does not consume its watchdog budget. Running cases retain the
+unchanged shared watchdog and no retries.
 
 Benchmark smoke uses `cargo test --benches`, which also executes library tests
 through libtest. The library contains only in-process tests, so this selection

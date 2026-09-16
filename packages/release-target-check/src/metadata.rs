@@ -23,23 +23,36 @@ impl Metadata {
         })
     }
 
-    // Tracking, existence and canonicalization are real-system adapters covered by integration
-    // tests. The containment decision stays in the in-memory validation below.
+    // Wire real-system adapters here; the same input selection and validation sequence below
+    // runs against in-memory callbacks in unit tests.
     #[cfg_attr(test, mutants::skip)]
     pub fn validate_inputs(
         &self,
         repository: &Repository,
         manifest: &Path,
     ) -> Result<(), AppError> {
-        _ = repository.require_tracked(&self.workspace_root.join("Cargo.toml"))?;
+        self.validate_inputs_using(
+            manifest,
+            |path| repository.require_tracked(path).map(|_| ()),
+            lockfile_exists,
+            canonicalize,
+        )
+    }
+
+    fn validate_inputs_using(
+        &self,
+        manifest: &Path,
+        mut require_tracked: impl FnMut(&Path) -> Result<(), AppError>,
+        lockfile_exists: impl FnOnce(&Path) -> Result<bool, AppError>,
+        canonicalize: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
+    ) -> Result<(), AppError> {
+        require_tracked(&self.workspace_root.join("Cargo.toml"))?;
         let lockfile = self.workspace_root.join("Cargo.lock");
-        if lockfile.try_exists().map_err(|error| {
-            VerificationError::caused_by("cannot inspect candidate workspace lockfile", error)
-        })? {
-            _ = repository.require_tracked(&lockfile)?;
+        if lockfile_exists(&lockfile)? {
+            require_tracked(&lockfile)?;
         }
         for package in &self.packages {
-            _ = repository.require_tracked(&package.manifest_path)?;
+            require_tracked(&package.manifest_path)?;
         }
         let workspace_root = canonicalize(&self.workspace_root)?;
         validate_manifest_location(manifest, &workspace_root)
@@ -81,6 +94,14 @@ impl Metadata {
     }
 }
 
+// Filesystem lookup failures are exercised with the integration fixture's symlink loop.
+#[cfg_attr(test, mutants::skip)]
+fn lockfile_exists(path: &Path) -> Result<bool, AppError> {
+    path.try_exists().map_err(|error| {
+        VerificationError::caused_by("cannot inspect candidate workspace lockfile", error).into()
+    })
+}
+
 fn validate_manifest_location(manifest: &Path, workspace_root: &Path) -> Result<(), AppError> {
     if !manifest.starts_with(workspace_root) {
         return Err(VerificationError::new(
@@ -105,6 +126,7 @@ struct Package {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use serde_json::json;
@@ -130,6 +152,102 @@ mod tests {
             let error = validate_manifest_location(&manifest, root).unwrap_err();
             assert!(error.find_source::<VerificationError>().is_some());
         }
+    }
+
+    #[test]
+    fn selects_every_manifest_and_only_an_existing_lockfile() {
+        let root = Path::new("workspace");
+        let canonical_root = Path::new("canonical-workspace");
+        let mut metadata = sample(root);
+        metadata.packages = vec![
+            package(&root.join("first"), "first"),
+            package(&root.join("second"), "second"),
+        ];
+
+        for exists in [false, true] {
+            let calls = RefCell::new(Vec::new());
+            metadata
+                .validate_inputs_using(
+                    &canonical_root.join("Cargo.toml"),
+                    |path| {
+                        calls.borrow_mut().push(("tracked", path.to_owned()));
+                        Ok(())
+                    },
+                    |path| {
+                        calls.borrow_mut().push(("exists", path.to_owned()));
+                        Ok(exists)
+                    },
+                    |path| {
+                        calls.borrow_mut().push(("canonicalize", path.to_owned()));
+                        Ok(canonical_root.to_owned())
+                    },
+                )
+                .unwrap();
+
+            let mut expected = vec![
+                ("tracked", root.join("Cargo.toml")),
+                ("exists", root.join("Cargo.lock")),
+            ];
+            if exists {
+                expected.push(("tracked", root.join("Cargo.lock")));
+            }
+            expected.extend([
+                ("tracked", root.join("first").join("Cargo.toml")),
+                ("tracked", root.join("second").join("Cargo.toml")),
+                ("canonicalize", root.to_owned()),
+            ]);
+            assert_eq!(*calls.borrow(), expected);
+        }
+    }
+
+    #[test]
+    fn input_validation_propagates_each_adapter_failure() {
+        let root = Path::new("workspace");
+        let mut metadata = sample(root);
+        metadata.packages = vec![package(&root.join("member"), "widget")];
+        let expected = [
+            ("tracked", root.join("Cargo.toml")),
+            ("exists", root.join("Cargo.lock")),
+            ("tracked", root.join("Cargo.lock")),
+            ("tracked", root.join("member").join("Cargo.toml")),
+            ("canonicalize", root.to_owned()),
+        ];
+
+        for failed_call in 0..expected.len() {
+            let calls = RefCell::new(Vec::new());
+            let record = |operation, path: &Path| -> Result<(), AppError> {
+                calls.borrow_mut().push((operation, path.to_owned()));
+                if calls.borrow().len() == failed_call + 1 {
+                    Err(VerificationError::new("adapter failed").into())
+                } else {
+                    Ok(())
+                }
+            };
+            let error = metadata
+                .validate_inputs_using(
+                    &root.join("Cargo.toml"),
+                    |path| record("tracked", path),
+                    |path| record("exists", path).map(|()| true),
+                    |path| record("canonicalize", path).map(|()| path.to_owned()),
+                )
+                .unwrap_err();
+            assert!(error.find_source::<VerificationError>().is_some());
+            assert_eq!(*calls.borrow(), expected.get(..=failed_call).unwrap());
+        }
+    }
+
+    #[test]
+    fn input_validation_uses_the_canonical_root_for_containment() {
+        let root = Path::new("workspace");
+        let error = sample(root)
+            .validate_inputs_using(
+                &root.join("Cargo.toml"),
+                |_| Ok(()),
+                |_| Ok(false),
+                |_| Ok(PathBuf::from("different-workspace")),
+            )
+            .unwrap_err();
+        assert!(error.find_source::<VerificationError>().is_some());
     }
 
     fn sample(root: &Path) -> Metadata {
