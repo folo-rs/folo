@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use crate::pal::PlatformFacade;
+use crate::pal::{Platform, PlatformFacade};
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, Report};
 
 /// Manages processor time tracking session state and contains operations.
@@ -76,27 +76,19 @@ impl Session {
     )]
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            operations: Arc::new(Mutex::new(HashMap::new())),
-            platform: PlatformFacade::real(),
-            emit_stdout: true,
-            emit_file: true,
-        }
+        Self::with_platform(PlatformFacade::real())
     }
 
     /// Creates a new processor time tracking session with a specific platform.
     ///
-    /// This method is primarily used for testing purposes to inject a fake platform
-    /// that does not rely on actual system calls. Automatic output on drop is
-    /// disabled so that tests do not print to stdout or write to the target
-    /// directory.
-    #[cfg(test)]
+    /// Output defaults are shared by real and fake platforms; the platform owns
+    /// external effects, not the decision to emit. See docs/implementation.md.
     pub(crate) fn with_platform(platform: PlatformFacade) -> Self {
         Self {
             operations: Arc::new(Mutex::new(HashMap::new())),
             platform,
-            emit_stdout: false,
-            emit_file: false,
+            emit_stdout: true,
+            emit_file: true,
         }
     }
 
@@ -245,10 +237,10 @@ impl Drop for Session {
         // value, so stdout and file outputs render identical figures.
         let report = self.to_report();
         if self.emit_stdout {
-            report.print_to_stdout();
+            self.platform.print_to_stdout(&report);
         }
         if self.emit_file {
-            report.write_to_target();
+            self.platform.write_to_target(&report);
         }
     }
 }
@@ -263,6 +255,9 @@ impl fmt::Display for Session {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic;
+    use std::time::Duration;
+
     use super::*;
     use crate::pal::{FakePlatform, PlatformFacade};
 
@@ -270,6 +265,88 @@ mod tests {
         let fake_platform = FakePlatform::new();
         let platform_facade = PlatformFacade::fake(fake_platform);
         Session::with_platform(platform_facade)
+    }
+
+    #[test]
+    fn drop_emits_recorded_report_to_each_enabled_destination() {
+        for (stdout, file) in [(true, true), (true, false), (false, true), (false, false)] {
+            let platform = FakePlatform::new();
+            let session = Session::with_platform(PlatformFacade::fake(platform.clone()));
+            let session = if stdout { session } else { session.no_stdout() };
+            let session = if file { session } else { session.no_file() };
+            let operation = session.operation("measured");
+            {
+                let _span = operation.measure_thread().iterations(4);
+                platform.set_thread_time(Duration::from_millis(80));
+            }
+
+            assert!(platform.stdout_reports().is_empty());
+            assert!(platform.file_reports().is_empty());
+            drop(session);
+
+            let stdout_reports = platform.stdout_reports();
+            let file_reports = platform.file_reports();
+            assert_eq!(stdout_reports.len(), usize::from(stdout));
+            assert_eq!(file_reports.len(), usize::from(file));
+            for report in stdout_reports.iter().chain(&file_reports) {
+                let operations = report.operations().collect::<Vec<_>>();
+                assert_eq!(operations.len(), 1);
+                let (name, metrics) = operations.first().unwrap();
+                assert_eq!(*name, "measured");
+                assert_eq!(metrics.total_iterations(), 4);
+                assert_eq!(metrics.total_processor_time(), Duration::from_millis(80));
+            }
+        }
+    }
+
+    #[test]
+    fn drop_keeps_unmeasured_sessions_silent() {
+        for registered in [false, true] {
+            let platform = FakePlatform::new();
+            let session = Session::with_platform(PlatformFacade::fake(platform.clone()));
+            if registered {
+                _ = session.operation("unmeasured");
+            }
+            drop(session);
+            assert!(platform.stdout_reports().is_empty());
+            assert!(platform.file_reports().is_empty());
+        }
+    }
+
+    #[test]
+    fn drop_eligibility_depends_on_iterations_not_clock_progress() {
+        for iterations in [0, 1] {
+            let platform = FakePlatform::new();
+            let session = Session::with_platform(PlatformFacade::fake(platform.clone()));
+            {
+                let operation = session.operation("completed");
+                let _span = operation.measure_thread().iterations(iterations);
+                if iterations == 0 {
+                    platform.set_thread_time(Duration::from_millis(80));
+                }
+            }
+            drop(session);
+            assert_eq!(
+                platform.stdout_reports().len(),
+                usize::from(iterations != 0)
+            );
+            assert_eq!(platform.file_reports().len(), usize::from(iterations != 0));
+        }
+    }
+
+    #[test]
+    fn drop_during_unwind_preserves_original_panic_without_output() {
+        const PANIC: &str = "session unwind canary";
+        let platform = FakePlatform::new();
+        let result = panic::catch_unwind(|| {
+            let session = Session::with_platform(PlatformFacade::fake(platform.clone()));
+            drop(session.operation("measured").measure_thread().iterations(1));
+            panic::panic_any(PANIC);
+        });
+        // Verify pass-through of the original panic, not incidental diagnostic wording.
+        assert_eq!(result.unwrap_err().downcast_ref::<&str>(), Some(&PANIC));
+        assert!(platform.stdout_reports().is_empty());
+        assert!(platform.file_reports().is_empty());
     }
 
     #[test]
