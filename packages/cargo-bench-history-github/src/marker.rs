@@ -5,7 +5,7 @@ use ohno::AppError;
 
 use crate::model::{CommitSha, Instance, IssueKind};
 
-/// An optional caller-selected exact marker for adopting an existing rolling PR comment.
+/// A caller-selected exact HTML marker for existing PR comment metadata.
 #[derive(Clone, Debug)]
 pub(crate) struct CommentMarker(String);
 
@@ -54,6 +54,15 @@ pub(crate) fn issue(instance: &Instance, kind: IssueKind) -> String {
         instance.as_str(),
         kind.as_str()
     )
+}
+
+pub(crate) fn has_issue_identity(body: &str) -> bool {
+    body.lines().any(|line| {
+        line.strip_prefix("<!-- cargo-bench-history:")
+            .and_then(|value| value.strip_suffix(" -->"))
+            .and_then(|value| value.split_once(":issue:"))
+            .is_some_and(|(instance, kind)| !instance.is_empty() && !kind.is_empty())
+    })
 }
 
 pub(crate) fn pr_comment(instance: &Instance) -> String {

@@ -19,14 +19,14 @@ use crate::github::wire::{
     BodyWrite, CommentResponse, CompareResponse, IssueResponse, IssueStateWrite, IssueUpdate,
     IssueWrite, PullResponse, comparison,
 };
-use crate::github::{Comment, Comparison, GitHub, Issue};
+use crate::github::{Comment, Comparison, GitHub, Issue, WorkflowJob};
 use crate::model::{CommitSha, Repository};
 
 /// GitHub request construction and policy over an injectable HTTP boundary.
 pub(crate) struct RestGitHub<H = ReqwestHttp> {
-    http: H,
+    pub(crate) http: H,
     token: SecretToken,
-    page_size: NonZero<usize>,
+    pub(crate) page_size: NonZero<usize>,
 }
 
 impl<H: fmt::Debug> fmt::Debug for RestGitHub<H> {
@@ -47,7 +47,7 @@ impl RestGitHub {
 }
 
 impl<H: Http> RestGitHub<H> {
-    fn new(http: H, token: SecretToken, page_size: NonZero<usize>) -> Self {
+    pub(crate) fn new(http: H, token: SecretToken, page_size: NonZero<usize>) -> Self {
         Self {
             http,
             token,
@@ -55,7 +55,7 @@ impl<H: Http> RestGitHub<H> {
         }
     }
 
-    fn request(
+    pub(crate) fn request(
         &self,
         method: Method,
         repository: &Repository,
@@ -109,7 +109,7 @@ impl<H: Http> RestGitHub<H> {
         Ok(request)
     }
 
-    async fn send_json<T: DeserializeOwned>(
+    pub(crate) async fn send_json<T: DeserializeOwned>(
         &self,
         operation: &str,
         request: Request,
@@ -203,6 +203,14 @@ impl<H: Http> RestGitHub<H> {
 }
 
 impl<H: Http> GitHub for RestGitHub<H> {
+    async fn workflow_jobs(
+        &self,
+        repository: &Repository,
+        run_id: NonZero<u64>,
+    ) -> Result<Vec<WorkflowJob>, AppError> {
+        self.list_jobs(repository, run_id).await
+    }
+
     async fn open_issues(&self, repository: &Repository) -> Result<Vec<Issue>, AppError> {
         let mut request = self.request(Method::GET, repository, "issues")?;
         request
@@ -370,10 +378,13 @@ impl<H: Http> GitHub for RestGitHub<H> {
 }
 
 /// A credential whose diagnostic representation never reveals its contents.
-struct SecretToken(String);
+pub(crate) struct SecretToken(String);
 
 impl SecretToken {
-    fn select(primary: Option<String>, fallback: Option<String>) -> Result<Self, AppError> {
+    pub(crate) fn select(
+        primary: Option<String>,
+        fallback: Option<String>,
+    ) -> Result<Self, AppError> {
         primary
             .filter(|value| !value.trim().is_empty())
             .or_else(|| fallback.filter(|value| !value.trim().is_empty()))
@@ -395,7 +406,7 @@ impl fmt::Debug for SecretToken {
 /// Discovery cannot safely complete because GitHub pagination makes no progress.
 #[ohno::error]
 #[display("GitHub pagination did not advance while {operation}")]
-struct PaginationError {
+pub(crate) struct PaginationError {
     operation: String,
 }
 
@@ -448,6 +459,7 @@ mod tests {
     use crate::errors::InvalidCommitShaError;
     use crate::github::http::TransportError;
     use crate::message::Envelope;
+    use crate::migration::MigrationOptions;
     use crate::operations::{Context, alert, pr_comment_preflight};
 
     assert_impl_all!(PaginationError: Send, Sync, UnwindSafe, RefUnwindSafe);
@@ -572,6 +584,7 @@ mod tests {
             instance: "default".parse().unwrap(),
             verbose: false,
             comment_marker: None,
+            migration: MigrationOptions::default(),
         }
     }
 
@@ -654,6 +667,30 @@ mod tests {
 
     fn query(request: &Request) -> BTreeMap<String, String> {
         request.url().query_pairs().into_owned().collect()
+    }
+
+    #[test]
+    fn issue_author_type_is_preserved_without_guessing_from_login_names() {
+        let bot = issue(1, "bot report");
+        let mut human = issue(2, "human report");
+        human.as_object_mut().unwrap().insert(
+            "user".to_owned(),
+            json!({"login": "name-that-looks-like-a-bot[bot]", "type": "User"}),
+        );
+        let mut unknown = issue(3, "deleted author");
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("user".to_owned(), Value::Null);
+        let github = github([response(StatusCode::OK, json!([bot, human, unknown]))]);
+        let issues = block_on(github.open_issues(&repository())).unwrap();
+        assert_eq!(
+            issues
+                .iter()
+                .map(|issue| issue.bot_authored)
+                .collect::<Vec<_>>(),
+            [true, false, false]
+        );
     }
 
     fn assert_request(request: &Request, method: &Method, path: &str, body: Option<Value>) {

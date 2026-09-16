@@ -219,8 +219,10 @@ a new commit abandons the outdated run. That supersession only fires when a *new
 arrives on the branch, so closing or merging a PR — which pushes nothing to the PR branch —
 would otherwise leave its in-flight Standard validation run to burn to completion. A dedicated
 companion workflow closes that gap: it triggers on the PR-close event and joins the target
-workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Standard validation
-workflow and the PR benchmark-history workflow pair with such a close companion.
+workflow's concurrency group so cancel-in-progress reclaims the stale run. Standard validation
+uses that close companion. PR benchmark history handles `closed` in its own workflow: the
+event enters its group and skips collection and publication. Unsupported fork events use
+separate groups, so a same-named fork branch cannot cancel supported benchmark work.
 Merge queue validation has its own queue-ref-specific group. Standard validation uses
 run-specific groups when called by scheduled/manual validation, so neither main pushes nor
 other scheduled runs cancel that full-scope backstop. The close companion stays
@@ -247,7 +249,7 @@ nightly and that tip's own collection cancel each other.
 PR benchmark collection additionally runs at most one job per platform across the repository.
 Linux and Windows use separate worker pools, so they do not block each other. Other PRs wait
 in the platform's concurrency queue without cancelling running or pending collection, up to
-GitHub's queue capacity. Ref-keyed workflow supersession and the close companion still cancel
+GitHub's queue capacity. Ref-keyed workflow supersession and the close event still cancel
 outdated work, including collection waiting for a platform slot. This limit applies only to PR
 collection; delta analysis and comment maintenance do not wait for a collection slot, and main
 history collection and backfill retain their independent concurrency policies.
@@ -415,20 +417,21 @@ presents `repo:folo-rs/folo:ref:refs/heads/<branch>` (e.g. `…:ref:refs/heads/m
 pull-request run presents `repo:folo-rs/folo:pull_request`. The audience is always
 `api://AzureADTokenExchange`. The two non-secret identifiers a job needs — the managed
 identity's client id and the tenant id — live in `constants.env` and are remapped to the
-standard `AZURE_*` names the tool and `azure/login` read (`AZURE_PROD_CLIENT_ID` →
-`AZURE_CLIENT_ID`) by a single shared federation step, so the mapping is defined once rather
-than copy-pasted per job.
+standard `AZURE_*` names by the shared federation helper. Production writers select
+`AZURE_PROD_CLIENT_ID`; readers select `AZURE_PROD_READER_CLIENT_ID`. Reader selection never
+falls back to the writer, and using the same client ID for both is a configuration error.
 
 Federation only works for **same-repo** runs: a fork's run cannot mint a token whose subject
 names this repository, so fork PRs skip the Azure-touching jobs rather than fail.
 
-Two managed identities exist, each registered with exactly the subjects its events present:
+Managed identities separate durable production writes, production reads, and disposable tests:
 
 | Event | OIDC subject | Identity | Consumer |
 | --- | --- | --- | --- |
-| push to `main` | `…:ref:refs/heads/main` | prod | `bench-history.yml` |
-| schedule on `main` | `…:ref:refs/heads/main` | prod | `bench-history-backfill.yml` |
-| pull request | `…:pull_request` | prod | `pr-bench-history.yml` |
+| push to `main` | `…:ref:refs/heads/main` | prod writer | History collection |
+| schedule on `main` | `…:ref:refs/heads/main` | prod writer | History backfill |
+| push/dispatch on `main` | `…:ref:refs/heads/main` | prod reader | History analysis |
+| pull request | `…:pull_request` | prod reader | PR analysis |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
 | schedule/manual dispatch on `main` | `…:ref:refs/heads/main` | test | Scheduled `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
@@ -436,14 +439,18 @@ Two managed identities exist, each registered with exactly the subjects its even
 `merge_group` is not a trusted subject. Queue validation does not include `test-azure`,
 avoiding an exchange that cannot succeed.
 
-The **prod** identity backs history collection and the PR benchmark workflow; the **test**
-identity backs the Azure-backend test job against a throwaway account. Both trust `main` and
-`pull_request` so each identity's on-main and on-PR consumers can sign in. Granting the prod
-identity a `pull_request` credential is a deliberate tradeoff: it widens prod's write surface
-from "only pushes to `main`" to "any same-repo PR run", accepting a larger blast radius in
-exchange for letting a PR's benchmarks be compared against the very store that holds `main`'s
-baseline. The narrower alternative — a separate PR store — was rejected because branch-mode
-analysis must read the base's accumulated history and the tool reads a single backend.
+The production writer retains `Storage Blob Data Contributor` for collection and backfill.
+The production reader has `Storage Blob Data Reader` scoped to the history container.
+PR collection holds no Azure federation permission and writes only run-local files. Analysis
+reads those files together with the production baseline through `--local-input`; publication
+runs in another job with GitHub write scopes and no Azure federation.
+
+Deployment is reader-first: add the reader and record its non-secret client ID before
+activating its consumers. Preserve an existing writer PR credential until legacy PR-writing
+runs have drained, then explicitly retire it. Incremental ARM deployment does not delete an
+omitted credential. Fresh writer identities are main-only, and later deployments preserve
+retired trust rather than recreating it. The deployment wrapper owns that policy; see
+[`infra/azure-bench-history-prod`](../../infra/azure-bench-history-prod/README.md).
 
 ## Benchmark history
 
@@ -474,8 +481,8 @@ fingerprint**, with no fixed key override. The GitHub-hosted pool is heterogeneo
 single shared key would blend genuinely different machines into one jittery series;
 fingerprinting instead splits the pool into one clean series per hardware type. Because
 collection is a matrix and analysis is a single job that cannot re-derive those keys from its
-own hardware, each collect leg writes its fingerprint out as an artifact and the analysis job
-threads exactly the keys collected this run into its selection — scoping the analysis to the
+own hardware, each collect leg writes a run/attempt-bound receipt with its fingerprint and the analysis job
+threads exactly the successfully collected keys into its selection — scoping the analysis to the
 machines that actually measured this commit, without assuming anything about other data in
 the shared store. The cost of that split is sparseness: consecutive commits land on whatever
 hardware the pool handed out, so each per-key series sees only a fraction of `main`'s commits.
@@ -521,11 +528,21 @@ collect matrix into the single analyze job (see below), so a mode that skipped c
 no keys to analyze. To force a refresh out of band, push a commit or dispatch a `recollect_commit_id`
 run (which still collects, hence still produces keys).
 A downstream analysis job reads the accumulated
-history and files a single rolling, advisory issue when it detects a notable regression;
-regressions never fail the run. Because a GitHub issue body is size-capped and a large
+history and publishes through a separate GitHub-only job. A rolling, advisory issue is
+identified by its instance/kind marker, not its mutable title or a label. History preflight
+marks old findings stale; findings replace the report, while fully judged, complete clean
+evidence writes all-clear without automatically closing the issue. Incomplete or unjudged
+analysis never clears findings. Regressions never fail the run.
+
+Partial collection is disclosed in the published body without suppressing findings. Receipts
+are reconciled with each platform's latest job attempt: failed retries cannot reuse old
+successful receipts, and untouched successful legs remain usable across partial reruns.
+Total collection failure is an error, not a fabricated non-notable report.
+
+Because a GitHub issue body is size-capped and a large
 analysis can exceed it, the issue carries a **condensed summary** (the top findings) and
-links to the **full Markdown and JSON reports**, which the job uploads as a run artifact — so
-the issue always fits while the complete data stays one click away.
+links to the **full report bundle**, uploaded for every completed analysis — so the issue
+fits while complete results, including quiet or partial reports, remain accessible.
 
 ### Nightly history backfill
 
@@ -579,96 +596,49 @@ carries, and strictly better than leaving the gap empty.
 
 ### PR benchmark history
 
-The same measure-and-report loop runs on pull requests, retuned to answer "does this PR move
-any benchmark relative to `main`?" instead of "is `main` trending?". It reuses the analysis
-tool's **branch mode**: with the PR head as context and `main` as the base, the tool splits the
-head's first-parent ancestry at the merge-base and compares the branch tip's level against the
-base ancestry's clean baseline, so a finding means *this branch changed the level* rather than
-that the long-range trend moved. To keep that topology intact the collect and analyze jobs
-check out the PR head's real commit — not the synthetic `pull_request` merge ref, whose first
-parent is `main` and would corrupt the comparison — with full history, since both the
-merge-base and the first-parent walk need it.
+PR feedback answers whether the frozen PR head changes benchmark performance relative to its
+base. Automation is built from the event's merge checkout so updated helpers are available
+to older PR heads. Benchmark execution and topology use a separate full checkout of the real
+head; no measurement is stamped with the synthetic merge commit. The event's frozen head and
+base frame the comparison.
 
-Because a PR is transient, the findings land in a single **rolling PR comment** (deduped by a
-hidden marker, updated in place on every push) rather than the rolling issue the `main`
-workflow files; the comment lives and dies with the pull request. The comment is strictly
-advisory — findings never affect the check's exit code, so a regression note never blocks a
-merge — and it reports detected improvements alongside regressions, or a plain "no regressions"
-state. It also states its **collection scope** — which packages were benchmarked — so a clean
-result is never mistaken for the whole suite being clean when only the impacted subset was
-measured. A run *failure* surfaces only as the red check, with no issue and no failure comment,
-because a PR failure is a transient condition, not the persistent one the issue lifecycle
-tracks.
+Collection is **delta-scoped**: cargo-delta compares the measured head with its merge base,
+expands impacted packages to dependents, and the shared collection exclusions remove packages
+that this workflow does not maintain. An empty scope routes directly to an explanatory
+comment, without collecting or requiring Azure configuration.
 
-An all-clear is claimed only when the analysis actually reached a verdict. The detector judges
-a series only when it carries enough evidence to tell a change from noise, so "no findings" and
-"nothing was assessed" are different states that would otherwise render identically. The comment
-resolves them from the **series census** the report carries: a run that judged nothing, and a
-placeholder report from a total collect failure, both say so plainly instead of showing a
-checkmark. Silence is only reassuring when it is silence *about something*.
+The collection matrix has no Azure federation or GitHub posting permission. Each successful
+leg uploads its local store and a run/attempt-bound receipt. Analysis combines only validated
+successful inputs with the production baseline through `--local-input`, using the reader
+identity. It restores the main history cache without saving PR entries; artifact staging is
+outside the persisted cache path.
 
-Because a full benchmark run takes hours and a new push *cancels* the in-flight one (see
-Concurrency), on a PR's first push there is nothing on display yet, and on later pushes the comment
-on display can lag the PR tip by a long way with no way for a reader to tell current numbers from
-hours-old ones. A lightweight **`mark-stale` job** runs at the *start* of each new run (right after
-the short delta preflight, without waiting for a collection slot) and keeps the comment honest
-about the run just begun. When the PR has **no comment yet**, it seeds a *"benchmarking in
-progress"* placeholder — carrying the same hidden dedup marker and disclosing the collection scope,
-so the author knows results are coming rather than seeing nothing for hours; it refreshes that
-placeholder's scope on later pushes and steps aside once a completed analyze overwrites it with real
-findings. When a comment **already carries results**, two further mechanisms flag their age: every
-such comment records **which commit it measured** — a human-visible line printing the full SHA bare
-(GitHub autolinks it to the commit and abbreviates it for display, so we neither truncate it
-ourselves nor lose the click-through) plus a hidden full-SHA marker — and `mark-stale` prepends a
-warning banner stating how far behind `HEAD` those numbers now are: *"N commits behind HEAD"*, or a
-numberless *"out of date"* when the two share no history (e.g. a force-push) or the marker is
-absent. The distance comes from the GitHub compare API (`ahead_by`), which needs no clone and still
-resolves a commit orphaned by a force-push; any inability to compute it degrades to the numberless
-wording rather than failing the run. The banner is bounded by a sentinel pair so a re-run *replaces*
-rather than stacks it, and the next completed analyze — which rewrites the body from scratch with a
-fresh analyzed-commit marker — drops it automatically once real new results land. The staleness pass
-skips a still-empty placeholder (it has no results to age), leaving the placeholder's own upkeep to
-the seeding pass. `mark-stale` is gated on the same non-empty delta as collect, so it never races the
-cleanup path that *deletes* the comment when the PR no longer touches anything benchmarkable.
+Analysis remains unscoped by package name. Benchmark identities are engine-dependent, so
+name-prefix filtering could drop valid measurements. The tool's always-on ghost filter
+limits detection to identities present at the measured context, and local run objects take
+precedence over matching baseline objects.
 
-That start-of-run banner only helps a *later* run flag an *earlier* run's results; a run must also not
-publish results that are *already* stale by the time it finishes. Two mechanisms cover the finish side.
-First, the `analyze` job is gated on `!cancelled()`, **not** `always()`: a partially-failed collect
-(one platform red) is not a cancellation, so analysis still runs and reports whatever landed, but a run
-*superseded* by a newer push — which concurrency `cancel-in-progress` cancels — does **not** analyze or
-post, because `always()` would run even when cancelled and publish results for a head SHA the PR has
-already moved past. Second, as defense-in-depth for the narrow window where a push races a run's *final
-post* faster than the cancellation can stop it, the `analyze` job re-reads the **live PR head** just
-before posting and, when it no longer matches the analyzed (frozen) head SHA, injects that same
-staleness banner into the composed body first — so a superseded result is never published looking fresh.
-Both this self-check and `mark-stale` word the banner through one shared helper so they cannot drift,
-and both degrade to posting/leaving the body untouched rather than failing the advisory comment if the
-live head or compare distance cannot be read.
+Findings land in a single **rolling PR comment**, identified by a hidden marker. It reports
+both improvements and regressions, and discloses package scope, missing collection platforms,
+and unjudged series independently. Named outcomes distinguish clean evidence from insufficient
+baseline or nothing in scope. A total collect failure produces no fabricated report. Findings
+remain advisory and never change the process exit code.
 
-Collection is **delta-scoped**: a preflight job runs cargo-delta against `main` and benchmarks only
-the impacted packages — those the PR changed, plus their dependents — since re-measuring the whole
-workspace on every PR push would be wasteful. Analysis, by contrast, is deliberately **not**
-package-scoped — yet it stays correctly scoped anyway, by construction rather than by a name
-filter. `analyze` considers only
-benchmarks **present at the context commit** (the PR head), dropping any "ghost" benchmark with
-no run there *before* detection. Because only the impacted packages are collected at the PR's
-branch-unique head commit, only they are present there, so every other package is excluded
-as a ghost automatically — for *every* measurement engine — leaving exactly the collected set to
-analyze. Package scoping thus falls out of *what gets collected*, with no need to filter analysis
-by name, which would in fact be wrong: benchmark identities are engine-dependent (some engines
-identify a series by bare operation name with no package prefix), so a name filter would silently
-drop those series and turn a real regression into a false negative. The PR analysis therefore
-relies on that ghost exclusion, which is unconditional and cannot be turned off. As a side
-benefit the same filter
-also drops a benchmark the PR itself *removed*, so a deletion is never mis-reported as a
-regression.
+A preflight job runs after scope and companion preparation, without waiting for a collection
+slot. It seeds or refreshes an owned in-progress placeholder when results are not yet available,
+or adds a replaceable staleness banner to older results. The analyzed commit is retained as a
+full machine marker and a human-readable commit link. Unknown commit distance is disclosed
+rather than presented as fresh.
 
-When a PR impacts no benchmarkable package — including a PR that impacted one earlier and then
-reverted it — a lightweight cleanup path removes any rolling comment a prior push left behind
-and posts nothing, so a stale, misleading comment never lingers; it is a no-op when there was
-no comment. PR runs read the shared history cache **restore-only** (never saving), keeping the
-baseline warm without accumulating per-PR cache entries, which the append-only store makes
-safe even when slightly stale.
+Analysis and publication use `!cancelled()` so superseded work does not publish. The separate
+GitHub-only publication job also checks the live head immediately before writing: stale or
+unverified freshness is qualified, and already-current newer results are preserved. Comment
+writers share one per-instance/per-PR concurrency group.
+
+Empty-scope cleanup creates or updates a brief explanatory note instead of silently deleting
+the comment. A finalizer may run after failure or cancellation, but changes only the placeholder
+owned by that exact run and head; it never replaces real results or a newer run's placeholder.
+The close event enters workflow concurrency without starting benchmark or posting jobs.
 
 ## Failure alerting
 
@@ -676,7 +646,7 @@ The push-triggered history collection, release, and validation workflows all ope
 issue on failure, but with
 deliberately different lifecycles matched to what failed. A benchmark-history failure is
 a recurring condition on a rolling target, so it opens a *deduplicated* tracking issue
-(keyed on a fixed title) that a companion job closes automatically once the workflow is
+(keyed on its instance/failure marker, with no label requirement) that the companion closes automatically once the workflow is
 green again — exactly one open issue per persistent failure, cleared without manual
 intervention. The nightly backfill is deliberately outside this scheme and files nothing (see
 Nightly history backfill). A release failure is a discrete event tied to one publish attempt, so it
@@ -778,30 +748,31 @@ CI touches unreliable infrastructure — package mirrors, the GitHub API, runner
 single blip (an HTTP 5xx, a rate-limit refusal, a dropped connection, a runner disk I/O error)
 is not a real failure and must not fail a whole job. Such faults are retried automatically, and
 at the lowest feasible level: one flaky download or one API read is re-attempted in place rather
-than restarting the job around it. A shared helper, `scripts/utility/Retry.psm1`, is the single
-place that logic lives: `Invoke-WithRetry` re-runs an action a few times with exponential backoff
+than restarting the job around it. Shell bootstrap and download callers share
+`scripts/utility/Retry.psm1`: `Invoke-WithRetry` re-runs an action a few times with exponential backoff
 capped at a ceiling, and `Test-TransientFailure` classifies an error message so callers can retry
 only genuinely transient faults.
 
 Retry wraps the operations most exposed to that risk: the in-repo Rust toolchain install (the
 `rustup toolchain install` a runner disk blip once failed with no retry, dropping a whole job on
 one bad sector), the actionlint/shellcheck/azcopy tool downloads (which re-fetch *and* re-verify
-the checksum, so a truncated payload re-downloads rather than being trusted), and the idempotent
-`gh` read calls behind the bench-history modules' `Invoke-GhCapture` seam.
+the checksum, so a truncated payload re-downloads rather than being trusted). The Rust
+benchmark companion owns the equivalent typed HTTP policy for its GitHub operations.
 
-Two rules bound where and how retry is applied. First, it never wraps a non-idempotent mutation —
-creating, editing, closing, or deleting an issue or comment — because a retry after a fault that
-already took effect would duplicate it; only reads opt in, via `Invoke-GhCapture -RetryOnFailure`.
-Second, how a retryable failure is recognised depends on whether the failure is legible. A `gh` read
-runs against a live API where a deterministic error (a 4xx, an auth refusal, a malformed request) is
-unambiguous and should surface at once, so those reads pass `Test-TransientFailure` as the retry
-predicate and re-attempt only transient-looking failures. The idempotent installs and downloads are
+Non-idempotent creates never retry blindly: the companion reconciles a failed response
+against the intended marker and body. Reads, complete-body updates, closes, and deletion of a
+known comment are idempotent and retry transient failures within a bounded policy. A repeated
+delete returning not-found has reached its desired state. The adapter honors acceptable
+retry delays and surfaces permanent failures; redirects and transport-level automatic retries
+cannot bypass the operation-specific policy.
+
+The idempotent installs and downloads are
 different: their motivating faults — a runner disk I/O error, a truncated fetch — are not reliably
 classifiable from the error text, and the operations are cheap to repeat, so they retry *every*
 failure within a small, bounded budget, and a genuinely deterministic failure (a bad version pin, a
-checksum that never matches) costs only the capped backoff window before it surfaces. Reads that
-already degrade gracefully — returning a neutral result on failure rather than aborting the job — are
-left un-retried, since a soft-failing read needs no retry to keep the job alive.
+checksum that never matches) costs only the capped backoff window before it surfaces.
+Unavailable freshness evidence is qualified explicitly; it does not silently produce a
+current-looking benchmark report.
 
 First-party marketplace actions (checkout, cache, artifact up/download, and the like) are trusted
 to retry their own network operations internally, so they are not wrapped in a third-party retry

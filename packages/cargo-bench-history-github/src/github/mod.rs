@@ -1,8 +1,10 @@
 mod http;
+mod job;
 mod port;
 mod rest;
 mod wire;
 
+pub(crate) use job::*;
 pub(crate) use port::*;
 pub(crate) use rest::*;
 

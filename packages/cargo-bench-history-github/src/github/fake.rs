@@ -1,17 +1,19 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::future::{Future, ready};
+use std::num::NonZero;
 
 use ohno::AppError;
 
 use crate::errors::{AmbiguousCreateError, RequestFailedError};
-use crate::github::{Comment, Comparison, GitHub, Issue};
+use crate::github::{Comment, Comparison, GitHub, Issue, WorkflowJob};
 use crate::model::{CommitSha, Repository};
 
 /// An in-memory GitHub port for orchestration tests.
 #[derive(Debug, Default)]
 pub(crate) struct FakeGitHub {
     issues: RefCell<BTreeMap<u64, Issue>>,
+    closed_issues: RefCell<Vec<Issue>>,
     comments: RefCell<BTreeMap<u64, (u64, Comment)>>,
     pull_heads: RefCell<BTreeMap<u64, CommitSha>>,
     comparisons: RefCell<BTreeMap<(String, String), Comparison>>,
@@ -23,9 +25,14 @@ pub(crate) struct FakeGitHub {
     issue_list_calls: Cell<usize>,
     comment_list_calls: Cell<usize>,
     fail_pull_head: Cell<bool>,
+    jobs: RefCell<Vec<WorkflowJob>>,
 }
 
 impl FakeGitHub {
+    pub(crate) fn set_jobs(&self, jobs: Vec<WorkflowJob>) {
+        *self.jobs.borrow_mut() = jobs;
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             next_id: Cell::new(1),
@@ -35,6 +42,10 @@ impl FakeGitHub {
 
     pub(crate) fn issues(&self) -> Vec<Issue> {
         self.issues.borrow().values().cloned().collect()
+    }
+
+    pub(crate) fn closed_issues(&self) -> Vec<Issue> {
+        self.closed_issues.borrow().clone()
     }
 
     pub(crate) fn comments_for(&self, pull_request: u64) -> Vec<Comment> {
@@ -93,6 +104,14 @@ impl FakeGitHub {
 }
 
 impl GitHub for FakeGitHub {
+    fn workflow_jobs(
+        &self,
+        _repository: &Repository,
+        _run_id: NonZero<u64>,
+    ) -> impl Future<Output = Result<Vec<WorkflowJob>, AppError>> {
+        ready(Ok(self.jobs.borrow().clone()))
+    }
+
     fn open_issues(
         &self,
         _repository: &Repository,
@@ -119,6 +138,7 @@ impl GitHub for FakeGitHub {
             number: self.next_id(),
             title: _title.to_owned(),
             body: body.to_owned(),
+            bot_authored: true,
         };
         self.issues.borrow_mut().insert(issue.number, issue.clone());
         if self.fail_issue_create_after_commit.replace(false) {
@@ -148,7 +168,9 @@ impl GitHub for FakeGitHub {
         _repository: &Repository,
         number: u64,
     ) -> impl Future<Output = Result<(), AppError>> {
-        self.issues.borrow_mut().remove(&number);
+        if let Some(issue) = self.issues.borrow_mut().remove(&number) {
+            self.closed_issues.borrow_mut().push(issue);
+        }
         ready(Ok(()))
     }
 

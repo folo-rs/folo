@@ -5,11 +5,12 @@ use ohno::{AppError, EnrichableExt as _};
 use crate::cli::{Cli, Command, ResultArgs};
 use crate::errors::{MissingRepositoryError, read_body_error};
 use crate::github::{Comment, Comparison, GitHub, Issue, RestGitHub};
-use crate::marker;
 use crate::marker::{CommentMarker, UnexpectedCommentMarker};
 use crate::message::{self, Envelope};
+use crate::migration::{MigrationOptions, find_issue_target};
 use crate::model::{CommitSha, Instance, IssueKind, Repository};
 use crate::result::{AnalysisMode, AnalysisReport, Evidence, PlatformCoverage};
+use crate::{marker, workflow};
 
 /// Inputs shared by every lifecycle operation.
 #[derive(Clone, Debug)]
@@ -18,6 +19,7 @@ pub(crate) struct Context {
     pub(crate) instance: Instance,
     pub(crate) verbose: bool,
     pub(crate) comment_marker: Option<CommentMarker>,
+    pub(crate) migration: MigrationOptions,
 }
 
 impl Context {
@@ -29,17 +31,37 @@ impl Context {
     }
 }
 
-/// Executes one GitHub lifecycle command.
+/// Executes one lifecycle or workflow evidence command.
 ///
 /// # Errors
 ///
-/// Returns an error when inputs cannot be loaded or a required GitHub operation
-/// does not complete successfully.
+/// Returns an error when input loading, local output writing or a required GitHub
+/// operation does not complete successfully.
 // Process wiring constructs the live adapter and reads process environment/filesystem.
 // The generic lifecycle functions it dispatches to carry the behavioral tests.
 #[cfg_attr(test, mutants::skip)]
 pub async fn run(cli: Cli) -> Result<(), AppError> {
-    let repository = match cli.repository() {
+    let repository = cli.repository();
+    let instance = cli.instance();
+    let verbose = cli.verbose();
+    let comment_marker = cli.comment_marker();
+    let migration = cli.migration_options()?;
+    let command = match cli.into_command() {
+        Command::WorkflowMatrix(args) => {
+            if comment_marker.is_some() {
+                return Err(UnexpectedCommentMarker::new().into());
+            }
+            return workflow::workflow_matrix(&instance, &args, verbose);
+        }
+        Command::InspectReport(args) => {
+            if comment_marker.is_some() {
+                return Err(UnexpectedCommentMarker::new().into());
+            }
+            return workflow::inspect_report(args).await;
+        }
+        command => command,
+    };
+    let repository = match repository {
         Some(repository) => repository,
         None => env::var("GITHUB_REPOSITORY")
             .map_err(MissingRepositoryError::caused_by)?
@@ -47,11 +69,11 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     };
     let context = Context {
         repository,
-        instance: cli.instance(),
-        verbose: cli.verbose(),
-        comment_marker: cli.comment_marker(),
+        instance,
+        verbose,
+        comment_marker,
+        migration,
     };
-    let command = cli.into_command();
     if context.comment_marker.is_some()
         && !matches!(
             command,
@@ -63,9 +85,18 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     {
         return Err(UnexpectedCommentMarker::new().into());
     }
+    // Offline evidence commands must not require credentials or construct an HTTP client.
+    let command = match command {
+        Command::CollectionReceipt(args) => return workflow::collection_receipt(&context, args),
+        command => command,
+    };
     let github = RestGitHub::from_env()?;
 
     match command {
+        Command::PrepareAnalysis(args) => workflow::prepare_analysis(&github, &context, args).await,
+        Command::CollectionReceipt(_) | Command::InspectReport(_) | Command::WorkflowMatrix(_) => {
+            unreachable!("offline commands return before GitHub construction")
+        }
         Command::IssuePreflight { head } => issue_preflight(&github, &context, &head).await,
         Command::PublishIssue {
             title,
@@ -140,6 +171,7 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
             packages,
             head,
             run_id,
+            ..
         } => {
             pr_comment_preflight(
                 &github,
@@ -204,7 +236,10 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     }
 }
 
-async fn load_evidence(args: ResultArgs, commit: &CommitSha) -> Result<Evidence, AppError> {
+pub(crate) async fn load_evidence(
+    args: ResultArgs,
+    commit: &CommitSha,
+) -> Result<Evidence, AppError> {
     let json = tokio::fs::read_to_string(&args.report_file)
         .await
         .map_err(|error| read_body_error(args.report_file, error))?;
@@ -220,13 +255,14 @@ pub(crate) async fn issue_preflight(
     head: &CommitSha,
 ) -> Result<(), AppError> {
     let identity = marker::issue(&context.instance, IssueKind::Regression);
-    let Some(issue) = find_issue(github, &context.repository, &identity).await? else {
+    let Some(target) = find_issue_target(github, context, &identity).await? else {
         note(
             context,
             "no rolling regression issue exists, so preflight is a no-op",
         );
         return Ok(());
     };
+    let issue = target.issue;
     let Some(analyzed) = marker::find_analyzed_sha(&issue.body, &context.instance) else {
         let body = message::insert_stale_banner(
             &issue.body,
@@ -245,6 +281,23 @@ pub(crate) async fn issue_preflight(
         return Ok(());
     }
     let comparison = compare_or_unknown(github, context, &analyzed, head).await;
+    // Serialized writers can still arrive with out-of-order frozen heads.
+    if comparison.ahead_by.is_none()
+        && compare_or_unknown(github, context, head, &analyzed)
+            .await
+            .ahead_by
+            .is_some_and(|distance| distance > 0)
+    {
+        note(
+            context,
+            &format!(
+                "the reverse comparison proves analyzed commit {} is newer than frozen head {}; preserving the report",
+                analyzed.as_str(),
+                head.as_str()
+            ),
+        );
+        return Ok(());
+    }
     let warning = message::stale_warning(comparison.ahead_by, "Findings are");
     let body = message::insert_stale_banner(&issue.body, &context.instance, &warning);
     github
@@ -286,16 +339,18 @@ pub(crate) async fn issue_cleanup(
     evidence.require_all_clear()?;
     let clean_commit = &evidence.report.commit;
     let identity = marker::issue(&context.instance, IssueKind::Regression);
-    let Some(issue) = find_issue(github, &context.repository, &identity).await? else {
+    let Some(target) = find_issue_target(github, context, &identity).await? else {
         note(
             context,
             "no rolling regression issue exists, so cleanup is a no-op",
         );
         return Ok(());
     };
-    if !may_replace_issue(github, context, &issue, clean_commit).await {
+    // Initial adoption installs a validated SHA. A marker-owned issue still requires ordering.
+    if !target.legacy && !may_replace_issue(github, context, &target.issue, clean_commit).await {
         return Ok(());
     }
+    let issue = target.issue;
     let body = message::all_clear_issue(&context.instance, clean_commit, envelope);
     github
         .update_issue(&context.repository, issue.number, None, &body)
@@ -326,11 +381,17 @@ pub(crate) async fn resolve_alert(
     run_url: &str,
 ) -> Result<(), AppError> {
     let identity = marker::issue(&context.instance, IssueKind::FailureAlert);
-    let Some(issue) = find_issue(github, &context.repository, &identity).await? else {
+    let Some(target) = find_issue_target(github, context, &identity).await? else {
         note(context, "no failure alert exists, so resolution is a no-op");
         return Ok(());
     };
+    let issue = target.issue;
     let body = message::resolved_failure_issue(&issue.body, run_url);
+    let body = if target.legacy {
+        format!("{identity}\n\n{body}")
+    } else {
+        body
+    };
     github
         .update_issue(&context.repository, issue.number, None, &body)
         .await?;
@@ -365,7 +426,8 @@ pub(crate) async fn pr_comment_preflight(
         }
         Some(comment)
             if message::is_in_progress(&comment.body, &context.instance)
-                || message::is_terminal_note(&comment.body, &context.instance) =>
+                || message::is_terminal_note(&comment.body, &context.instance)
+                || context.migration.is_legacy_placeholder(&comment.body) =>
         {
             let body =
                 message::pr_in_progress(&context.instance, &identity, packages, head, run_id);
@@ -538,14 +600,16 @@ async fn upsert_issue(
     body: &str,
     commit: Option<&CommitSha>,
 ) -> Result<(), AppError> {
-    if let Some(issue) = find_issue(github, &context.repository, marker).await? {
+    if let Some(target) = find_issue_target(github, context, marker).await? {
+        // Only explicit legacy adoption can bypass the absent companion-SHA guard.
         if let Some(commit) = commit
-            && !may_replace_issue(github, context, &issue, commit).await
+            && !target.legacy
+            && !may_replace_issue(github, context, &target.issue, commit).await
         {
             return Ok(());
         }
         return github
-            .update_issue(&context.repository, issue.number, Some(title), body)
+            .update_issue(&context.repository, target.issue.number, Some(title), body)
             .await;
     }
     match github.create_issue(&context.repository, title, body).await {
@@ -674,6 +738,7 @@ mod tests {
             instance: "default".parse().unwrap(),
             verbose: false,
             comment_marker: None,
+            migration: MigrationOptions::default(),
         }
     }
 
@@ -778,6 +843,56 @@ mod tests {
 
         let body = only_issue(&github).body;
         assert_eq!(body.matches("2 commits behind HEAD").count(), 1);
+    }
+
+    #[test]
+    fn issue_preflight_preserves_a_provably_newer_report() {
+        let github = FakeGitHub::new();
+        let context = context();
+        block_on(publish_issue(
+            &github,
+            &context,
+            "Regressions",
+            "Newer findings",
+            &evidence_at(AnalysisMode::History, Outcome::Findings, 'b'),
+            Envelope::default(),
+        ))
+        .unwrap();
+        let before = only_issue(&github);
+        github.set_comparison(&sha('b'), &sha('a'), Comparison { ahead_by: None });
+        github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(1) });
+        block_on(issue_preflight(&github, &context, &sha('a'))).unwrap();
+        assert_eq!(only_issue(&github), before);
+    }
+
+    #[test]
+    fn issue_preflight_warns_when_commit_order_cannot_be_proved() {
+        for ahead_by in [None, Some(0)] {
+            let github = FakeGitHub::new();
+            let context = context();
+            block_on(publish_issue(
+                &github,
+                &context,
+                "Regressions",
+                "Unordered findings",
+                &evidence_at(AnalysisMode::History, Outcome::Findings, 'b'),
+                Envelope::default(),
+            ))
+            .unwrap();
+            let before = only_issue(&github);
+            github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by });
+            block_on(issue_preflight(&github, &context, &sha('a'))).unwrap();
+            let after = only_issue(&github);
+            assert_eq!(after.number, before.number);
+            assert_eq!(
+                after.body,
+                message::insert_stale_banner(
+                    &before.body,
+                    &context.instance,
+                    &message::stale_warning(None, "Findings are"),
+                )
+            );
+        }
     }
 
     #[test]
@@ -1517,6 +1632,7 @@ mod tests {
             number: 1,
             title: "Regression".to_owned(),
             body: marker::analyzed_sha(&context.instance, &sha('a')),
+            bot_authored: true,
         };
         github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(0) });
         assert!(!block_on(may_replace_issue(

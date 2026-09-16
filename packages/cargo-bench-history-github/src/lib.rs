@@ -13,9 +13,20 @@ mod errors;
 mod github;
 mod marker;
 mod message;
+mod migration;
 mod model;
 mod operations;
 mod result;
+mod workflow;
+
+#[cfg(any(test, feature = "private-test-util"))]
+mod private_test_util;
 
 pub use cli::Cli;
 pub use operations::run;
+
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::private_test_util::*;
+}

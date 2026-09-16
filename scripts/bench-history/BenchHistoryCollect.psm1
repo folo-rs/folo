@@ -163,10 +163,31 @@ function Get-BenchHistoryCollectCommand {
         [Parameter()]
         [AllowNull()]
         [AllowEmptyCollection()]
-        [string[]] $Package
+        [string[]] $Package,
+
+        [AllowNull()][AllowEmptyString()][string] $LocalStore,
+        [AllowNull()][AllowEmptyString()][string] $Repository,
+        [AllowNull()][AllowEmptyString()][string] $ConfigPath
     )
 
     $scope = Get-BenchHistoryScopeArgument -Package $Package
+    if ($PSBoundParameters.ContainsKey('LocalStore')) {
+        if ([string]::IsNullOrWhiteSpace($LocalStore)) {
+            throw 'An explicit local collection store must not be empty; refusing to fall back to cloud storage.'
+        }
+        $scope += "--local=$LocalStore"
+    }
+    foreach ($binding in @(
+            @{ Parameter = 'Repository'; Flag = '--repo'; Value = $Repository }
+            @{ Parameter = 'ConfigPath'; Flag = '--config'; Value = $ConfigPath }
+        )) {
+        if ($PSBoundParameters.ContainsKey($binding.Parameter)) {
+            if ([string]::IsNullOrWhiteSpace($binding.Value)) {
+                throw "An explicit $($binding.Parameter) must not be empty."
+            }
+            $scope += @($binding.Flag, $binding.Value)
+        }
+    }
 
     $recollect = if ($null -eq $RecollectCommitId) { '' } else { $RecollectCommitId.Trim() }
 
@@ -192,6 +213,20 @@ function Get-BenchHistoryCollectCommand {
         'and the toolchain that builds it come from that commit; the collection logic, the ' +
         'RUSTFLAGS and the scope flags come from this checkout.')
     return @('backfill', $recollect, $recollect) + $scope + @('--overwrite')
+}
+
+function Get-BenchHistoryRustFlag {
+    # Every collection recipe uses the same alignment policy without dropping unrelated flags.
+    # The stability value comes from constants.env; this function only replaces prior spellings
+    # of that setting so source/toolchain selection does not alter benchmark comparability.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()][AllowEmptyString()][string] $Existing,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Stability
+    )
+    $kept = ("$Existing" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+    return (@($kept, $Stability) | Where-Object { $_ }) -join ' '
 }
 
 function Invoke-GitCapture {
@@ -340,4 +375,4 @@ function Get-BenchHistoryBackfillCommand {
         @('--ignore-errors')
 }
 
-Export-ModuleMember -Function Get-BenchHistoryCollectCommand, Get-BenchHistoryBackfillCommand, Select-BenchmarkablePackage
+Export-ModuleMember -Function Get-BenchHistoryCollectCommand, Get-BenchHistoryBackfillCommand, Select-BenchmarkablePackage, Get-BenchHistoryRustFlag

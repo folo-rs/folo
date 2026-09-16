@@ -35,6 +35,10 @@ private-api = true
 name = "cargo-bench-history-github"
 path = "src/main.rs"
 
+[features]
+# Native integration tests inject completed job discovery without live GitHub access.
+private-test-util = []
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 mimalloc = { workspace = true }

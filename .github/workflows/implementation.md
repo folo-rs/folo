@@ -14,7 +14,7 @@ the installed App's scheduling controls.
 | `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
-| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened. | Advisory production-backed benchmark feedback for same-repository PRs. |
+| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Local PR collection, read-only production-backed analysis, and advisory GitHub publication for same-repository PRs. |
 
 ```text
 Deep validation on main: plan -> standard + deep checks -> report failures -> run report issue
@@ -34,6 +34,49 @@ normal PR relationship, not a main-push confirmation workflow.
 Standard validation and its close companion share the `standard-validation-`
 ref-specific concurrency group. The merge-blocking job/check name and ruleset
 target are exactly `required-checks`.
+
+## Benchmark workflow artifacts
+
+Benchmark automation separates preparation, collection, analysis and GitHub publication.
+Preparation builds the Linux companion with the repository's pinned Rust toolchain and
+archives its executable permissions. Posting jobs download that run-scoped archive rather
+than installing the full development environment, and have no Azure federation permission.
+A failed companion build or unavailable executable remains a failed workflow check; no
+notification is reported as successful when its executable could not run.
+
+The companion turns the configured platform CSV into the matrix and collection job prefix.
+Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
+`receipt.json` with its repository, instance, workflow run/attempt, frozen head, platform and
+machine key. PR collection artifacts additionally carry a `results` directory containing the
+ordinary local store. Artifact names are stable per platform within a run and overwritten on
+successful reruns.
+
+Analysis downloads through the REST run-artifacts endpoint so surviving older-attempt
+artifacts remain visible. Rust reconciles receipts with each platform's latest job attempt,
+then writes the selected machine keys and assembles only successful PR result trees. It
+rejects missing, conflicting or mismatched evidence instead of silently narrowing success.
+The local input and collection artifacts are outside the persisted history cache.
+
+Automation and measured source are separate for PR runs. The workflow's merge checkout
+supplies current helpers, tool builds and configuration. The full real-head checkout under
+`benchmark-source` supplies Cargo scope, benchmark execution and git topology. Collection
+passes its repository and the automation configuration explicitly; analysis passes that
+repository and the frozen event head/base. This preserves real commit attribution without
+requiring every open PR head to contain new automation files.
+
+The analysis bundle always contains the tool's full Markdown, JSON and summary. The
+companion projects validated JSON into outcome and all-clear outputs; publication receives
+the same report and completed-platform set. Main issue writers share an instance concurrency
+group, and PR comment writers share an instance/PR group. Explicit legacy-title and
+placeholder-marker inputs adopt existing Folo sinks without adding label support.
+
+Reader configuration is checked before collection, except empty PR scope, which needs no
+Azure access. It is intentionally not initialized with the writer client ID. Deployment adds
+the reader first; workflow activation requires its returned client ID in `constants.env`.
+Legacy posting runs should finish or be deliberately cancelled before cutover so they cannot
+replace new marker-based reports. Retire the writer's PR federation only after legacy
+PR-writing runs have drained. These are maintainer deployment actions, not workflow approval
+prompts or automatic changes to live infrastructure.
 
 ## Standard validation structure
 

@@ -17,10 +17,14 @@ pub(crate) struct Evidence {
 
 impl Evidence {
     pub(crate) fn require_all_clear(&self) -> Result<(), AppError> {
-        if self.report.outcome != Outcome::Clean || !self.platforms.is_complete() {
+        if !self.is_all_clear() {
             return Err(UnsafeAllClear::new().into());
         }
         Ok(())
+    }
+
+    pub(crate) fn is_all_clear(&self) -> bool {
+        self.report.outcome == Outcome::Clean && self.platforms.is_complete()
     }
 }
 
@@ -102,6 +106,18 @@ pub(crate) enum Outcome {
     Partial,
 }
 
+impl Outcome {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Findings => "findings",
+            Self::Clean => "clean",
+            Self::InsufficientBaseline => "insufficient_baseline",
+            Self::NothingInScope => "nothing_in_scope",
+            Self::Partial => "partial",
+        }
+    }
+}
+
 /// Analysis mode is checked to keep history and PR lifecycle commands distinct.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -155,7 +171,7 @@ impl PlatformCoverage {
     }
 }
 
-fn platform_list(input: &str) -> Result<BTreeSet<String>, AppError> {
+pub(crate) fn platform_list(input: &str) -> Result<BTreeSet<String>, AppError> {
     input
         .split(',')
         .map(str::trim)

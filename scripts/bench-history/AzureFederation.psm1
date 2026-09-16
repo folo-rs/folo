@@ -3,11 +3,9 @@
 # Azure OIDC federation identity plumbing for the benchmark-history workflow
 # (.github/workflows/bench-history.yml).
 #
-# The `collect` and `analyze` jobs both federate into Azure with the SAME two identifiers, which
-# live (non-secret) in constants.env. Two jobs re-exporting those under the standard AZURE_* names
-# is exactly the kind of copy-pasted inline snippet that drifts - and where the recent
-# case-collision footgun hid - so the parse-and-map logic lives here, behind small seams the Pester
-# suite (AzureFederation.Tests.ps1) exercises, and each job's workflow step is a thin import + call.
+# Collection/backfill use the writer identity; analysis uses the separately scoped reader.
+# Their non-secret client IDs and shared tenant live in constants.env. This module keeps the
+# required-value validation and standard AZURE_* export consistent across workflow jobs.
 #
 # constants.env is read directly (not via `just`'s dotenv) because these steps re-export under
 # different names (AZURE_PROD_CLIENT_ID -> AZURE_CLIENT_ID) and must fail loudly when an identifier
@@ -58,21 +56,25 @@ function Get-RequiredConstant {
 }
 
 function Set-AzureFederationEnv {
-    # Reads the two federation identifiers from $ConstantsPath and appends them, under the standard
-    # AZURE_* names the tool and azure/login read, to the GitHub step-env file at $EnvFilePath
-    # (normally $env:GITHUB_ENV). The mapping is deliberate: constants.env names them
-    # AZURE_PROD_CLIENT_ID / AZURE_TENANT_ID, the consumers expect AZURE_CLIENT_ID / AZURE_TENANT_ID.
-    # Returns the mapping it wrote so a caller (and the tests) can inspect it.
+    # Selects the requested capability without a reader-to-writer fallback. Writer is the default
+    # for existing collection/backfill callers; analysis explicitly requests Reader. A source-built
+    # preparation job may also call this to validate identifiers without holding id-token permission.
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)][string] $ConstantsPath,
-        [Parameter(Mandatory)][string] $EnvFilePath
+        [Parameter(Mandatory)][string] $EnvFilePath,
+        [ValidateSet('Writer', 'Reader')][string] $Access = 'Writer'
     )
 
     $constants = Read-DotEnvFile -Path $ConstantsPath
+    $clientConstant = if ($Access -eq 'Reader') { 'AZURE_PROD_READER_CLIENT_ID' } else { 'AZURE_PROD_CLIENT_ID' }
+    $clientId = Get-RequiredConstant -Values $constants -Name $clientConstant
+    if ($Access -eq 'Reader' -and $clientId -eq $constants['AZURE_PROD_CLIENT_ID']) {
+        throw 'The production reader must use its own identity, not AZURE_PROD_CLIENT_ID. Deploy the reader identity before activating analysis.'
+    }
     $exported = [ordered]@{
-        AZURE_CLIENT_ID = Get-RequiredConstant -Values $constants -Name 'AZURE_PROD_CLIENT_ID'
+        AZURE_CLIENT_ID = $clientId
         AZURE_TENANT_ID = Get-RequiredConstant -Values $constants -Name 'AZURE_TENANT_ID'
     }
 
@@ -80,7 +82,7 @@ function Set-AzureFederationEnv {
     if ($PSCmdlet.ShouldProcess($EnvFilePath, 'Append AZURE_CLIENT_ID and AZURE_TENANT_ID')) {
         $lines | Add-Content -Path $EnvFilePath -Encoding utf8
     }
-    Write-Verbose "Exported AZURE_CLIENT_ID and AZURE_TENANT_ID from '$ConstantsPath' to '$EnvFilePath' so the collect/analyze jobs federate into Azure with the same committed, non-secret identifiers."
+    Write-Verbose "Selected $Access access from $clientConstant in '$ConstantsPath'; exported its client ID and the tenant to '$EnvFilePath'."
     return $exported
 }
 

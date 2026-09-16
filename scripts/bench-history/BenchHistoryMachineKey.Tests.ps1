@@ -31,6 +31,43 @@ BeforeAll {
     }
 }
 
+Describe 'Get-BenchHistoryAnalysisCommand' {
+    It 'returns a flat argument vector with explicit frozen topology and isolated input' {
+        $keys = Join-Path $TestDrive 'keys'
+        Write-KeyFile -Directory $keys -Name 'first' -Content 'abcdef0123456789'
+        Write-KeyFile -Directory $keys -Name 'second' -Content '0123456789abcdef'
+        $report = Join-Path $TestDrive 'report output'
+        $result = Get-BenchHistoryAnalysisCommand -KeyDirectory $keys -ReportDirectory $report `
+            -Context ('a' * 40) -Base ('b' * 40) -LocalInput 'local input' -Repository 'measured repo'
+        , $result | Should -BeOfType [string[]]
+        $result | Should -Be @(
+            'analyze', '--engine', 'all', '--target-triple', 'all'
+            '--machine-key', '0123456789abcdef', '--machine-key', 'abcdef0123456789'
+            '--context', ('a' * 40), '--base', ('b' * 40), '--verbose'
+            "--cache=$(Join-Path $report 'cache')"
+            '--no-text', '--markdown', (Join-Path $report 'report.md')
+            '--json', (Join-Path $report 'report.json')
+            '--markdown-summary', (Join-Path $report 'summary.md')
+            '--local-input', 'local input', '--repo', 'measured repo'
+        )
+    }
+
+    It 'omits local input for ordinary history analysis' {
+        $keys = Join-Path $TestDrive 'history keys'
+        Write-KeyFile -Directory $keys -Name 'first' -Content 'abcdef0123456789'
+        $result = Get-BenchHistoryAnalysisCommand -KeyDirectory $keys -ReportDirectory $TestDrive `
+            -Context ('a' * 40) -Base ('a' * 40)
+        $result | Should -Not -Contain '--local-input'
+        $result | Should -Not -Contain '--repo'
+    }
+
+    It 'fails instead of fabricating a report when collection supplied no keys' {
+        { Get-BenchHistoryAnalysisCommand -KeyDirectory (Join-Path $TestDrive 'absent') `
+            -ReportDirectory $TestDrive -Context ('a' * 40) -Base ('a' * 40) } | Should -Throw
+        Test-Path -LiteralPath (Join-Path $TestDrive 'report.json') | Should -BeFalse
+    }
+}
+
 Describe 'Get-MachineKeyArgument' {
     Context 'a normal multi-runner collection' {
         It 'builds one --machine-key per distinct fingerprint, sorted' {
@@ -46,6 +83,7 @@ Describe 'Get-MachineKeyArgument' {
             } finally {
                 Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
             }
+
         }
 
         It 'collapses duplicate fingerprints from identically-specced runners' {

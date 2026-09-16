@@ -1,0 +1,45 @@
+name: Build benchmark-history companion
+description: Build a run-scoped Linux companion without the full development-tool installation
+
+outputs:
+  archive:
+    description: Executable archive for the Ubuntu publication jobs
+    value: ${{ steps.build.outputs.archive }}
+  binary:
+    description: Companion executable in the preparation checkout
+    value: ${{ steps.build.outputs.binary }}
+
+runs:
+  using: composite
+  steps:
+    # This bootstrap needs only the pinned compiler and native build prerequisites already on
+    # the Ubuntu image, not Valgrind or the repository's full development-tool installation.
+    # Ref: .github/workflows/implementation.md#benchmark-workflow-artifacts.
+    - name: Install pinned Rust toolchain
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        Import-Module ./scripts/setup/RustToolchain.psm1 -Force
+        Install-RustToolchain
+
+    - name: Cache companion build dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: bench-history-companion
+        workspaces: . -> target/bench-history-companion
+        env-vars: ImageVersion
+
+    - name: Build and archive companion
+      id: build
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        $archive = Join-Path $env:RUNNER_TEMP 'bench-history-companion.tar.gz'
+        ./scripts/bench-history/build-companion.ps1 -ArchivePath $archive
+        "archive=$archive" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+        "binary=$(Join-Path $env:GITHUB_WORKSPACE 'target/bench-history-companion/x86_64-unknown-linux-gnu/debug/cargo-bench-history-github')" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+

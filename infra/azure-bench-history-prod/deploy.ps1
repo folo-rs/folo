@@ -1,4 +1,4 @@
-#requires -Version 7
+#Requires -Version 7.6
 
 <#
 .SYNOPSIS
@@ -6,19 +6,13 @@
     cargo-bench-history benchmark history.
 
 .DESCRIPTION
-    Idempotently provisions a resource group, an Entra-only Storage account, a
-    dedicated user-assigned managed identity with a GitHub OIDC federated credential
-    for `main`, and the `Storage Blob Data Contributor` role assignments needed by
-    the nightly workflow and (optionally) a local developer principal. Re-running it
-    converges to the same state, so the paired `teardown.ps1` + this script let you
-    delete and re-create everything at will.
+    Maintainer entry point for reader-first production provisioning. Bicep defines
+    the resources; ProductionIdentityDeployment.psm1 preserves existing storage
+    and writer PR trust and performs only explicitly requested retirement.
+    PowerShell is the Azure CLI boundary and needs no prepared Rust toolchain.
 
-    This prod data store is fully self-contained: it owns its own identity and shares
-    nothing with infra/azure-bench-history-test/ except the tenant. There is no need
-    to deploy the test infra first.
-
-    Requires the Azure CLI (`az`) and an authenticated session (`az login`) for an
-    account with rights to create the resources and role assignments.
+    Requires installed Azure CLI and Bicep, plus an authenticated session allowed
+    to create the resources and assign roles. No tools are automatically installed.
 
 .PARAMETER SubscriptionId
     Target subscription id.
@@ -37,6 +31,19 @@
     Name of the user-assigned managed identity used by the nightly workflow. Defaults
     to 'id-folo-bench-history-prod'.
 
+.PARAMETER ReaderManagedIdentityName
+    Dedicated reader identity name. Defaults to ManagedIdentityName plus '-reader'.
+
+.PARAMETER HistoryContainerName
+    Container receiving the reader role. Defaults to 'bench-history', matching
+    .cargo/bench_history.toml. A missing container is provisioned before the grant.
+
+.PARAMETER RetireWriterPullRequestTrust
+    Explicitly deletes only the writer's github-pull-request federated credential
+    after a successful deployment. Use only after legacy PR-writing runs drain
+    and replacement workflows use the reader. Main/backfill writer access remains.
+    Ordinary repeat deployments preserve this credential's absence.
+
 .PARAMETER LocalPrincipalId
     Object id of a local developer principal (user or group) to grant data access.
     Omit to grant CI access only. Tip: your own user id is
@@ -46,7 +53,7 @@
     'User' (default) or 'Group', matching LocalPrincipalId.
 
 .EXAMPLE
-    ./deploy.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 `
+    .\deploy.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 `
         -LocalPrincipalId (az ad signed-in-user show --query id -o tsv)
 #>
 [CmdletBinding()]
@@ -58,10 +65,14 @@ param(
 
     [string] $Location = 'swedencentral',
 
-    [ValidatePattern('^[a-z0-9]{3,24}$')]
+    [ValidatePattern('^[a-z0-9]{3,24}$', Options = 'None')]
     [string] $StorageAccountName = 'folohistory',
 
     [string] $ManagedIdentityName = 'id-folo-bench-history-prod',
+
+    [string] $ReaderManagedIdentityName = '',
+
+    [string] $HistoryContainerName = 'bench-history',
 
     [string] $GithubOrg = 'folo-rs',
 
@@ -70,60 +81,28 @@ param(
     [string] $LocalPrincipalId = '',
 
     [ValidateSet('User', 'Group')]
-    [string] $LocalPrincipalType = 'User'
+    [string] $LocalPrincipalType = 'User',
+
+    [switch] $RetireWriterPullRequestTrust
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-Write-Verbose "Selecting subscription $SubscriptionId."
-az account set --subscription $SubscriptionId
-
-Write-Verbose "Ensuring resource group '$ResourceGroup' exists in '$Location'."
-az group create --name $ResourceGroup --location $Location --output none
-
-Write-Verbose 'Exporting parameters for main.bicepparam (readEnvironmentVariable).'
-$env:AZURE_STORAGE_ACCOUNT_NAME = $StorageAccountName
-$env:AZURE_LOCATION = $Location
-$env:AZURE_MANAGED_IDENTITY_NAME = $ManagedIdentityName
-$env:GITHUB_ORG = $GithubOrg
-$env:GITHUB_REPO = $GithubRepo
-$env:AZURE_LOCAL_PRINCIPAL_ID = $LocalPrincipalId
-$env:AZURE_LOCAL_PRINCIPAL_TYPE = $LocalPrincipalType
-
-if ([string]::IsNullOrEmpty($LocalPrincipalId)) {
-    Write-Verbose 'No LocalPrincipalId supplied; granting data access to the CI identity only.'
-}
-else {
-    Write-Verbose "Granting data access to local $LocalPrincipalType '$LocalPrincipalId'."
-}
-
-$bicepFile = Join-Path $scriptDir 'main.bicep'
-$paramFile = Join-Path $scriptDir 'main.bicepparam'
-$deploymentName = "bench-history-prod-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-
-Write-Verbose "Deploying '$bicepFile' as '$deploymentName'."
-$outputJson = az deployment group create `
-    --resource-group $ResourceGroup `
-    --name $deploymentName `
-    --template-file $bicepFile `
-    --parameters $paramFile `
-    --query properties.outputs `
-    --output json
-$outputs = $outputJson | ConvertFrom-Json
+Import-Module (Join-Path $PSScriptRoot '..' '..' 'scripts' 'bench-history' 'ProductionIdentityDeployment.psm1') -Force
+$outputs = Invoke-ProductionIdentityDeployment @PSBoundParameters
 
 Write-Host ''
 Write-Host 'Deployment complete.' -ForegroundColor Green
 Write-Host ''
-Write-Host 'The account name belongs in .cargo/bench_history.toml; the identity values are' -ForegroundColor Cyan
-Write-Host 'committed (non-secret) in constants.env. The nightly bench-history workflow signs' -ForegroundColor Cyan
-Write-Host 'in with the PROD client id; tenant/subscription are shared with the test identity.' -ForegroundColor Cyan
-Write-Host 'If you re-created the resources, update:' -ForegroundColor Cyan
+Write-Host 'Record these non-secret identifiers in repository configuration.' -ForegroundColor Cyan
+Write-Host 'Reader provisioning alone does not activate replacement PR workflows.' -ForegroundColor Cyan
 Write-Host "  .cargo/bench_history.toml -> [storage.azure] account = `"$($outputs.storageAccountName.value)`""
+Write-Host "  .cargo/bench_history.toml -> [storage.azure] container = `"$($outputs.historyContainerName.value)`""
 Write-Host "  AZURE_PROD_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
+Write-Host "  AZURE_PROD_READER_CLIENT_ID=$($outputs.readerManagedIdentityClientId.value)"
 Write-Host "  AZURE_TENANT_ID=$($outputs.tenantId.value)"
 Write-Host "  AZURE_SUBSCRIPTION_ID=$($outputs.subscriptionId.value)"
 Write-Host ''

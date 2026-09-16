@@ -62,12 +62,48 @@ AfterAll {
     }
 }
 
+Describe 'Get-BenchHistoryRustFlag' {
+    It 'replaces alignment spellings and preserves unrelated flags' -ForEach @(
+        @{ Existing = '-Copt-level=2 -Cllvm-args=-align-all-functions=3 -g' }
+        @{ Existing = '-Copt-level=2 -C llvm-args=-align-all-functions=3 -g' }
+        @{ Existing = '-Copt-level=2 --codegen=llvm-args=-align-all-functions=3 -g' }
+        @{ Existing = '-Copt-level=2 --codegen llvm-args=-align-all-functions=3 -g' }
+    ) {
+        Get-BenchHistoryRustFlag -Existing $Existing -Stability '-Cllvm-args=-align-all-functions=6' |
+            Should -Be '-Copt-level=2 -g -Cllvm-args=-align-all-functions=6'
+    }
+
+    It 'supports an initially empty flag set' {
+        Get-BenchHistoryRustFlag -Existing '' -Stability 'configured-stability' | Should -Be 'configured-stability'
+    }
+}
+
 Describe 'Get-BenchHistoryCollectCommand' {
+    Context 'separate automation and measured checkouts' {
+        It 'keeps local storage, measured repository and current configuration as distinct arguments' {
+            $result = Get-BenchHistoryCollectCommand -Package @('measured') `
+                -LocalStore "temporary store's data" -Repository 'measured checkout' -ConfigPath 'automation config.toml'
+            $result | Should -Contain "--local=temporary store's data"
+            $result[[Array]::IndexOf($result, '--repo') + 1] | Should -Be 'measured checkout'
+            $result[[Array]::IndexOf($result, '--config') + 1] | Should -Be 'automation config.toml'
+            $result | Should -Contain '--skip-existing'
+        }
+
+        It 'rejects an explicitly empty store instead of selecting cloud storage' {
+            { Get-BenchHistoryCollectCommand -Package @('measured') -LocalStore '' } | Should -Throw
+        }
+
+        It 'rejects an explicitly empty measured repository' {
+            { Get-BenchHistoryCollectCommand -Package @('measured') -Repository ' ' } | Should -Throw
+        }
+    }
+
     Context 'append mode (no recollect commit id)' {
         It 'collects the pushed commit in append mode for an empty id' {
             $result = Get-BenchHistoryCollectCommand -RecollectCommitId ''
             $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
         }
+
 
         It 'treats a null id as append mode' {
             $result = Get-BenchHistoryCollectCommand -RecollectCommitId $null

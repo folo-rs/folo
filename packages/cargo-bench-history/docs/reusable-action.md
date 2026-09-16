@@ -1625,7 +1625,7 @@ The working design must distinguish those capabilities from the integration prer
   `scripts/bench-history/*.psm1` modules exist because nothing else could compose or post;
   once the tool and the companion can, they are replaced by the action rather than generalized
   into it, and Folo's bench-history workflows collapse into calls to the reusable
-  workflows (§4.7, §10) — including `cancel-pr-bench-history.yml`, whose whole job `pr.yml`
+  workflows (§4.7, §10) — including PR-close cancellation, whose whole job `pr.yml`
   now absorbs (§4.7).
 * **Docs — the book gains a "GitHub automation" section.** The user guide currently
   documents the tool as something you run by hand (Installation, Commands, Concepts,
@@ -1755,6 +1755,39 @@ them. The new lifecycle commands (`issue-preflight`,
 `issue-cleanup`, `pr-comment-finalize`) land here too, so their behaviour is observed on a real
 repository before anyone else can adopt them.
 
+**Phase 3 execution contract.** A preparation job builds the companion from the workflow's
+automation checkout and publishes it as a run-scoped Linux executable archive. Posting jobs
+download that executable; they have GitHub write scopes but no Azure federation. Collection
+and analysis retain source-built tools during this monorepo cutover, so the unpublished
+companion does not need a bootstrap release before the change can be prepared.
+
+PR automation is built from the event's merge checkout while benchmarking and topology use a
+separate full checkout of the frozen PR head. This makes updated automation available to PRs
+whose head predates it without recording the synthetic merge commit as a measurement.
+Collection passes that repository explicitly to the tool; analysis passes both it and the
+event's frozen base commit. The ordinary collection/exclusion helpers remain until the
+predefined-workflow phase replaces their scope logic.
+
+Successful collection writes a receipt containing repository, instance, run, attempt, frozen
+head, platform and the actual machine key. The artifact also carries the local result store
+for PRs. Analysis reconciles receipts with each platform's latest GitHub job attempt: a failed
+retry cannot reuse an older receipt, while an untouched successful leg retains its earlier
+one. Missing evidence for a successful job is an error; total collection failure produces no
+synthetic report. Only selected successful platform data enters the local analysis input.
+
+The companion projects validated reports into workflow outputs for publication and cleanup.
+History all-clear is permitted only by the complete clean-evidence projection. Publication
+always receives the JSON, summary and exact platform set from that analysis, and reports
+remain downloadable even when they contain no findings. The cutover explicitly adopts the
+legacy rolling issue title and PR placeholder marker; new sinks use instance markers.
+
+Azure activation is staged: provision the reader first, record its non-secret client ID,
+then activate the reader-only analysis jobs and local PR collection. Retire the writer's PR
+federated credential only after legacy PR-writing runs are drained. A missing or reused writer
+client ID is a configuration error, never permission to fall back to write-capable analysis.
+The preparation artifact is also required by notification jobs; inability to build or obtain
+the companion remains a failed workflow check rather than a successful notification.
+
 **Phase 4 — The composite action.** Add `action.yml` and the
 `command` surface (§4, §7), implemented as thin wiring over the binaries from phases 1–3. Its
 repository exists. Rust unit tests remain with the Rust packages in the monorepo; the action
@@ -1783,20 +1816,22 @@ scheduled-validation infrastructure.
 
 ### 12.1 Phase 0 — what needs your hands
 
-Short, and shorter than it looks: only two items genuinely gate anything, and neither gates
-the near-term work. Nothing here can be done from a pull request.
+These actions do not block preparing the implementation, but deployment and publication have
+explicit maintainer gates. Repository changes can prepare them without changing live resources.
 
 | # | Action | Gates | Notes |
 | --- | --- | --- | --- |
-| 1 | **Bootstrap `cargo-bench-history-github`, then configure Trusted Publishing** | Before any flow installs the released companion | Complete the cutover-readiness work, merge, and perform the first manual publication from a clean `main` checkout as described in `RELEASING.md`. Then configure owner `folo-rs`, repository `folo`, workflow `release.yml` on crates.io. The companion is not yet published; do not assume it is installable. |
-| 2 | **Enable Marketplace publishing** on the action repo — accept the agreement, choose a category, verify the listing | Phase 7 | A one-time UI flow tied to the account, not to a release run (§8.1). |
-| 3 | **Decide the `v1` promise** — when the floating major tag starts moving, its consumers inherit whatever it points at | Phase 7 | A decision, not a setting. Worth making deliberately rather than discovering it after the first breaking change. |
-| 4 | **Repository settings** (§12.2) | Nothing | Hygiene. Worth doing, but no phase waits on it. |
+| 1 | **Deploy the production reader identity and complete writer-PR retirement** | Activating Phase 3's read-only Azure path | Deploy the prepared Bicep change additively, record `AZURE_PROD_READER_CLIENT_ID`, and verify reader access. After the new workflows replace legacy PR collection and old writers are drained, explicitly retire only the writer's PR federated credential. Omitting a resource from an incremental ARM deployment does not delete it. |
+| 2 | **Bootstrap `cargo-bench-history-github`, then configure Trusted Publishing** | Before any flow installs the released companion | Complete the cutover-readiness work, merge, and perform the first manual publication from a clean `main` checkout as described in `RELEASING.md`. Then configure owner `folo-rs`, repository `folo`, workflow `release.yml` on crates.io. The companion is not yet published; do not assume it is installable. |
+| 3 | **Enable Marketplace publishing** on the action repo — accept the agreement, choose a category, verify the listing | Phase 7 | A one-time UI flow tied to the account, not to a release run (§8.1). |
+| 4 | **Decide the `v1` promise** — when the floating major tag starts moving, its consumers inherit whatever it points at | Phase 7 | A decision, not a setting. Worth making deliberately rather than discovering it after the first breaking change. |
+| 5 | **Repository settings** (§12.2) | Nothing | Hygiene. Worth doing, but no phase waits on it. |
 
 Four things I want to flag as **not** needed, because they would each be reasonable to assume:
 
-* **No new secrets or tokens.** Every phase runs on the per-run `GITHUB_TOKEN` (§9) or the
-  existing Azure federation. The one-time crates.io bootstrap uses the maintainer's manual
+* **No new stored secrets or tokens.** Every phase runs on the per-run `GITHUB_TOKEN` (§9) or
+  Azure federation. The additional reader identity has a non-secret client ID and short-lived
+  OIDC exchanges, not a maintained credential. The one-time crates.io bootstrap uses the maintainer's manual
   publication process; ongoing automation introduces no stored user credential.
 * **No separate test repository.** Testing happens in the repository that runs it (§9), which
   is what removes the cross-repository credential problem entirely.

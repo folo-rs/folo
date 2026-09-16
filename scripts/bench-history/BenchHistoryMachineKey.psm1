@@ -2,7 +2,7 @@
 
 # Machine-key threading for the benchmark-history `analyze` step, shared by the push-to-main workflow
 # (.github/workflows/bench-history.yml, via the gh-analyze-bench-history recipe) and the per-PR
-# workflow (.github/workflows/pr-bench-history.yml, via gh-analyze-pr-bench-history).
+# workflow (.github/workflows/pr-bench-history.yml, through the same analysis recipe).
 #
 # Collection runs as a matrix across a heterogeneous GitHub runner pool, so each leg stamps its
 # results with its OWN real hardware fingerprint (there is no longer a fixed `github` key). Analysis,
@@ -37,10 +37,8 @@ function Get-MachineKeyArgument {
     #
     # An absent or empty directory returns an empty vector, NOT an error: a total collect failure
     # (every matrix leg failed, so nothing was uploaded) legitimately yields zero keys, and the caller
-    # detects that and skips the analysis (there is no new data to survey) while the workflow's
-    # separate collect-failure alert does the notifying. Only hardware-DEPENDENT engines partition by
-    # machine key; deterministic engines (Callgrind, alloc_tracker) are exempt from the machine-key
-    # filter inside the tool, so a non-empty vector still analyzes them too.
+    # rejects analysis without collection evidence. Every engine is machine-keyed; no engine is
+    # exempt from the filter.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
@@ -52,7 +50,7 @@ function Get-MachineKeyArgument {
 
     if ([string]::IsNullOrWhiteSpace($KeyDirectory) -or -not (Test-Path -LiteralPath $KeyDirectory)) {
         Write-Verbose ("No machine-key directory at '$KeyDirectory': treating as zero collected " +
-            'keys (a total collect failure uploads nothing). The caller skips analysis.')
+            'keys. The analysis command requires collection evidence and rejects an empty set.')
         return @()
     }
 
@@ -63,7 +61,7 @@ function Get-MachineKeyArgument {
     $files = @(Get-ChildItem -LiteralPath $KeyDirectory -Recurse -File -Filter 'machine-key.txt' -ErrorAction Stop)
     if ($files.Count -eq 0) {
         Write-Verbose ("Machine-key directory '$KeyDirectory' holds no machine-key.txt files: zero " +
-            'collected keys. The caller skips analysis.')
+            'collected keys. The analysis command rejects an empty set.')
         return @()
     }
 
@@ -108,4 +106,40 @@ function Get-MachineKeyArgument {
     return , $arguments.ToArray()
 }
 
-Export-ModuleMember -Function Get-MachineKeyArgument
+function Get-BenchHistoryAnalysisCommand {
+    # Thin argument assembly shared by history and PR analysis. The Rust companion validates
+    # receipts and report decisions; this wrapper supplies the existing CLI's paths and filters.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)][string] $KeyDirectory,
+        [Parameter(Mandatory)][string] $ReportDirectory,
+        [Parameter(Mandatory)][string] $Context,
+        [Parameter(Mandatory)][string] $Base,
+        [AllowEmptyString()][string] $LocalInput = '',
+        [AllowEmptyString()][string] $Repository = ''
+    )
+    $keys = Get-MachineKeyArgument -KeyDirectory $KeyDirectory -Verbose
+    if ($null -eq $keys -or $keys.Count -eq 0) {
+        throw 'Analysis requires at least one validated collection machine key; no placeholder report will be emitted.'
+    }
+    $arguments = @(
+        'analyze', '--engine', 'all', '--target-triple', 'all'
+    ) + $keys + @(
+        '--context', $Context, '--base', $Base, '--verbose'
+        "--cache=$(Join-Path $ReportDirectory 'cache')"
+        '--no-text'
+        '--markdown', (Join-Path $ReportDirectory 'report.md')
+        '--json', (Join-Path $ReportDirectory 'report.json')
+        '--markdown-summary', (Join-Path $ReportDirectory 'summary.md')
+    )
+    if (-not [string]::IsNullOrWhiteSpace($LocalInput)) {
+        $arguments += @('--local-input', $LocalInput)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Repository)) {
+        $arguments += @('--repo', $Repository)
+    }
+    return , [string[]] $arguments
+}
+
+Export-ModuleMember -Function Get-MachineKeyArgument, Get-BenchHistoryAnalysisCommand

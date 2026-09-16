@@ -1,7 +1,9 @@
 use std::future::Future;
+use std::num::NonZero;
 
 use ohno::AppError;
 
+use crate::github::WorkflowJob;
 use crate::model::{CommitSha, Repository};
 
 /// A rolling GitHub issue.
@@ -10,6 +12,7 @@ pub(crate) struct Issue {
     pub(crate) number: u64,
     pub(crate) title: String,
     pub(crate) body: String,
+    pub(crate) bot_authored: bool,
 }
 
 /// A GitHub pull-request comment.
@@ -27,6 +30,12 @@ pub(crate) struct Comparison {
 
 /// Semantic GitHub operations used by the report lifecycles.
 pub(crate) trait GitHub {
+    fn workflow_jobs(
+        &self,
+        repository: &Repository,
+        run_id: NonZero<u64>,
+    ) -> impl Future<Output = Result<Vec<WorkflowJob>, AppError>>;
+
     fn open_issues(
         &self,
         repository: &Repository,
