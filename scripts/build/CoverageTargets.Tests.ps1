@@ -11,14 +11,30 @@ $VerbosePreference = 'Continue'
 
 BeforeAll {
     $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-    $script:coverageConfig = Join-Path $root '.config\coverage-nextest.toml'
-    $recipes = (just --justfile (Join-Path $root 'justfile') --dump --dump-format json |
-        ConvertFrom-Json -AsHashtable).recipes
-    $measurement = @($recipes['coverage-measure'].body | Where-Object { $_ -contains ' llvm-cov nextest ' })
+    # Expand the actual recipe without running its workspace builds. Consume its arguments
+    # in the fixture so broken recipe wiring cannot be hidden by test-supplied configuration.
+    $recipe = (just --justfile (Join-Path $root 'justfile') --dry-run coverage-measure 2>&1) -join "`n"
+    $LASTEXITCODE | Should -Be 0
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($recipe, [ref] $null, [ref] $parseErrors)
+    $parseErrors | Should -BeNullOrEmpty
+    $measurement = @($ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst] -and
+                    $node.GetCommandName() -eq 'cargo' -and $node.Extent.Text -match ' llvm-cov nextest '
+            }, $true))
     $measurement.Count | Should -Be 1
-    $commandText = ($measurement[0] | Where-Object { $_ -is [string] }) -join ''
-    $script:selectors = @([regex]::Matches($commandText, '--(?:lib|bins|tests|examples|benches|all-targets)\b') |
-        ForEach-Object { $_.Value })
+    $elements = $measurement[0].CommandElements
+    $script:selectors = @($elements.Extent.Text |
+        Where-Object { $_ -match '^--(?:lib|bins|tests|examples|benches|all-targets)$' })
+    $script:configurationArguments = @(
+        for ($index = 0; $index -lt $elements.Count; $index++) {
+            if ($elements[$index].Extent.Text -eq '--tool-config-file') {
+                $elements[$index].Extent.Text
+                $elements[($index + 1)].SafeGetValue()
+            }
+        }
+    )
     $script:workspace = Join-Path $TestDrive 'coverage-targets'
     $null = New-Item -ItemType Directory -Path $workspace
     $null = New-Item -ItemType Directory -Path (Join-Path $workspace '.config')
@@ -99,15 +115,25 @@ Describe 'Coverage Cargo target selection' {
         @($actual | Sort-Object) | Should -Be @($expected | Sort-Object)
     }
 
-    It 'retains successful-test stdout and stderr with the coverage tool configuration' {
+    It 'retains successful-test output only with coverage configuration=<UseCoverageConfiguration>' -TestCases @(
+        @{ UseCoverageConfiguration = $true }
+        @{ UseCoverageConfiguration = $false }
+    ) {
+        param($UseCoverageConfiguration)
+        $runnerConfiguration = if ($UseCoverageConfiguration) { $configurationArguments } else { @() }
         cargo nextest run --manifest-path (Join-Path $workspace 'Cargo.toml') `
-            --tool-config-file "coverage:$coverageConfig" --target-dir (Join-Path $workspace 'target') `
+            @runnerConfiguration --target-dir (Join-Path $workspace 'target') `
             --offline --all-features @selectors -p binary_only
         $LASTEXITCODE | Should -Be 0
         [xml] $report = Get-Content -LiteralPath (Join-Path $workspace 'target\nextest\default\junit.xml') -Raw
         $test = @($report.testsuites.testsuite.testcase | Where-Object name -EQ 'binary_case')
         $test.Count | Should -Be 1
-        $test[0].'system-out' | Should -Match 'stdout canary'
-        $test[0].'system-err' | Should -Match 'stderr canary'
+        if ($UseCoverageConfiguration) {
+            $test[0].'system-out' | Should -Match 'stdout canary'
+            $test[0].'system-err' | Should -Match 'stderr canary'
+        }
+        else {
+            $test[0].InnerXml | Should -Not -Match 'stdout canary|stderr canary'
+        }
     }
 }
