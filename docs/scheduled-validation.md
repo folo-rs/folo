@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Keep ordinary PR validation fast while running expensive checks nightly. GitHub
-Actions runs the checks and reports failures. A human or personally funded Local
+Keep ordinary PR and merge-queue validation fast while running complete standard and deep
+validation nightly. GitHub Actions runs the checks and reports failures. A human or personally funded Local
 Copilot App session triages each report into independently actionable issues and
 repairs them through ordinary pull requests.
 
 ```text
-Nightly or manual deep checks
+Nightly or manual standard + deep checks
               |
               v
 Readable failed-run issue
@@ -36,13 +36,17 @@ The local shallow and deep validation commands retain their separate meanings.
 
 ## Checks and readable failure reports
 
-**Standard validation** runs ordinary required checks.
-**[Deep validation](../.github/workflows/deep-validation.yml)** runs the complete
+**Standard validation** runs ordinary required PR checks and full-scope checks on main pushes.
+**Merge queue validation** runs only full-workspace dev Clippy, formatting and version readiness.
+**[Deep validation](../.github/workflows/deep-validation.yml)** reuses the complete standard
+workflow, including its full package, tooling and platform scope, and runs the complete
 Miri platform matrix, many-seed Miri cases, mutation shards, careful checks,
 release-profile Clippy, release builds, example execution, dependency default-feature policy checks,
 feature-powerset compilation, unused-dependency checks and ARM64 tests with benchmark
-smoke checks nightly on main. Every nightly run executes the checks; previous success does not
-skip a night. Ordinary dependency/build caches remain available.
+smoke checks nightly on main. Standard coverage includes native tests and coverage,
+documentation and doctests, minimum-dependency compilation, external-type checks, tooling checks,
+release validation and Azure backend tests. Every nightly run executes the checks; previous
+success does not skip a night. Ordinary dependency/build caches remain available.
 
 The scheduled matrix invokes the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes available to developers, with the relevant package and
@@ -55,7 +59,9 @@ mutation timeouts, setup failures and incomplete execution remain failures.
 Independent matrix jobs continue after another job fails, and diagnostic uploads
 run even on failure.
 
-Planning, checks and failure reporting are jobs in the same main-only workflow.
+Planning, standard and deep checks, and failure reporting belong to the same main-only workflow.
+Main pushes do not cancel its standard checks. Publication remains independent of post-merge
+validation, so detection does not prevent a regression from being released.
 The report job has ordinary issue-write permission and can report planning or
 toolchain setup failures before checker artifacts exist.
 
