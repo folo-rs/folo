@@ -272,9 +272,6 @@ mod operation_metrics;
 mod process_span;
 mod report;
 mod session;
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod session_tests;
 mod span_measurement;
 mod target_output;
 mod thread_span;

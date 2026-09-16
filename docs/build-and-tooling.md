@@ -96,6 +96,9 @@ The same selection applies to the unmutated baseline and each mutant. Integratio
 tests, doctests, binary targets, examples, and benchmarks are not mutation-test targets; ordinary
 testing and coverage retain their own selections. See
 [the mutation-testing policy](testing.md#mutation-testing-target-selection).
+Unit tests exercise in-process logic; real external interactions belong in
+integration targets even if they could technically be compiled by `--lib`.
+See [the test boundary](testing.md#unit-tests-stay-inside-the-process).
 
 The selectors live in `.cargo/mutants.toml` under `additional_cargo_args`, so
 cargo-mutants applies them to both its test-build and test-execution commands.

@@ -143,9 +143,13 @@ formatted cell contents, so adding a column does not require touching the layout
 JSON output omits the peak fields entirely when the peak is unavailable, which keeps them
 additive for existing consumers.
 
-Session lifecycle tests record synthetic thread-local allocations so emptiness and output
-selection do not depend on global allocator traffic. The library harness runs its output
-probe in a child process with a private Cargo target directory and captured stdout. This
-exercises the real drop and target-resolution paths without mutating the parent process's
-environment or substituting test-only output behavior. In-memory lifecycle cases also run
-under Miri; the process and filesystem probes run natively.
+Session output policy accepts the thread's unwind state and output functions, taking one
+snapshot for every enabled destination after releasing session locks. Unit tests pass
+in-memory observers and synthetic thread-local allocations to exercise silence, independent
+destination selection and snapshot consistency without child processes or global state
+changes. The same policy runs in production and under Miri.
+
+The drop adapter supplies the real unwind state and destinations. It and Cargo-target
+resolution are narrow mutation exclusions: automatic stdout and target-directory output
+belong to integration coverage, while the output policy remains covered by library unit
+tests. Explicit-directory output retains its separate serialization and persistence coverage.

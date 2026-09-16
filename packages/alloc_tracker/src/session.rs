@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::{fmt, thread};
 
 use crate::{ERR_POISONED_LOCK, Operation, OperationMetrics, Report};
 
@@ -199,14 +199,19 @@ impl Session {
                 .values()
                 .all(|op| op.lock().expect(ERR_POISONED_LOCK).is_empty())
     }
-}
 
-impl Drop for Session {
-    fn drop(&mut self) {
+    // Keep output policy independent of process-global destinations so unit tests can
+    // observe it in memory. Ref: docs/implementation.md, "Reporting".
+    fn emit_results(
+        &self,
+        panicking: bool,
+        print: impl FnOnce(&Report),
+        write: impl FnOnce(&Report),
+    ) {
         // Emitting output while the thread is already unwinding would risk a
         // double panic (which aborts the process) and would obscure the original
         // failure. See docs/error-handling.md.
-        if std::thread::panicking() {
+        if panicking {
             return;
         }
 
@@ -227,11 +232,24 @@ impl Drop for Session {
         // value, so stdout and file outputs render identical figures.
         let report = self.to_report();
         if self.emit_stdout {
-            report.print_to_stdout();
+            print(&report);
         }
         if self.emit_file {
-            report.write_to_target();
+            write(&report);
         }
+    }
+}
+
+impl Drop for Session {
+    // This adapter only supplies thread state and real output destinations. The policy
+    // stays mutation-tested in emit_results; integration tests exercise automatic output.
+    #[cfg_attr(test, mutants::skip)]
+    fn drop(&mut self) {
+        self.emit_results(
+            thread::panicking(),
+            Report::print_to_stdout,
+            Report::write_to_target,
+        );
     }
 }
 
@@ -248,10 +266,146 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use super::*;
+    use crate::counters::register_fake_allocation;
+
+    // Distinct totals reveal a missing or changed report without using the global allocator.
+    const OPERATION: &str = "work";
+    const ITERATIONS: u64 = 7;
+    const BYTES: u64 = 91;
+    const ALLOCATIONS: u64 = 13;
 
     // The type is thread-safe.
     static_assertions::assert_impl_all!(Session: Send, Sync);
 
     // Static assertions for unwind safety.
     static_assertions::assert_impl_all!(Session: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn empty_session_lifecycle() {
+        let session = Session::new().no_stdout().no_file();
+        assert!(session.is_empty());
+
+        _ = session.operation("unmeasured");
+        assert!(session.is_empty());
+
+        // Allocator activity alone cannot define a rate when no iterations completed.
+        record(&session, 0);
+        assert!(session.is_empty());
+
+        record(&session, ITERATIONS);
+        assert!(!session.is_empty());
+
+        _ = session.operation("also_unmeasured");
+        assert!(!session.is_empty());
+    }
+
+    #[test]
+    fn completed_iterations_without_allocations_are_not_empty() {
+        let session = Session::new().no_stdout().no_file();
+        let operation = session.operation(OPERATION);
+        drop(operation.measure_thread().iterations(ITERATIONS));
+
+        assert!(!session.is_empty());
+    }
+
+    #[test]
+    fn output_destinations_are_independent() {
+        for (session, expected) in [
+            (Session::new(), (true, true)),
+            (Session::new().no_stdout(), (false, true)),
+            (Session::new().no_file(), (true, false)),
+            (Session::new().no_stdout().no_file(), (false, false)),
+        ] {
+            record(&session, ITERATIONS);
+            let mut stdout = None;
+            let mut file = None;
+            session.emit_results(
+                false,
+                |report| stdout = Some(report.clone()),
+                |report| file = Some(report.clone()),
+            );
+            // The policy has already been exercised with in-memory destinations.
+            drop(session.no_stdout().no_file());
+
+            assert_eq!((stdout.is_some(), file.is_some()), expected);
+            for report in stdout.iter().chain(file.iter()) {
+                assert_recorded_work(report);
+            }
+        }
+    }
+
+    #[test]
+    fn outputs_share_a_snapshot_without_holding_session_locks() {
+        let session = Session::new();
+        record(&session, ITERATIONS);
+        let mut stdout = None;
+        let mut file = None;
+        session.emit_results(
+            false,
+            |report| {
+                stdout = Some(report.clone());
+                // Updating the session while emitting the first destination must not
+                // change the snapshot supplied to the second destination.
+                drop(session.operations.try_lock().unwrap());
+                record(&session, ITERATIONS);
+            },
+            |report| file = Some(report.clone()),
+        );
+        drop(session.no_stdout().no_file());
+
+        assert_recorded_work(&stdout.unwrap());
+        assert_recorded_work(&file.unwrap());
+    }
+
+    #[test]
+    fn unused_session_emits_nothing() {
+        assert_silent(Session::new(), false);
+    }
+
+    #[test]
+    fn unmeasured_operations_emit_nothing() {
+        let session = Session::new();
+        _ = session.operation(OPERATION);
+        assert_silent(session, false);
+    }
+
+    #[test]
+    fn zero_iterations_emit_nothing() {
+        let session = Session::new();
+        record(&session, 0);
+        assert_silent(session, false);
+    }
+
+    #[test]
+    fn unwinding_emits_nothing() {
+        let session = Session::new();
+        record(&session, ITERATIONS);
+        assert_silent(session, true);
+    }
+
+    fn record(session: &Session, iterations: u64) {
+        let operation = session.operation(OPERATION);
+        let _span = operation.measure_thread().iterations(iterations);
+        register_fake_allocation(BYTES, ALLOCATIONS);
+    }
+
+    fn assert_silent(session: Session, panicking: bool) {
+        let mut stdout = false;
+        let mut file = false;
+        session.emit_results(panicking, |_| stdout = true, |_| file = true);
+        drop(session.no_stdout().no_file());
+
+        assert!(!stdout);
+        assert!(!file);
+    }
+
+    fn assert_recorded_work(report: &Report) {
+        let operations = report.operations().collect::<Vec<_>>();
+        assert_eq!(operations.len(), 1);
+        let (name, operation) = operations.first().unwrap();
+        assert_eq!(*name, OPERATION);
+        assert_eq!(operation.total_iterations(), ITERATIONS);
+        assert_eq!(operation.total_bytes_allocated(), BYTES);
+        assert_eq!(operation.total_allocations_count(), ALLOCATIONS);
+    }
 }
