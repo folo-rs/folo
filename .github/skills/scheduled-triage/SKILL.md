@@ -94,6 +94,10 @@ does not establish one. Mark tentative scope and relationships as uncertain.
 These ordinary notes support intake's overlap/stacking assessment, not package
 reservations, version assignments or authorization to start a repair. Do not
 require a complete release plan or invent dependencies to fill a template.
+Link related findings that could share investigation, test-coverage work or
+validation in one repair session, explaining the common scope when evident.
+Keep independently actionable problems as separate issues even when intake can
+repair them together; grouping execution does not establish duplicate identity.
 
 Add `needs-human` for permissions, policy decisions or external intervention,
 explaining the needed action. Infrastructure recovery may resolve a problem with
