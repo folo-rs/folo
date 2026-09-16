@@ -6,11 +6,10 @@
 //! upload source for Azure. Generation is CPU-bound (millions of small records
 //! serialized to JSON), so it is fanned out across the available cores.
 
-use std::fs;
 use std::num::NonZero;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::thread;
+use std::{fs, thread};
 
 use cbh_codec as codec;
 use cbh_model::{
@@ -109,7 +108,7 @@ pub(crate) fn seed(
             .to_owned()
     });
 
-    let workers = thread::available_parallelism().unwrap_or(NonZero::MIN);
+    let workers = thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN);
     let bytes = write_tasks(root, scenario, sets, &tasks, workers, &write_file)?;
     let stats = SeedStats {
         objects: tasks.len(),
@@ -541,7 +540,7 @@ mod write_tests {
     fn collect_objects(
         objects: &Mutex<BTreeMap<PathBuf, Vec<u8>>>,
     ) -> impl Fn(&Path, &[u8]) -> Result<(), Error> + '_ {
-        |path, stored| {
+        move |path, stored| {
             let previous = objects
                 .lock()
                 .unwrap()
@@ -694,7 +693,7 @@ mod write_tests {
             SCENARIO,
             &sets(),
             &tasks()[..1],
-            NonZero::MIN,
+            NonZero::<usize>::MIN,
             &|_, _| panic!(),
         )
         .unwrap_err();
