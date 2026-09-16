@@ -246,12 +246,6 @@ mod tests {
             api,
             package("inherited", PackageStatus::NeedsIncrement, ""),
             pending,
-            package("unchanged", PackageStatus::Unchanged, ""),
-            PackageClass::new_package(
-                "new",
-                Version::new(1, 0, 0),
-                PathBuf::from("new/Cargo.toml"),
-            ),
         ]);
         data.work_tree.version_targets.push(VersionTarget {
             name: "helper".to_owned(),
@@ -296,7 +290,7 @@ mod tests {
         let json: Value = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
         assert_eq!(json.get("schema_version"), Some(&json!(SCHEMA_VERSION)));
         assert_eq!(json.get("head"), Some(&json!("classified-head")));
-        assert_eq!(json.get("packages").unwrap().as_array().unwrap().len(), 5);
+        assert_eq!(json.get("packages").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(
             json.pointer("/packages/0").unwrap(),
             &json!({
@@ -318,12 +312,7 @@ mod tests {
             json.pointer("/packages/2/dependents"),
             Some(&json!(["api"]))
         );
-        for index in [1, 3, 4] {
-            assert!(
-                json.pointer(&format!("/packages/{index}/diff_path"))
-                    .is_none()
-            );
-        }
+        assert!(json.pointer("/packages/1/diff_path").is_none());
         assert_eq!(
             json.get("non_publishable_packages").unwrap(),
             &json!([
@@ -343,6 +332,20 @@ mod tests {
                 quote_path(&directory.join("report.json").display().to_string()),
             )
         );
+    }
+
+    #[test]
+    fn unchanged_and_new_packages_have_no_patch_name() {
+        for data in [
+            package("unchanged", PackageStatus::Unchanged, ""),
+            PackageClass::new_package(
+                "new",
+                Version::new(1, 0, 0),
+                PathBuf::from("new/Cargo.toml"),
+            ),
+        ] {
+            assert!(diff_file_name(&data).is_none());
+        }
     }
 
     #[test]
