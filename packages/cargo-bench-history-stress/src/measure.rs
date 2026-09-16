@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn recorded_cpu_reflects_a_measured_span() {
+    fn recorded_cpu_forwards_the_first_duration_exactly() {
         // An arbitrary subsecond value checks exact forwarding without depending
         // on host clock resolution. The distinct later value protects selection.
         let measured = Duration::from_nanos(123_456_789);
