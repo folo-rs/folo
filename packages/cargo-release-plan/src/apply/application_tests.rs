@@ -13,41 +13,28 @@ use crate::{ParseTomlError, UnknownPlanTargetError};
 
 #[test]
 fn expanded_or_captured_plans_dispatch_without_manifest_only_operations() {
-    for stage in [PlanStage::Proposed, PlanStage::Expanded] {
-        for captured in [false, true] {
-            for dry_run in [false, true] {
-                let plan = plan(stage, captured);
-                let called = Cell::new(false);
-                let output = apply_plan(
-                    &plan,
-                    dry_run,
-                    Verbose::new(false),
-                    |received, received_dry_run| {
-                        assert_eq!(received, &plan);
-                        assert_eq!(received_dry_run, dry_run);
-                        called.set(true);
-                        Ok("captured result".to_owned())
-                    },
-                    || {
-                        assert_eq!(stage, PlanStage::Proposed);
-                        assert!(!captured);
-                        Ok(work_tree())
-                    },
-                    |path| Ok(manifests().get(path).unwrap().clone()),
-                    |_| Ok(()),
-                )
-                .unwrap();
-                match (stage, captured) {
-                    (PlanStage::Proposed, false) => {
-                        assert!(!called.get());
-                        assert_eq!(output, manifest_only_summary(dry_run));
-                    }
-                    _ => {
-                        assert!(called.get());
-                        assert_eq!(output, "captured result");
-                    }
-                }
-            }
+    for (stage, captured) in [
+        (PlanStage::Proposed, true),
+        (PlanStage::Expanded, false),
+        (PlanStage::Expanded, true),
+    ] {
+        let plan = plan(stage, captured);
+        for dry_run in [false, true] {
+            let output = apply_plan(
+                &plan,
+                dry_run,
+                Verbose::new(false),
+                |received, received_dry_run| {
+                    assert_eq!(received, &plan);
+                    assert_eq!(received_dry_run, dry_run);
+                    Ok("captured result".to_owned())
+                },
+                || panic!(),
+                |_| panic!(),
+                |_| panic!(),
+            )
+            .unwrap();
+            assert_eq!(output, "captured result");
         }
     }
 }
@@ -89,6 +76,68 @@ fn edits_include_root_and_unique_members_with_complete_rewritten_contents() {
         assert_eq!(&edit.original, originals.get(&edit.path).unwrap());
         assert_eq!(&edit.updated, expected.get(&edit.path).unwrap());
     }
+}
+
+#[test]
+fn root_edit_rewrites_dependencies_without_changing_shared_package_version() {
+    let original = concat!(
+        "# workspace root\n[package]\nname = 'root'\nversion = '0.1.0' # local\n",
+        "[workspace.package]\nversion = '0.1.0'\n",
+        "[workspace.dependencies]\nalias = { package = 'api', path = 'api', version = '=0.1.0' }\n",
+        "[dependencies]\napi = { path = 'api', version = '^0.1.0' }\n",
+    );
+    let expected = concat!(
+        "# workspace root\n[package]\nname = 'root'\nversion = \"0.2.0\" # local\n",
+        "[workspace.package]\nversion = '0.1.0'\n",
+        "[workspace.dependencies]\nalias = { package = 'api', path = 'api', version = \"=0.2.0\" }\n",
+        "[dependencies]\napi = { path = 'api', version = \"0.2.0\" }\n",
+    );
+    let mut tree = work_tree();
+    tree.member_manifests.clear();
+    let edits = compute_edits_with(&tree, &versions("0.2.0"), Verbose::new(false), |_| {
+        Ok(original.to_owned())
+    })
+    .unwrap();
+    assert_eq!(edits.len(), 1);
+    let edit = edits.first().unwrap();
+    assert_eq!(edit.original, original);
+    assert_eq!(edit.updated, expected);
+}
+
+#[test]
+fn member_edit_rewrites_each_dependency_kind_and_preserves_versionless_entries() {
+    let original = concat!(
+        "[package]\nname = 'helper'\nversion = '0.1.0'\npublish = false\n",
+        "[dependencies]\nalias = { workspace = true }\n",
+        "[build-dependencies]\napi = { path = '../api', version = '=0.1.0' }\n",
+        "[dev-dependencies]\napi = { path = '../api' }\n",
+        "[target.'cfg(unix)'.dependencies.api]\npath = '../api'\nversion = '^0.1.0'\n",
+    );
+    let expected = concat!(
+        "[package]\nname = 'helper'\nversion = \"0.2.0\"\npublish = false\n",
+        "[dependencies]\nalias = { workspace = true }\n",
+        "[build-dependencies]\napi = { path = '../api', version = \"=0.2.0\" }\n",
+        "[dev-dependencies]\napi = { path = '../api' }\n",
+        "[target.'cfg(unix)'.dependencies.api]\npath = '../api'\nversion = \"0.2.0\"\n",
+    );
+    let mut tree = work_tree();
+    let path = tree.workspace_root.join("helper").join("Cargo.toml");
+    tree.member_manifests = vec![path.clone()];
+    let edits = compute_edits_with(
+        &tree,
+        &versions("0.2.0"),
+        Verbose::new(false),
+        |read_path| {
+            // This scenario only transforms the member; the virtual root has no declarations.
+            Ok(if read_path == path { original } else { "" }.to_owned())
+        },
+    )
+    .unwrap();
+    assert_eq!(edits.len(), 2);
+    let edit = edits.last().unwrap();
+    assert_eq!(edit.path, path);
+    assert_eq!(edit.original, original);
+    assert_eq!(edit.updated, expected);
 }
 
 #[test]
@@ -174,6 +223,7 @@ fn dry_run_computes_the_full_edit_set_without_writing() {
 
 #[test]
 fn unchanged_application_does_not_write() {
+    let originals = manifests();
     let mut plan = plan(PlanStage::Proposed, false);
     for increment in &mut plan.increments {
         increment.version = Some("0.1.0".to_owned());
@@ -184,7 +234,7 @@ fn unchanged_application_does_not_write() {
         Verbose::new(false),
         |_, _| panic!(),
         || Ok(work_tree()),
-        |path| Ok(manifests().get(path).unwrap().clone()),
+        |path| Ok(originals.get(path).unwrap().clone()),
         |_| panic!(),
     )
     .unwrap();
@@ -225,44 +275,20 @@ fn workspace_and_plan_failures_precede_manifest_acquisition() {
 }
 
 #[test]
-fn read_and_parse_failures_discard_earlier_computed_edits_without_writes() {
-    for parse_failure in [false, true] {
-        let originals = manifests();
-        let mut reads = Vec::new();
-        let paths = unique_paths();
-        let last = paths.last().unwrap();
-        let error = apply_plan(
-            &plan(PlanStage::Proposed, false),
-            false,
-            Verbose::new(false),
-            |_, _| panic!(),
-            || Ok(work_tree()),
-            |path| {
-                reads.push(path.to_path_buf());
-                if path == last {
-                    if parse_failure {
-                        Ok("[package".to_owned())
-                    } else {
-                        Err(ApplicationFailure::new().into())
-                    }
-                } else {
-                    Ok(originals.get(path).unwrap().clone())
-                }
-            },
-            |_| panic!(),
-        )
-        .unwrap_err();
-        assert_eq!(reads, paths);
-        if parse_failure {
-            assert!(error.find_source::<ParseTomlError>().is_some());
-        } else {
-            assert!(error.find_source::<ApplicationFailure>().is_some());
-        }
-    }
+fn read_failure_discards_earlier_computed_edits_without_writes() {
+    let error = failed_manifest_application(Err(ApplicationFailure::new().into()));
+    assert!(error.find_source::<ApplicationFailure>().is_some());
+}
+
+#[test]
+fn parse_failure_discards_earlier_computed_edits_without_writes() {
+    let error = failed_manifest_application(Ok("[package".to_owned()));
+    assert!(error.find_source::<ParseTomlError>().is_some());
 }
 
 #[test]
 fn write_failure_stops_subsequent_writes_and_is_not_reported_as_success() {
+    let originals = manifests();
     let mut writes = Vec::new();
     let error = apply_plan(
         &plan(PlanStage::Proposed, false),
@@ -270,7 +296,7 @@ fn write_failure_stops_subsequent_writes_and_is_not_reported_as_success() {
         Verbose::new(false),
         |_, _| panic!(),
         || Ok(work_tree()),
-        |path| Ok(manifests().get(path).unwrap().clone()),
+        |path| Ok(originals.get(path).unwrap().clone()),
         |edit| {
             writes.push(edit.path.clone());
             Err(ApplicationFailure::new().into())
@@ -279,6 +305,33 @@ fn write_failure_stops_subsequent_writes_and_is_not_reported_as_success() {
     .unwrap_err();
     assert!(error.find_source::<ApplicationFailure>().is_some());
     assert_eq!(writes, [PathBuf::from("workspace").join("Cargo.toml")]);
+}
+
+fn failed_manifest_application(failure: Result<String, AppError>) -> AppError {
+    let originals = manifests();
+    let mut failure = Some(failure);
+    let mut reads = Vec::new();
+    let paths = unique_paths();
+    let last = paths.last().unwrap();
+    let error = apply_plan(
+        &plan(PlanStage::Proposed, false),
+        false,
+        Verbose::new(false),
+        |_, _| panic!(),
+        || Ok(work_tree()),
+        |path| {
+            reads.push(path.to_path_buf());
+            if path == last {
+                failure.take().unwrap()
+            } else {
+                Ok(originals.get(path).unwrap().clone())
+            }
+        },
+        |_| panic!(),
+    )
+    .unwrap_err();
+    assert_eq!(reads, paths);
+    error
 }
 
 fn plan(stage: PlanStage, captured: bool) -> PlanFile {
@@ -364,20 +417,11 @@ fn manifests() -> BTreeMap<PathBuf, String> {
     unique_paths()
         .into_iter()
         .zip([
-            concat!(
-                "# workspace root\n[package]\nname = 'root'\nversion = '0.1.0' # local\n",
-                "[workspace]\nmembers = ['api', 'helper', 'untouched']\n",
-                "[workspace.package]\nversion = '0.1.0'\n",
-                "[workspace.dependencies]\nalias = { package = 'api', path = 'api', version = '=0.1.0' }\n",
-                "[dependencies]\napi = { path = 'api', version = '^0.1.0' }\n",
-            ),
+            "[package]\nname = 'root'\nversion = '0.1.0' # local\n",
             "[package]\nname = 'api'\nversion = '0.1.0'\n",
             concat!(
                 "[package]\nname = 'helper'\nversion = '0.1.0'\npublish = false\n",
-                "[dependencies]\nalias = { workspace = true }\n",
-                "[build-dependencies]\napi = { path = '../api', version = '=0.1.0' }\n",
-                "[dev-dependencies]\napi = { path = '../api' }\n",
-                "[target.'cfg(unix)'.dependencies.api]\npath = '../api'\nversion = '^0.1.0'\n",
+                "[dependencies]\napi = { path = '../api', version = '=0.1.0' }\n",
             ),
             "# preserve spacing and quoting\n[package]\nname = 'untouched'\nversion  =  '0.1.0'\n",
         ])
@@ -390,14 +434,7 @@ fn updated_manifests() -> BTreeMap<PathBuf, String> {
     let paths = unique_paths();
     updated.insert(
         paths[0].clone(),
-        concat!(
-            "# workspace root\n[package]\nname = 'root'\nversion = \"0.2.0\" # local\n",
-            "[workspace]\nmembers = ['api', 'helper', 'untouched']\n",
-            "[workspace.package]\nversion = '0.1.0'\n",
-            "[workspace.dependencies]\nalias = { package = 'api', path = 'api', version = \"=0.2.0\" }\n",
-            "[dependencies]\napi = { path = 'api', version = \"0.2.0\" }\n",
-        )
-        .to_owned(),
+        "[package]\nname = 'root'\nversion = \"0.2.0\" # local\n".to_owned(),
     );
     updated.insert(
         paths[1].clone(),
@@ -407,10 +444,7 @@ fn updated_manifests() -> BTreeMap<PathBuf, String> {
         paths[2].clone(),
         concat!(
             "[package]\nname = 'helper'\nversion = \"0.2.0\"\npublish = false\n",
-            "[dependencies]\nalias = { workspace = true }\n",
-            "[build-dependencies]\napi = { path = '../api', version = \"=0.2.0\" }\n",
-            "[dev-dependencies]\napi = { path = '../api' }\n",
-            "[target.'cfg(unix)'.dependencies.api]\npath = '../api'\nversion = \"0.2.0\"\n",
+            "[dependencies]\napi = { path = '../api', version = \"=0.2.0\" }\n",
         )
         .to_owned(),
     );
