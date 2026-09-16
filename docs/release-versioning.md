@@ -108,8 +108,9 @@ increments. And a package's creation commit counts as a version change (absent �
 package added and released in one pull request needs no special handling.
 
 The base revision defaults to `origin/main`. CI passes the release branch's remote-tracking
-revision on a `pull_request` or `push` run, and the commit the queue rebased onto
-(`merge_group.base_sha`) on a merge-queue run. Using the original pull-request target inside the
+revision on a `pull_request` run, the tested main commit on push and scheduled/manual runs,
+and the commit the queue rebased onto (`merge_group.base_sha`) on a merge-queue run.
+Using the original pull-request target inside the
 queue would let two branches that both incremented `0.6.1 → 0.6.2` both look valid. A stale base
 is otherwise safe rather than unsound: it can only move the anchor further back, which reports
 more, never less. The check needs full history (`fetch-depth: 0`) and that base revision, and
@@ -127,9 +128,9 @@ checks run, so once the first has merged, the second's base contains 0.6.2 and i
 version has *not* increased relative to its anchor — while its content has. The check demands
 0.6.3, the skill applies it, and the pull request re-enters the queue.
 
-Requiring branches to be up to date *without* a queue would give the same guarantee and
-serialise the author: every competing merge is a manual rebase and a second skill run. The
-queue performs the rebase. "Require branches to be up to date" is not used.
+Requiring branches to be up to date *without* a queue gives the same guarantee and
+serialises the author: every competing merge is a manual rebase and a second skill run.
+When a required merge queue replaces that policy, the queue performs the rebase.
 
 The queue can also batch two pull requests that both increment the same package to the same
 version into one merge. That lands as one combined release of that version; the invariant
@@ -512,15 +513,15 @@ release set.
 
 ## The GitHub check
 
-Standard validation includes a `merge_group` trigger so the queue actually runs the workflow. A required
-check that never fires as `merge_group` is a failed check, and the queue never merges. Merge-queue
-runs use the same pruned job set as pull requests; `push` to `main` remains the full backstop.
-Delta analysis on a queue run uses `merge_group.base_sha` (the commit the queue rebased onto),
-not a freshly fetched `origin/main`, so scoping cannot drift from the version check's base.
+Merge queue validation handles `merge_group` and reports the same `required-checks` name as
+Standard validation does for pull requests. A required check that never fires for the queue
+blocks merging. Queue validation runs full-workspace dev Clippy, formatting and version readiness
+without delta, binstall or SemVer checks. Full standard validation runs on main pushes and
+within scheduled/manual validation, alongside the deep suite.
 
-The Standard validation concurrency group (`github.head_ref || github.ref`) distinguishes
-queue entries: `head_ref` is empty there and `github.ref` is the unique queue ref. The
-close-companion stays pull-request-only.
+The queue workflow has its own queue-ref concurrency group. Standard validation's
+close-companion stays pull-request-only, and scheduled callers are isolated from main-push
+cancellation.
 
 ### `validate-versions`
 
@@ -532,7 +533,9 @@ packages the current pull request did not touch.
 
 The job uses a full-history checkout because a truncated clone can hide the commit that last
 changed a version and report a package as unchanged. Its version step receives
-`RELEASE_PLAN_BASE` from the merge-group base SHA or the default release branch.
+`RELEASE_PLAN_BASE` from the default release branch on PRs or the immutable tested commit on
+main pushes and scheduled/manual runs. The queue's separate version-readiness job uses
+`merge_group.base_sha`, the release-branch commit its candidate was built upon.
 
 The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
 also emits `semver_targets` for the compatibility step. The PowerShell side stays thin — it

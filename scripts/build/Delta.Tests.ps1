@@ -265,12 +265,14 @@ Describe 'Get-DeltaOutput' {
 }
 
 Describe 'Get-DeltaWorkflowOutput' {
-    It 'returns full-workspace outputs for push without running cargo-delta' {
+    It 'returns full-workspace outputs for <_> without running cargo-delta' -ForEach @(
+        'push', 'schedule', 'workflow_dispatch'
+    ) {
         $result = @(
             Get-DeltaWorkflowOutput `
-                -EventName 'push' `
-                -BaselineRevision 'ignored-for-push' `
-                -Analyze { throw 'cargo-delta should not run for push validation.' }
+                -EventName $_ `
+                -BaselineRevision 'unused' `
+                -Analyze { throw 'cargo-delta should not run for full validation.' }
         )
 
         $result | Should -Be @('packages=', 'packages_json=[]', 'skip_all=false')
@@ -294,11 +296,11 @@ Describe 'Get-DeltaWorkflowOutput' {
         $script:deltaArgs.ContainsKey('BaselineRevision') | Should -BeFalse
     }
 
-    It 'passes an explicit merge_group baseline revision through to cargo-delta' {
+    It 'passes an explicit baseline revision through to cargo-delta' {
         $script:deltaArgs = $null
         $result = @(
             Get-DeltaWorkflowOutput `
-                -EventName 'merge_group' `
+                -EventName 'pull_request' `
                 -BaselineRevision 'abc123' `
                 -Analyze {
                     param([hashtable] $Argument)
@@ -314,5 +316,13 @@ Describe 'Get-DeltaWorkflowOutput' {
         )
         $script:deltaArgs['SkipFetch'] | Should -BeTrue
         $script:deltaArgs['BaselineRevision'] | Should -Be 'abc123'
+    }
+
+    It 'rejects events outside Standard validation rather than running delta' -ForEach @(
+        'merge_group', 'workflow_run', ''
+    ) {
+        $script:analyzed = $false
+        { Get-DeltaWorkflowOutput -EventName $_ -Analyze { $script:analyzed = $true; @() } } | Should -Throw
+        $script:analyzed | Should -BeFalse
     }
 }

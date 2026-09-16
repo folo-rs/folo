@@ -2,6 +2,10 @@
 
 # Protects Standard validation's change domains, whole-candidate Git comparisons and explicit
 # no-work results. Native Git fixtures cover deletions/renames without GitHub or a Rust setup.
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ValidationPlan.psm1') -Force
     $script:allDomains = @('analyzer', 'bench-history', 'book', 'build', 'release', 'scheduled', 'setup', 'utility')
@@ -74,16 +78,21 @@ Describe 'Non-Cargo change domains' {
         $plan.script_domains | Should -Be @('book', 'build', 'scheduled')
     }
 
-    It 'runs all tooling on main without needing a comparison' {
-        $plan = Get-ValidationWorkflowPlan -EventName push -EventData @{ ref = 'refs/heads/main' }
+    It 'runs all tooling for <_> on main without needing a comparison' -ForEach @(
+        'push', 'schedule', 'workflow_dispatch'
+    ) {
+        $plan = Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main'
         $plan.workflows | Should -BeTrue
         $plan.script_analysis | Should -BeTrue
         $plan.script_domains | Should -Be $allDomains
     }
 
-    It 'rejects unsupported workflow events and non-main pushes' {
-        { Get-ValidationWorkflowPlan -EventName workflow_dispatch -EventData @{} } | Should -Throw
-        { Get-ValidationWorkflowPlan -EventName push -EventData @{ ref = 'refs/heads/feature' } } | Should -Throw
+    It 'rejects full-scope <_> runs outside main' -ForEach @('push', 'schedule', 'workflow_dispatch') {
+        { Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/feature' } | Should -Throw
+    }
+
+    It 'rejects events that do not belong to Standard validation' -ForEach @('merge_group', 'workflow_run') {
+        { Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main' } | Should -Throw
     }
 }
 
@@ -169,13 +178,9 @@ Describe 'Complete Git change sets' {
             git commit --quiet -m 'Fixture change'
             return git rev-parse HEAD
         }
-        function Get-FixturePlan([string] $Kind, [string] $Base, [string] $Head) {
-            $eventData = if ($Kind -ceq 'pull_request') {
-                @{ pull_request = @{ base = @{ sha = $Base }; head = @{ sha = $Head } } }
-            } else {
-                @{ merge_group = @{ base_sha = $Base; head_sha = $Head } }
-            }
-            Get-ValidationWorkflowPlan -EventName $Kind -EventData $eventData
+        function Get-FixturePlan([string] $Base, [string] $Head) {
+            $eventData = @{ pull_request = @{ base = @{ sha = $Base }; head = @{ sha = $Head } } }
+            Get-ValidationWorkflowPlan -EventName pull_request -EventData $eventData -Ref 'refs/pull/1/merge'
         }
     }
     AfterEach { Pop-Location }
@@ -185,7 +190,7 @@ Describe 'Complete Git change sets' {
         $null = Save-FixtureCommit
         Add-Content -LiteralPath 'README.md' -Value 'later'
         $head = Save-FixtureCommit
-        (Get-FixturePlan pull_request $base $head).script_domains | Should -Be @('book')
+        (Get-FixturePlan $base $head).script_domains | Should -Be @('book')
     }
 
     It 'excludes changes made only on the advanced PR base branch' {
@@ -194,29 +199,29 @@ Describe 'Complete Git change sets' {
         git switch --quiet -c advanced-base $base
         Set-Content -LiteralPath 'scripts/setup/unrelated.ps1' -Value '# base-only'
         $newBase = Save-FixtureCommit
-        (Get-FixturePlan pull_request $newBase $head).script_domains | Should -Be @('book')
+        (Get-FixturePlan $newBase $head).script_domains | Should -Be @('book')
     }
 
-    It 'includes both domains of a rename and the entire merge group' {
+    It 'includes both domains of a rename across the entire pull request' {
         Move-Item -LiteralPath 'scripts/book/old name.ps1' -Destination 'scripts/build/new name.ps1'
         $null = Save-FixtureCommit
-        Add-Content -LiteralPath 'README.md' -Value 'another queued change'
+        Add-Content -LiteralPath 'README.md' -Value 'later change'
         $head = Save-FixtureCommit
-        (Get-FixturePlan merge_group $base $head).script_domains | Should -Be @('book', 'build', 'scheduled')
+        (Get-FixturePlan $base $head).script_domains | Should -Be @('book', 'build', 'scheduled')
     }
 
     It 'retains deletions and emits an explicit empty plan for identical commits' {
         Remove-Item -LiteralPath 'scripts/book/old name.ps1'
         $head = Save-FixtureCommit
-        (Get-FixturePlan pull_request $base $head).script_domains | Should -Be @('book')
-        $empty = Get-FixturePlan merge_group $head $head
+        (Get-FixturePlan $base $head).script_domains | Should -Be @('book')
+        $empty = Get-FixturePlan $head $head
         $empty.script_domains | Should -BeNullOrEmpty
         $empty.script_analysis | Should -BeFalse
         $empty.workflows | Should -BeFalse
     }
 
     It 'fails for missing or unavailable event revisions' {
-        { Get-ValidationWorkflowPlan -EventName pull_request -EventData @{} } | Should -Throw
-        { Get-FixturePlan merge_group $base ('f' * 40) } | Should -Throw
+        { Get-ValidationWorkflowPlan -EventName pull_request -EventData @{} -Ref 'refs/pull/1/merge' } | Should -Throw
+        { Get-FixturePlan $base ('f' * 40) } | Should -Throw
     }
 }

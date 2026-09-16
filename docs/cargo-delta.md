@@ -36,8 +36,8 @@ continue to scope to their own package.)
 The comparison anchor depends on the environment:
 
 * Local `just delta*` recipes and pull request builds use `origin/main`.
-* Merge-queue builds use `merge_group.base_sha`, the commit the queue rebased onto.
-* Push-to-main builds validate the full workspace rather than deriving an affected package set.
+* Merge-queue, push-to-main and scheduled/manual main builds validate their checks at full
+  workspace scope rather than deriving an affected package set.
 
 Command-level validation, fetch policy mechanics and cargo-delta parameter wiring live in
 `scripts/build/Delta.psm1`.
@@ -75,8 +75,9 @@ just package="events_once infinity_pool" validate-local
 
 ## CI behavior
 
-Pull request and merge-queue builds use delta to validate only impacted packages. Push-to-main
-builds act as a backstop and always validate the full workspace. If the backstop catches something
+Pull request builds use delta to validate only impacted packages. Push-to-main and scheduled
+builds act as backstops and always validate the full workspace. Merge-queue validation also
+avoids delta but runs only its lightweight check set. If a backstop catches something
 that the delta build missed, the `delta.toml` configuration should be updated to prevent
 recurrence.
 

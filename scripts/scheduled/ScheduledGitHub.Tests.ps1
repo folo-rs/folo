@@ -85,6 +85,34 @@ Describe 'Same-workflow failure reporting' {
             Test-Path -LiteralPath (Join-Path $script:directory 'job-20.log') | Should -BeFalse
             Should -Invoke Read-ScheduledArtifactText -Times 0
         }
+        It 'reports nested standard checks alongside deep failures in the same issue' {
+            $script:jobs[0].name = 'standard / test-x64 (ubuntu-latest)'
+            $deepFailure = $script:jobs[0].Clone()
+            $deepFailure.id = 23
+            $deepFailure.name = 'miri-linux'
+            $deepFailure.html_url = 'https://github.com/example/repo/actions/runs/10/job/23'
+            $script:jobs += $deepFailure
+            Mock Save-ScheduledGitHubFile {
+                param($Endpoint, $Path)
+                $text = if ($Endpoint.EndsWith('/20/logs')) {
+                    '##[error]Combined-change assertion failed'
+                } else { '##[error]Miri detected undefined behavior' }
+                Set-Content -LiteralPath $Path -Value $text
+            }
+
+            $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+
+            $script:writes.Count | Should -Be 1
+            $text = $script:writes[0].body.body
+            $text | Should -Match ([regex]::Escape($script:jobs[0].name))
+            $text | Should -Match ([regex]::Escape($deepFailure.name))
+            $text | Should -Match 'Combined-change assertion failed'
+            $text | Should -Match 'Miri detected undefined behavior'
+            $text | Should -Not -Match 'independent-success'
+            foreach ($jobId in @(20, 23)) {
+                $text | Should -Match "/job/$jobId"
+            }
+        }
         It 'does not report <Conclusion> jobs without a completed failure' -ForEach @(
             @{ Conclusion = 'success' }, @{ Conclusion = 'skipped' },
             @{ Conclusion = 'cancelled' }, @{ Conclusion = 'neutral' }

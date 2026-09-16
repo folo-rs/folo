@@ -83,13 +83,13 @@ function Get-DeltaOutput {
 
 function Get-DeltaWorkflowOutput {
     # Shapes Standard validation's Cargo scope outputs while keeping workflow-only branching under
-    # Pester coverage. Push-to-main runs must keep the full workspace as the validation backstop;
-    # pull requests and merge-queue runs use cargo-delta with the checkout's already-complete
-    # history.
+    # Pester coverage. Main pushes and scheduled/manual callers keep the full workspace;
+    # only pull requests use cargo-delta with the checkout's already-complete history.
+    # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)][AllowEmptyString()][string] $EventName,
+        [Parameter(Mandatory)][ValidateSet('push', 'pull_request', 'schedule', 'workflow_dispatch')][string] $EventName,
         [AllowEmptyString()][string] $BaselineRevision = '',
         [scriptblock] $Analyze = {
             param([hashtable] $Argument)
@@ -97,8 +97,8 @@ function Get-DeltaWorkflowOutput {
         }
     )
 
-    if ($EventName -eq 'push') {
-        Write-Host 'Push to main detected, running full workspace validation.'
+    if ($EventName -cne 'pull_request') {
+        Write-Host "$EventName selects full workspace validation without cargo-delta."
         return @(
             'packages='
             'packages_json=[]'
@@ -154,9 +154,8 @@ function Invoke-CargoDelta {
     param(
         [string] $ConfigPath = (Resolve-Path 'delta.toml').Path,
         [switch] $SkipFetch,
-        # Revision whose tree anchors the Git comparison. Local runs and pull requests use
-        # origin/main; merge-queue runs pass merge_group.base_sha so scoping matches the queued
-        # candidate's base.
+        # Revision whose tree anchors the Git comparison. Local runs and pull requests default
+        # to the release branch; callers may pin another comparison commit explicitly.
         [string] $BaselineRevision = 'origin/main'
     )
 

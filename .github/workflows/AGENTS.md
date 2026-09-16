@@ -69,12 +69,16 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   depending on it would file an issue about a cancelled run.
 - The job's GitHub check name is the literal `required-checks` (`name: required-checks`).
   Do not rename it.
-- Merge-queue runs use the same pruned job set as pull requests. A `github.event_name ==
-  'push'` guard that means "full matrix" must stay keyed on `push`, not on
-  `!= 'pull_request'`, or a `merge_group` run would take the full matrix.
+- Keep `merge_group` exclusive to `merge-queue-validation.yml`, using the literal
+  `required-checks` fan-in name and requiring every queue job to succeed. Run only
+  full-workspace dev Clippy, formatting and version readiness there; do not add delta.
+- Keep Standard validation reusable by Deep validation. Only PR events may prune its
+  package/tooling scope or platform matrices. Scheduled/manual calls must not share
+  a cancellation group with main pushes, and their failures belong to the parent reporter.
 - Keep PR/push CI shallow. Repair PRs use ordinary required checks and human review of relevant
   deep-check results; do not introduce a repair registry or special merge gate.
-- Keep deep validation full-scope and main-only, with failure reporting in the same workflow.
+- Keep scheduled validation full-scope and main-only, covering both standard and deep checks
+  with failure reporting in the same workflow.
 - Run checks through the existing developer Just recipes. Keep toolchain, runner, argument and
   pass/fail behavior in those recipes rather than in a separate scheduled implementation.
 - Treat repair branches like other same-repository branches; do not add naming-based gates.
