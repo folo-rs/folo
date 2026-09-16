@@ -2,14 +2,14 @@ use std::fs;
 use std::process::Command;
 
 use tempfile::TempDir;
-use testing::with_watchdog;
 
 use crate::fixture::Fixture;
+use crate::scheduling::with_io_test;
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn accepts_later_library_snapshot_without_generating_a_lockfile() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         fixture.write(".github/workflows/release.yml", "name: updated fixture\n");
         fixture.git(&["rm", "Cargo.lock"]);
@@ -36,7 +36,7 @@ fn accepts_later_library_snapshot_without_generating_a_lockfile() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn rejects_changed_inherited_value_using_the_release_checker() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         fixture.write_workspace("Apache-2.0");
         let commit = fixture.commit("unreleased inherited license");
@@ -50,7 +50,7 @@ fn rejects_changed_inherited_value_using_the_release_checker() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn accepts_older_candidate_before_release_line_version_advances() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         let old = fixture.head();
         let lockfile = fs::read(fixture.root().join("Cargo.lock")).unwrap();
@@ -78,7 +78,7 @@ fn accepts_older_candidate_before_release_line_version_advances() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn rejects_requested_version_after_main_advances() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         fixture.write_package("1.1.0");
         let main = fixture.commit("next release");
@@ -94,7 +94,7 @@ fn rejects_requested_version_after_main_advances() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn rejects_dirty_source_at_executable_boundary() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         let commit = fixture.head();
         fixture.write("packages/widget/src/lib.rs", "pub fn value() -> u8 { 2 }\n");
@@ -110,7 +110,7 @@ fn rejects_dirty_source_at_executable_boundary() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes the verifier against an empty directory")]
 fn reports_argument_errors_at_executable_boundary() {
-    with_watchdog(|| {
+    with_io_test(|| {
         // Parser branches belong to cli's unit tests. Here only the executable's error
         // reporting matters, so no Git repository or Cargo workspace needs to be constructed.
         let directory = TempDir::new().unwrap();
@@ -127,7 +127,7 @@ fn reports_argument_errors_at_executable_boundary() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn missing_lockfile_is_not_generated_as_a_repair() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         fixture.write("packages/widget/src/main.rs", "fn main() {}\n");
         // Anchor the binary with its lockfile before removing only that file. Otherwise the
@@ -150,7 +150,7 @@ fn missing_lockfile_is_not_generated_as_a_repair() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
 fn rejects_side_branch_even_after_a_merge_to_main() {
-    with_watchdog(|| {
+    with_io_test(|| {
         let fixture = Fixture::new();
         fixture.git(&["checkout", "-b", "feature"]);
         fixture.write("feature-notes", "not released\n");
