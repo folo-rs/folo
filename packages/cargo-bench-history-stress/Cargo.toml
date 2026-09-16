@@ -31,7 +31,6 @@ cbh_detect = { path = "../cbh_detect", default-features = false }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 tempfile = { workspace = true }
-testing = { path = "../testing", default-features = false }
 
 [lints]
 workspace = true

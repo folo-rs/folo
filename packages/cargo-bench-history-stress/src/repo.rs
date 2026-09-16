@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 
 use jiff::Timestamp;
 use tokio::io::AsyncWriteExt;
@@ -151,6 +151,9 @@ fn append_commit(
 }
 
 /// Feeds the stream to `git fast-import`, writing SHAs to the marks file.
+// Process and pipe I/O is covered by stress_smoke; exit decisions remain unit-tested.
+// Ref: docs/implementation.md, "Repository construction".
+#[cfg_attr(test, mutants::skip)]
 async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(), Error> {
     let marks_arg = format!("--export-marks={}", marks_path.display());
     let mut child = Command::new("git")
@@ -183,20 +186,21 @@ async fn import_stream(dir: &Path, marks_path: &Path, stream: &[u8]) -> Result<(
         .wait_with_output()
         .await
         .map_err(|error| fail(format!("git fast-import did not complete: {error}")))?;
-    if !output.status.success() {
-        return Err(fail(format!(
-            "git fast-import failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(())
+    check_git_output("fast-import", &output)
 }
 
-/// Parses the export-marks file into a `mark -> commit ID` map.
+/// Reads Git's exported marks and delegates their interpretation.
+// File acquisition is an integration boundary; parsing remains a mutation target.
+#[cfg_attr(test, mutants::skip)]
 async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> {
     let text = tokio::fs::read_to_string(marks_path)
         .await
         .map_err(|error| fail(format!("failed to read the fast-import marks: {error}")))?;
+    Ok(parse_marks(&text))
+}
+
+/// Parses the export-marks contents into a `mark -> commit ID` map.
+fn parse_marks(text: &str) -> HashMap<usize, String> {
     let mut marks = HashMap::new();
     for line in text.lines() {
         // Each line is ":<mark> <commit_id>".
@@ -208,7 +212,7 @@ async fn read_marks(marks_path: &Path) -> Result<HashMap<usize, String>, Error> 
             marks.insert(mark, commit_id.to_owned());
         }
     }
-    Ok(marks)
+    marks
 }
 
 /// Resolves the `mark -> commit ID` map back into per-branch commit lists.
@@ -246,6 +250,8 @@ fn resolve_commits(
 }
 
 /// Runs a `git` subcommand in `dir`, failing on a non-zero exit.
+// Subprocess acquisition is covered by stress_smoke; check_git_output owns exit decisions.
+#[cfg_attr(test, mutants::skip)]
 async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
     let output = Command::new("git")
         .arg("-C")
@@ -254,10 +260,14 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
         .output()
         .await
         .map_err(|error| fail(format!("failed to run git {}: {error}", args.join(" "))))?;
+    check_git_output(&args.join(" "), &output)
+}
+
+/// Applies Git's completion status independently of subprocess acquisition.
+fn check_git_output(subcommand: &str, output: &Output) -> Result<(), Error> {
     if !output.status.success() {
         return Err(fail(format!(
-            "git {} failed: {}",
-            args.join(" "),
+            "git {subcommand} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
     }
@@ -267,149 +277,72 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<(), Error> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::future::Future;
-
-    use testing::with_watchdog;
-    use tokio::runtime::Builder;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt as _;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
 
     use super::*;
 
-    // These helpers own real Git and filesystem I/O. Tiny native library tests keep that
-    // boundary observable during mutation testing without running the stress pipeline.
-    // Ref: ../docs/implementation.md, "Repository construction".
-    fn with_runtime(test: impl Future<Output = ()> + Send + 'static) {
-        with_watchdog(|| {
-            Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(test);
-        });
+    #[test]
+    fn successful_git_exit_accepts_diagnostic_output() {
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: Vec::new(),
+            stderr: b"progress on stderr".to_vec(),
+        };
+        check_git_output("fast-import", &output).unwrap();
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "creates a repository through a real Git subprocess")]
-    fn run_git_creates_a_repository() {
-        with_runtime(async {
-            let dir = tempfile::tempdir().unwrap();
-
-            run_git(dir.path(), &["init", "-q", "-b", BRANCH_MAIN, "."])
-                .await
-                .unwrap();
-
-            assert!(dir.path().join(".git").is_dir());
-        });
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "observes a real Git subprocess exit status")]
-    fn run_git_rejects_a_failed_command() {
-        with_runtime(async {
-            let dir = tempfile::tempdir().unwrap();
-
-            // A missing -C directory fails inside Git, after the process has spawned.
-            _ = run_git(&dir.path().join("missing"), &["status"])
-                .await
-                .unwrap_err();
-        });
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "imports and queries history through real Git subprocesses"
-    )]
-    fn import_stream_exports_the_commits_git_created() {
-        with_runtime(async {
-            let dir = tempfile::tempdir().unwrap();
-            // Spaces exercise the export-marks argument as one path, not shell words.
-            let marks_path = dir.path().join("exported marks");
-            run_git(dir.path(), &["init", "-q", "-b", BRANCH_MAIN, "."])
-                .await
-                .unwrap();
-            // One commit per branch is enough to distinguish their exported identities.
-            let stream = build_stream(&[ts(1_000)], &[ts(2_000)]);
-
-            import_stream(dir.path(), &marks_path, &stream)
-                .await
-                .unwrap();
-
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(dir.path())
-                .args(["rev-parse", BRANCH_MAIN, BRANCH_FEATURE])
-                .output()
-                .await
-                .unwrap();
-            assert!(output.status.success());
-            let text = String::from_utf8(output.stdout).unwrap();
-            let commits: Vec<_> = text.lines().collect();
-            let [main, feature] = commits.as_slice() else {
-                panic!();
+    fn unsuccessful_git_exit_rejects_empty_diagnostics() {
+        // These represent nonzero Windows exits, or Unix signal and exit failures.
+        for raw in [1, 256] {
+            let output = Output {
+                status: ExitStatus::from_raw(raw),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
             };
-            assert_ne!(main, feature);
-            assert_eq!(
-                read_marks(&marks_path).await.unwrap(),
-                HashMap::from([(1, (*main).to_owned()), (2, (*feature).to_owned())])
-            );
-        });
+            _ = check_git_output("fast-import", &output).unwrap_err();
+        }
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "observes a real Git fast-import subprocess exit status"
-    )]
-    fn import_stream_rejects_a_failed_exit() {
-        with_runtime(async {
-            let dir = tempfile::tempdir().unwrap();
-
-            // An empty stream avoids a broken-pipe write racing with Git's rejection of the
-            // missing -C directory. The error must come from the completed subprocess.
-            _ = import_stream(&dir.path().join("missing"), &dir.path().join("marks"), b"")
-                .await
-                .unwrap_err();
-        });
+    fn marks_preserve_identities_and_resolve_branch_order() {
+        // Distinct full IDs and out-of-order marks distinguish missing/substituted
+        // entries without depending on Git's export order.
+        let first = "0123456789abcdef0123456789abcdef01234567";
+        let second = "abcdef0123456789abcdef0123456789abcdef01";
+        let marks = parse_marks(&format!(":2 {second}\n:1 {first}\n"));
+        assert_eq!(
+            marks,
+            HashMap::from([(1, first.to_owned()), (2, second.to_owned())])
+        );
+        let repo = resolve_commits(&marks, &[ts(1_000)], &[ts(2_000)]).unwrap();
+        assert_eq!(repo.main.len(), 1);
+        assert_eq!(repo.feature.len(), 1);
+        assert_eq!(repo.main[0].commit_id, first);
+        assert_eq!(repo.main[0].time, ts(1_000));
+        assert_eq!(repo.feature[0].commit_id, second);
+        assert_eq!(repo.feature[0].time, ts(2_000));
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "reads an exported-marks file through Tokio filesystem I/O"
-    )]
-    fn read_marks_preserves_all_mark_identities() {
-        with_runtime(async {
-            let dir = tempfile::tempdir().unwrap();
-            let marks_path = dir.path().join("marks");
-            // Distinct full-length IDs and out-of-order marks expose dropped or substituted
-            // entries without relying on the order in which Git exports them.
-            let first = "0123456789abcdef0123456789abcdef01234567";
-            let second = "abcdef0123456789abcdef0123456789abcdef01";
-            tokio::fs::write(&marks_path, format!(":2 {second}\n:1 {first}\n"))
-                .await
-                .unwrap();
-
-            assert_eq!(
-                read_marks(&marks_path).await.unwrap(),
-                HashMap::from([(1, first.to_owned()), (2, second.to_owned())])
-            );
-        });
+    fn missing_marks_fail_commit_resolution() {
+        let marks = parse_marks(":1 main-id\n");
+        _ = resolve_commits(&HashMap::new(), &[ts(1_000)], &[]).unwrap_err();
+        _ = resolve_commits(&marks, &[ts(1_000)], &[ts(2_000)]).unwrap_err();
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "reads exported-marks files through Tokio filesystem I/O"
-    )]
-    fn read_marks_distinguishes_an_empty_file_from_a_missing_file() {
-        with_runtime(async {
-            let dir = tempfile::tempdir().unwrap();
-            let marks_path = dir.path().join("marks");
-
-            _ = read_marks(&marks_path).await.unwrap_err();
-            tokio::fs::write(&marks_path, "").await.unwrap();
-            assert!(read_marks(&marks_path).await.unwrap().is_empty());
-        });
+    fn marks_parse_empty_and_unrecognized_lines() {
+        assert!(parse_marks("").is_empty());
+        assert!(parse_marks("\nnot-a-mark\n:invalid ignored\n").is_empty());
+        assert_eq!(
+            parse_marks("3 commit-id\n"),
+            HashMap::from([(3, "commit-id".to_owned())])
+        );
     }
 
     fn ts(second: i64) -> Timestamp {

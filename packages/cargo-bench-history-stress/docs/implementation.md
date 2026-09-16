@@ -27,13 +27,13 @@ main-branch checkout. Storage seeding uses those IDs rather than independently
 inventing identities. Subprocess launch, input, completion, and unsuccessful exits
 are errors; an absent marks file is not interchangeable with an empty one.
 
-Library tests exercise the Git and filesystem helpers directly with temporary
-directories and minimal history. They check observable repository creation, imported
-branch identities, failed exits, and complete marks contents. Using real Git here
-keeps command construction and pipe handling within the tested boundary without a
-mock that duplicates Git's protocol. These tests participate in library-only mutation
-testing; their last-chance watchdogs are disabled by the normal mutation environment.
-Miri excludes them because it cannot execute the subprocess and filesystem paths.
+Library tests exercise stream construction, marks parsing, branch identity resolution
+and exit-status decisions entirely in memory. Both Git invocation adapters delegate
+completion decisions to the same helper; file acquisition delegates marks interpretation
+to the parser. Their I/O, pipe handling and delegation remain covered by the seeded
+binary integration scenarios, outside library mutation testing. Only these acquisition
+adapters carry justified mutation exclusions; their parsing and decision logic remains
+instrumented and mutation-tested without a runtime, filesystem or subprocess fixture.
 
 ## Validation boundaries
 

@@ -15,9 +15,9 @@ want to know how `analyze`
 scales, so it never runs automatically in `just test` or CI. The package's own small
 unit and integration tests, which exercise the harness at tiny sizes, do run as a
 normal workspace member under `just test`, CI, and coverage. Mutation testing builds
-and runs only library unit tests, including tiny real-Git tests of repository construction;
-it does not run the end-to-end stress scenarios. Tests requiring real Git or
-filesystem I/O are excluded from Miri, not from native mutation testing.
+and runs only library unit tests, including in-memory repository construction,
+marks parsing and Git exit-status decisions. Real Git and filesystem interactions
+remain covered by the end-to-end stress integration scenarios.
 See the [design](docs/design.md) and [implementation guide](docs/implementation.md)
 for the execution and validation boundaries.
 
