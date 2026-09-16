@@ -566,7 +566,7 @@ mod write_tests {
             let bytes = write_one(root, SCENARIO, &sets, task, &collect_objects(&objects)).unwrap();
             assert_eq!(
                 bytes,
-                assert_object(&objects.lock().unwrap()[&root.join(key)], &body)
+                assert_object(objects.lock().unwrap().get(&root.join(key)).unwrap(), &body)
             );
         }
         assert_eq!(objects.into_inner().unwrap().len(), tasks().len());
@@ -590,7 +590,7 @@ mod write_tests {
         assert_eq!(objects.len(), tasks().len());
         let expected_bytes: u64 = expected_objects(&sets)
             .iter()
-            .map(|(key, body)| assert_object(&objects[&root.join(key)], body))
+            .map(|(key, body)| assert_object(objects.get(&root.join(key)).unwrap(), body))
             .sum();
         assert_eq!(bytes, expected_bytes);
     }
