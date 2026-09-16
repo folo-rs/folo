@@ -17,6 +17,7 @@ runs:
       if: always()
       with:
         name: ${{ inputs.name }}
+        if-no-files-found: error
         path: |
           target/llvm-cov-target/*.profraw
           target/llvm-cov-target/*.profdata

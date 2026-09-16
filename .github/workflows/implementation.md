@@ -59,6 +59,9 @@ the merge-input list when reporting reached that stage, instrumented executables
 dynamic libraries, and the nextest JUnit report. Cargo's dependency and example output
 directories retain the matching binaries without intermediate archives or debug-symbol
 files. Artifact names distinguish platform, run and attempt.
+If no evidence files exist, the upload step reports an error rather than successful
+preservation. This also makes an early build failure with no coverage outputs explicit;
+the original coverage failure remains the job's primary failure.
 
 `coverage-measure` supplies `.config/coverage-nextest.toml` as a nextest tool configuration,
 retaining successful-test output in JUnit as well as failures. Other nextest entry points
