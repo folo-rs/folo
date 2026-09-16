@@ -5,24 +5,28 @@ use ohno::AppError;
 use semver::Version;
 use serde::Deserialize;
 
-use crate::repository::{Repository, VerificationError, canonicalize};
+use crate::Repository;
+use crate::repository::{VerificationError, canonicalize};
 
 /// Validates Cargo's identity response before the release checker assesses package content.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Metadata {
+pub struct Metadata {
     packages: Vec<Package>,
     workspace_members: Vec<String>,
     workspace_root: PathBuf,
 }
 
 impl Metadata {
-    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, AppError> {
+    pub fn parse(bytes: &[u8]) -> Result<Self, AppError> {
         serde_json::from_slice(bytes).map_err(|error| {
             VerificationError::caused_by("cannot decode candidate Cargo metadata", error).into()
         })
     }
 
-    pub(crate) fn validate_inputs(
+    // Tracking, existence and canonicalization are real-system adapters covered by integration
+    // tests. The containment decision stays in the in-memory validation below.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn validate_inputs(
         &self,
         repository: &Repository,
         manifest: &Path,
@@ -38,13 +42,7 @@ impl Metadata {
             _ = repository.require_tracked(&package.manifest_path)?;
         }
         let workspace_root = canonicalize(&self.workspace_root)?;
-        if !manifest.starts_with(&workspace_root) {
-            return Err(VerificationError::new(
-                "candidate manifest is outside the metadata workspace root",
-            )
-            .into());
-        }
-        Ok(())
+        validate_manifest_location(manifest, &workspace_root)
     }
 
     pub(crate) fn validate_packages(
@@ -83,6 +81,16 @@ impl Metadata {
     }
 }
 
+fn validate_manifest_location(manifest: &Path, workspace_root: &Path) -> Result<(), AppError> {
+    if !manifest.starts_with(workspace_root) {
+        return Err(VerificationError::new(
+            "candidate manifest is outside the metadata workspace root",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Carries the declared identity and publication eligibility of a metadata package.
 #[derive(Debug, Deserialize)]
 struct Package {
@@ -97,17 +105,32 @@ struct Package {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-    #[cfg(unix)]
-    use std::io::Error;
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use serde_json::json;
-    use testing::with_watchdog;
+    use static_assertions::assert_impl_all;
 
     use super::*;
-    use crate::repository::fixture::{command, fixture};
+
+    assert_impl_all!(Metadata: RefUnwindSafe, UnwindSafe);
+
+    #[test]
+    fn requires_manifest_within_metadata_workspace() {
+        let root = Path::new("workspace");
+        for manifest in [
+            root.join("Cargo.toml"),
+            root.join("member").join("Cargo.toml"),
+        ] {
+            validate_manifest_location(&manifest, root).unwrap();
+        }
+        for manifest in [
+            PathBuf::from("Cargo.toml"),
+            Path::new("workspace-other").join("Cargo.toml"),
+        ] {
+            let error = validate_manifest_location(&manifest, root).unwrap_err();
+            assert!(error.find_source::<VerificationError>().is_some());
+        }
+    }
 
     fn sample(root: &Path) -> Metadata {
         Metadata {
@@ -227,78 +250,5 @@ mod tests {
         required.insert("other".into(), Version::new(1, 0, 0));
         required.insert("widget".into(), Version::new(2, 0, 0));
         _ = metadata.validate_packages(&required, false).unwrap_err();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-    fn validates_tracked_inputs_with_and_without_a_lockfile() {
-        with_watchdog(|| {
-            let (_directory, repository) = fixture();
-            let metadata = sample(&repository.root);
-            let manifest = repository.root.join("Cargo.toml");
-            metadata.validate_inputs(&repository, &manifest).unwrap();
-
-            fs::write(repository.root.join("Cargo.lock"), "tracked lockfile").unwrap();
-            command(&repository.root, &["add", "Cargo.lock"]);
-            metadata.validate_inputs(&repository, &manifest).unwrap();
-        });
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-    fn rejects_an_untracked_lockfile_or_member_manifest() {
-        with_watchdog(|| {
-            let (_directory, repository) = fixture();
-            let mut metadata = sample(&repository.root);
-            let manifest = repository.root.join("Cargo.toml");
-            let lockfile = repository.root.join("Cargo.lock");
-            fs::write(&lockfile, "untracked lockfile").unwrap();
-            _ = metadata
-                .validate_inputs(&repository, &manifest)
-                .unwrap_err();
-
-            fs::remove_file(lockfile).unwrap();
-            let member = repository.root.join("member.toml");
-            fs::write(&member, "untracked member manifest").unwrap();
-            metadata.packages.first_mut().unwrap().manifest_path = member;
-            _ = metadata
-                .validate_inputs(&repository, &manifest)
-                .unwrap_err();
-        });
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-    fn rejects_a_manifest_outside_the_reported_workspace() {
-        with_watchdog(|| {
-            let (_directory, repository) = fixture();
-            let nested = repository.root.join("nested");
-            fs::create_dir_all(&nested).unwrap();
-            fs::write(nested.join("Cargo.toml"), "nested workspace").unwrap();
-            command(&repository.root, &["add", "nested/Cargo.toml"]);
-            let metadata = sample(&nested);
-            let error = metadata
-                .validate_inputs(&repository, &repository.root.join("Cargo.toml"))
-                .unwrap_err();
-            assert!(error.find_source::<VerificationError>().is_some());
-        });
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[cfg_attr(miri, ignore = "Creates a filesystem symlink loop and executes Git")]
-    fn propagates_a_lockfile_lookup_error() {
-        with_watchdog(|| {
-            let (_directory, repository) = fixture();
-            // An owned symlink loop produces a deterministic lookup error without races or
-            // permission assumptions that change when a runner is privileged.
-            symlink("Cargo.lock", repository.root.join("Cargo.lock")).unwrap();
-            let metadata = sample(&repository.root);
-            let error = metadata
-                .validate_inputs(&repository, &repository.root.join("Cargo.toml"))
-                .unwrap_err();
-            assert!(error.find_source::<VerificationError>().is_some());
-            assert!(error.find_source::<Error>().is_some());
-        });
     }
 }

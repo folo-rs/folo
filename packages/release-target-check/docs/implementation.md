@@ -20,9 +20,12 @@ identity for binary builds.
 
 The binary entry point delegates to the library's `run()` function. The library
 owns argument parsing, verification, diagnostics, and the implementation's unit
-tests, so Cargo's library-only mutation selection covers the same implementation
-used by release orchestration. Integration tests retain the real executable
-boundary.
+tests. In-memory parsing and decision tests participate in Cargo's library-only
+mutation selection. All real filesystem and child-process tests live in one Cargo
+integration target, including direct adapter calls and the executable boundary.
+The nonpublished library exposes the implementation operations those tests need;
+it is a private-use implementation crate, not a public library API. Metadata fields
+and application error leaves remain private.
 
 Git subprocesses establish exact HEAD identity and first-parent membership.
 Cleanliness checks reject staged edits, tracked edits, untracked files and index
@@ -42,12 +45,20 @@ verification and its subsequent use.
 
 ## Verification boundary tests
 
-Metadata decoding, resource ownership and package identity are tested independently
+Metadata decoding and package identity are tested independently
 of process execution. This lets malformed or inconsistent metadata exercise the
 same validation used by the executable without requiring a broken Cargo process.
 Checker-result handling likewise has an observable diagnostic callback; production
 sends those diagnostics to stderr, while unit tests verify verdicts, warning
 forwarding and unexpected result rejection.
+
+Repository evidence decisions are pure functions over captured commit IDs, status,
+index entries, history and paths. Their unit tests cover acceptance and rejection,
+while an in-memory callback sequence verifies checks before and after either
+operation outcome. Only the real-system adapters and their trivial forwarding
+methods have function-level mutation exclusions; parsing and these decisions
+remain mutation targets. Integration tests cover the excluded queries and their
+composition with the same decisions.
 
 Real Git fixtures cover clean and concealed index state, corrupt or unavailable
 history, and ownership failures. Native temporary directories avoid cross-filesystem
@@ -61,19 +72,26 @@ End-to-end tests execute real Cargo and the real release checker to cover their
 composition: read-only verification, candidate-relative baselines, release-checker
 rejection and lockfile policy. Representative argument, cleanliness, first-parent
 history and package identity failures verify executable wiring; their case matrices
-belong to unit tests rather than repeated executable invocations. The inherited-value
+belong to the unit or direct-adapter tests rather than repeated executable invocations. The inherited-value
 case verifies checker rejection without duplicating its released-source matrix.
 Missing-lockfile rejection starts from an otherwise release-equivalent binary
 snapshot, so another release violation cannot satisfy the assertion.
 
-Non-Windows runs retain ordinary parallel scheduling. On Windows, nextest serializes
-this package's tests in one group: both repository unit tests and integration tests
-issue real Git/Cargo queries, and their overlap under coverage can exhaust the
-watchdog budget. Serializing only the integration binary still allows its first
-test to contend with Git-heavy unit tests. Reducing fixture work remains necessary
-for both contended and uncontended execution; scheduling isolation does not replace
-it. All tests retain the shared last-chance watchdog without extending its deadline
-or adding retries.
+Non-Windows runs retain ordinary parallel scheduling. Windows integration cases
+share an execution slot before starting their individual last-chance watchdogs.
+Nextest enforces the slot across processes through its integration-binary group;
+the integration target enforces it across libtest threads with a shared mutex.
+This covers ordinary Cargo tests, all-target runs and careful checking as well as
+nextest. The slot protects no shared fixture data, so a panicking case does not
+invalidate subsequent fixtures. A queued case has not started executing and does
+not consume its watchdog budget. Running cases retain the unchanged shared
+watchdog and no retries.
+
+Benchmark smoke uses `cargo test --benches`, which also executes library tests
+through libtest. The library contains only in-process tests, so this selection
+cannot start Git/Cargo fixtures. Integration scenarios remain selected by ordinary
+testing and coverage; moving them out of the library is not a benchmark-smoke
+substitute for that coverage.
 
 ## Release policy reuse
 
