@@ -31,6 +31,20 @@ jobs:
           $matrix = @{ include = @(Get-ScheduledCheck) } | ConvertTo-Json -Depth 10 -Compress
           "matrix=$matrix" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
 
+  # Reuse every standard check at the same main commit, with no PR/delta pruning.
+  # The caller grants the permissions required by Azure tests and the reusable workflow's
+  # push-only alert job; this workflow's report job owns scheduled failure publication.
+  # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
+  standard:
+    needs: plan
+    uses: ./.github/workflows/standard-validation.yml
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   checks:
     needs: plan
     name: ${{ matrix.id }}
@@ -239,7 +253,7 @@ jobs:
   report:
     # This is a normal failure-reporting job in the same run, including planning/setup failures.
     # Ref: .github/workflows/implementation.md#failure-reporting.
-    needs: [plan, checks, build-release, run-examples, default-features-check, hack, machete, test-arm]
+    needs: [plan, standard, checks, build-release, run-examples, default-features-check, hack, machete, test-arm]
     if: failure()
     runs-on: ubuntu-latest
     permissions:

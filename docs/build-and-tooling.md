@@ -61,8 +61,10 @@ distinction between local and combined CI benchmark smoke passes.
 many-seed Miri and careful checking on the current platform. These recipes are
 independent: deep validation does not implicitly rerun the shallow suite.
 
-The **Standard validation** workflow performs shallow PR/push/merge-queue checks;
-**Deep validation** runs the full deep suite on merged `main`.
+The **Standard validation** workflow performs shallow PR/push checks.
+**Merge queue validation** runs full-workspace dev Clippy, formatting and version readiness.
+**Deep validation** reuses the complete standard suite and runs the full deep suite on merged
+`main`, without delta or PR-platform pruning.
 Scheduled checks invoke the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes used locally. Recipes own the toolchains, test runners,
 helper preparation and check behavior; scheduling only selects platform, packages
@@ -96,6 +98,9 @@ The same selection applies to the unmutated baseline and each mutant. Integratio
 tests, doctests, binary targets, examples, and benchmarks are not mutation-test targets; ordinary
 testing and coverage retain their own selections. See
 [the mutation-testing policy](testing.md#mutation-testing-target-selection).
+Unit tests exercise in-process logic; real external interactions belong in
+integration targets even if they could technically be compiled by `--lib`.
+See [the test boundary](testing.md#unit-tests-stay-inside-the-process).
 
 The selectors live in `.cargo/mutants.toml` under `additional_cargo_args`, so
 cargo-mutants applies them to both its test-build and test-execution commands.

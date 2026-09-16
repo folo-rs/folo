@@ -8,6 +8,36 @@ tests.
 The `unwrap()` / `expect()` rule (both test and production sides) lives in
 [`docs/error-handling.md`](error-handling.md).
 
+## Unit tests stay inside the process
+
+A **unit test** exercises logic within the current process. Anything that reaches
+outside the process belongs in an **integration test**: real filesystem access,
+child processes, network requests, external databases, or operating-system services.
+A temporary directory, local emulator, loopback connection or self-spawned test
+harness still crosses that boundary.
+
+Keep Rust unit tests in `#[cfg(test)]` modules and real-system tests in Cargo
+`tests/` targets. Apply the same boundary when organizing tests in other languages.
+Cargo's target selection is a mechanism, not a definition of test scope: placing
+an I/O test under `src/` does not make it a unit test.
+
+Test parsing, serialization, decisions and transformations using in-memory values,
+buffers and simple fakes. Separate these from the small adapters that perform I/O.
+Do not introduce subprocess protocols, environment-variable dispatch or child test
+harnesses merely to make a unit test observe a real-system boundary. Keep those
+scenarios as integration tests instead of adding production machinery only for
+test isolation.
+
+Threads and synchronization within the same process can be unit-tested with
+in-memory shared state; they do not justify external I/O. Pure path manipulation
+and an in-memory filesystem fake are also unit-testable, unlike touching the real
+filesystem. A test ignored by Miri because it needs the real operating system
+should be checked for misplaced integration coverage.
+
+Do not move real-system tests into the unit harness to catch a mutation. Keep the
+logic unit-tested, retain integration coverage of the adapter, and justify any
+necessary narrow mutation exclusion under the policy below.
+
 ## Test behavior, not checked-in wording
 
 Do not test that checked-in source, configuration, prompts or documentation contain
@@ -224,11 +254,10 @@ Cargo integration-test targets are excluded because their repeated
 build and execution cost is not part of the mutation-testing budget. Doctests,
 binary targets, examples, and benchmarks also stay outside this selection.
 
-Use Cargo's classifications directly. A test belongs to the selected unit-test
-suite because it is compiled into a library test harness, not because
-of a separate assessment of its complexity, runtime, or use of I/O. Expensive
-unit tests may be moved into Cargo integration-test targets when appropriate;
-the runner does not introduce another test taxonomy.
+Cargo's `--lib` selector determines which harness runs; it does not enforce the
+[in-process unit-test boundary](#unit-tests-stay-inside-the-process). Authors must
+keep external interactions in integration targets rather than putting them into
+the library harness to participate in mutation testing.
 
 CLI applications keep their implementation and its unit tests in a library crate,
 with a thin binary entry point. This lets their implementation participate in

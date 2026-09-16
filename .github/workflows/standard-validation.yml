@@ -6,20 +6,18 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
-  # Merge-queue runs must execute this workflow: a required check that never fires as
-  # merge_group is a failed check, and the queue never merges. Queue entries use the same
-  # pruned job set as pull_request because every full-matrix guard keys on
-  # `github.event_name == 'push'`, which is false here. Push to main remains the full
-  # backstop. The concurrency group (`github.head_ref || github.ref`) already distinguishes
-  # queue refs: head_ref is empty and github.ref is unique. cancel-standard-validation.yml stays
-  # pull-request-only.
-  merge_group:
-    branches: [main]
+  # Deep validation reuses the complete standard suite on its main-only schedule/dispatch.
+  # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 concurrency:
-  # Share the ref-specific group with the PR-close companion so closing a PR cancels stale work.
+  # PR/push runs share ref-specific groups with the PR-close companion. Scheduled/manual callers
+  # use their run ID so neither a main push nor another nightly run cancels their coverage.
   # Ref: .github/workflows/design.md#concurrency.
-  group: standard-validation-${{ github.head_ref || github.ref }}
+  group: standard-validation-${{ github.event_name == 'pull_request' && github.head_ref || github.event_name == 'push' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 # Emit a backtrace whenever a test (or any Rust process) panics, so a rare flake — such as the
@@ -32,7 +30,7 @@ concurrency:
 env:
   RUST_BACKTRACE: "1"
 
-# Least privilege by default, so pull-request and merge-queue validation do not inherit whatever
+# Least privilege by default, so standard validation does not inherit whatever
 # the repository's default token scope happens to be. Jobs needing more declare it themselves; a
 # job-level block replaces this default rather than adding to it.
 permissions:
@@ -40,7 +38,7 @@ permissions:
 
 jobs:
   # One checkout and runner prepare both non-Cargo and Cargo validation scope.
-  # Complete history supports the whole PR and the queue's immutable combined candidate;
+  # Complete history supports the whole PR and release-version anchors;
   # PowerShell plans paths before setup, then Cargo impact adds native-helper test domains.
   # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
   prepare:
@@ -65,7 +63,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/build/ValidationPlan.psm1 -Force
           $eventData = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -AsHashtable
-          $plan = Get-ValidationWorkflowPlan -EventName $env:GITHUB_EVENT_NAME -EventData $eventData -Verbose
+          $plan = Get-ValidationWorkflowPlan -EventName $env:GITHUB_EVENT_NAME -EventData $eventData -Ref $env:GITHUB_REF -Verbose
           "plan=$(ConvertTo-Json -InputObject $plan -Compress)" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
@@ -78,12 +76,9 @@ jobs:
         # ~30-second restore.
         uses: ./.github/actions/setup-environment
 
-      - name: Compute delta
+      - name: Select Cargo validation scope
         id: compute
         shell: pwsh
-        env:
-          # Empty on pull_request and push; the SHA the queue rebased onto on merge_group.
-          DELTA_BASELINE: ${{ github.event.merge_group.base_sha }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -93,15 +88,10 @@ jobs:
           # `just delta` recipe so the two cannot drift. See scripts/build/Delta.psm1.
           Import-Module ./scripts/build/Delta.psm1 -Force
 
-          # Full workspace only on push to main. merge_group must not take this path: a queue
-          # run uses the same pruned job set as a pull request.
-          # Full history is already checked out (fetch-depth: 0), so the workflow wrapper skips a
-          # redundant fetch. Pull requests analyze origin/main; merge-queue runs pass
-          # merge_group.base_sha so the baseline revision matches validate-versions. The module
-          # cleans up after itself (no artifacts land in the checkout to dirty the tree).
-          Get-DeltaWorkflowOutput `
-            -EventName $env:GITHUB_EVENT_NAME `
-            -BaselineRevision $env:DELTA_BASELINE |
+          # Only pull requests invoke delta. Push, schedule and dispatch select the whole
+          # workspace without a comparison; preparation has already enforced the main-only gate.
+          # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
+          Get-DeltaWorkflowOutput -EventName $env:GITHUB_EVENT_NAME |
             Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
       - name: Include affected native helpers in script scope
@@ -226,9 +216,8 @@ jobs:
           # The release baseline is the tip of the branch releases are made from, which is
           # not the branch a pull request targets: a stacked pull request targets an
           # unreleased parent, and anchoring on it would treat that parent's pending
-          # increment as a release. A queue run is the exception, because the queue rebased
-          # the entry onto the named release-branch commit and must be scoped to it.
-          RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.event.repository.default_branch) }}
+          # increment as a release. Main runs use the tested commit, not a moving remote tip.
+          RELEASE_PLAN_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.event.repository.default_branch) || github.sha }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -408,7 +397,7 @@ jobs:
         run: just package="${{ needs.prepare.outputs.packages }}" test-benches
 
   # Documentation builds and doctests share setup. The macOS leg adds little on PRs, so
-  # the full three-platform matrix runs only on push to main.
+  # main pushes and scheduled/manual main runs retain the full platform matrix.
   # Ref: .github/workflows/implementation.md#standard-validation-structure.
   docs:
     needs: [prepare]
@@ -416,7 +405,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+        platform: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -517,14 +506,14 @@ jobs:
 
   # The same real-Azure scenarios exercise developer credentials and self-minted GitHub OIDC
   # credentials sequentially, sharing compilation and login. Only same-repository PR/main
-  # subjects can federate; queue and fork runs skip. Azurite supplies coverage separately.
+  # subjects can federate; fork PRs skip. Queue validation has no Azure job.
+  # Azurite supplies coverage separately.
   # Ref: .github/workflows/implementation.md#real-azure-authentication.
   test-azure:
     needs: prepare
     if: >-
       needs.prepare.outputs.skip_all != 'true'
       && (needs.prepare.outputs.packages == '' || contains(fromJson(needs.prepare.outputs.packages_json), 'cargo-bench-history'))
-      && github.event_name != 'merge_group'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # Both azure/login and the application's self-minting credential need GitHub OIDC access.
@@ -712,7 +701,9 @@ jobs:
       - test-azurite
       - test-azure
       - coverage-notify
-    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    # Scheduled callers use their own combined standard/deep failure reporter, not a second issue.
+    # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
+    if: failure() && github.event_name == 'push' && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

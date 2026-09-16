@@ -1,0 +1,90 @@
+name: Merge queue validation
+
+on:
+  merge_group:
+    branches: [main]
+
+concurrency:
+  # Queue refs identify combined candidates independently of PR and main validation.
+  # Ref: .github/workflows/design.md#merge-queue-validation.
+  group: merge-queue-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Compile every package on the supported platforms, without delta or minimum-dependency checks.
+  # Formatting shares Ubuntu setup; runtime checks belong to PR and full main validation.
+  # Ref: .github/workflows/design.md#merge-queue-validation.
+  clippy-dev:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Run format-check
+        if: matrix.platform == 'ubuntu-latest'
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just format-check
+      - name: Run clippy dev on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just clippy dev
+
+  # Reassess version readiness for the combined candidate against its immutable release base.
+  # SemVer analysis and binstall checks remain in Standard validation.
+  # Ref: .github/workflows/implementation.md#merge-queue-validation.
+  validate-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Check package versions
+        shell: pwsh
+        env:
+          RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just validate-versions
+
+  required-checks:
+    # The ruleset uses the same check name on PR and queue SHAs; neither queue job may skip.
+    # Ref: .github/workflows/implementation.md#merge-blocking-result.
+    name: required-checks
+    if: always()
+    needs: [clippy-dev, validate-versions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Evaluate merge-blocking jobs
+        shell: pwsh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          MUST_SUCCEED_JOBS: clippy-dev validate-versions
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/build/RequiredChecks.psm1 -Force
+          $mustSucceed = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $mustSucceed
