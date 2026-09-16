@@ -18,9 +18,8 @@ slow-timeout = { period = "10s", terminate-after = 6, grace-period = "0s" }
 # enough to hit the last-chance watchdog, so they share one execution slot.
 [test-groups]
 dure-windows-conpty = { max-threads = 1 }
-# Both unit and integration fixtures issue real Git/Cargo queries. They share one
-# Windows slot so the first integration test cannot overlap Git-heavy unit tests
-# under coverage. See packages/release-target-check/docs/implementation.md.
+# Real Git/Cargo cases share one Windows slot across nextest processes. The integration
+# binary also serializes libtest threads. See packages/release-target-check/docs/implementation.md.
 release-target-check-windows = { max-threads = 1 }
 
 [[profile.default.overrides]]
@@ -28,7 +27,7 @@ filter = 'package(dure) & binary(windows)'
 test-group = 'dure-windows-conpty'
 
 [[profile.default.overrides]]
-filter = 'package(release-target-check)'
+filter = 'package(release-target-check) & binary(integration)'
 platform = 'cfg(windows)'
 test-group = 'release-target-check-windows'
 
