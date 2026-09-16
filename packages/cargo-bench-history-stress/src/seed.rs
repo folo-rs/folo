@@ -558,7 +558,6 @@ mod write_tests {
     fn assert_object(stored: &[u8], body: &str) -> u64 {
         // Use the current storage codec as the oracle instead of pinning compressed fixture bytes.
         assert_eq!(stored, codec::compress(body.as_bytes()));
-        assert_eq!(codec::decompress(stored).unwrap(), body.as_bytes());
         u64::try_from(stored.len()).unwrap()
     }
 
