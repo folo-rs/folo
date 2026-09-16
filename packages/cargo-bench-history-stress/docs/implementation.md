@@ -25,6 +25,12 @@ runtime or operating-system fixture. Configuration writes use isolated temporary
 directories and cover replacement and filesystem failures without network access.
 These filesystem tests are excluded from Miri, not from native mutation testing.
 
+Seeded-object tests use small fixed scenarios and independent model expectations
+to verify storage keys, compressed contents and reported byte totals. Single-object
+and batch writes are exercised without constructing Git history or invoking analysis.
+Invalid-input and filesystem-obstruction cases protect error propagation; only the
+input-validation cases run under Miri.
+
 Successful end-to-end execution belongs to the seeded binary integration tests.
 They verify analysis modes, findings and retained data without timing assertions.
 They remain outside the library-only mutation build and execution selection.
