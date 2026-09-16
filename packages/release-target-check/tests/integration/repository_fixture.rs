@@ -1,12 +1,11 @@
-//! Shared real-Git fixtures for repository and metadata boundary unit tests.
+//! Minimal real-Git inputs for repository and metadata integration tests.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use release_target_check::Repository;
 use tempfile::TempDir;
-
-use crate::repository::Repository;
 
 pub(crate) fn fixture() -> (TempDir, Repository) {
     // Native temporary storage keeps subprocess-heavy fixtures off cross-platform mounts.

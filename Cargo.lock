@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "all_the_time",
  "criterion",
@@ -1218,7 +1218,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dure"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "clap",
  "dure-test-helper",
@@ -2601,7 +2601,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.60"
+version = "0.2.61"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -3107,10 +3107,12 @@ name = "release-target-check"
 version = "0.0.0"
 dependencies = [
  "cargo-release-plan",
+ "mutants",
  "ohno",
  "semver",
  "serde",
  "serde_json",
+ "static_assertions",
  "tempfile",
  "testing",
 ]

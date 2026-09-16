@@ -18,9 +18,8 @@ slow-timeout = { period = "10s", terminate-after = 6, grace-period = "0s" }
 # enough to hit the last-chance watchdog, so they share one execution slot.
 [test-groups]
 dure-windows-conpty = { max-threads = 1 }
-# Both unit and integration fixtures issue real Git/Cargo queries. They share one
-# Windows slot so the first integration test cannot overlap Git-heavy unit tests
-# under coverage. See packages/release-target-check/docs/implementation.md.
+# Real Git/Cargo cases share one Windows slot across nextest processes. The integration
+# binary also serializes libtest threads. See packages/release-target-check/docs/implementation.md.
 release-target-check-windows = { max-threads = 1 }
 
 [[profile.default.overrides]]
@@ -28,7 +27,7 @@ filter = 'package(dure) & binary(windows)'
 test-group = 'dure-windows-conpty'
 
 [[profile.default.overrides]]
-filter = 'package(release-target-check)'
+filter = 'package(release-target-check) & binary(integration)'
 platform = 'cfg(windows)'
 test-group = 'release-target-check-windows'
 
@@ -44,19 +43,6 @@ test-group = 'release-target-check-windows'
 [[profile.default.overrides]]
 filter = 'test(=collect_against_real_criterion_bench_stores_wall_time)'
 retries = { backoff = "exponential", count = 2, delay = "2m", jitter = true }
-
-# `panic_on_next_alloc` arms a process-global one-shot flag that the very next allocation on ANY
-# thread consumes (see packages/alloc_tracker/src/allocator.rs). This test expects its own `vec!`
-# to be that allocation, but the test process is not single-threaded — the libtest harness and
-# incidental runtime allocations share it — so occasionally another thread's allocation trips the
-# flag first, the intended allocation no longer panics, and `assert!(result.is_err())` fails. The
-# behaviour is an inherent race on global state and hard to test hermetically; a fresh retry (each
-# in a new process) re-rolls the race. This is a deliberate, narrowly-scoped exception to the
-# no-retry policy above: it masks only this known global-state race, not genuine regressions, which
-# would fail every attempt.
-[[profile.default.overrides]]
-filter = 'test(=panic_on_next_alloc_resets_automatically)'
-retries = 3
 
 # These tests observe how the hardware appears to a process that the operating system has
 # narrowed, which is only reachable on a machine that has enough processors (and, on Windows,

@@ -10,6 +10,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["ohno::app::error::AppError", "serde_core::de::Deserialize"]
+
 [package.metadata.docs.rs]
 all-features = true
 
@@ -21,6 +24,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+mutants = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 testing = { path = "../testing" }
 

@@ -4,9 +4,8 @@ use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
 use ohno::AppError;
 
 use crate::cli::Cli;
-use crate::command::capture;
-use crate::metadata::Metadata;
-use crate::repository::{Repository, VerificationError};
+use crate::repository::VerificationError;
+use crate::{Metadata, Repository, capture};
 
 pub(crate) fn verify(cli: &Cli) -> Result<String, AppError> {
     let repository = Repository::discover(&cli.manifest_path, &cli.commit)?;
