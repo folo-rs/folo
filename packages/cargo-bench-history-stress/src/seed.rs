@@ -386,15 +386,16 @@ fn i64_from(value: usize) -> i64 {
 mod write_tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::slice;
     use std::sync::Mutex;
 
     use cbh_model::{Engine, MachineKey, TargetTriple};
 
     use super::*;
 
-    // Small enough to test storage without analysis or Git, covering every benchmark family.
+    // Native runs cover every family; Miri needs one metric to verify each stored-object format.
     const SCENARIO: Scenario = Scenario {
-        benchmarks: 5,
+        benchmarks: if cfg!(miri) { 1 } else { 5 },
         commits: 4,
         branch_commits: 1,
         dirty_runs: 2,
@@ -525,16 +526,20 @@ mod write_tests {
             ),
             (
                 sets[0].bless_key(PROJECT, MAIN_COMMIT, ISSUED),
-                BlessingRecord::new(
-                    MAIN_COMMIT.to_owned(),
-                    ts(ISSUED),
-                    vec![BenchmarkIdPrefix::new(scenario::blessable_family_prefix()).unwrap()],
-                    TOOL_VERSION.to_owned(),
-                )
-                .to_json()
-                .unwrap(),
+                expected_blessing(ISSUED),
             ),
         ]
+    }
+
+    fn expected_blessing(issued: i64) -> String {
+        BlessingRecord::new(
+            MAIN_COMMIT.to_owned(),
+            ts(issued),
+            vec![BenchmarkIdPrefix::new(scenario::blessable_family_prefix()).unwrap()],
+            TOOL_VERSION.to_owned(),
+        )
+        .to_json()
+        .unwrap()
     }
 
     fn collect_objects(
@@ -557,19 +562,41 @@ mod write_tests {
         u64::try_from(stored.len()).unwrap()
     }
 
-    #[test]
-    fn write_one_stores_keyed_content_and_reports_compressed_bytes() {
+    fn assert_one(index: usize) {
         let root = Path::new("storage");
         let objects = Mutex::new(BTreeMap::new());
         let sets = sets();
-        for (task, (key, body)) in tasks().iter().zip(expected_objects(&sets)) {
-            let bytes = write_one(root, SCENARIO, &sets, task, &collect_objects(&objects)).unwrap();
-            assert_eq!(
-                bytes,
-                assert_object(objects.lock().unwrap().get(&root.join(key)).unwrap(), &body)
-            );
-        }
-        assert_eq!(objects.into_inner().unwrap().len(), tasks().len());
+        let tasks = tasks();
+        let task = tasks.get(index).unwrap();
+        let expected = expected_objects(&sets);
+        let (key, body) = expected.get(index).unwrap();
+        let bytes = write_one(root, SCENARIO, &sets, task, &collect_objects(&objects)).unwrap();
+        let objects = objects.into_inner().unwrap();
+        assert_eq!(
+            bytes,
+            assert_object(objects.get(&root.join(key)).unwrap(), body)
+        );
+        assert_eq!(objects.len(), 1);
+    }
+
+    #[test]
+    fn write_one_stores_clean_main_content_and_byte_count() {
+        assert_one(0);
+    }
+
+    #[test]
+    fn write_one_stores_clean_feature_content_and_byte_count() {
+        assert_one(1);
+    }
+
+    #[test]
+    fn write_one_stores_dirty_content_and_byte_count() {
+        assert_one(2);
+    }
+
+    #[test]
+    fn write_one_stores_blessing_content_and_byte_count() {
+        assert_one(3);
     }
 
     #[test]
@@ -577,18 +604,40 @@ mod write_tests {
         let root = Path::new("storage");
         let objects = Mutex::new(BTreeMap::new());
         let sets = sets();
+        let (tasks, expected): (Vec<_>, Vec<_>) = if cfg!(miri) {
+            // Compact sidecars exercise shared accounting without repeating the full format
+            // matrix's compression workload. Distinct issue times give them distinct keys.
+            [ISSUED, ISSUED + 1]
+                .map(|issued| {
+                    (
+                        Task::Bless {
+                            set: 0,
+                            commit_id: MAIN_COMMIT.to_owned(),
+                            issued,
+                        },
+                        (
+                            sets[0].bless_key(PROJECT, MAIN_COMMIT, issued),
+                            expected_blessing(issued),
+                        ),
+                    )
+                })
+                .into_iter()
+                .unzip()
+        } else {
+            (tasks().into(), expected_objects(&sets).into())
+        };
         let bytes = write_tasks(
             root,
             SCENARIO,
             &sets,
-            &tasks(),
+            &tasks,
             WORKERS,
             &collect_objects(&objects),
         )
         .unwrap();
         let objects = objects.into_inner().unwrap();
-        assert_eq!(objects.len(), tasks().len());
-        let expected_bytes: u64 = expected_objects(&sets)
+        assert_eq!(objects.len(), tasks.len());
+        let expected_bytes: u64 = expected
             .iter()
             .map(|(key, body)| assert_object(objects.get(&root.join(key)).unwrap(), body))
             .sum();
@@ -671,11 +720,14 @@ mod write_tests {
     #[test]
     fn write_tasks_propagates_a_storage_error() {
         let calls = AtomicUsize::new(0);
+        let tasks = tasks();
+        // A compact sidecar suffices: this case checks failure propagation, not object formats.
+        let tasks = slice::from_ref(tasks.last().unwrap());
         _ = write_tasks(
             Path::new("storage"),
             SCENARIO,
             &sets(),
-            &tasks(),
+            tasks,
             WORKERS,
             &|_, _| {
                 calls.fetch_add(1, Ordering::Relaxed);

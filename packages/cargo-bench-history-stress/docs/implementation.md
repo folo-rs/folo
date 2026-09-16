@@ -30,7 +30,9 @@ to verify storage keys, compressed contents and reported byte totals. Single-obj
 and batch writes receive an in-memory storage operation and an explicit worker limit,
 so they exercise shared accounting without filesystem access, OS parallelism discovery,
 Git history or analysis. Invalid-input, injected storage-error and worker-panic cases
-protect error propagation. These tests also run under Miri.
+protect error propagation. Miri covers each object format with a reduced metric
+fixture and shared accounting with compact sidecars, keeping repeated compression
+within the interpreter workload budget without changing production behavior.
 
 The seeding entry point discovers available parallelism and supplies the real
 filesystem adapter. Object construction and encoding precede storage; only a
