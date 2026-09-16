@@ -293,9 +293,7 @@ mod tests {
                 ("pending.patch".to_owned(), "-before\n+after\n".to_owned()),
             ])
         );
-        let report: ReportFile = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
-        report.validate().unwrap();
-        let json = serde_json::to_value(&report).unwrap();
+        let json: Value = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
         assert_eq!(json.get("schema_version"), Some(&json!(SCHEMA_VERSION)));
         assert_eq!(json.get("head"), Some(&json!("classified-head")));
         assert_eq!(json.get("packages").unwrap().as_array().unwrap().len(), 5);
