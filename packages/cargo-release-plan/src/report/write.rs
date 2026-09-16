@@ -221,7 +221,7 @@ mod tests {
     use super::*;
     use crate::classify::fixture::{classification, package};
     use crate::groups::Groups;
-    use crate::metadata::{ReportedDep, VersionTarget};
+    use crate::metadata::{DepKind, ReportedDep, VersionTarget};
 
     #[test]
     fn command_publishes_current_patches_and_complete_report_metadata() {
@@ -233,6 +233,7 @@ mod tests {
             name: "pending".to_owned(),
             req: "1.0.1".to_owned(),
             exact_pin: false,
+            kind: DepKind::Normal,
             public: true,
         }];
         let mut pending = package(
@@ -295,12 +296,12 @@ mod tests {
         let report: ReportFile = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
         report.validate().unwrap();
         let json = serde_json::to_value(&report).unwrap();
-        assert_eq!(json["schema_version"], SCHEMA_VERSION);
-        assert_eq!(json["head"], "classified-head");
-        assert_eq!(json["packages"].as_array().unwrap().len(), 5);
+        assert_eq!(json.get("schema_version"), Some(&json!(SCHEMA_VERSION)));
+        assert_eq!(json.get("head"), Some(&json!("classified-head")));
+        assert_eq!(json.get("packages").unwrap().as_array().unwrap().len(), 5);
         assert_eq!(
-            json["packages"][0],
-            json!({
+            json.pointer("/packages/0").unwrap(),
+            &json!({
                 "name": "api", "declared_version": "1.0.0", "group": "api",
                 "status": "needs-increment",
                 "anchor": {"commit": "package-anchor", "version": "1.0.0"},
@@ -311,20 +312,29 @@ mod tests {
                 "dependents": [], "consumer_contract": true, "untracked": ["untracked.rs"]
             })
         );
-        assert_eq!(json["packages"][2]["diff_path"], "diffs/pending.patch");
-        assert_eq!(json["packages"][2]["dependents"], json!(["api"]));
+        assert_eq!(
+            json.pointer("/packages/2/diff_path"),
+            Some(&json!("diffs/pending.patch"))
+        );
+        assert_eq!(
+            json.pointer("/packages/2/dependents"),
+            Some(&json!(["api"]))
+        );
         for index in [1, 3, 4] {
-            assert!(json["packages"][index].get("diff_path").is_none());
+            assert!(
+                json.pointer(&format!("/packages/{index}/diff_path"))
+                    .is_none()
+            );
         }
         assert_eq!(
-            json["non_publishable_packages"],
-            json!([
+            json.get("non_publishable_packages").unwrap(),
+            &json!([
                 {"name": "helper", "declared_version": "1.0.0", "group": "api"}
             ])
         );
         assert_eq!(
-            json["groups"],
-            json!({
+            json.get("groups").unwrap(),
+            &json!({
                 "api": {"members": ["api", "helper"], "consistent": true, "version": "1.0.0"}
             })
         );
@@ -379,7 +389,7 @@ mod tests {
         assert_eq!(output.operations, [Operation::Reset, Operation::Complete]);
         assert!(output.patches.is_empty());
         let report: Value = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
-        assert_eq!(report["packages"], json!([]));
+        assert_eq!(report.get("packages"), Some(&json!([])));
         assert!(message.contains("(0 needing an increment)"));
     }
 

@@ -573,7 +573,7 @@ mod tests {
                         verify,
                         |data| {
                             assert!(!probed.replace(true));
-                            assert_eq!(data.packages[0].name, "api");
+                            assert_eq!(data.packages.first().unwrap().name, "api");
                             "packaging observation".to_owned()
                         },
                     )

@@ -317,7 +317,11 @@ fn report_replaces_the_diffs_of_an_earlier_run() {
     assert!(!stale.exists());
     assert!(out_dir.join("report.json").exists());
     assert!(!out_dir.join("report.json.tmp").exists());
-    let diff_path = report["packages"][0]["diff_path"].as_str().unwrap();
+    let diff_path = report
+        .pointer("/packages/0/diff_path")
+        .unwrap()
+        .as_str()
+        .unwrap();
     assert_eq!(diff_path, "diffs/demo.patch");
     let patch = fs::read_to_string(out_dir.join(diff_path)).unwrap();
     assert!(patch.contains("-pub fn old() {}"));
@@ -361,7 +365,7 @@ fn staging_failure_does_not_publish_a_completion_marker() {
     fixture.write("packages/demo/src/lib.rs", "pub fn changed() {}\n");
     fixture.write("out/report.json", "previous completion marker");
     let out_dir = fixture.path().join("out");
-    fs::create_dir(out_dir.join("report.json.tmp")).unwrap();
+    fs::create_dir_all(out_dir.join("report.json.tmp")).unwrap();
 
     let result = run(&RunInput::Report {
         out_dir: out_dir.clone(),
@@ -370,7 +374,7 @@ fn staging_failure_does_not_publish_a_completion_marker() {
         verbose: false,
     });
 
-    assert!(result.is_err());
+    result.unwrap_err();
     assert!(!out_dir.join("report.json").exists());
     assert!(
         fs::read_to_string(out_dir.join("diffs/demo.patch"))
