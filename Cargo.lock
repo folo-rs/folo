@@ -30,6 +30,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
+ "testing",
 ]
 
 [[package]]

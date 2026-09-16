@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::Report;
 use crate::pal::abstractions::Platform;
 #[cfg(test)]
 use crate::pal::fake::FakePlatform;
@@ -50,6 +51,26 @@ impl Platform for PlatformFacade {
             Self::Real(platform) => platform.process_time(),
             #[cfg(test)]
             Self::Fake(platform) => platform.process_time(),
+        }
+    }
+
+    // Trivial forwarding; lifecycle decisions are covered through the fake platform.
+    #[cfg_attr(test, mutants::skip)]
+    fn print_to_stdout(&self, report: &Report) {
+        match self {
+            Self::Real(platform) => platform.print_to_stdout(report),
+            #[cfg(test)]
+            Self::Fake(platform) => platform.print_to_stdout(report),
+        }
+    }
+
+    // Trivial forwarding; lifecycle decisions are covered through the fake platform.
+    #[cfg_attr(test, mutants::skip)]
+    fn write_to_target(&self, report: &Report) {
+        match self {
+            Self::Real(platform) => platform.write_to_target(report),
+            #[cfg(test)]
+            Self::Fake(platform) => platform.write_to_target(report),
         }
     }
 }
