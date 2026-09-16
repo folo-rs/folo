@@ -156,3 +156,14 @@ The human-readable table is rendered from a fixed column set with widths compute
 formatted cell contents, so adding a column does not require touching the layout logic. The
 JSON output omits the peak fields entirely when the peak is unavailable, which keeps them
 additive for existing consumers.
+
+Session output policy accepts the thread's unwind state and output functions, taking one
+snapshot for every enabled destination after releasing session locks. Unit tests pass
+in-memory observers and synthetic thread-local allocations to exercise silence, independent
+destination selection and snapshot consistency without child processes or global state
+changes. The same policy runs in production and under Miri.
+
+The drop adapter supplies the real unwind state and destinations. It and Cargo-target
+resolution are narrow mutation exclusions: automatic stdout and target-directory output
+belong to integration coverage, while the output policy remains covered by library unit
+tests. Explicit-directory output retains its separate serialization and persistence coverage.
