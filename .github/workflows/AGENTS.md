@@ -35,15 +35,17 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 
 ## Job gating
 
-- Gate non-Cargo checks on the explicit change plan, never on `delta.skip_all`.
+- Gate non-Cargo checks on the explicit change plan, never on Cargo delta's `skip_all`.
   Maintain script-domain inputs and shared consumers in `scripts/build/ValidationPlan.psm1`;
   native-helper impact comes from Cargo delta and is unioned with path-selected domains.
   New test domains must join the full-suite selection. Preserve full tooling validation on
   pushes to `main`, and update the planner/fan-in tests when selection changes.
-- Keep `validate-versions` unconditional, including its live binstall metadata check. It generates
-  release state for every publishable package against its version anchor, so the PR's changed
-  package set cannot skip a package that already needed an increment.
-- Azure OIDC jobs (`test-azure`, `test-azure-gh`) must not run on `merge_group`. The test
+- Keep `validate-versions` unconditional, including its live binstall metadata and SemVer checks.
+  It generates release state for every publishable package against its version anchor, so the
+  PR's changed package set cannot skip a package that already needed an increment.
+- Use sequential steps for checks sharing a job and stop at the first failure. Keep
+  failure-time artifact uploads and resource cleanup, not additional validation passes.
+- The Azure OIDC job (`test-azure`) must not run on `merge_group`. The test
   identity's federated subjects are `pull_request` and the `main` branch ref only.
 - A workflow edit must consume the consumer-contract package set from the release-plan report
   rather than restating it in YAML. A package states this in its own manifest by declaring
@@ -58,8 +60,8 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   (`coverage-notify`) and `alert` stay off that list. If the new job has no skip
   condition, also add its id to `MUST_SUCCEED_JOBS` in that job so a skipped result cannot
   green the fan-in. Change-selected jobs stay in `needs:` and must succeed whenever the plan
-  selects them; update `RequiredChecks.psm1` when adding a new planned job. Keep `changes` and
-  `delta` in the must-succeed list so unavailable plans cannot authorize skips.
+  selects them; update `RequiredChecks.psm1` when adding a new planned job. Keep `prepare`
+  in the must-succeed list so unavailable plans cannot authorize skips.
 - Add the new job to the `alert` job's `needs:` list as well. That list covers everything worth
   an issue after a failed push to `main`, including the advisory jobs the fan-in excludes, so the
   two lists are maintained together rather than derived from each other. Never add
@@ -67,12 +69,16 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   depending on it would file an issue about a cancelled run.
 - The job's GitHub check name is the literal `required-checks` (`name: required-checks`).
   Do not rename it.
-- Merge-queue runs use the same pruned job set as pull requests. A `github.event_name ==
-  'push'` guard that means "full matrix" must stay keyed on `push`, not on
-  `!= 'pull_request'`, or a `merge_group` run would take the full matrix.
+- Keep `merge_group` exclusive to `merge-queue-validation.yml`, using the literal
+  `required-checks` fan-in name and requiring every queue job to succeed. Run only
+  full-workspace dev Clippy, formatting and version readiness there; do not add delta.
+- Keep Standard validation reusable by Deep validation. Only PR events may prune its
+  package/tooling scope or platform matrices. Scheduled/manual calls must not share
+  a cancellation group with main pushes, and their failures belong to the parent reporter.
 - Keep PR/push CI shallow. Repair PRs use ordinary required checks and human review of relevant
   deep-check results; do not introduce a repair registry or special merge gate.
-- Keep deep validation full-scope and main-only, with failure reporting in the same workflow.
+- Keep scheduled validation full-scope and main-only, covering both standard and deep checks
+  with failure reporting in the same workflow.
 - Run checks through the existing developer Just recipes. Keep toolchain, runner, argument and
   pass/fail behavior in those recipes rather than in a separate scheduled implementation.
 - Treat repair branches like other same-repository branches; do not add naming-based gates.

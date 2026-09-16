@@ -31,6 +31,20 @@ jobs:
           $matrix = @{ include = @(Get-ScheduledCheck) } | ConvertTo-Json -Depth 10 -Compress
           "matrix=$matrix" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
 
+  # Reuse every standard check at the same main commit, with no PR/delta pruning.
+  # The caller grants the permissions required by Azure tests and the reusable workflow's
+  # push-only alert job; this workflow's report job owns scheduled failure publication.
+  # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
+  standard:
+    needs: plan
+    uses: ./.github/workflows/standard-validation.yml
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   checks:
     needs: plan
     name: ${{ matrix.id }}
@@ -79,6 +93,75 @@ jobs:
 
   # Low-yield checks run at full workspace scope after the main-only plan gate.
   # Ref: .github/workflows/design.md#shallow-and-deep-validation.
+  build-release:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Run clippy release on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just clippy release
+
+      - name: Run build release on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just build release
+
+  run-examples:
+    needs: plan
+    # Work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
+    env:
+      RUST_BACKTRACE: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Run examples on ${{ matrix.platform }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just run-examples
+
+  # Default features check is platform-agnostic, so run only on Ubuntu for efficiency.
+  default-features-check:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Run default-features-check
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just default-features-check
+
   hack:
     needs: plan
     # Work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
@@ -170,7 +253,7 @@ jobs:
   report:
     # This is a normal failure-reporting job in the same run, including planning/setup failures.
     # Ref: .github/workflows/implementation.md#failure-reporting.
-    needs: [plan, checks, hack, machete, test-arm]
+    needs: [plan, standard, checks, build-release, run-examples, default-features-check, hack, machete, test-arm]
     if: failure()
     runs-on: ubuntu-latest
     permissions:

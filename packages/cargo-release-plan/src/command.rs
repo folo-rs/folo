@@ -205,6 +205,8 @@ fn spawn(
 mod tests {
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt as _;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt as _;
 
     use tempfile::TempDir;
 
@@ -216,6 +218,19 @@ mod tests {
         assert_eq!(subprocess_cwd(Path::new("")), Path::new("."));
         assert_eq!(subprocess_cwd(Path::new(".")), Path::new("."));
         assert_eq!(subprocess_cwd(Path::new("packages")), Path::new("packages"));
+    }
+
+    #[test]
+    fn failure_status_preserves_the_exit_code() {
+        // Distinct ordinary failures must not collapse to a generic diagnostic.
+        for code in [1, 23] {
+            #[cfg(unix)]
+            let status = ExitStatus::from_raw(code << 8);
+            #[cfg(windows)]
+            let status = ExitStatus::from_raw(code);
+            assert!(!status.success());
+            assert_eq!(failure_status(status), code.to_string());
+        }
     }
 
     #[test]

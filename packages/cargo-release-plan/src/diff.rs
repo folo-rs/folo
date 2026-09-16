@@ -381,7 +381,8 @@ fn remaining<'a, 'b>(lines: &'b [&'a str], index: isize) -> &'b [&'a str] {
 /// the lowest reachable diagonal has no `k - 1` to delete from, and the highest
 /// has no `k + 1` to insert from. The same rule decides the step forwards in
 /// [`myers_trace`] and the step backwards in [`backtrack`], so both agree on the
-/// path without recording it.
+/// path without recording it. Equal predecessor positions require deletion:
+/// that step advances the old index, whereas insertion leaves it unchanged.
 fn takes_insertion(reach: &[isize], index: usize, diagonal: isize, edits: isize) -> bool {
     if diagonal == edits.saturating_neg() {
         return true;
@@ -518,6 +519,41 @@ mod tests {
 
     fn count(script: &[Edit], wanted: Edit) -> usize {
         script.iter().filter(|edit| **edit == wanted).count()
+    }
+
+    fn assert_valid_script(old: &[&str], new: &[&str], script: &[Edit]) {
+        let mut old = old.iter();
+        let mut new = new.iter();
+        for edit in script {
+            match edit {
+                Edit::Keep => assert_eq!(old.next().unwrap(), new.next().unwrap()),
+                Edit::Delete => {
+                    old.next().unwrap();
+                }
+                Edit::Insert => {
+                    new.next().unwrap();
+                }
+            }
+        }
+        assert_eq!(old.next(), None);
+        assert_eq!(new.next(), None);
+    }
+
+    #[test]
+    fn benchmark_patch_rendering_reports_bytes_and_ordered_line_counts() {
+        // Unequal edit counts detect swapped statistics; non-ASCII text distinguishes
+        // the rendered byte length from a character count.
+        let expected = "--- a/benchmark.txt\n+++ b/benchmark.txt\n\
+                        @@ -1,1 +1,2 @@\n-old\n+caf\u{e9}\n+extra\n";
+        assert_eq!(
+            benchmark_patch_rendering("old\n", "caf\u{e9}\nextra\n"),
+            (expected.len(), 2, 1)
+        );
+    }
+
+    #[test]
+    fn benchmark_patch_rendering_reports_no_change() {
+        assert_eq!(benchmark_patch_rendering("same\n", "same\n"), (0, 0, 0));
     }
 
     #[test]
@@ -718,6 +754,35 @@ mod tests {
         let diff = render(Some("a\nb\n"), Some("a\nx\nb\n"));
         assert!(diff.text.contains("@@ -1,0 +2,1 @@\n+x\n"), "{}", diff.text);
         assert_eq!((diff.insertions, diff.deletions), (1, 0));
+    }
+
+    #[test]
+    fn overlapping_lines_stay_minimal_at_the_edit_budget() {
+        let old = ["a\n", "b\n"];
+        let new = ["c\n", "a\n"];
+        // Keeping the shared line needs one insertion and one deletion. A budget
+        // below that must fall back, but reaching it must preserve the shared line.
+        for (old, new) in [(&old, &new), (&new, &old)] {
+            for (budget, changed_lines) in [(1, 2), (2, 1)] {
+                let script = edit_script(old, new, budget);
+                assert_valid_script(old, new, &script);
+                assert_eq!(count(&script, Edit::Delete), changed_lines);
+                assert_eq!(count(&script, Edit::Insert), changed_lines);
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_lines_preserve_content_with_the_production_budget() {
+        let old = ["a\n", "b\n"];
+        let new = ["c\n", "a\n"];
+        for (old, new) in [(&old, &new), (&new, &old)] {
+            let script = edit_script(old, new, MAX_EDIT_DISTANCE);
+            assert_valid_script(old, new, &script);
+            let diff = render(Some(&old.concat()), Some(&new.concat()));
+            // Patch statistics describe actual edits, not the unchanged overlap.
+            assert_eq!((diff.insertions, diff.deletions), (1, 1));
+        }
     }
 
     #[test]

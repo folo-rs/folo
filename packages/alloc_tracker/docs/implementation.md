@@ -52,6 +52,13 @@ writes are a relaxed load followed by a relaxed store rather than a read-modify-
 thread readers accordingly see values that may be slightly stale, which is acceptable because
 process-scope figures are approximate by nature.
 
+Process spans sample the registry at their lifetime boundaries and pass the closing totals
+to delta arithmetic as a value. The arithmetic subtracts the opening counters without
+dividing by iterations or converting to floating point; the operation accumulator receives
+whole-span integer totals. Keeping sampling separate lets unit tests exercise exact deltas
+without depending on other tests' allocator traffic. Integration tests exercise the global
+allocator and the complete process-span lifetime.
+
 Outstanding bytes is signed. A block is attributed to whichever thread performs the
 deallocation, so a thread that frees memory allocated elsewhere drives its own outstanding
 count below zero. This is a deliberate consequence of measuring allocator events per thread
@@ -76,6 +83,22 @@ also consume the one-shot flag used by the panic-on-next-allocation debugging fe
 
 Recording happens after the inner allocator call and only when it succeeded, so a failed
 allocation moves no counters.
+
+## Allocation tripwire
+
+The optional panic check consumes a process-global atomic flag before entering the inner
+allocator. Consuming it before raising the panic prevents the panic machinery's own
+allocations from retriggering the check.
+
+Library tests exercise this private check directly without installing the tracking allocator
+globally. Tests that call allocating methods of the tracking wrapper or arm the flag share a
+test-only mutex, so another test cannot consume an armed flag. The test helper catches failures,
+resets the flag and releases the lock before resuming unwind, preventing both flag leakage and
+lock poisoning. This synchronization does not change production code.
+
+Direct calls verify triggering, one-shot consumption, cross-thread arming and explicit
+disabling without unwinding through a `GlobalAlloc` method, which Rust does not permit.
+The scenarios remain inside the process and run under Miri as well as native test runners.
 
 ## Watermark protocol
 
@@ -135,3 +158,14 @@ The human-readable table is rendered from a fixed column set with widths compute
 formatted cell contents, so adding a column does not require touching the layout logic. The
 JSON output omits the peak fields entirely when the peak is unavailable, which keeps them
 additive for existing consumers.
+
+Session output policy accepts the thread's unwind state and output functions, taking one
+snapshot for every enabled destination after releasing session locks. Unit tests pass
+in-memory observers and synthetic thread-local allocations to exercise silence, independent
+destination selection and snapshot consistency without child processes or global state
+changes. The same policy runs in production and under Miri.
+
+The drop adapter supplies the real unwind state and destinations. It and Cargo-target
+resolution are narrow mutation exclusions: automatic stdout and target-directory output
+belong to integration coverage, while the output policy remains covered by library unit
+tests. Explicit-directory output retains its separate serialization and persistence coverage.

@@ -3,6 +3,11 @@
 // The design forbids resolving a full graph or compiling. `--no-deps` is the
 // only Cargo invocation used for classification.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf, absolute};
@@ -29,11 +34,14 @@ use crate::manifest::{
 };
 #[cfg(test)]
 use crate::packaging::PackagingRules;
-use crate::packaging::relativize;
 use crate::{
     InvalidVersionError, LegacyVersionGroupsError, MalformedPrivateApiError, ParseMetadataError,
     ReadFileError, UnsupportedExactRequirementError,
 };
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod dependency_tests;
 
 /// Work-tree snapshot from `cargo metadata --no-deps`.
 #[derive(Debug)]
@@ -352,7 +360,7 @@ impl TrackedMetadata<'_> {
         let package_dir = join_git_rel(self.git.prefix(), &manifest.directory);
         let mut present = Vec::new();
         for path in &self.paths {
-            let Some(relative) = relativize(path, &package_dir) else {
+            let Some(relative) = self.case.relativize(path, &package_dir) else {
                 continue;
             };
             match fs::symlink_metadata(self.git.root().join(path)) {
@@ -391,6 +399,7 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
     // Make the argument absolute before changing Cargo's working directory.
     let manifest_path =
         absolute(manifest_path).map_err(|error| ReadFileError::caused_by(manifest_path, error))?;
+    let manifest_path = cargo_manifest_path(&manifest_path);
     let cwd = manifest_path
         .parent()
         .expect("an absolute manifest filename has a parent directory");
@@ -412,6 +421,23 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
         cwd,
     )?;
     Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+}
+
+/// Uses Cargo's required manifest basename without changing the selected file.
+///
+/// Canonicalized captured paths retain the filesystem's recorded spelling, but
+/// Cargo validates the argument's basename before opening it. Only a probed
+/// filesystem alias can be rewritten; a distinct sensitive path stays distinct.
+pub(crate) fn cargo_manifest_path(path: &Path) -> PathBuf {
+    let Some(name) = path.file_name() else {
+        return path.to_path_buf();
+    };
+    if let Some(parent) = path.parent()
+        && PathCase::probe(parent).same_path(&name.to_string_lossy(), "Cargo.toml")
+    {
+        return path.with_file_name("Cargo.toml");
+    }
+    path.to_path_buf()
 }
 
 fn work_tree_from_metadata(
@@ -960,9 +986,8 @@ fn validated_exact_requirement(requirement: &str) -> Result<Option<Version>, ()>
         return Err(());
     };
     let version = version.trim();
-    if parsed.comparators.len() != 1 || version.split('.').count() != 3 {
-        return Err(());
-    }
+    // Parsing the entire suffix as a version enforces a complete triplet and
+    // rejects additional comparators without separate syntax-counting guards.
     let version = Version::parse(version).map_err(|_error| ())?;
     if !version.pre.is_empty() || !version.build.is_empty() {
         return Err(());
@@ -1310,16 +1335,57 @@ pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String>
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+mod discovery_tests;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod installation_tests;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
 
     use serde_json::json;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::manifest::InstallationDependencies;
 
     fn doc(text: &str) -> DocumentMut {
         parse_document(Path::new("Cargo.toml"), text).unwrap()
+    }
+
+    #[cfg_attr(
+        miri,
+        ignore = "Manifest argument normalization probes filesystem case behavior."
+    )]
+    #[test]
+    fn cargo_manifest_basename_preserves_canonical_and_empty_paths() {
+        for path in ["", "Cargo.toml", "workspace/Cargo.toml"] {
+            assert_eq!(cargo_manifest_path(Path::new(path)), Path::new(path));
+        }
+    }
+
+    #[cfg_attr(miri, ignore = "Probes real directory entries and filesystem aliases.")]
+    #[test]
+    fn cargo_manifest_basename_only_rewrites_a_filesystem_alias() {
+        let directory = tempdir().unwrap();
+        let manifest = directory.path().join("Cargo.toml");
+        fs::write(&manifest, "[workspace]\n").unwrap();
+        let alias = directory.path().join("cargo.toml");
+        let expected = match fs::read(&alias) {
+            Ok(bytes) => {
+                assert_eq!(bytes, fs::read(&manifest).unwrap());
+                &manifest
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => &alias,
+            Err(error) => panic!("filesystem probe failed: {error}"),
+        };
+        assert_eq!(&cargo_manifest_path(&alias), expected);
+        let other = directory.path().join("manifest.input");
+        fs::write(&other, "[workspace]\n").unwrap();
+        assert_eq!(cargo_manifest_path(&other), other);
     }
 
     #[test]
@@ -1556,6 +1622,9 @@ mod tests {
             "=1.2.3-alpha",
             "=1.2.3+build",
             "=1.2.3, <2.0.0",
+            "=1.2.3, =1.2.3",
+            "=1.2.*",
+            "=01.2.3",
             "^1.0.0, =1.2.3",
             "=not-a-version",
         ] {
@@ -1587,7 +1656,7 @@ mod tests {
     fn member_resolution_follows_filesystem_aliases() {
         use std::os::unix::fs::symlink;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = tempdir().unwrap();
         let member = root.path().join("member");
         fs::create_dir_all(&member).unwrap();
         symlink(&member, root.path().join("alias")).unwrap();

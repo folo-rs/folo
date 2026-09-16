@@ -470,6 +470,25 @@ mod tests {
     }
 
     #[test]
+    fn increment_descriptions_preserve_the_requested_decision() {
+        for level in [
+            IncrementLevel::Patch,
+            IncrementLevel::Minor,
+            IncrementLevel::Major,
+        ] {
+            let description = IncrementSpec::Level(level).describe();
+            assert!(description.contains("level"));
+            assert!(description.ends_with(&level.to_string()));
+        }
+        // Prerelease and build metadata are part of an explicit version choice.
+        for version in [v("2.4.6"), v("3.0.0-rc.2+build.7")] {
+            let description = IncrementSpec::Version(version.clone()).describe();
+            assert!(description.contains("version"));
+            assert!(description.ends_with(&version.to_string()));
+        }
+    }
+
+    #[test]
     fn expands_group_when_one_member_is_listed() {
         let plan = PlanFile::new(
             PlanStage::Proposed,

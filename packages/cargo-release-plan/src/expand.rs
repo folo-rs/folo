@@ -106,15 +106,7 @@ fn write_expansion(out_path: &Path, json: &str, preserve_input: bool) -> Result<
     if preserve_input {
         // Exclusive temporary-file creation cannot overwrite another input or another run's
         // staging file. Promotion is the only operation that replaces the requested destination.
-        let parent = out_path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let mut staged = NamedTempFile::new_in(parent)
-            .map_err(|error| WriteFileError::caused_by(out_path, error))?;
-        staged
-            .write_all(json.as_bytes())
-            .map_err(|error| WriteFileError::caused_by(out_path, error))?;
+        let staged = stage_expansion(out_path, json)?;
         _ = staged
             .persist(out_path)
             .map_err(|error| WriteFileError::caused_by(out_path, error.error))?;
@@ -124,6 +116,19 @@ fn write_expansion(out_path: &Path, json: &str, preserve_input: bool) -> Result<
             .map_err(|error| WriteFileError::caused_by(out_path, error))?;
     }
     Ok(())
+}
+
+fn stage_expansion(out_path: &Path, json: &str) -> Result<NamedTempFile, AppError> {
+    let parent = out_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut staged = NamedTempFile::new_in(parent)
+        .map_err(|error| WriteFileError::caused_by(out_path, error))?;
+    staged
+        .write_all(json.as_bytes())
+        .map_err(|error| WriteFileError::caused_by(out_path, error))?;
+    Ok(staged)
 }
 
 /// Protected expansion may not replace the artifact it reads.
@@ -137,6 +142,68 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::ParsePlanError;
+
+    #[test]
+    #[cfg_attr(miri, ignore = "creates missing output directories")]
+    fn expansion_creates_missing_output_parents_in_both_modes() {
+        let directory = tempdir().unwrap();
+        for preserve_input in [false, true] {
+            let output = directory
+                .path()
+                .join(preserve_input.to_string())
+                .join("nested")
+                .join("expanded.json");
+            write_expansion(&output, "complete", preserve_input).unwrap();
+            assert_eq!(fs::read_to_string(output).unwrap(), "complete");
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "stages files beside the requested output")]
+    fn staging_is_complete_and_beside_the_untouched_destination() {
+        let directory = tempdir().unwrap();
+        let output = directory.path().join("expanded.json");
+        fs::write(&output, "previous").unwrap();
+        let staged = stage_expansion(&output, "complete").unwrap();
+        assert_eq!(
+            fs::canonicalize(staged.path().parent().unwrap()).unwrap(),
+            fs::canonicalize(directory.path()).unwrap()
+        );
+        assert_ne!(staged.path(), output);
+        assert_eq!(fs::read_to_string(staged.path()).unwrap(), "complete");
+        assert_eq!(fs::read_to_string(&output).unwrap(), "previous");
+        drop(staged);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "reads proposal files without acquiring a workspace")]
+    fn accepted_destinations_reach_plan_validation_in_both_modes() {
+        let directory = tempdir().unwrap();
+        let input = directory.path().join("plan.json");
+        fs::write(&input, "invalid plan, retained").unwrap();
+        for (preserve_input, output) in [
+            (true, directory.path().join("expanded.json")),
+            (false, directory.path().join("expanded.json")),
+            (false, input.clone()),
+        ] {
+            let error = run_expand(
+                &input,
+                &output,
+                Path::new("unused.toml"),
+                preserve_input,
+                Verbose::new(false),
+            )
+            .unwrap_err();
+            assert!(error.find_source::<ParsePlanError>().is_some());
+            assert_eq!(
+                fs::read_to_string(&input).unwrap(),
+                "invalid plan, retained"
+            );
+        }
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     #[test]
     #[cfg_attr(miri, ignore = "stages files on the host filesystem")]

@@ -1,0 +1,13 @@
+paths:
+  .github/workflows/bench-history.yml:
+    ignore:
+      # reason: GitHub supports queue: max, but actionlint does not recognize the queue key.
+      # Remove this exception when https://github.com/rhysd/actionlint/issues/657 is resolved.
+      # Ref: workflows/implementation.md#workflow-lint-environment.
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'
+  .github/workflows/pr-bench-history.yml:
+    ignore:
+      # reason: GitHub supports queue: max, but actionlint does not recognize the queue key.
+      # Remove this exception when https://github.com/rhysd/actionlint/issues/657 is resolved.
+      # Ref: workflows/implementation.md#workflow-lint-environment.
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'

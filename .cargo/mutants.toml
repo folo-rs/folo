@@ -6,15 +6,12 @@ profile = "mutants"
 
 additional_cargo_args = [
     # avoid spending time on Cargo package manager activity during mutation testing - we use the packages in the lockfile.
-    "--locked"
+    "--locked",
+    # Cargo library unit tests are the mutation-testing boundary. Apply this to
+    # both the build and test phases so integration targets are neither compiled nor run.
+    # Ref: docs/testing.md, "Mutation testing target selection".
+    "--lib"
 ]
-
-# Only run unit tests and integration tests, not doctests because doctests are slow (even after
-# the recent speedups - they are slow when they fail, and they will fail a lot under mutation, so
-# are not really worth using in mutation testing). Likewise, we do not specify benchmarks here
-# because they can have nontrivial overhead due to benchmark harness setup and are rarely doing
-# something that is not already covered by unit tests or integration tests.
-additional_cargo_test_args = [ "--tests" ]
 
 exclude_re = [
     # We typically do not have any API contract for what we expose as human-readable output.
@@ -40,4 +37,9 @@ exclude_re = [
     # reconstructs the same family and is rejected there too. Replacing either `||`
     # with `&&` changes the amount of work but not the selected family.
     'packages/cbh_detect/src/detect/branch\.rs:\d+:\d+: replace \|\| with && in consider_family_seed',
+
+    # Equivalent: hexadecimal parsing bounds each nibble to disjoint bits after
+    # shifting the high nibble, so OR and XOR produce the same byte for every input.
+    # Keep the AND replacement and all parsing/validation mutations enabled.
+    'packages/cargo-release-plan/src/manifest\.rs:\d+:\d+: replace \| with \^ in decode_git_reference',
 ]

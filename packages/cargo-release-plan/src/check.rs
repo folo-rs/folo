@@ -1123,6 +1123,127 @@ mod tests {
     }
 
     #[test]
+    fn inconsistent_group_annotation_targets_its_first_member_manifest() {
+        let targets = [
+            VersionTarget {
+                name: "unrelated".to_string(),
+                version: Version::new(9, 0, 0),
+                manifest_path: PathBuf::from("elsewhere/Cargo.toml"),
+                publishable: true,
+            },
+            VersionTarget {
+                name: "library".to_string(),
+                version: Version::new(1, 4, 0),
+                manifest_path: PathBuf::from("packages/library/Cargo.toml"),
+                publishable: true,
+            },
+            VersionTarget {
+                name: "helper".to_string(),
+                version: Version::new(1, 3, 0),
+                manifest_path: PathBuf::from("tools/helper,notes/Cargo.toml"),
+                publishable: false,
+            },
+        ];
+        // The first member is unpublished and is not the first version target:
+        // neither the classified package list nor positional lookup can locate it.
+        let members = ["helper".to_string(), "library".to_string()];
+        let declared = targets
+            .iter()
+            .map(|target| (target.name.clone(), target.version.clone()))
+            .collect();
+        let groups = BTreeMap::from([(
+            "helper".to_string(),
+            GroupVerdict::new(&members, &declared, &HashSet::new()),
+        )]);
+        let packages = [with_dependencies(
+            "library",
+            Version::new(1, 4, 0),
+            Version::new(1, 4, 0),
+            vec![],
+        )];
+        let render =
+            |format| render_workspace_diagnostics(&packages, &groups, BASE, format, &targets, &[]);
+        let text = render(CheckFormat::Text);
+        for member in &members {
+            assert!(text.contains(&format!("{member}@{}", declared.get(member).unwrap())));
+        }
+        assert_annotation_pair(
+            &text,
+            &render(CheckFormat::Github),
+            "tools/helper%2Cnotes/Cargo.toml",
+            "inconsistent-group",
+        );
+    }
+
+    #[test]
+    fn unpublished_requirement_annotation_targets_the_declaring_manifest() {
+        let targets = [
+            VersionTarget {
+                name: "library".to_string(),
+                version: Version::new(1, 4, 0),
+                manifest_path: PathBuf::from("packages/library/Cargo.toml"),
+                publishable: true,
+            },
+            VersionTarget {
+                name: "helper".to_string(),
+                version: Version::new(1, 4, 0),
+                manifest_path: PathBuf::from("tools/helper/Cargo.toml"),
+                publishable: false,
+            },
+        ];
+        let dependencies = [ExactDependency {
+            source: "helper".to_string(),
+            target: "library".to_string(),
+            requirement: "=1.3.0".to_string(),
+            manifest_path: targets[1].manifest_path.clone(),
+            location: "build-dependencies".to_string(),
+        }];
+        let packages = [with_dependencies(
+            "library",
+            targets[0].version.clone(),
+            targets[0].version.clone(),
+            vec![],
+        )];
+        let render = |format| {
+            render_workspace_diagnostics(
+                &packages,
+                &BTreeMap::new(),
+                BASE,
+                format,
+                &targets,
+                &dependencies,
+            )
+        };
+        let text = render(CheckFormat::Text);
+        let dependency = &dependencies[0];
+        for value in [
+            &dependency.source,
+            &dependency.target,
+            &dependency.requirement,
+            &dependency.location,
+            &format!("={}", targets[0].version),
+        ] {
+            assert!(text.contains(value));
+        }
+        assert_annotation_pair(
+            &text,
+            &render(CheckFormat::Github),
+            "tools/helper/Cargo.toml",
+            "stale-workspace-requirement",
+        );
+    }
+
+    fn assert_annotation_pair(text: &str, github: &str, escaped_file: &str, title: &str) {
+        assert!(!text.starts_with("::error"));
+        assert_eq!(text.lines().count(), 1);
+        let annotation = format!(
+            "::error file={escaped_file},title={title}::{}",
+            escape_data(text)
+        );
+        assert!(github.lines().eq([annotation.as_str(), text]));
+    }
+
+    #[test]
     fn github_format_precedes_each_diagnostic_with_an_annotation() {
         let package = failing("demo", Vec::new());
 

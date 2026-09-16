@@ -11,7 +11,7 @@ The [scheduled validation contract](../../docs/scheduled-validation.md) separate
 check execution, failure triage and repair. Each handoff is an ordinary GitHub issue
 that a human or Local Copilot App agent can understand and act on.
 
-The **Deep validation** workflow runs the full suite against merged `main` on its
+The **Deep validation** workflow runs the full standard and deep suites against merged `main` on its
 schedule, or when started manually on `main`. It is not triggered by PRs or forks.
 Its failure-reporting job files a readable **Scheduled validation failed on &lt;date&gt;**
 issue when planning or checks fail. A triager investigates all reported
@@ -31,12 +31,22 @@ GitHub-hosted workflows do not invoke AI. Final approval and merge remain human.
 
 ### Shallow and deep validation
 
-**Standard validation** runs the ordinary shallow PR, push and merge-queue checks.
-**Deep validation** runs the full deep suite at the main commit selected by its event.
+**Standard validation** runs the ordinary shallow PR and push checks.
+**Merge queue validation** runs a lightweight full-workspace gate for combined candidates.
+**Deep validation** runs the full standard and deep suites at the main commit selected by its event,
+without affected-package or PR-platform pruning. It reuses Standard validation rather than
+maintaining a separate copy of its checks.
 Deep validation covers ordinary Miri, many-seed Miri, mutation testing and careful checks.
-It also runs feature-powerset compilation (`hack`), unused-dependency checks (`machete`)
-and ARM64 tests and benchmark smoke checks (`test-arm`). These lower-yield checks run
+It also runs release-profile Clippy and builds (`build-release`),
+example execution (`run-examples`),
+dependency default-feature policy checks (`default-features-check`), feature-powerset
+compilation (`hack`), unused-dependency checks (`machete`) and ARM64 tests and benchmark
+smoke checks (`test-arm`). These lower-yield checks run
 nightly or on manual dispatch rather than on every push.
+Release-profile Clippy rarely diverges from dev-profile Clippy, release builds add little
+beyond it, examples rarely change or break,
+and dependency default-feature policy mistakes have limited impact and can be repaired
+asynchronously. These checks therefore do not block merging.
 Planning, check jobs and failure reporting belong to that same workflow.
 The local entry points have fixed meanings: `validate-local` is shallow and
 `validate-deep-local` is deep. Repair authors run relevant local deep checks against the
@@ -52,7 +62,7 @@ Each selected package runs its full seed budget in one shard by default. Additio
 shards are reserved for packages approaching the job timeout; scheduled validation
 does not need extra horizontal scaling solely to shorten already-small jobs.
 
-Nightly runs execute the entire deep suite even on unchanged source. Build caches
+Nightly runs execute the entire standard and deep suites even on unchanged source. Build caches
 remain ordinary performance aids, not receipts used to skip validation. Hosted
 execution and reporting do not depend on the availability of a Local App.
 
@@ -68,6 +78,16 @@ Generated diagnostics remain separate from source inputs, including while a chec
 copies the source tree for isolated execution. Partial logs remain available after
 interruption, and genuine checker failures retain their status and artifacts.
 
+Step summaries fit GitHub's upload limit including the authoritative final result
+and exit code. Diagnostic truncation is visible and retains references to complete
+artifacts; it does not change the check verdict.
+
+Failed-run issues retain a bounded excerpt and direct diagnostic links for every
+unsuccessful job, not whole verbose summaries. Omitted diagnostic text is explicit.
+Publication is paced and resumable: retries retain the same attempt's report and
+already-published sections, even if the original logs later expire. Known throttling
+receives bounded backoff; an ambiguous write is not blindly repeated.
+
 An empty mutation shard is explicitly reported as no work, not a passing baseline.
 The shared mutation recipe runs cargo-mutants' baseline for nonempty shards.
 Missing output is not proof of an empty shard. Reproduction instructions preserve
@@ -80,10 +100,13 @@ do not select permissions or opt out of jobs.
 
 ## Job granularity and gating
 
-Standard validation runs each `just` command as its own parallel job rather than one combined
-`validate-local` step. Parallelism gives faster feedback and pinpoints failures by check
-name instead of burying them in a monolithic log. The local recipes define the local
-check suites, while workflow jobs own execution cadence, platform selection,
+Validation groups short, related checks that share a runner environment into named steps,
+avoiding queue and setup costs that outweigh the checks themselves. Preparation shares a
+checkout and runner; version readiness and API compatibility share their release-validation
+environment. Independent expensive checks retain parallel jobs when that improves feedback
+time. Separate steps preserve failure attribution, and each job stops checking at its first
+failure. Artifact collection and resource cleanup still run after failure. The local recipes
+define the local check suites, while workflow jobs own execution cadence, platform selection,
 prerequisites and evidence capture. Clippy stands in for a bare `cargo check` here: Clippy compiles the code as a
 prerequisite to linting it, so a standalone `check` job would only re-prove what a green
 Clippy already guarantees.
@@ -101,15 +124,19 @@ native helpers. Domain selection includes fixtures, configuration and shared con
 just the file containing a test. Shared validation machinery changes exercise every tooling
 check. Ordinary Rust source changes do not by themselves select unrelated tooling checks.
 
-Selection covers the complete pull request or merge-queue candidate, including deleted and
-renamed inputs. An unavailable change set is an error, not an empty selection. Pushes to
-`main` run the full set as a backstop. The workflow itself always starts, so required-check
-reporting does not depend on GitHub's workflow-level path filters.
+Selection covers the complete pull request, including deleted and renamed inputs.
+An unavailable change set is an error, not an empty selection. Pushes to `main` and
+scheduled/manual main runs use the full set as a backstop. The workflow itself always starts,
+so required-check reporting does not depend on GitHub's workflow-level path filters.
 
-Release-plan generation (`validate-versions`) remains unconditional: it compares every
+The `prepare` job publishes both Cargo and non-Cargo scope. Its complete outputs are required
+before downstream checks can run or be accepted as intentionally skipped.
+
+Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
 base. Live binstall metadata validation accompanies it because Cargo target discovery can
-change release obligations without a manifest edit.
+change release obligations without a manifest edit. API compatibility follows successful
+version readiness in the same job using the report's consumer-contract selection.
 
 ## Platform strategy
 
@@ -128,8 +155,8 @@ legs to cut runner cost, leaning on push-to-`main` as the backstop for what it d
 test and docs suites only on the x86_64 Windows and Linux runners. The macOS doctest and
 docs jobs wait for a push to `main`, because re-running these platform-independent
 suites on macOS is rarely informative.
-The release-profile Clippy pass is also main-only. The
-compile-oriented passes (dev Clippy, release build, frozen-minimum check)
+Release-profile Clippy runs only in Deep validation. The
+compile-oriented passes in Standard validation (dev Clippy and frozen-minimum check)
 deliberately keep their macOS leg on PRs, because a cheap macOS cross-compile still catches
 macOS-specific build breaks that the pruned runtime passes would not. MSRV *compilation*
 therefore stays covered on every PR by `check-frozen`, which compiles all targets on the
@@ -138,19 +165,28 @@ pass runs in Deep validation. Because a push to `main` is the first place Standa
 validation's pruned checks can fail,
 that event — unlike a PR — files a tracking issue (see Failure alerting).
 
-The event split is expressed two ways: a job whose every leg is pruned on a PR
-(`clippy-release`) carries a whole-job `github.event_name ==
-'push'` guard, while a job that keeps some legs on a PR (macOS-dropping test/docs, the
-platform-specific compilation jobs) selects its platform list with a `fromJSON` conditional matrix
-keyed on the same event. Both reduce to "the full set on push, the pruned set on a PR".
-A `merge_group` (merge queue) run uses that same pruned set: those guards are false for
-anything that is not `push`. Do not rewrite them as `!= 'pull_request'`, or a queue entry
-would take the full matrix. Push to `main` remains the backstop.
+Only pull-request events select the pruned docs/doctest matrix. Main pushes and
+scheduled/manual main runs use the full matrix and skip delta. Pull-request delta analysis
+uses `origin/main`.
 
-Delta analysis on a queue run uses `merge_group.base_sha` (the commit the queue rebased
-onto) rather than a freshly fetched `origin/main`, so the affected-package set cannot
-drift from the version check's base. Pull requests keep today's `origin/main` baseline.
-Push to `main` still skips delta and validates the whole workspace.
+## Merge queue validation
+
+The merge queue checks the combined candidate with full-workspace dev-profile Clippy,
+formatting and version readiness. Clippy compiles all targets and features on Linux,
+Windows and macOS. No affected-package selection precedes these checks. Minimum-dependency,
+SemVer, binstall, runtime and other standard checks remain in PR and full main validation,
+not in the queue gate.
+
+This gate trades repeated pre-merge validation for earlier merges. Passing PRs do not
+prove that their combined changes pass runtime tests. Full Standard validation on main
+pushes provides early detection; scheduled validation repeats both the full standard and
+deep suites and reports failures even when no new commits arrive. Neither backstop gates
+publication: publish-on-merge can release a combined-change regression before detection.
+
+The dedicated queue workflow handles `merge_group` exclusively and reports the same
+`required-checks` name as PR validation. Enabling the queue also requires changing the
+repository ruleset from strict branch-up-to-date checks to required merge-queue checks.
+Workflow changes alone do not change that live repository policy.
 
 ## External type surface
 
@@ -184,18 +220,37 @@ arrives on the branch, so closing or merging a PR — which pushes nothing to th
 would otherwise leave its in-flight Standard validation run to burn to completion. A dedicated
 companion workflow closes that gap: it triggers on the PR-close event and joins the target
 workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Standard validation
-workflow and the PR benchmark-history workflow pair with such a close companion. Standard validation's
-group (`github.head_ref || github.ref`) already distinguishes merge-queue entries: `head_ref`
-is empty there and `github.ref` is the unique queue ref. The close companion stays
+workflow and the PR benchmark-history workflow pair with such a close companion.
+Merge queue validation has its own queue-ref-specific group. Standard validation uses
+run-specific groups when called by scheduled/manual validation, so neither main pushes nor
+other scheduled runs cancel that full-scope backstop. The close companion stays
 pull-request-only. The exception
-is history collection on `main`, which is keyed on the commit **SHA**: each commit is a distinct
-measurement, so distinct commits must run in parallel and only a redundant re-trigger of the
-*same* commit is deduplicated. A schedule-driven workflow carries a concurrency block only when
-a duplicate run would be expensive: the nightly history backfill groups on itself with
+is history collection on `main`, whose workflow-level group is keyed on the commit **SHA**:
+each commit is a distinct measurement, so only a redundant re-trigger of the *same* commit
+is deduplicated. Manual re-collection also keys on its repair target so different historical
+points remain independent.
+
+Push-to-main history collection runs at most one job per platform across workflow runs.
+Linux and Windows have separate queues, so one platform does not wait for the other.
+Distinct commits wait without occupying runners or cancelling running or pending collection,
+up to GitHub's queue capacity. The limit covers only push-triggered collection: manual runs
+use run-specific collection groups, and downstream analysis does not hold a collection slot.
+Workflow-level deduplication still applies to redundant runs of the same history point.
+
+A schedule-driven workflow carries a concurrency block only when a duplicate run would be
+expensive: the nightly history backfill groups on itself with
 cancellation **off**, so a manual dispatch queues behind the scheduled run rather than
 duplicating hours of benchmarking. Keeping it out of collection's SHA-keyed group matters for
 the same reason — a scheduled run's SHA is the current tip, so a shared group would let the
 nightly and that tip's own collection cancel each other.
+
+PR benchmark collection additionally runs at most one job per platform across the repository.
+Linux and Windows use separate worker pools, so they do not block each other. Other PRs wait
+in the platform's concurrency queue without cancelling running or pending collection, up to
+GitHub's queue capacity. Ref-keyed workflow supersession and the close companion still cancel
+outdated work, including collection waiting for a platform slot. This limit applies only to PR
+collection; delta analysis and comment maintenance do not wait for a collection slot, and main
+history collection and backfill retain their independent concurrency policies.
 
 ## Thin steps
 
@@ -273,7 +328,8 @@ corrected by editing the requirement.
 
 ## Required checks fan-in
 
-Standard validation posts a fan-in job whose GitHub check name is the ruleset string. GitHub's
+Standard and Merge queue validation post a fan-in job whose GitHub check name is the ruleset string.
+Their event triggers are disjoint, so each PR or queue candidate receives one merge gate. GitHub's
 required-checks field is a string match on that name: it cannot express "this matrix
 job, but only the legs that actually ran", and it cannot see a check that was skipped
 rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
@@ -282,7 +338,7 @@ Expected — Waiting for status to be reported forever if they are listed as req
 
 A ruleset that requires merge-blocking Standard validation therefore lists only this fan-in. The
 job is `if: always()`, `needs:` every merge-blocking job in Standard validation (including
-`validate-versions` and `semver-checks`), succeeds when every dependency reports `success` or an
+`prepare` and `validate-versions`), succeeds when every dependency reports `success` or an
 allowed `skipped`, and fails on `failure`, `cancelled`, or any other result.
 Unconditional gates may not skip. Change-selected tooling jobs must succeed when selected;
 only an explicit no-work plan permits them to skip. Missing plans or dependencies fail the
@@ -293,6 +349,9 @@ When a new merge-blocking job is added to Standard validation it is added to thi
 is never added to the GitHub ruleset. Unconditional gates are also named in the fan-in's
 must-succeed list. Matrix jobs that can skip via a job-level `if:` can only be made
 required through this fan-in.
+
+The queue fan-in requires every queue check to succeed; none may skip. It uses the
+same result classifier without a change plan, because queue scope is unconditional.
 
 `alert` keeps a `needs:` list of its own, which also names the advisory jobs the fan-in excludes,
 so a new job joins both. The two lists answer different questions — what blocks a merge, and what
@@ -340,6 +399,11 @@ can never silently pass by testing nothing. All Azure authentication uses GitHub
 workload-identity federation — no long-lived secret is stored — and is gated to same-repo
 runs, since a fork cannot federate into the tenant.
 
+Real-Azure authentication modes share a job and run sequentially against independently
+created test containers. Each pass selects its credential through step-local configuration;
+the application's self-minting mode does not use the developer session for storage access.
+The shared login remains available for test cleanup.
+
 ## Federated identity
 
 Every Azure sign-in in these workflows uses GitHub OIDC workload-identity federation, so no
@@ -366,13 +430,14 @@ Two managed identities exist, each registered with exactly the subjects its even
 | schedule on `main` | `…:ref:refs/heads/main` | prod | `bench-history-backfill.yml` |
 | pull request | `…:pull_request` | prod | `pr-bench-history.yml` |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
+| schedule/manual dispatch on `main` | `…:ref:refs/heads/main` | test | Scheduled `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
 
-`merge_group` is not a trusted subject. Queue runs skip `test-azure` and `test-azure-gh`
-rather than attempting an exchange that cannot succeed.
+`merge_group` is not a trusted subject. Queue validation does not include `test-azure`,
+avoiding an exchange that cannot succeed.
 
 The **prod** identity backs history collection and the PR benchmark workflow; the **test**
-identity backs the Azure-backend test jobs against a throwaway account. Both trust `main` and
+identity backs the Azure-backend test job against a throwaway account. Both trust `main` and
 `pull_request` so each identity's on-main and on-PR consumers can sign in. Granting the prod
 identity a `pull_request` credential is a deliberate tradeoff: it widens prod's write surface
 from "only pushes to `main`" to "any same-repo PR run", accepting a larger blast radius in
@@ -546,7 +611,7 @@ Because a full benchmark run takes hours and a new push *cancels* the in-flight 
 Concurrency), on a PR's first push there is nothing on display yet, and on later pushes the comment
 on display can lag the PR tip by a long way with no way for a reader to tell current numbers from
 hours-old ones. A lightweight **`mark-stale` job** runs at the *start* of each new run (right after
-the short delta preflight, in parallel with the multi-hour collect) and keeps the comment honest
+the short delta preflight, without waiting for a collection slot) and keeps the comment honest
 about the run just begun. When the PR has **no comment yet**, it seeds a *"benchmarking in
 progress"* placeholder — carrying the same hidden dedup marker and disclosing the collection scope,
 so the author knows results are coming rather than seeing nothing for hours; it refreshes that

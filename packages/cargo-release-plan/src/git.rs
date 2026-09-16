@@ -3,6 +3,11 @@
 // The design forbids git2/gix; every read of history, trees, and diffs goes
 // through this type. Ref: docs/implementation.md, "Subprocess boundaries".
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns production code; child modules only organize unit tests."
+)]
+
 use std::collections::HashSet;
 use std::mem;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
@@ -10,10 +15,18 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use ohno::AppError;
 
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
-use crate::manifest::PathCase;
+use crate::manifest::{PathCase, to_git_separators};
 use crate::{
     CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
 };
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) mod testing;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod history_tests;
 
 /// Name Cargo requires for a manifest.
 const MANIFEST_FILE_NAME: &str = "Cargo.toml";
@@ -23,6 +36,10 @@ const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 /// The `glob` magic makes `**` cross directory boundaries, which the default
 /// pathspec syntax does not do.
 const MANIFEST_GLOB_PATHSPEC: &str = ":(glob)**/Cargo.toml";
+
+/// Git history must include manifest spellings that the checkout opens as aliases.
+const MANIFEST_ICASE_PATHSPECS: [&str; 2] =
+    [":(icase,literal)Cargo.toml", ":(icase,glob)**/Cargo.toml"];
 
 /// Tree mode Git records for a symbolic link.
 ///
@@ -234,18 +251,19 @@ impl GitRepo {
     /// Version and membership can change only on those commits, so classification
     /// reconstructs historical workspaces from this subset rather than every
     /// first-parent commit.
-    pub(crate) fn first_parent_manifest_commits(&self, rev: &str) -> Result<Vec<String>, AppError> {
+    pub(crate) fn first_parent_manifest_commits(
+        &self,
+        rev: &str,
+        case: PathCase,
+    ) -> Result<Vec<String>, AppError> {
         let all = self.first_parent_commits(rev)?;
+        let paths = match case {
+            PathCase::Sensitive => [MANIFEST_FILE_NAME, MANIFEST_GLOB_PATHSPEC],
+            PathCase::Insensitive => MANIFEST_ICASE_PATHSPECS,
+        };
         let stdout = run_capture(
             "git",
-            &[
-                "rev-list",
-                "--first-parent",
-                rev,
-                "--",
-                MANIFEST_FILE_NAME,
-                MANIFEST_GLOB_PATHSPEC,
-            ],
+            &["rev-list", "--first-parent", rev, "--", paths[0], paths[1]],
             &self.root,
         )?;
         let touching: HashSet<&str> = stdout
@@ -362,7 +380,11 @@ impl GitRepo {
     ///
     /// An empty input answers without invoking Git, because `git ls-files` with
     /// no pathspec lists the whole repository.
-    pub(crate) fn work_tree_modes(&self, pathspecs: &[&str]) -> Result<WorkTreeModes, AppError> {
+    pub(crate) fn work_tree_modes(
+        &self,
+        pathspecs: &[&str],
+        case: PathCase,
+    ) -> Result<WorkTreeModes, AppError> {
         if pathspecs.is_empty() {
             return Ok(WorkTreeModes::default());
         }
@@ -372,7 +394,11 @@ impl GitRepo {
             "-z".to_string(),
             "--".to_string(),
         ];
-        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
+        args.extend(
+            pathspecs
+                .iter()
+                .map(|pathspec| cased_pathspec(pathspec, case)),
+        );
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
         let mut modes = WorkTreeModes::default();
         for record in split_z(&stdout)? {
@@ -388,7 +414,11 @@ impl GitRepo {
             "--no-renames".to_string(),
             "--".to_string(),
         ];
-        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
+        args.extend(
+            pathspecs
+                .iter()
+                .map(|pathspec| cased_pathspec(pathspec, case)),
+        );
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
         overlay_work_tree_modes(&stdout, &mut modes)?;
         Ok(modes)
@@ -397,7 +427,11 @@ impl GitRepo {
     /// Untracked, non-ignored paths under `pathspec`.
     // Advisory-only listing; classification does not fail on untracked files.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn ls_untracked(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
+    pub(crate) fn ls_untracked(
+        &self,
+        pathspec: &str,
+        case: PathCase,
+    ) -> Result<Vec<String>, AppError> {
         let stdout = run_capture_bytes(
             "git",
             &[
@@ -406,7 +440,7 @@ impl GitRepo {
                 "--others",
                 "--exclude-standard",
                 "--",
-                &dir_pathspec(pathspec),
+                &cased_pathspec(pathspec, case),
             ],
             &self.root,
         )?;
@@ -561,7 +595,7 @@ pub(crate) struct TreeEntry {
 
 impl TreeEntry {
     /// Reads a `<mode> <type> <object>\t<path>` record, skipping anything else.
-    fn parse(record: &str) -> Option<Self> {
+    pub(crate) fn parse(record: &str) -> Option<Self> {
         let (metadata, path) = record.split_once('\t')?;
         let mut fields = metadata.split(' ');
         let mode = fields.next()?;
@@ -658,12 +692,7 @@ fn overlay_work_tree_modes(stdout: &[u8], modes: &mut WorkTreeModes) -> Result<(
 /// file, and paths Git itself reports already use `/` on every platform and are
 /// therefore taken verbatim.
 pub(crate) fn os_path(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    if MAIN_SEPARATOR == '/' {
-        path.into_owned()
-    } else {
-        path.replace(MAIN_SEPARATOR, "/")
-    }
+    to_git_separators(&path.to_string_lossy(), MAIN_SEPARATOR).into_owned()
 }
 
 /// Turns a directory into a pathspec Git matches literally.
@@ -700,17 +729,8 @@ fn cased_pathspec(path: &str, case: PathCase) -> String {
 /// workspace root to remain addressable. Both operands are already in Git's
 /// `/`-separated space.
 pub(crate) fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
-    let prefix = prefix.trim_end_matches('/');
-    let rel = workspace_rel.trim_end_matches('/');
-    let joined = if prefix.is_empty() || prefix == "." {
-        rel.to_string()
-    } else if rel.is_empty() || rel == "." {
-        prefix.to_string()
-    } else {
-        format!("{prefix}/{rel}")
-    };
     let mut normalized = Vec::new();
-    for component in joined.split('/') {
+    for component in prefix.split('/').chain(workspace_rel.split('/')) {
         match component {
             "" | "." => {}
             ".." if normalized.last().is_some_and(|previous| *previous != "..") => {
@@ -867,8 +887,9 @@ mod tests {
     /// Tree entries report the executable bit off the mode field.
     #[test]
     fn tree_records_report_the_executable_bit() {
-        let script = TreeEntry::parse("100755 blob abc\tpackages/foo/run.sh").unwrap();
-        assert!(script.is_executable());
+        let script = testing::tree_entry("packages/foo/run.sh", EXECUTABLE_TREE_MODE);
+        let record = format!("{} blob {}\t{}", script.mode, script.id, script.path);
+        assert!(TreeEntry::parse(&record).unwrap().is_executable());
         let plain = TreeEntry::parse("100644 blob def\tpackages/foo/lib.rs").unwrap();
         assert!(!plain.is_executable());
         // A symbolic link is not a regular file and so is never executable.
@@ -940,11 +961,16 @@ mod tests {
             fs::set_permissions(path, permissions).unwrap();
         }
 
-        let modes = repo.work_tree_modes(&["packages/foo"]).unwrap();
+        let modes = repo
+            .work_tree_modes(&["packages/foo"], PathCase::Sensitive)
+            .unwrap();
         assert!(modes.is_executable("packages/foo/run.sh"));
         assert!(!modes.is_executable("packages/foo/lib.rs"));
         assert!(!modes.is_symlink("packages/foo/run.sh"));
-        assert_eq!(repo.work_tree_modes(&[]).unwrap(), WorkTreeModes::default());
+        assert_eq!(
+            repo.work_tree_modes(&[], PathCase::Sensitive).unwrap(),
+            WorkTreeModes::default()
+        );
     }
 
     #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
@@ -988,6 +1014,9 @@ mod tests {
             modes.symlinks,
             HashSet::from(["made-link".to_string(), "unchanged-link".to_string()])
         );
+        assert!(modes.is_symlink("made-link"));
+        assert!(modes.is_symlink("unchanged-link"));
+        assert!(!modes.is_symlink("made-regular-link"));
     }
 
     /// A malformed mode record cannot invent an executable path.
@@ -1151,57 +1180,11 @@ mod tests {
 
         repo.first_parent_commits("HEAD").unwrap_err();
         repo.ls_files("").unwrap_err();
-        repo.ls_untracked("").unwrap_err();
+        repo.ls_untracked("", PathCase::Sensitive).unwrap_err();
         repo.ls_tree("HEAD", &[""]).unwrap_err();
         repo.ls_tree_paths("HEAD").unwrap_err();
         repo.hash_objects(&["Cargo.toml"]).unwrap_err();
         repo.rev_parse("HEAD").unwrap_err();
-    }
-
-    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
-    #[test]
-    fn a_commit_with_a_reachable_parent_is_not_a_root() {
-        let temp = tempdir().unwrap();
-        let repo = init_repo_with_two_commits(temp.path());
-        let head = repo.rev_parse("HEAD").unwrap();
-        let root = repo.rev_parse("HEAD~1").unwrap();
-
-        assert!(repo.has_parent_or_is_shallow_boundary(&head).unwrap());
-        assert!(!repo.has_parent_or_is_shallow_boundary(&root).unwrap());
-    }
-
-    /// A root commit whose message mentions a parent is still a root.
-    ///
-    /// The commit message follows the headers in `cat-file -p` output, so a message body that
-    /// mentions a parent must not be read as a header.
-    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
-    #[test]
-    fn a_root_commit_whose_message_mentions_a_parent_is_still_a_root() {
-        let temp = tempdir().unwrap();
-        let root = temp.path();
-        run_capture("git", &["init", "-q"], root).unwrap();
-        run_capture("git", &["config", "user.name", "test"], root).unwrap();
-        run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
-        run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
-        fs::write(root.join("first.txt"), "one\n").unwrap();
-        run_capture("git", &["add", "-A"], root).unwrap();
-        run_capture(
-            "git",
-            &[
-                "commit",
-                "-q",
-                "-m",
-                "subject",
-                "-m",
-                "parent 0123456789012345678901234567890123456789",
-            ],
-            root,
-        )
-        .unwrap();
-        let repo = GitRepo::discover(root).unwrap();
-        let head = repo.rev_parse("HEAD").unwrap();
-
-        assert!(!repo.has_parent_or_is_shallow_boundary(&head).unwrap());
     }
 
     /// Show file distinguishes an absent path from a failure.
@@ -1342,5 +1325,47 @@ mod tests {
             .unwrap();
 
         assert_eq!(hashed, recorded);
+        for (id, bytes) in hashed.iter().zip([b"x", b"y"]) {
+            assert_eq!(repo.show_blob_bytes(id).unwrap(), bytes);
+        }
+        repo.show_blob_bytes("missing-object").unwrap_err();
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "queries a real Git index")]
+    fn tracked_resource_queries_keep_recorded_paths_and_exclude_untracked_files() {
+        let fixture = testing::Repository::new();
+        fixture.write("shared/Guide.md", b"tracked");
+        fixture.write("shared/untracked.md", b"not staged");
+        fixture.command(&["add", "shared/Guide.md"]);
+        let repo = fixture.repo();
+
+        assert_eq!(
+            repo.tracked_paths(
+                &[
+                    "shared/Guide.md",
+                    "shared/untracked.md",
+                    "shared/missing.md"
+                ],
+                PathCase::Sensitive,
+            )
+            .unwrap(),
+            ["shared/Guide.md"]
+        );
+        assert!(
+            repo.tracked_paths(&[], PathCase::Sensitive)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            repo.tracked_paths(&["shared/guide.md"], PathCase::Sensitive)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            repo.tracked_paths(&["shared/guide.md"], PathCase::Insensitive)
+                .unwrap(),
+            ["shared/Guide.md"]
+        );
     }
 }

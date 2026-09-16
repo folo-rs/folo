@@ -4,17 +4,30 @@ use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 
-use crate::command::{capture, git};
+use crate::repository::validation::{
+    relative_input, validate_around, validate_commit, validate_history, validate_index,
+    validate_status,
+};
+use crate::{capture, git};
 
 /// Binds all verification reads to the caller's immutable candidate checkout.
 #[derive(Debug)]
-pub(crate) struct Repository {
+pub struct Repository {
     pub(crate) root: PathBuf,
     commit: String,
 }
 
 impl Repository {
-    pub(crate) fn discover(manifest: &Path, commit: &str) -> Result<Self, AppError> {
+    #[must_use]
+    // Trivial accessor, exercised by the integration fixture.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    // Canonicalization and Git discovery require the real-system integration boundary.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn discover(manifest: &Path, commit: &str) -> Result<Self, AppError> {
         let manifest = canonicalize(manifest)?;
         let directory = manifest.parent().ok_or_else(|| {
             VerificationError::new("candidate manifest must have a parent directory")
@@ -26,16 +39,11 @@ impl Repository {
         })
     }
 
-    pub(crate) fn ensure_clean_head(&self) -> Result<(), AppError> {
+    // The integration suite covers these Git queries; validation decisions are unit-tested.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn ensure_clean_head(&self) -> Result<(), AppError> {
         let head = git(["rev-parse", "--verify", "HEAD"], &self.root)?;
-        if head.trim() != self.commit {
-            return Err(VerificationError::new(format!(
-                "candidate HEAD {} differs from requested commit {}",
-                head.trim(),
-                self.commit
-            ))
-            .into());
-        }
+        validate_commit(&head, &self.commit)?;
         let status = capture(
             "git",
             [
@@ -47,42 +55,25 @@ impl Repository {
             ],
             &self.root,
         )?;
-        if !status.is_empty() {
-            return Err(VerificationError::new(format!(
-                "candidate checkout is not clean: {}",
-                String::from_utf8_lossy(&status).replace('\0', "; ")
-            ))
-            .into());
-        }
+        validate_status(&status)?;
         // Status trusts assume-unchanged and skip-worktree flags. Those flags cannot certify
         // released source bytes, even when the index itself names the correct commit.
         let files = capture("git", ["ls-files", "-v", "-z"], &self.root)?;
-        if files
-            .split(|byte| *byte == b'\0')
-            .filter(|entry| !entry.is_empty())
-            .any(|entry| entry.first() != Some(&b'H'))
-        {
-            return Err(VerificationError::new(
-                "candidate index contains flags that conceal tracked worktree changes",
-            )
-            .into());
-        }
-        Ok(())
+        validate_index(&files)
     }
 
-    pub(crate) fn checked<T>(
+    // Trivial wiring of the real Git adapter into the unit-tested recheck sequence.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn checked<T>(
         &self,
         operation: impl FnOnce() -> Result<T, AppError>,
     ) -> Result<T, AppError> {
-        self.ensure_clean_head()?;
-        let result = operation();
-        // Recheck failed operations too: callers must not reuse evidence changed by a failed
-        // metadata or checker invocation. The candidate is never repaired here.
-        self.ensure_clean_head()?;
-        result
+        validate_around(|| self.ensure_clean_head(), operation)
     }
 
-    pub(crate) fn ensure_first_parent(&self, release_line: &str) -> Result<(), AppError> {
+    // Git supplies commit resolution and history; pure comparisons remain mutation-tested.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn ensure_first_parent(&self, release_line: &str) -> Result<(), AppError> {
         for commit in [&self.commit, release_line] {
             let resolved = git(
                 [
@@ -93,38 +84,20 @@ impl Repository {
                 ],
                 &self.root,
             )?;
-            if resolved.trim() != commit {
-                return Err(VerificationError::new(
-                    "the supplied object ID must identify a commit",
-                )
-                .into());
-            }
+            validate_commit(&resolved, commit)?;
         }
         let history = git(
             ["rev-list", "--first-parent", release_line, "--"],
             &self.root,
         )?;
-        if !history.lines().any(|commit| commit == self.commit) {
-            return Err(VerificationError::new(format!(
-                "candidate {} is not on the first-parent history of release line {release_line}",
-                self.commit
-            ))
-            .into());
-        }
-        Ok(())
+        validate_history(&history, &self.commit, release_line)
     }
 
-    pub(crate) fn require_tracked(&self, path: &Path) -> Result<PathBuf, AppError> {
+    // Canonicalization and tracked-file queries are integration-tested real-system adapters.
+    #[cfg_attr(test, mutants::skip)]
+    pub fn require_tracked(&self, path: &Path) -> Result<PathBuf, AppError> {
         let path = canonicalize(path)?;
-        let relative = path.strip_prefix(&self.root).map_err(|error| {
-            VerificationError::caused_by(
-                format!(
-                    "release input is outside the candidate repository: {}",
-                    path.display()
-                ),
-                error,
-            )
-        })?;
+        let relative = relative_input(&path, &self.root)?;
         _ = git(
             [
                 OsStr::new("--literal-pathspecs"),
@@ -139,6 +112,8 @@ impl Repository {
     }
 }
 
+// The integration suite covers native filesystem lookup and its error propagation.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, AppError> {
     fs::canonicalize(path).map_err(|error| {
         VerificationError::caused_by(
@@ -154,4 +129,16 @@ pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, AppError> {
 #[display("{reason}")]
 pub(crate) struct VerificationError {
     reason: String,
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(Repository: RefUnwindSafe, UnwindSafe);
 }

@@ -1,6 +1,6 @@
 #requires -Version 7
 
-# cargo-delta orchestration shared by the local `just delta*` recipes and the CI `delta` job.
+# cargo-delta orchestration shared by local `just delta*` recipes and CI preparation.
 #
 # cargo-delta answers which workspace packages are affected by this branch's changes when
 # compared with a caller-selected baseline revision. The validation matrix can then scope itself
@@ -57,7 +57,7 @@ function Select-ExistingPackage {
 }
 
 function Get-DeltaOutput {
-    # Shapes an affected-package list into the three step outputs the CI `delta` job publishes:
+    # Shapes an affected-package list into the step outputs CI preparation publishes:
     # `packages` (space-separated, the form `just package="..."` expects), `packages_json` (a JSON
     # array the matrix `contains(fromJson(...))` checks consume), and `skip_all` ('true' when
     # nothing is affected, so dependent jobs can short-circuit). Pure so the exact JSON shaping is
@@ -82,14 +82,14 @@ function Get-DeltaOutput {
 }
 
 function Get-DeltaWorkflowOutput {
-    # Shapes the Standard validation `delta` job output lines while keeping workflow-only branching under
-    # Pester coverage. Push-to-main runs must keep the full workspace as the validation backstop;
-    # pull requests and merge-queue runs use cargo-delta with the checkout's already-complete
-    # history.
+    # Shapes Standard validation's Cargo scope outputs while keeping workflow-only branching under
+    # Pester coverage. Main pushes and scheduled/manual callers keep the full workspace;
+    # only pull requests use cargo-delta with the checkout's already-complete history.
+    # Ref: .github/workflows/implementation.md#scheduled-standard-validation.
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)][AllowEmptyString()][string] $EventName,
+        [Parameter(Mandatory)][ValidateSet('push', 'pull_request', 'schedule', 'workflow_dispatch')][string] $EventName,
         [AllowEmptyString()][string] $BaselineRevision = '',
         [scriptblock] $Analyze = {
             param([hashtable] $Argument)
@@ -97,8 +97,8 @@ function Get-DeltaWorkflowOutput {
         }
     )
 
-    if ($EventName -eq 'push') {
-        Write-Host 'Push to main detected, running full workspace validation.'
+    if ($EventName -cne 'pull_request') {
+        Write-Host "$EventName selects full workspace validation without cargo-delta."
         return @(
             'packages='
             'packages_json=[]'
@@ -154,9 +154,8 @@ function Invoke-CargoDelta {
     param(
         [string] $ConfigPath = (Resolve-Path 'delta.toml').Path,
         [switch] $SkipFetch,
-        # Revision whose tree anchors the Git comparison. Local runs and pull requests use
-        # origin/main; merge-queue runs pass merge_group.base_sha so scoping matches the queued
-        # candidate's base.
+        # Revision whose tree anchors the Git comparison. Local runs and pull requests default
+        # to the release branch; callers may pin another comparison commit explicitly.
         [string] $BaselineRevision = 'origin/main'
     )
 

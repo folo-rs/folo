@@ -32,6 +32,13 @@ function Get-MutantsExcludeArgument {
     )
 
     $exclude = @(
+        # Cargo's --lib restricts builds/tests, not cargo-mutants source discovery. Binary
+        # shells (including their private helpers) are not compiled by that runner. Keep
+        # shared implementation in the library, outside these conventional binary paths.
+        # Ref: docs/testing.md, "Mutation testing target selection".
+        '-e', '**/src/main.rs',
+        '-e', '**/src/bin/**',
+
         # Parts of this package require Criterion to work and other parts are currently not tested
         # as there is no public way to simulate a system topology for `many_cpus`.
         '-e', 'many_cpus_benchmarking',
@@ -137,9 +144,10 @@ function Get-MutantsExcludeArgument {
 
 function Get-MutantsShardArgument {
     # Converts the shared 1-based "N/M" shard spec into cargo-mutants' native 0-based `--shard`
-    # argument (`@('--shard', '0/M') .. @('--shard', '(M-1)/M')`). An empty spec means "no
-    # sharding" and yields an empty array so every mutant runs in one job. Throws (via Sharding)
-    # for a malformed spec.
+    # argument and selects round-robin distribution to spread expensive source regions across
+    # runners. Ref: docs/build-and-tooling.md, "Mutation target selection".
+    # An empty spec yields no arguments so every mutant runs without sharding.
+    # Throws (via Sharding) for a malformed spec.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
@@ -151,7 +159,7 @@ function Get-MutantsShardArgument {
     }
 
     $shard = ConvertFrom-ShardSpec -Spec $Spec
-    return @('--shard', ('{0}/{1}' -f ($shard.Index - 1), $shard.Count))
+    return @('--shard', ('{0}/{1}' -f ($shard.Index - 1), $shard.Count), '--sharding', 'round-robin')
 }
 
 function Invoke-MutantsCommand {

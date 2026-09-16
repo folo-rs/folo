@@ -196,6 +196,14 @@ stream that cannot take it fails the command. Diagnostics — verbose notes,
 warnings, the session banner, the final error message — are best effort. Nothing
 panics on a closed pipe, which matters most after a session has been committed.
 
+The output boundary separates selecting a process stream from writing to it.
+Required-output writers propagate write and flush failures; diagnostic writers
+attempt both operations without propagating either failure. In-memory writers
+exercise these policies, including the bytes present when flushing. Only the
+adapters selecting real stdout or stderr are excluded from mutation testing:
+observing those streams belongs in process-level integration tests, not the
+library unit-test harness. The write policies remain mutation-tested.
+
 ### Session age
 
 The wall clock is read in exactly two places, both for the age column: once by

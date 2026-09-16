@@ -102,6 +102,14 @@ resolver = "2"
         fs::read_to_string(self.path().join(rel)).unwrap()
     }
 
+    /// Renames through a distinct entry so case aliases never collide with the destination.
+    pub(crate) fn rename_case(&self, from: &str, to: &str) {
+        let temporary = self.path().join("case-rename-intermediate");
+        assert!(!temporary.exists());
+        fs::rename(self.path().join(from), &temporary).unwrap();
+        fs::rename(temporary, self.path().join(to)).unwrap();
+    }
+
     pub(crate) fn git(&self, args: &[&str]) -> String {
         let mut command = hermetic_git();
         command.arg("-C");

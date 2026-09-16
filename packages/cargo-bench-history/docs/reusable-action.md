@@ -855,6 +855,15 @@ paid once by us; the alternative charges every consumer an extra file whose purp
 non-obvious and which is easy to omit, silently losing the cancellation. Trading our complexity
 for theirs is the whole point of the layer.
 
+**Collection queues are separate from supersession.** The predefined workflows queue PR
+collection per platform across PRs, and push collection per platform across commits. Use
+job-level `cancel-in-progress: false` with `queue: max`, and namespace the group by repository,
+instance, flow and platform. Different platforms and analysis/publication jobs remain
+independent. Workflow-level cancellation still replaces an older run of the same PR; history
+deduplication targets the same commit and recollection target, not different commits. Manual
+history runs use their own groups so repairs do not sit behind the push backlog. Queueing
+belongs to GitHub, not a running worker waiting on a lock.
+
 ### 4.8 The densification flow (`backfill`)
 
 Analysis needs *neighbouring* points, not just the commit under test: a lone measurement on
@@ -1705,6 +1714,14 @@ that every approved action contract is ready for production cutover. Before Phas
 These are completion criteria for the existing phases, not additional features. Workflows
 continue to use their current implementation until the cutover gate is satisfied. Neither
 first publication nor a green unit suite substitutes for that gate.
+
+**Next implementation unit.** Complete the companion's result handoff and lifecycle safeguards
+before migrating workflows: consume the tool's JSON verdict and rendered summary, validate
+intended/completed platform sets, disclose missing platforms in both sinks, and require a
+fully judged, complete clean result for all-clear. Empty-scope cleanup creates its explanatory
+note even on a PR with no previous comment. Cover the actual HTTP request/response and retry
+logic through a controllable transport without live GitHub writes. The temporary-PR-results
+plus Azure-baseline storage view is the next separate unit after this companion work.
 
 **Phase 3 — Cut the monorepo over to the companion.** Replace the report-sink PowerShell
 modules with calls to the companion, preserving the benchmark triggers, collection and analysis

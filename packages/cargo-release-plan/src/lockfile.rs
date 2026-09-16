@@ -622,6 +622,35 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_lockfile_closures_sums_the_requested_walks() {
+        let text = r#"
+[[package]]
+name = "tool"
+version = "0.1.0"
+dependencies = ["dependency"]
+
+[[package]]
+name = "dependency"
+version = "1.0.0"
+"#;
+        // Repetition accumulates each walk, while selecting the leaf root yields no dependencies.
+        assert_eq!(benchmark_lockfile_closures(text, "tool", "0.1.0", 3), 3);
+        assert_eq!(
+            benchmark_lockfile_closures(text, "dependency", "1.0.0", 1),
+            0
+        );
+    }
+
+    #[test]
+    fn benchmark_lockfile_closures_does_not_walk_when_none_are_requested() {
+        // No root lookup is needed when the requested workload contains no walks.
+        assert_eq!(
+            benchmark_lockfile_closures("version = 4\n", "tool", "0.1.0", 0),
+            0
+        );
+    }
+
+    #[test]
     fn a_lockfile_without_packages_has_an_empty_closure() {
         let lockfile = Lockfile::parse("version = 4\n", LABEL).unwrap();
         assert!(
@@ -1211,6 +1240,56 @@ source = "registry+https://example.invalid"
                 .unwrap(),
             BTreeMap::from([("foo".to_owned(), BTreeSet::from(["1.0.0".to_owned()]))])
         );
+    }
+
+    #[test]
+    fn explicit_patch_origins_do_not_require_named_registry_configuration() {
+        let dependency = LockEntry {
+            name: "foo".to_owned(),
+            version: Version::new(1, 0, 0),
+            source: None,
+            dependencies: Vec::new(),
+        };
+        for (origin, index) in [
+            ("crates-io", "https://github.com/rust-lang/crates.io-index"),
+            (
+                "https://example.invalid/index",
+                "https://example.invalid/index",
+            ),
+        ] {
+            let installation = InstallationGraph {
+                patches: vec![DependencyPatch {
+                    origin: origin.to_owned(),
+                    name: "foo".to_owned(),
+                    replacement: Ok(InstallationDependency {
+                        name: "foo".to_owned(),
+                        requirement: None,
+                        source: DependencySource::Path(PackageIdentity {
+                            name: "foo".to_owned(),
+                            version: Version::new(1, 0, 0),
+                        }),
+                    }),
+                }],
+                registry_error: Some(installation_error(
+                    ReadFileError::new("unrelated named registry configuration").into(),
+                )),
+                ..InstallationGraph::default()
+            };
+            assert_eq!(
+                installation
+                    .allows(
+                        &[InstallationDependency {
+                            name: "foo".to_owned(),
+                            requirement: None,
+                            source: DependencySource::Registry(index.to_owned()),
+                        }],
+                        &dependency,
+                        "tool",
+                    )
+                    .unwrap(),
+                Some(true)
+            );
+        }
     }
 
     #[test]

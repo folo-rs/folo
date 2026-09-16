@@ -74,9 +74,11 @@ function Invoke-ScheduledCheck {
         $_ | Out-String | Set-Content -LiteralPath (Join-Path $OutputDirectory 'execution-error.txt')
     } finally {
         $conclusion = if ($exitCode -eq 0) { 'PASSED' } else { 'FAILED' }
-        Add-Content -LiteralPath $summary -Value "`n## Final result: $conclusion`n`nExit code: $exitCode"
+        Complete-ScheduledSummary -SummaryPath $summary -Footer "`n## Final result: $conclusion`n`nExit code: $exitCode`n"
         if ($env:GITHUB_STEP_SUMMARY) {
-            Get-Content -LiteralPath $summary | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+            # This step owns the entire payload. Copy bytes without newline conversion or a BOM
+            # so the finalized artifact's byte budget also governs the uploaded step summary.
+            [IO.File]::Copy($summary, $env:GITHUB_STEP_SUMMARY, $true)
         }
         Write-Host "$($Check.id): $conclusion. Full diagnostics: $OutputDirectory"
     }

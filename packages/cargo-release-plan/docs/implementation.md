@@ -44,6 +44,12 @@ Classification and report validation share the status derivation from anchor,
 declared version, and change evidence. Deserialization cannot manufacture a pending
 release without a version increase or comparison evidence for an anchorless package.
 
+Report group validation separates member ordering from uniqueness. Ordinary sortedness
+checks the order, while one membership set rejects repeated members within or across
+groups. Together these enforce strictly increasing members without a redundant strict
+comparison. Shape tests keep package references reciprocal while independently varying
+group size, canonical naming, ordering and uniqueness.
+
 ## Subprocess boundaries
 
 All repository access goes through `GitRepo`, which spawns the installed `git`.
@@ -71,6 +77,11 @@ directories to cover successful output capture and nonzero exits. Tests that nee
 repository state create it explicitly in temporary fixtures; integration tests
 share a hermetic fixture. The source tree's Git metadata is never a test prerequisite.
 
+Cargo subprocess arguments retain the required `Cargo.toml` basename even when
+canonicalized captured inputs record another spelling. This conversion follows
+the containing directory's probed alias behavior; it never redirects a distinct
+manifest on a sensitive filesystem. Git lookups continue to use recorded spelling.
+
 ### Test boundaries
 
 Pure decision and validation tests own the combinations of versions, dependency
@@ -92,13 +103,39 @@ Fixtures remain independently mutable. Immutable Git initialization and empty
 global configuration can be shared within a test process, while commits still
 use Git's normal index and filtering behavior. Process-local reuse must not be
 assumed to span nextest's separate test processes. Both native and mutation runs
-exercise the same behavioral suite; runtime reductions do not rely on a relaxed
-deadline or mutation-only test exclusions.
+use Cargo's test classifications: ordinary testing includes integration targets,
+while mutation testing selects only library unit-test targets under the
+[workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
+
+History acquisition unit tests use small hermetic Git histories without loading
+Cargo metadata. They verify first-parent ordering, manifest selection and endpoint
+retention directly. Local shallow fetches exercise missing-parent evidence and
+preserve the distinction between a truncated branch and a true root in the same
+repository; commit messages remain separate from parent headers.
+
+Installation acquisition unit tests use small temporary repositories without
+Cargo metadata or resolution. They distinguish historical blobs from work-tree
+files, check ancestor and filename configuration precedence, and retain missing
+versus unreadable-input behavior. Pure source-comparison and patch-applicability
+tests cover the decisions independently of acquisition.
+
+Released-file discovery unit tests use small Git indexes and filesystem fixtures
+without constructing or resolving Cargo workspaces. They exercise selection,
+presence, modes and cleaned blob bytes at the acquisition boundary. Optional
+reads and hash-input validation inject metadata and byte-read observations so
+disappearance between operations, permission failures and symlink rejection remain
+deterministic without races, delays or host symlink privileges. Real-filesystem
+link tests also exercise the metadata adapter on platforms that permit them.
 
 Filesystem path tests create symlinked temporary roots explicitly rather than
 depending on the host's temporary-directory layout. Expected destinations use a
 canonical existing ancestor followed by the missing suffix, preserving assertions
 about symlink resolution and parent traversal without assuming a root spelling.
+Artifact path resolution accepts injected canonicalization and directory queries
+for deterministic operational-error tests. A transient failure must propagate even
+if a subsequent query would succeed; tests do not depend on filesystem races or
+the host account's permissions. Output staging is tested before promotion so its
+same-directory placement, complete contents, and unchanged destination are observable.
 
 ## Workspace snapshots
 
@@ -127,6 +164,20 @@ Each snapshot resolves the package fields that may inherit from
 formatting changes do not masquerade as inherited-value changes. Dependency
 table kinds are retained so versionless dev dependencies omitted by Cargo do not
 create false inherited-value changes.
+
+Exact dependencies are discovered from effective raw declarations, not Cargo's
+normalized requirements. Both package identity and resolved member directory
+must match. Parsing the entire suffix after `=` as a SemVer version enforces a
+complete triplet and rejects compound requirements; separate prerelease and
+build-metadata checks retain the plain-release-only rule.
+
+Dependency unit tests use synthetic metadata and parsed manifests for declaration
+and exposure decisions. Small shared Git fixtures cover tracked-member selection
+and historical path acquisition without Cargo resolution. Canonical fallback
+tests use equivalent filesystem paths without requiring symlink privileges.
+Exposure tests retain propagation through private intermediaries, revisit
+earlier dependents until closure settles, and distinguish normal edges from
+build and development edges at every hop.
 
 ## Classification
 
@@ -192,10 +243,24 @@ package are flattened to the archive root, matching Cargo's layout. Their
 tracked state is queried explicitly so an untracked external README cannot affect
 a verdict.
 
-Path case is probed once at the workspace root and reused for member matching,
-declared-resource resolution, and default README detection. Git's recorded
-resource spelling is retained for blob and mode lookups. An inconclusive probe
+Path case is probed at the workspace root and reused throughout each current and
+historical snapshot. Relative-path matching compares whole components and retains
+Git's recorded suffix. Historical manifests, configuration and lockfiles resolve
+to recorded tree paths before blob lookup. Implicit path members use recorded
+directory keys, so dependency aliases cannot omit members or introduce duplicate
+membership. The manifest-history pathspec follows the same probed rules.
+
+The read-only filesystem probe forwards directory entries and case-flipped entry
+checks, without following symbolic links, to a pure decision function. Unit tests
+exercise both possible filesystem responses and ambiguous entries independently of the host volume;
+real-filesystem regressions verify the acquisition boundary. An inconclusive probe
 chooses case-sensitive matching, which does not widen the selected content.
+Insensitive historical selection uses a full Git tree listing: Git can record
+files under differently cased directory prefixes that merge in the checkout,
+and `ls-tree` cannot express case-insensitive pathspecs. Final packaging and
+resource matching determine the released files, not the breadth of the listing.
+Cargo's own reserved packaging names and include/exclude patterns retain their
+literal matching semantics.
 
 ### Patch rendering
 
@@ -204,6 +269,13 @@ edit distance rather than total file size, and it falls back to a whole-file
 replacement after the budget is exhausted. The fallback remains a correct patch
 and cannot change the verdict, which was already established from object ids and
 modes.
+
+The search preserves the furthest candidate after taking each edit, not merely
+the furthest predecessor. Deletion advances the old-line position and insertion
+does not, so equal predecessor positions require deletion. Forward search and
+backtracking use the same choice. Small overlapping-line fixtures verify valid
+line consumption, minimal edits within the budget, and valid replacement below
+that budget without selecting a preferred spelling among equivalent scripts.
 
 The renderer carries a file's content and mode together so an absent side cannot
 accidentally receive a mode. Binary files receive presence and mode headers but
@@ -261,7 +333,9 @@ library artifact into an installable binary artifact.
 
 Each endpoint that has an installable binary target must have a lockfile resolving
 the package at its corresponding declared version. An endpoint without such a
-target contributes an empty closure and does not require a lockfile. Missing or
+target contributes an empty closure and does not require a lockfile. Endpoint
+selection belongs to closure comparison itself, so classification needs no
+separate binary-target gate. Missing or
 incomplete required lockfile data stops classification because regenerating
 historical resolution would violate the offline, no-full-resolution boundary. A
 package absent from the baseline returns as new before lockfile comparison
@@ -414,6 +488,14 @@ candidate again. Classification uses the same pinned release baseline throughout
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
 
+The convergence loop is separate from the callback that rewrites manifests,
+resolves offline, classifies and captures each pass. It returns only when both
+version consequences and captured file contents are unchanged. Library tests
+drive successive resolver outputs through this same loop, including changing
+files with unchanged version decisions, before any final evidence verification.
+The loop returns the stable artifacts; the callback retains that pass's
+classification in the caller for report emission.
+
 Cycle history retains a Git object digest for each complete version/artifact
 state rather than retaining serialized lockfiles and manifests for every pass.
 Input fingerprint fields use fixed-width little-endian lengths so changing the
@@ -449,6 +531,15 @@ Git's `core.quotePath` output. Quotes, backslashes, and control characters are
 escaped so a path cannot forge another terminal line or GitHub workflow command.
 GitHub command properties receive their additional delimiter escaping.
 
+Classification emits lazy notes through a diagnostic sink. Its stderr adapter keeps
+the ordinary verbose toggle; recording sinks let unit tests observe emission
+conditions and computed values without process-global output capture. Status
+explanations consume the completed classification and do not decide its verdict.
+
+Renderer tests compare GitHub annotations with the generated plain diagnostics,
+including the manifest destination for unpublished version-group members. They
+assert structured fields and scenario values rather than freezing advisory prose.
+
 Subprocess stderr remains intact because Git and Cargo already quote their own
 paths, and escaping the entire diagnostic would destroy its multiline structure.
 
@@ -469,5 +560,9 @@ scale with workspace size:
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
 or parse state, and its fixed allocator model would omit a material part of their
-cost. The benchmark-only surface is gated behind `private-test-util` and does not
-participate in normal builds.
+cost. The benchmark-only surface is available in unit-test builds and through
+`private-test-util`, but does not participate in normal builds. Small unit tests
+exercise the adapters' byte and line statistics, root selection and repeated-walk
+totals without running a benchmark harness. Both adapters and their underlying
+algorithms participate in library-only mutation testing; benchmark smoke runs
+separately exercise the measured workloads without collecting measurements.

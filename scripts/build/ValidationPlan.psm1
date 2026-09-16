@@ -1,8 +1,7 @@
 #requires -Version 7
 
-# Plans non-Cargo Standard validation before any toolchain is installed, using only Git and
-# the runner's PowerShell. Bootstrapping Rust here would defeat the lightweight selection of
-# workflow lint and script analysis. Cargo dependency impact is added by the existing delta job.
+# Plans non-Cargo Standard validation in the prepare job before toolchain setup, using only
+# Git and the runner's PowerShell. The same job adds Cargo dependency impact after setup.
 # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -158,7 +157,7 @@ function Read-ScriptDomain {
 }
 
 function Get-ValidationScriptDomain {
-    # The delta job adds dependency-aware selection for native helpers exercised by Pester.
+    # Preparation adds dependency-aware selection for native helpers exercised by Pester.
     # In particular, an unrelated Cargo.lock edit is not a reason to run every script suite.
     [CmdletBinding()]
     [OutputType([string])]
@@ -237,26 +236,18 @@ function Get-ValidationChangedPath {
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)][ValidateSet('pull_request', 'merge_group')][string] $EventName,
         [Parameter(Mandatory)][hashtable] $EventData
     )
 
-    if ($EventName -ceq 'pull_request') {
-        $base = $EventData.pull_request.base.sha
-        $head = $EventData.pull_request.head.sha
-    } else {
-        $base = $EventData.merge_group.base_sha
-        $head = $EventData.merge_group.head_sha
-    }
+    $base = $EventData.pull_request.base.sha
+    $head = $EventData.pull_request.head.sha
     foreach ($revision in @($base, $head)) {
         if ($revision -isnot [string] -or $revision -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Change planning requires the event base and head commit SHAs.'
         }
     }
-    if ($EventName -ceq 'pull_request') {
-        $base = (Invoke-ValidationGit -Argument @('merge-base', $base, $head)).Trim()
-    }
-    Write-Verbose "Comparing $EventName commits $base..$head; renames contribute both removed and added paths."
+    $base = (Invoke-ValidationGit -Argument @('merge-base', $base, $head)).Trim()
+    Write-Verbose "Comparing pull-request commits $base..$head; renames contribute both removed and added paths."
     $output = Invoke-ValidationGit -Argument @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', $base, $head, '--')
     return $output.Split([char] 0, [StringSplitOptions]::RemoveEmptyEntries)
 }
@@ -265,16 +256,17 @@ function Get-ValidationWorkflowPlan {
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
-        [Parameter(Mandatory)][ValidateSet('push', 'pull_request', 'merge_group')][string] $EventName,
-        [Parameter(Mandatory)][hashtable] $EventData
+        [Parameter(Mandatory)][ValidateSet('push', 'pull_request', 'schedule', 'workflow_dispatch')][string] $EventName,
+        [Parameter(Mandatory)][hashtable] $EventData,
+        [Parameter(Mandatory)][string] $Ref
     )
 
-    if ($EventName -ceq 'push') {
-        if ($EventData.ref -cne 'refs/heads/main') { throw 'Full validation is reserved for pushes to main.' }
-        Write-Verbose 'Push to main selects every tooling check as the full-validation backstop.'
+    if ($EventName -cne 'pull_request') {
+        if ($Ref -cne 'refs/heads/main') { throw 'Full validation is reserved for main.' }
+        Write-Verbose "$EventName on main selects every tooling check without a changed-path comparison."
         return Get-ValidationPlan -ChangedPath @() -Full
     }
-    $paths = @(Get-ValidationChangedPath -EventName $EventName -EventData $EventData)
+    $paths = @(Get-ValidationChangedPath -EventData $EventData)
     return Get-ValidationPlan -ChangedPath $paths
 }
 

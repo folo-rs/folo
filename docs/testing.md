@@ -8,6 +8,36 @@ tests.
 The `unwrap()` / `expect()` rule (both test and production sides) lives in
 [`docs/error-handling.md`](error-handling.md).
 
+## Unit tests stay inside the process
+
+A **unit test** exercises logic within the current process. Anything that reaches
+outside the process belongs in an **integration test**: real filesystem access,
+child processes, network requests, external databases, or operating-system services.
+A temporary directory, local emulator, loopback connection or self-spawned test
+harness still crosses that boundary.
+
+Keep Rust unit tests in `#[cfg(test)]` modules and real-system tests in Cargo
+`tests/` targets. Apply the same boundary when organizing tests in other languages.
+Cargo's target selection is a mechanism, not a definition of test scope: placing
+an I/O test under `src/` does not make it a unit test.
+
+Test parsing, serialization, decisions and transformations using in-memory values,
+buffers and simple fakes. Separate these from the small adapters that perform I/O.
+Do not introduce subprocess protocols, environment-variable dispatch or child test
+harnesses merely to make a unit test observe a real-system boundary. Keep those
+scenarios as integration tests instead of adding production machinery only for
+test isolation.
+
+Threads and synchronization within the same process can be unit-tested with
+in-memory shared state; they do not justify external I/O. Pure path manipulation
+and an in-memory filesystem fake are also unit-testable, unlike touching the real
+filesystem. A test ignored by Miri because it needs the real operating system
+should be checked for misplaced integration coverage.
+
+Do not move real-system tests into the unit harness to catch a mutation. Keep the
+logic unit-tested, retain integration coverage of the adapter, and justify any
+necessary narrow mutation exclusion under the policy below.
+
 ## Test behavior, not checked-in wording
 
 Do not test that checked-in source, configuration, prompts or documentation contain
@@ -217,6 +247,38 @@ primitives instead — these are Miri-compatible.
 This rule applies even when `parking_lot` would offer a measurable performance
 benefit: Miri coverage is more valuable than the fast-path savings.
 
+## Mutation testing target selection
+
+Mutation testing builds and runs Cargo library unit-test targets (`--lib`).
+Cargo integration-test targets are excluded because their repeated
+build and execution cost is not part of the mutation-testing budget. Doctests,
+binary targets, examples, and benchmarks also stay outside this selection.
+
+Cargo's `--lib` selector determines which harness runs; it does not enforce the
+[in-process unit-test boundary](#unit-tests-stay-inside-the-process). Authors must
+keep external interactions in integration targets rather than putting them into
+the library harness to participate in mutation testing.
+
+CLI applications keep their implementation and its unit tests in a library crate,
+with a thin binary entry point. This lets their implementation participate in
+library-only mutation testing without testing the binary shell.
+
+Binary-only code belongs in `src/main.rs` or `src/bin/`; shared implementation
+belongs outside those paths and is compiled by the library target. The mutation
+recipe excludes these binary source locations from discovery because Cargo's
+`--lib` flag alone does not stop cargo-mutants from generating uncompiled mutants.
+This exclusion covers helpers in the binary source, not just functions named `main`.
+
+Integration tests remain part of ordinary testing and coverage. They protect
+real-system behavior independently of mutation testing; they do not need to run
+against every mutant. The unmutated baseline still runs the selected unit-test
+targets, and missed mutations and timeouts still fail mutation validation.
+
+Improve unit coverage when practical. If a mutation cannot reasonably be caught
+by unit tests, it may be explicitly skipped with a justification under the policy
+below. An integration-only detection path is not a reason to include integration
+targets in mutation testing.
+
 ## Mutation testing coverage and skipping mutations
 
 We expect all mutations to either be unviable or to be caught. Uncaught mutations
@@ -237,6 +299,8 @@ justifiable reasons are:
   reached due to higher layers of the API preventing the situation from arising.
 * The mutation is in trivial forwarder code (e.g. a facade that chooses between a
   real and mock implementation).
+* The mutation requires integration testing to detect and cannot reasonably be
+  exercised through unit tests.
 
 To skip a mutation, use the `#[cfg_attr(test, mutants::skip)]` style and leave a
 comment to justify why we are skipping it.

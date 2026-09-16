@@ -108,8 +108,9 @@ increments. And a package's creation commit counts as a version change (absent �
 package added and released in one pull request needs no special handling.
 
 The base revision defaults to `origin/main`. CI passes the release branch's remote-tracking
-revision on a `pull_request` or `push` run, and the commit the queue rebased onto
-(`merge_group.base_sha`) on a merge-queue run. Using the original pull-request target inside the
+revision on a `pull_request` run, the tested main commit on push and scheduled/manual runs,
+and the commit the queue rebased onto (`merge_group.base_sha`) on a merge-queue run.
+Using the original pull-request target inside the
 queue would let two branches that both incremented `0.6.1 → 0.6.2` both look valid. A stale base
 is otherwise safe rather than unsound: it can only move the anchor further back, which reports
 more, never less. The check needs full history (`fetch-depth: 0`) and that base revision, and
@@ -127,9 +128,9 @@ checks run, so once the first has merged, the second's base contains 0.6.2 and i
 version has *not* increased relative to its anchor — while its content has. The check demands
 0.6.3, the skill applies it, and the pull request re-enters the queue.
 
-Requiring branches to be up to date *without* a queue would give the same guarantee and
-serialise the author: every competing merge is a manual rebase and a second skill run. The
-queue performs the rebase. "Require branches to be up to date" is not used.
+Requiring branches to be up to date *without* a queue gives the same guarantee and
+serialises the author: every competing merge is a manual rebase and a second skill run.
+When a required merge queue replaces that policy, the queue performs the rebase.
 
 The queue can also batch two pull requests that both increment the same package to the same
 version into one merge. That lands as one combined release of that version; the invariant
@@ -456,8 +457,9 @@ release set.
    best-effort `just check-never-published` advisory. When cargo-semver-checks fails to *run* —
    classically an installed copy too old for the toolchain's rustdoc JSON format — the result must
    never be read as "no breaking changes". `verify-semver-checks` is the canary for the skill and
-   for the CI `semver-checks` job. Before application, `check-increment-published` performs the exact
-   fail-closed publication check over the expanded plan before anything is applied.
+   for CI's compatibility step in `validate-versions`. Before application,
+   `check-increment-published` performs the exact fail-closed publication check over the expanded
+   plan before anything is applied.
 2. **Prepare and collect.** `just release-prepare <dir>` prepares offline dependency resolution,
    records its inputs, writes the release report, and then runs
    `cargo semver-checks --all-features` for affected publishable packages that declare a
@@ -511,46 +513,33 @@ release set.
 
 ## The GitHub check
 
-Standard validation includes a `merge_group` trigger so the queue actually runs the workflow. A required
-check that never fires as `merge_group` is a failed check, and the queue never merges. Merge-queue
-runs use the same pruned job set as pull requests; `push` to `main` remains the full backstop.
-Delta analysis on a queue run uses `merge_group.base_sha` (the commit the queue rebased onto),
-not a freshly fetched `origin/main`, so scoping cannot drift from the version check's base.
+Merge queue validation handles `merge_group` and reports the same `required-checks` name as
+Standard validation does for pull requests. A required check that never fires for the queue
+blocks merging. Queue validation runs full-workspace dev Clippy, formatting and version readiness
+without delta, binstall or SemVer checks. Full standard validation runs on main pushes and
+within scheduled/manual validation, alongside the deep suite.
 
-The Standard validation concurrency group (`github.head_ref || github.ref`) distinguishes
-queue entries: `head_ref` is empty there and `github.ref` is the unique queue ref. The
-close-companion stays pull-request-only.
+The queue workflow has its own queue-ref concurrency group. Standard validation's
+close-companion stays pull-request-only, and scheduled callers are isolated from main-push
+cancellation.
 
 ### `validate-versions`
 
-The `validate-versions` job in `standard-validation.yml`. Its inputs are git history and manifests, not
-Cargo packages, so
-per the workflow conventions it runs **unconditionally**. `cargo-delta`'s changed-package scoping
-must not be applied to it — the whole point is to catch packages the current pull request did not
-touch.
+The `validate-versions` job in `standard-validation.yml` runs live binstall validation,
+version readiness and scoped API compatibility in one environment. Its release-plan inputs
+are git history and manifests, not a changed-package selection, so it runs **unconditionally**.
+`cargo-delta`'s changed-package scoping must not be applied to it — the whole point is to catch
+packages the current pull request did not touch.
 
-```yaml
-validate-versions:
-  runs-on: ubuntu-latest
-  outputs:
-    semver_targets: ${{ steps.check.outputs.semver_targets }}
-  steps:
-    - uses: actions/checkout@v7
-      with:
-        # A truncated clone can hide the commit that last changed a version, which
-        # would report that package as unchanged.
-        fetch-depth: 0
-    - uses: ./.github/actions/setup-environment
-    - id: check
-      env:
-        RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.event.repository.default_branch) }}
-      run: just validate-versions
-      shell: pwsh
-```
+The job uses a full-history checkout because a truncated clone can hide the commit that last
+changed a version and report a package as unchanged. Its version step receives
+`RELEASE_PLAN_BASE` from the default release branch on PRs or the immutable tested commit on
+main pushes and scheduled/manual runs. The queue's separate version-readiness job uses
+`merge_group.base_sha`, the release-branch commit its candidate was built upon.
 
 The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
-also emits `semver_targets` for the next job. The PowerShell side stays thin — it invokes the
-tool, writes the step output, and owns the valid-empty skip — because the classification logic is
+also emits `semver_targets` for the compatibility step. The PowerShell side stays thin — it
+invokes the tool, writes the step output, and owns the valid-empty skip — because the classification logic is
 the Rust tool's job and is tested there. The job joins `alert`'s `needs:` list and the
 `required-checks` fan-in.
 
@@ -577,8 +566,8 @@ on `Expected — Waiting for status to be reported` forever if they are listed a
 Dynamically generated names have the same problem.
 
 The ruleset therefore requires **only** `required-checks`. That job is a fan-in: `if: always()`,
-`needs:` every merge-blocking job in Standard validation (including `validate-versions` and
-`semver-checks`), succeeds when every dependency reports `success` or an allowed `skipped`, and
+`needs:` every merge-blocking job in Standard validation (including `prepare` and
+`validate-versions`), succeeds when every dependency reports `success` or an allowed `skipped`, and
 fails on `failure`, `cancelled`, or any other result. Unconditional gates may not skip. Advisory
 jobs stay off that list. `alert` stays off it — it files issues on a failed push to `main`, it is
 not a merge gate.
@@ -600,21 +589,17 @@ with a supported consumer contract that carry unreleased content changes. That s
 than what a merge publishes, because published implementation and test-support packages declare
 themselves private and have no consumer contract to compare, and it is not limited to the current
 pull request, because a package whose increment landed in an earlier pull request still carries
-unreleased content. It runs with `--all-features`, for the same reason the skill does. Group
-closure means this set is not always small, so the job runs in parallel with the rest of
-validation rather than gating it. An empty `semver_targets` is a successful skip, not a
-workspace-wide comparison.
+unreleased content. It runs with `--all-features`, for the same reason the skill does.
+An empty `semver_targets` is a successful skip, not a workspace-wide comparison.
 
-It runs with `if: !cancelled()` on `needs: [validate-versions]`, so a failing version check still
-surfaces insufficient-increment findings in the same round trip rather than hiding them behind a
-second push, while a cancelled run stops here instead of holding a runner. `always()` is reserved
-for the `required-checks` fan-in, where classifying failed and cancelled dependencies is the
-job's entire purpose.
+The compatibility steps run inside `validate-versions` after binstall validation and version
+readiness succeed. The canary precedes the comparison, and any failure stops later checks.
+The `required-checks` fan-in still classifies the combined job even when it fails or is cancelled.
 
 `cargo-release-plan` checks that an increment *happened*; `cargo-semver-checks` checks that it was
 *big enough* — it compares against the latest crates.io release and fails when the declared version
 is an inadequate increment. Neither substitutes for the other. The canary preflight guards this
-job as well.
+comparison as well.
 
 ```mermaid
 flowchart TD
@@ -634,7 +619,7 @@ flowchart TD
 
 Version increments are applied by `just apply-release-plan` (the `increment-versions`
 skill's wrapper over `cargo-release-plan apply`). `verify-semver-checks` is the skill's
-and the CI `semver-checks` job's canary.
+and CI compatibility validation's canary.
 
 `release-plz release` is the publish half. It is idempotent, and nothing downstream of it
 reads release-plz state — `plan-binaries` reconciles against `cargo metadata` and

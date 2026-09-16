@@ -63,6 +63,9 @@ impl Report {
     ///
     /// Also panics if two operation names sanitize to the same file name, since
     /// writing both would silently discard one operation's results.
+    // Resolving the process-global Cargo target is an integration boundary; existing
+    // integration tests exercise this adapter through automatic session output.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn write_to_target(&self) {
         let target =
             folo_utils::cargo_target_directory().unwrap_or_else(|| PathBuf::from("target"));

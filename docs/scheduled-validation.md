@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Keep ordinary PR validation fast while running expensive checks nightly. GitHub
-Actions runs the checks and reports failures. A human or personally funded Local
+Keep ordinary PR and merge-queue validation fast while running complete standard and deep
+validation nightly. GitHub Actions runs the checks and reports failures. A human or personally funded Local
 Copilot App session triages each report into independently actionable issues and
 repairs them through ordinary pull requests.
 
 ```text
-Nightly or manual deep checks
+Nightly or manual standard + deep checks
               |
               v
 Readable failed-run issue
@@ -36,12 +36,17 @@ The local shallow and deep validation commands retain their separate meanings.
 
 ## Checks and readable failure reports
 
-**Standard validation** runs ordinary required checks.
-**[Deep validation](../.github/workflows/deep-validation.yml)** runs the complete
+**Standard validation** runs ordinary required PR checks and full-scope checks on main pushes.
+**Merge queue validation** runs only full-workspace dev Clippy, formatting and version readiness.
+**[Deep validation](../.github/workflows/deep-validation.yml)** reuses the complete standard
+workflow, including its full package, tooling and platform scope, and runs the complete
 Miri platform matrix, many-seed Miri cases, mutation shards, careful checks,
-feature-powerset compilation, unused-dependency checks and ARM64 tests with benchmark smoke checks
-nightly on main. Every nightly run executes the checks; previous success does not
-skip a night. Ordinary dependency/build caches remain available.
+release-profile Clippy, release builds, example execution, dependency default-feature policy checks,
+feature-powerset compilation, unused-dependency checks and ARM64 tests with benchmark
+smoke checks nightly on main. Standard coverage includes native tests and coverage,
+documentation and doctests, minimum-dependency compilation, external-type checks, tooling checks,
+release validation and Azure backend tests. Every nightly run executes the checks; previous
+success does not skip a night. Ordinary dependency/build caches remain available.
 
 The scheduled matrix invokes the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes available to developers, with the relevant package and
@@ -54,7 +59,9 @@ mutation timeouts, setup failures and incomplete execution remain failures.
 Independent matrix jobs continue after another job fails, and diagnostic uploads
 run even on failure.
 
-Planning, checks and failure reporting are jobs in the same main-only workflow.
+Planning, standard and deep checks, and failure reporting belong to the same main-only workflow.
+Main pushes do not cancel its standard checks. Publication remains independent of post-merge
+validation, so detection does not prevent a regression from being released.
 The report job has ordinary issue-write permission and can report planning or
 toolchain setup failures before checker artifacts exist.
 
@@ -66,13 +73,18 @@ excerpts. It links full logs and tool-generated artifacts and explains missing
 diagnostics or checks that never ran. The reporter describes observations, not
 inferred root causes.
 
-Reports start with `[Copilot speaking]`. Long findings may continue in readable
-Markdown comments, not API response blobs or encoded pages. Useful failure details
-remain on GitHub after Actions logs expire; successful-job inventories and whole
-logs do not belong in issues.
+Reports start with `[Copilot speaking]`. Bounded per-job excerpts may continue in
+readable Markdown comments, not API response blobs or encoded pages. Every
+unsuccessful job retains diagnostic links, and clipped text has an omission notice.
+Useful failure details remain on GitHub after Actions logs expire; successful-job
+inventories and whole logs do not belong in issues. Diagnostic verbosity does not
+create an unlimited sequence of comments.
 
 The visible run URL and attempt identify a report. Reporter retries search open
-and closed reports for that attempt before creating one. Each failed rerun gets
+and closed reports for that attempt before creating one, then publish only missing
+sections without rewriting completed snapshots. Writes are paced; explicit rate
+limits receive bounded backoff and ambiguous outcomes are checked for persistence,
+not blindly replayed. Each failed rerun gets
 its own report; a successful rerun neither files a failure nor silently closes
 older reports or problems. If reporting fails, the report job's failure remains
 visible in **Deep validation**. Resolve an ambiguous duplicate with an ordinary
@@ -165,6 +177,13 @@ or explicit uncertainty, useful diagnostics and report/job links, reproduction
 steps with applicable toolchain/target/seed details, and acceptance criteria.
 Triage need not finish the repair investigation or prescribe a speculative patch.
 
+When supported by the evidence, distinguish packages likely to need repair edits
+or version movements from packages merely affected by a failed check. Note known
+version-group or dependent-package effects and link any prerequisite repair,
+explaining why it is needed. Mark estimates and unresolved scope explicitly;
+these ordinary issue notes help intake assess overlap without requiring a release
+plan, a mandatory field or a speculative dependency.
+
 Repeated unresolved failures update the existing problem with links and materially
 new evidence. A supported recurrence after a fix can reopen the issue; a run of
 pre-fix code is not a recurrence. Link uncertain duplicates rather than
@@ -225,14 +244,17 @@ not indicate ongoing work.
 ## Repair and PR completion
 
 The [scheduled-intake skill](../.github/skills/scheduled-intake/SKILL.md) coordinates
-repairs. It follows existing claimed issues and PRs first, then starts at most one
-new unclaimed repair per invocation. Intake considers only open findings; closure
-ends intake responsibility, including follow-up of linked PRs. Keep the issue open
+admission and newly discovered relationships between repairs. It reads existing
+ownership, package scope and disposition before starting at most one new repair
+session per invocation, subject to the [repair-session limit](#repair-session-capacity)
+and the [package-overlap policy](#package-overlap-and-stacked-repairs).
+Only open findings are repair candidates. Known sessions linked to closed findings
+remain relevant only to establish disposition and capacity. Keep the issue open
 while its repair is ongoing. Closing it with an open PR requires an explicit
-disposition of that PR, not continued automatic intake follow-up. Independent PRs
-awaiting review do not block the entire backlog.
+disposition of that PR, not an intake request to resume automatic PR follow-up.
 The [scheduled-repair skill](../.github/skills/scheduled-repair/SKILL.md)
-works on one issue in its native issue/PR-linked Local App session.
+works on one issue in its native issue/PR-linked Local App session and owns that
+repair's PR follow-up.
 
 Confirm the failure, implement the correction and create a normal PR with
 `Fixes #<issue>`. Follow repository conventions, including `increment-versions`
@@ -246,27 +268,37 @@ local results at the reviewed head; unrelated green checks do not establish the
 fix. Reviewers assess these results and limitations alongside ordinary required
 checks and version validation.
 
-Follow the same PR through CI/deep failures, conflicts and review feedback. Read
-top-level discussion, review summaries and inline threads, including valid
+The repair owner follows the same PR through CI/deep failures, conflicts and review
+feedback. Read top-level discussion, review summaries and inline threads, including valid
 low-confidence agent comments. Follow repository communication policy, including
 the exception permitting responses to the original user's own human comments.
 Every authored post begins with `[Copilot speaking]`. Request human decisions for
 design changes or unsafe ambiguity; do not call blocked work complete.
 
+Apply the [check-waiting policy](git-workflow.md#check-waiting-and-merge-queue-readiness)
+to optional GitHub checks. Do not wait for low-signal optional results, such as
+benchmark comparisons when no performance-relevant inputs changed, solely to
+finish every check. They may continue after a ready handoff; record what was not
+awaited and why, without claiming success. Intake does not wake a worker merely
+to wait for those results. Repair owners handle actionable findings during their
+normal authorized follow-up.
+
 Queued, pending and in-progress checks or automated reviews are normal ongoing
 work. Queue age, no assigned runner, absent steps/logs before execution and other
 queued repository runs do not establish an outage or a need for human action.
-The worker continues requested foreground follow-up, waiting between current-head
-check and review reads rather than busy-polling. This requires no per-PR timer,
-automation or hidden watcher. Routine waiting is not a reason to end that work,
-add `needs-human` or request a check waiver.
+The worker continues requested foreground follow-up while required checks,
+relevant optional checks or automated review are pending, waiting between
+current-head check and review reads rather than busy-polling. This requires no
+per-PR timer, automation or hidden watcher. A delay in results worth awaiting is
+not a reason to end that work, add `needs-human` or request a check waiver.
 
 Human blockers require concrete evidence and a specific action outside the
 worker's authority, such as a required approval or a diagnosed permission failure.
 Diagnose failed execution and pursue authorized recovery before escalating.
-Only hand off as ready for human review/approval/merge after current-head checks
-and automated review have concluded and actionable findings are addressed.
-If foreground execution is interrupted while results are pending, retain
+Only hand off as ready for human review/approval/merge after current-head required
+checks, relevant optional checks and automated review have concluded and actionable
+findings are addressed. Relevant local deep verification remains necessary.
+If foreground execution is interrupted while results worth awaiting are pending, retain
 ownership and the next follow-up action as pending work, not a human blocker.
 
 Repair branches follow ordinary repository conventions. Normal same-repository
@@ -278,21 +310,147 @@ not resolve the issue: record the disposition and explicitly release or block th
 claim. No post-merge confirmation service is needed; later scheduled failures are
 triaged normally.
 
+### Repair-session capacity
+
+The maximum incomplete repair sessions defaults to `5`. An operator can override
+it with a nonnegative integer in the intake invocation or saved repair automation
+prompt. `0` pauses new admissions while preserving new relationship coordination.
+Invalid or conflicting values require clarification, not a silent fallback. The limit
+applies to this repository's scheduled repairs across intake invocations and
+parent sessions; unrelated human work, triage/coordinator sessions and other
+repositories do not consume its capacity.
+
+Count distinct incomplete repair sessions, reconciling native issue/PR links with
+GitHub ownership comments. A merged PR whose session is no longer executing work
+consumes no slot and reserves no package scope. Exclude it regardless of retained
+issue labels or assignments, stale checks/reviews/checklists, missing final
+handoffs or local work. GitHub merge state and native inactivity suffice; intake
+does not inspect its worktree or ask the owner to confirm completion.
+
+Use native activity, not the existence of a session, running CLI process or retained
+worktree, to determine whether work is executing. A session still executing repair
+work remains counted until inactive, even after merge. Do not interrupt or wake
+workers to free capacity. If execution state cannot be established, report that
+specific uncertainty rather than infer free capacity.
+
+An inactive repair also leaves capacity after explicit abandonment with its PR
+closed and claim released, or documented resolution or explicit abandonment on an
+issue without a PR. Unmerged repairs remain incomplete while running, paused,
+idle, unavailable, blocked or awaiting human review/merge. A missing worktree does
+not release a retained claim, and an unresolved `needs-human` requirement remains
+in force. An issue closed with an open PR still needs a PR disposition. Do not
+double-count an executor because both an issue and a PR refer to it.
+
+Every intake invocation reconciles disposition before comparing the count with
+the limit, including on an empty queue. Session archival and retained-worktree
+housekeeping belong to the operator, not intake. They are never admission
+prerequisites: lack of cleanup authority, leftover artifacts or an unarchived
+finished session does not block another repair. Intake neither deletes local work
+nor wakes finished owners to prepare it for cleanup.
+
+After reconciliation, refresh the incomplete count. At or above the limit,
+coordinate newly discovered relationships but do not claim another repair or
+create a session. The same gate applies to a replacement executor after an explicit
+handoff; an explicitly requested continuation in an existing incomplete session
+does not consume another slot. Below the limit, prioritize handed-off work needing
+an executor, then the oldest actionable unclaimed finding, and start at most one
+new session. Refresh capacity immediately before opening a new session or claiming
+a new repair in an existing session. Creating the admitted executor occupies its
+slot; claiming and starting that same executor do not require another slot.
+Incomplete discovery or uncertain ownership/completion defers admission rather
+than implying free capacity. Keep intake invocations nonoverlapping; these
+observations are not an atomic reservation or a financial cap.
+
+### Package overlap and stacked repairs
+
+Concurrent repairs of the same package can independently choose the same version
+increment. Intake reduces this avoidable synchronization work by deferring a new
+repair when its likely edited or version-moving packages overlap an incomplete
+repair. Waiting for checks, human review or merge does not release that scope.
+This is a best-effort scheduling heuristic, not a package lock or a replacement
+for normal version validation.
+
+Use current PR **Version/release plan** sections, changed paths and substantive
+issue/owner notes. Include known version-group members and dependent releases, not
+just directly edited packages. Distinguish likely repair targets from a check's
+broader affected scope; an infrastructure failure or unreleased documentation edit
+does not imply every tested package needs publishing. A missing release plan is
+not an empty package set. Make a bounded read of relevant source or manifests when
+useful, without preparing Rust or computing exhaustive release plans in intake.
+Defer plausible overlaps whose scope is unresolved, but uncertainty alone is not
+a repository-wide lock. Continue scanning for the oldest eligible independent
+finding rather than stopping at the first deferred issue.
+
+A new repair may instead form a stacked PR when it naturally depends on an
+existing repair's changes. Sharing a package or wanting a different version is
+not a dependency. The proposed parent must have an open PR with committed, pushed
+changes and a current release plan whose increments are present at its head.
+Published progress and PR evidence must establish a settled scope and release
+plan; unresolved development likely to change them is not a suitable base.
+Checks may still be running if they do not reveal such unresolved work.
+
+Use one ordered chain, extending its current top rather than creating competing
+siblings. Verify that the whole prerequisite chain is suitable and contains every
+known overlapping repair; a stack does not excuse a collision with unrelated
+work. Record the dependency reason, parent issue/PR, branch and exact head commit
+on GitHub. Recheck the parent and package scope immediately before admission and
+again before the worker edits. If the parent merged, reassess against current main;
+if it moved, was abandoned or is no longer suitable, defer the new admission while
+the existing owners reconcile their work rather than silently changing the base.
+
+Each layer has its own session, claim, branch and PR, consumes a normal incomplete
+slot, and counts toward the one-new-session-per-invocation limit. The coordinator
+creates only the admitted upper layer from the verified pushed parent branch,
+using `create_session` with an explicit `base_branch`. Its ordinary issue ownership
+comment identifies the session until its own app-native PR supplies the native
+link. Do not open a duplicate issue session to attach it. The Local App's bundled
+`pr-stack` skill supplies native stack inspection, creation/extension and
+synchronization mechanics; it is an App prerequisite, not a repository-local
+skill. Confirm it is exposed before admitting a stacked layer. If unavailable,
+defer stacked admission, disclose the missing prerequisite and continue to
+consider independent repairs without installing a substitute. This skill does
+not authorize extra workers, modifying another owner's branch or merging.
+Where native registration is unsupported, an explicit dependent-PR chain retains
+ordinary bottom-to-top synchronization in the owning sessions without requiring
+native membership.
+
+The worker keeps release evidence anchored to current main, not an unreleased
+parent. It also assesses its own released-content and dependency effects against
+the parent: each existing package needing a release for this layer must advance
+beyond the parent's version by the level this layer requires. An inherited pending
+increment is not that additional increment. Inheritance alone does not justify
+a second semantic increment. Required group alignment and dependent releases
+still move every target in the expanded plan, including otherwise unchanged
+inherited packages. New packages follow first-publication rules. Keep the complete
+release plan and explain all parent-to-child movements, including mechanical
+movements, separately from release-anchor versions.
+Parent changes or merges require refreshed scope, version and relevant validation
+evidence even if the child's existing checks are green. Owners publish the
+reconciled parent snapshot for later intake runs. Agreed ancestor/descendant
+overlap does not block necessary parent fixes; coordinate downstream updates.
+Normal version checks remain authoritative.
+
+Workers publish likely package scope early and update it when diagnosis or the
+expanded release plan changes. Intake records substantive overlap deferrals and
+prerequisite links in ordinary issue discussion so later invocations can reassess
+them. Package waiting alone does not warrant assignment, `needs-human`, a timer
+or repeated comments. No schema, reservation counter or private registry is needed.
+
 ## Local App setup and operation
 
 Use separate repository-level **Local** App automations for triage and repair.
 Inference uses the operator-selected personal account and model, not GitHub
 Actions or a cloud coding agent. Keep one enabled entry per role and avoid
 overlapping invocations. Starting at most one new repair per invocation is pacing,
-not a hard financial cap.
+and the incomplete-session limit bounds outstanding repair work, not spending.
 
 Run the checked-in [setup prompt](../.github/prompts/setup-scheduled-remediation.prompt.md)
 when installing or updating the entries. It uses `list_projects`, `list_workflows`,
 `save_workflow` and the supported native editor. It lists existing entries,
 updates the operator-selected disabled ones rather than blindly duplicating them,
 and defaults to disabled until enabling is explicitly authorized. Model/effort,
-personal account, Local environment and schedule are ordinary operator choices.
-Setup neither installs tooling nor runs an automation.
+personal account, Local environment, schedule and repair-session limit are ordinary
+operator choices. Setup neither installs tooling nor runs an automation.
 
 | Role | Suggested App name | Skill |
 |---|---|---|
@@ -300,18 +458,33 @@ Setup neither installs tooling nor runs an automation.
 | Repair coordination | Folo scheduled repair | `scheduled-intake` |
 
 The coordinator uses native session lookup and `open_issue_session` or
-`open_pr_session` to open/resume visible linked sessions. It preserves the
+`open_pr_session` to open/resume visible linked sessions, and `create_session` with
+the verified parent branch for an admitted stacked layer. It preserves the
 existing executor when available. GitHub remains the source of truth; native
-runtime metadata locates the executor, not the work record.
+runtime metadata locates executors and establishes activity, not repair correctness
+or ownership.
 
-Empty scans exit without posting or preparing Rust/WSL. Routine waiting does not
-trigger duplicate worker turns or heartbeat posts and does not cancel an active
-worker's requested foreground follow-up. Subsequent intake runs read current
-checks and reviews and route actionable results to the existing owner. New
-decisions or other material information can resume blocked work. Follow-up uses
-the repository repair automation, never per-PR timers or hidden watchers.
+Empty scans reconcile known repair dispositions for capacity, then exit without
+posting empty-scan updates or preparing Rust/WSL. Existing workers monitor their
+own PR checks, reviews, conflicts, blockers and readiness. Intake does not repeat
+that monitoring or relay feedback, reminders, blocker-label corrections or
+completion requests. An idle or paused owner is not an invitation to resume it.
+Interrupted work retains its owner's pending handoff for continuation in the same
+session; intake is not a fallback PR monitor.
+
+Intake contacts an existing owner only for a newly discovered cross-repair
+relationship or an explicit operator handoff. Examples are an admitted stacked
+layer, a previously unknown prerequisite or newly evidenced package overlap.
+Publish the relationship and notify the affected active owners with issue/PR and
+session links so they can coordinate directly. Do not repeat relationships already
+known to them. Changes in a recorded parent's head, release plan or disposition
+belong to the related workers' own follow-up; intake still reads the live state
+when assessing a new admission. Finished owners are not woken for a relationship
+that can instead use their merged result. Surface unresolved operator inputs
+without guessing approval. Neither coordination nor worker follow-up uses per-PR
+timers or hidden watchers.
 
 A paused machine leaves the backlog intact. After an explicit handoff, a human
 or another machine can resume from GitHub without copying coordination state.
 There are no Local state stores, enrollment files, profiles, dispatch tokens,
-admission counters, health ledgers or mandatory issue schemas.
+persisted admission counters, health ledgers or mandatory issue schemas.

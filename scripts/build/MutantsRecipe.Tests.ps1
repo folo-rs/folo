@@ -122,6 +122,7 @@ Describe 'Shared mutants recipe' {
         $argv | Should -Contain '--unviable'
         $argv | Should -Not -Contain '--output'
         $argv | Should -Not -Contain '--shard'
+        $argv | Should -Not -Contain '--sharding'
         $argv[[array]::IndexOf($argv, '--jobs') + 1] | Should -Be ([string]([int][Math]::Floor($result.cargo.processor_count / 6) + 1))
         $argv | Should -Contain '**/*facade.rs'
         $argv | Should -Contain 'packages/testing/**'
@@ -148,6 +149,8 @@ Describe 'Shared mutants recipe' {
         $argv = $result.cargo.arguments
         $argv[[array]::IndexOf($argv, '--output') + 1] | Should -BeExactly $output
         $argv[[array]::IndexOf($argv, '--shard') + 1] | Should -Be '1/8'
+        $argv | Should -Contain '--sharding'
+        $argv[[array]::IndexOf($argv, '--sharding') + 1] | Should -Be 'round-robin'
         $argv | Should -Contain 'cpulist'
         $argv | Should -Contain 'many_cpus'
         $argv | Should -Not -Contain '--workspace'

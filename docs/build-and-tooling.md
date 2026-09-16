@@ -61,15 +61,18 @@ distinction between local and combined CI benchmark smoke passes.
 many-seed Miri and careful checking on the current platform. These recipes are
 independent: deep validation does not implicitly rerun the shallow suite.
 
-The **Standard validation** workflow performs shallow PR/push/merge-queue checks;
-**Deep validation** runs the full deep suite on merged `main`.
+The **Standard validation** workflow performs shallow PR/push checks.
+**Merge queue validation** runs full-workspace dev Clippy, formatting and version readiness.
+**Deep validation** reuses the complete standard suite and runs the full deep suite on merged
+`main`, without delta or PR-platform pruning.
 Scheduled checks invoke the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes used locally. Recipes own the toolchains, test runners,
 helper preparation and check behavior; scheduling only selects platform, packages
 and shards and captures diagnostics.
-CI composes these commands into separately reported jobs
-and diagnostic-producing matrix entries rather than running one monolithic local
-recipe. Repair authors also run the particular deep checks needed to verify
+CI groups related commands into sequential steps in shared jobs and diagnostic-producing
+matrix entries rather than running one monolithic local recipe. A job stops checking on its
+first failure, while diagnostic collection and resource cleanup remain available.
+Repair authors also run the particular deep checks needed to verify
 their repair locally and link the results for review. Scheduling belongs to workflow orchestration, not
 to the definitions of the local recipes. To run just mutation testing, use
 `just package="foo bar" mutants`. It runs the unmutated baseline before testing
@@ -87,6 +90,40 @@ applicable rather than on every polling-session creation.
 
 We operate under a **zero warnings allowed** requirement - fix all warnings that
 validation generates.
+
+For asynchronous GitHub results, follow the
+[check-waiting policy](git-workflow.md#check-waiting-and-merge-queue-readiness).
+Low-signal optional checks do not delay readiness or authorized queue submission;
+this does not reduce required validation or relevant local checks.
+
+### Mutation target selection
+
+`just mutants` selects Cargo library unit-test targets with `--lib`.
+The same selection applies to the unmutated baseline and each mutant. Integration
+tests, doctests, binary targets, examples, and benchmarks are not mutation-test targets; ordinary
+testing and coverage retain their own selections. See
+[the mutation-testing policy](testing.md#mutation-testing-target-selection).
+Unit tests exercise in-process logic; real external interactions belong in
+integration targets even if they could technically be compiled by `--lib`.
+See [the test boundary](testing.md#unit-tests-stay-inside-the-process).
+
+The selectors live in `.cargo/mutants.toml` under `additional_cargo_args`, so
+cargo-mutants applies them to both its test-build and test-execution commands.
+`additional_cargo_test_args` alone would still compile integration targets during
+the preceding build phase. CLI applications expose their implementation through a
+library crate rather than adding binary targets to the mutation run.
+
+Cargo target selection does not restrict cargo-mutants source discovery.
+`Get-MutantsExcludeArgument` in `scripts/build/Mutants.psm1` excludes `**/src/main.rs`
+and `**/src/bin/**` alongside the platform-specific source exclusions. These paths
+contain binary shells and their private helpers, not shared library implementation.
+Keep new binary targets in these conventional locations; a custom binary source
+layout needs corresponding source-selection handling.
+
+Sharded runs use `--sharding round-robin` to distribute mutations from expensive
+source regions across runners rather than assigning consecutive source ranges to
+each shard. The shared recipe applies this to both local and CI runs while
+preserving the 1-based `N/M` shard argument. Unsharded runs select every mutant.
 
 ### Coverage status policy
 
@@ -242,7 +279,7 @@ over everything under `scripts/`, gating on Error/Warning findings. The rule set
 `PSScriptAnalyzerSettings.psd1`, supplemented by repo-local custom rules in
 `scripts/analyzer/FoloAnalyzerRules.psm1` - which catch classes the built-in rules (and strict
 mode) miss, such as a `foreach` whose loop variable case-insensitively collides with the
-collection it enumerates. It runs as part of `just validate-local` and the CI `validate-scripts` job.
+collection it enumerates. It runs as part of `just validate-local` and the CI `test-scripts` job.
 Silence a genuine false positive with a justified
 `[Diagnostics.CodeAnalysis.SuppressMessageAttribute(...)]`, never by relaxing the gate; the tree
 is expected to be finding-free.
