@@ -322,10 +322,12 @@ mod tests {
         let repo = resolve_commits(&marks, &[ts(1_000)], &[ts(2_000)]).unwrap();
         assert_eq!(repo.main.len(), 1);
         assert_eq!(repo.feature.len(), 1);
-        assert_eq!(repo.main[0].commit_id, first);
-        assert_eq!(repo.main[0].time, ts(1_000));
-        assert_eq!(repo.feature[0].commit_id, second);
-        assert_eq!(repo.feature[0].time, ts(2_000));
+        let main = repo.main.first().unwrap();
+        let feature = repo.feature.first().unwrap();
+        assert_eq!(main.commit_id, first);
+        assert_eq!(main.time, ts(1_000));
+        assert_eq!(feature.commit_id, second);
+        assert_eq!(feature.time, ts(2_000));
     }
 
     #[test]
