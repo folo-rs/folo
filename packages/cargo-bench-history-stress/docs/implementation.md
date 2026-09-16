@@ -43,6 +43,23 @@ runtime or operating-system fixture. Configuration writes use isolated temporary
 directories and cover replacement and filesystem failures without network access.
 These filesystem tests are excluded from Miri, not from native mutation testing.
 
+Seeded-object tests use small fixed scenarios and independent model expectations
+to verify storage keys, compressed contents and reported byte totals. Single-object
+and batch writes receive an in-memory storage operation and an explicit worker limit,
+so they exercise shared accounting without filesystem access, OS parallelism discovery,
+Git history or analysis. Invalid-input, injected storage-error and worker-panic cases
+protect error propagation. Miri covers each object format with a reduced metric
+fixture and shared accounting with compact sidecars, keeping repeated compression
+within the interpreter workload budget without changing production behavior.
+
+The seeding entry point discovers available parallelism and supplies the real
+filesystem adapter. Object construction and encoding precede storage; only a
+successful write contributes its compressed length to the total. The adapter creates
+parent directories and writes the supplied bytes. This real-I/O boundary is covered by
+the existing retained-data binary integration test rather than library mutation or
+line coverage; generation, dispatch, error propagation and accounting remain unit
+mutation targets.
+
 Successful end-to-end execution belongs to the seeded binary integration tests.
 They verify analysis modes, findings and retained data without timing assertions.
 They remain outside the library-only mutation build and execution selection.
