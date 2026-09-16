@@ -62,6 +62,10 @@ pub fn create_test_provider() -> (SdkMeterProvider, TestMetricReader) {
 }
 
 /// Finds the monotonic flag and value of a `u64` sum metric.
+// Integration-test assertion adapter, not exporter logic. Populated SDK snapshots have no
+// public in-memory constructors; obtaining them requires the real SDK collection pipeline.
+// Keep that coverage in integration tests rather than expanding library-only mutation targets.
+#[cfg_attr(test, mutants::skip)]
 pub fn find_u64_sum(metrics: &ResourceMetrics, name: &str) -> Option<(bool, u64)> {
     metrics
         .scope_metrics()

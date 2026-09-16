@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "alloc_tracker",
  "criterion",
