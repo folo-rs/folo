@@ -244,8 +244,9 @@ not indicate ongoing work.
 ## Repair and PR completion
 
 The [scheduled-intake skill](../.github/skills/scheduled-intake/SKILL.md) coordinates
-admission and newly discovered relationships between repairs. It reads existing
-ownership, package scope and disposition before starting at most one new repair
+admission, newly discovered relationships between repairs and recovery of
+unexpectedly stopped repair sessions. It reads existing ownership, package scope
+and disposition before starting at most one new repair
 session per invocation, subject to the [repair-session limit](#repair-session-capacity)
 and the [package-overlap policy](#package-overlap-and-stacked-repairs).
 Only open findings are repair candidates. Known sessions linked to closed findings
@@ -314,8 +315,9 @@ triaged normally.
 
 The maximum incomplete repair sessions defaults to `5`. An operator can override
 it with a nonnegative integer in the intake invocation or saved repair automation
-prompt. `0` pauses new admissions while preserving new relationship coordination.
-Invalid or conflicting values require clarification, not a silent fallback. The limit
+prompt. `0` pauses new admissions while preserving new relationship coordination
+and recovery in existing sessions. Invalid or conflicting values require
+clarification, not a silent fallback. The limit
 applies to this repository's scheduled repairs across intake invocations and
 parent sessions; unrelated human work, triage/coordinator sessions and other
 repositories do not consume its capacity.
@@ -349,8 +351,9 @@ finished session does not block another repair. Intake neither deletes local wor
 nor wakes finished owners to prepare it for cleanup.
 
 After reconciliation, refresh the incomplete count. At or above the limit,
-coordinate newly discovered relationships but do not claim another repair or
-create a session. The same gate applies to a replacement executor after an explicit
+coordinate newly discovered relationships and recover unexpectedly stopped owners,
+but do not claim another repair or create a session. The same gate applies to a
+replacement executor after an explicit
 handoff; an explicitly requested continuation in an existing incomplete session
 does not consume another slot. Below the limit, prioritize handed-off work needing
 an executor, then the oldest actionable unclaimed finding, and start at most one
@@ -360,6 +363,40 @@ slot; claiming and starting that same executor do not require another slot.
 Incomplete discovery or uncertain ownership/completion defers admission rather
 than implying free capacity. Keep intake invocations nonoverlapping; these
 observations are not an atomic reservation or a financial cap.
+
+### Unexpectedly stopped repair sessions
+
+Intake inspects existing incomplete scheduled repair sessions for unexpected
+execution stops, including after a connection failure exhausts retries. This is
+best-effort recovery of already authorized work in the same session, not takeover
+or a parallel PR monitor. It runs even when admission is paused, at capacity or
+there are no new eligible findings. Finished repairs and unrelated sessions are
+outside its scope.
+
+Native activity and recent conversation/diagnostic evidence must establish that
+execution is inactive, the latest authorized request is unfinished and the stop
+was unexpected. Indexed history can lag; use a bounded native CLI event tail when
+needed, not private App databases or a repository-wide session-history scan.
+Missing or ambiguous evidence is reported rather than treated as permission.
+An idle status, a long gap or old commit alone does not establish a stall.
+
+Never interrupt busy workers or ongoing retries. Intentional operator stops,
+unresolved input/approval gates, `needs-human`, documented prerequisite waiting
+and a completed handoff for human review/merge prevent automatic recovery.
+Elapsed time does not override them. Check current ownership and issue/PR
+disposition immediately before sending; closed findings and merged or
+closed-unmerged PRs are not automatic recovery candidates.
+
+Send one focused continuation request for the evidenced stopped request to its
+existing owner, preserving session settings and local work. The owner rechecks
+the live claim, disposition and gates before continuing. Suppress repeated
+messages using native conversation history, including an already queued
+continuation; uncertain delivery is reconciled rather than blindly retried.
+Report delivery separately from observed resumed execution. A recovery request
+without subsequent progress calls for operator attention, not repeated nudges.
+Another automatic recovery needs intervening work and a distinct unexpected stop.
+No recovery ledger, GitHub heartbeat, replacement executor or per-PR timer is
+needed.
 
 ### Package overlap and stacked repairs
 
@@ -464,17 +501,20 @@ existing executor when available. GitHub remains the source of truth; native
 runtime metadata locates executors and establishes activity, not repair correctness
 or ownership.
 
-Empty scans reconcile known repair dispositions for capacity, then exit without
-posting empty-scan updates or preparing Rust/WSL. Existing workers monitor their
+Empty scans reconcile known repair dispositions and inspect incomplete owners for
+unexpected stops, then exit without posting empty-scan updates or preparing
+Rust/WSL. Existing workers monitor their
 own PR checks, reviews, conflicts, blockers and readiness. Intake does not repeat
 that monitoring or relay feedback, reminders, blocker-label corrections or
 completion requests. An idle or paused owner is not an invitation to resume it.
 Interrupted work retains its owner's pending handoff for continuation in the same
-session; intake is not a fallback PR monitor.
+session. [Unexpected-stop recovery](#unexpectedly-stopped-repair-sessions) may
+resume that work when the evidence supports it; intake is not a fallback PR monitor.
 
-Intake contacts an existing owner only for a newly discovered cross-repair
-relationship or an explicit operator handoff. Examples are an admitted stacked
-layer, a previously unknown prerequisite or newly evidenced package overlap.
+Apart from unexpected-stop recovery, intake contacts an existing owner only for a
+newly discovered cross-repair relationship or an explicit operator handoff.
+Examples are an admitted stacked layer, a previously unknown prerequisite or newly
+evidenced package overlap.
 Publish the relationship and notify the affected active owners with issue/PR and
 session links so they can coordinate directly. Do not repeat relationships already
 known to them. Changes in a recorded parent's head, release plan or disposition
