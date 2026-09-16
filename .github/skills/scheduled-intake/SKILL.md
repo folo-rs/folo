@@ -1,6 +1,6 @@
 ---
 name: scheduled-intake
-description: Recover unexpectedly stopped scheduled repair sessions and admit at most one scheduled-finding repair within Local App capacity. Coordinate newly discovered relationships and avoid package overlap except for stable, naturally dependent stacked repairs; existing owners monitor their own PRs.
+description: Recover unexpectedly stopped scheduled repair sessions and group related unclaimed scheduled-finding issues into at most one new repair session within Local App capacity. Coordinate newly discovered relationships and avoid package overlap except for stable, naturally dependent stacked repairs; existing owners monitor their own PRs.
 ---
 
 # Scope
@@ -63,7 +63,11 @@ this repository's scheduled repair sessions, including sessions from earlier
 invocations or other parents. Reconcile native issue/PR links with GitHub ownership
 comments, not names or the shared assignee alone. Include sessions whose issues
 are now closed or whose PRs are merged or closed, even when the open queue is empty.
-An issue and PR linked to the same session identify one executor.
+Several issues and a PR linked to the same session identify one executor. The
+native issue link may identify only the primary issue used to open the session;
+follow its ownership notes and PR links to read every admitted issue and any
+documented scope changes. Do not mistake the other claimed members for findings
+without an executor or create a session for each.
 
 Apply the completion rules in Stage 3 before investigating an inactive finished
 session further. A retained worktree or stale native PR state is not evidence of
@@ -128,9 +132,9 @@ another attempt.
 
 Perform this reconciliation before comparing the count with `N`, including on an
 empty queue or when already at capacity. Read each known repair session's current
-issue/PR disposition and native activity. **A merged PR whose session is no longer
-executing work consumes no slot and reserves no package scope.** Ignore that
-session for admission, regardless of remaining issue labels or assignments, stale
+issue/PR disposition and native activity. **A merged PR covering the admitted repair
+whose session is no longer executing work consumes no slot and reserves no package
+scope.** Ignore that session for admission, regardless of remaining issue labels or assignments, stale
 checks/reviews/checklists, an absent final handoff or retained local work. GitHub's
 merge state and the session's inactivity are sufficient; do not inspect its
 worktree, artifacts or housekeeping state, or wake it to obtain confirmation.
@@ -148,6 +152,12 @@ remains incomplete even when its session is idle. A retained `needs-human` claim
 on an unresolved repair remains incomplete. An issue closed with an open PR needs
 an explicit PR disposition; surface that missing decision without messaging the
 owner to resume automatic PR follow-up.
+
+For a grouped repair, reconcile every member, not just the native primary issue.
+A merged shared PR accounts for the members it fixes without separate completion
+attestations. A member resolved without that PR needs its own documented
+disposition. Any retained unresolved member not covered by the merged PR keeps
+the session incomplete; closing the primary issue alone does not free its slot.
 
 # Stage 4: Recover unexpectedly stopped repair sessions
 
@@ -202,8 +212,11 @@ operational failure from an intentional stop. Do not scan PR checks/reviews to
 manufacture a new follow-up task for an idle owner.
 
 Immediately before sending, refresh native activity, the issue/PR disposition,
-claim and any newer instructions or continuation. Require the same owner, an open
-issue, no merged or closed-unmerged PR, inactive execution and no unresolved gate.
+claims and any newer instructions or continuation. Require the same owner,
+still-open claimed work, no merged or closed-unmerged PR for that work, inactive
+execution and no unresolved gate. For a grouped repair, name the remaining
+authorized issues; do not revive resolved members or treat a closed primary issue
+as completion of the others. A blocker shared by the group still prevents recovery.
 Send at most one focused `send_session_message` with `delivery_mode: immediate`
 to the existing App session ID. Omit `mode` and preserve its model, effort, branch
 and worktree. Name the stopped request/turn and observed failure with its timestamp,
@@ -237,23 +250,59 @@ If the count is **greater than or equal to `N`**, do not claim a new repair or
 create a repair session, including a replacement executor. New relationship
 coordination and recovery in existing sessions still run. If below `N`, prioritize
 an explicitly handed-off repair needing an executor; otherwise examine actionable,
-unassigned and unclaimed open findings
-oldest first, excluding `needs-human` and competing work. Apply the overlap screen
-below before choosing one. Repairs awaiting review permit more admissions only
-while below the limit. Start at most one new repair
-session per invocation, including replacements and stacked layers; stacking never
+unassigned and unclaimed open findings oldest first, excluding `needs-human` and
+competing work. Form a coherent group
+and apply the overlap screen below before choosing an admission.
+Repairs awaiting review permit more admissions only while below the limit.
+Start at most one new repair session per invocation, including replacements and stacked layers; stacking never
 bypasses capacity. This is pacing, not a financial cap.
+
+## Group related unclaimed findings
+
+Follow the [grouping policy](../../../docs/scheduled-validation.md#grouping-related-findings).
+Use the oldest eligible finding as the primary issue and look across the open
+backlog, not just adjacent issues, for other actionable unassigned and unclaimed
+findings that belong in the same repair. Prefer one session, branch and PR for
+related work that shares meaningful investigation, implementation or regression
+coverage and can be reviewed and validated together. For example, different
+missed-mutant or mutation-timeout findings in the same package can share a repair
+of that package's test coverage; they need not describe the same mutant or root
+cause. Do not default to one session per issue when this common scope is evident.
+
+Read candidate bodies, diagnostics, acceptance criteria and scope notes before
+grouping; similar titles, a common checker or a package name alone do not establish
+a coherent repair. Keep unrelated mechanisms, incompatible prerequisites and work
+too broad for a reviewable PR separate. Use a singleton when no suitable companion
+exists. Bound membership by the shared repair and validation scope, not an
+arbitrary issue count or a requirement to prove the issues are duplicates.
+
+Keep independently actionable issues separate on GitHub. Grouping is an execution
+decision, not duplicate closure: retain each member's diagnostics and acceptance
+criteria, and record the full issue list and grouping rationale in the handoff.
+Use the union of likely edited/version-moving packages, including group and
+dependent releases, for overlap screening. Overlap among members sharing this
+executor is not concurrent overlap. The group consumes one incomplete-session
+slot and one new-session admission, regardless of its issue count.
+
+Never absorb an existing owner's issue, an unresolved `needs-human` issue or
+competing work. Preserve the agreed scope of an explicit handoff rather than
+automatically enlarging it. Do not append new findings to existing sessions or
+combine their branches/PRs without an explicit scope handoff; newly discovered
+relationships still follow Stage 2. Fix membership at admission instead of
+keeping the repair open for future findings.
 
 ## Screen package overlap and prerequisites
 
-Compare each candidate's likely edited and version-moving packages with other
-incomplete repairs, including those waiting for checks, human review or merge.
+Compare the whole candidate group's likely edited and version-moving packages
+with other incomplete repairs, including those waiting for checks, human review or merge.
 Use existing release plans and issue evidence, including group/dependent effects.
 Make only bounded source/manifest reads to clarify scope; do not run release
 planning or prepare Rust in intake. Follow the
 [package-overlap policy](../../../docs/scheduled-validation.md#package-overlap-and-stacked-repairs).
 
-Defer a known or plausible overlap and continue to the next eligible finding.
+Defer a known or plausible overlap. If only a companion is affected and the
+remaining repair is still coherent, leave that companion unclaimed and reassess
+the remaining group; otherwise continue to the next eligible primary finding.
 Unknown scope alone is not a global lock or proof of independence; state what is
 known and use the available evidence. Do not make up package claims for broad
 infrastructure failures. Replacements still need this screen against other repairs.
@@ -281,6 +330,8 @@ merged, reassess an ordinary main-based repair; closed-unmerged or unstable
 prerequisites require reconciliation, not admission.
 Use only stack inspection and creation/extension mechanics here, never splitting,
 reordering, landing or spawning additional layers.
+For a grouped stacked repair, the same verified parent chain must be suitable for
+the entire group; grouping does not authorize unrelated work on that base.
 
 Preserve useful scope estimates and prerequisite links in ordinary issue
 discussion. For a substantive deferral, name the overlapping packages, related
@@ -290,15 +341,18 @@ unchanged reasons. No mandatory schema or coordination registry is needed.
 
 ## Create the admitted session
 
-Read the issue again and confirm it is still open. Locate an existing linked
-session before opening one; do not adopt an unrelated human session. Refresh the
+Read every proposed member again and confirm its state, blockers and ownership
+still permit admission. Locate an existing linked session before opening one;
+do not adopt an unrelated human session. Refresh the
 count and overlap evidence immediately before opening a new session, or before
 claiming a new repair in an existing session, and defer if capacity has filled or
 the candidate is no longer eligible. A newly admitted session occupies that slot:
 do not charge another slot when claiming and starting that same executor.
 
-Use `open_pr_session` for an existing PR or `open_issue_session` for ordinary
-issue-only work. For a new stacked layer, use `create_session` in this Local
+Use `open_pr_session` for an existing PR or `open_issue_session` once for the
+primary issue of ordinary issue-only work. Do not open companion issue sessions
+to obtain native links; their GitHub claims link them to the same executor.
+For a new stacked layer, use `create_session` in this Local
 project with `base_branch` set to the verified parent's actual branch and
 `coordinate_with_creator: true`. Recheck its live head, plan and stack top before
 creation; verify the new checkout starts at that pushed commit. Do not use
@@ -306,26 +360,35 @@ creation; verify the new checkout starts at that pushed commit. Do not use
 The ownership comment identifies it until its own PR supplies the native link.
 Reconcile an uncertain native result with session lookup before retrying.
 If snapshot verification blocks startup after creation, record the actual
-session/branch and pending reconciliation on the issue so intake can still
-account for that executor; do not start edits or lose it as an unlinked session.
+session/branch and pending reconciliation on the proposed members so intake can
+still account for that executor; do not start edits or lose it as an unlinked session.
 For a new session, omit kickoff when the operator chose App defaults. An explicit
 operator-selected model/effort needs the supported kickoff fields; its bootstrap
 prompt must only establish the session and wait, without diagnosis or edits.
 Use `kickoff.mode: interactive` for this waiting bootstrap.
 Inspect the actual Local session and branch, then follow the
 [ownership convention](../../../docs/scheduled-validation.md#ownership-and-handoff):
-assign the responsible GitHub user and post a short comment
-naming the owner, actual session and branch. Once available, link the GitHub branch
-and PR. Include likely edited/version-moving packages and unresolved scope. For a
-stacked repair, record the dependency reason and parent issue/PR, branch and exact
-pushed head commit; link these from both issues without changing the parent's
+assign the responsible GitHub user on every admitted issue and post a short claim
+on each naming the same owner, actual session and branch, the primary issue and
+all companion issue links. Explain the shared repair scope and why it belongs in
+one PR. Once available, link the GitHub branch and PR. Include the combined likely
+edited/version-moving packages and unresolved scope. For a stacked repair, record
+the dependency reason and parent issue/PR, branch and exact pushed head commit;
+link these from the member and parent issues without changing the parent's
 ownership. Repair branches follow ordinary repository conventions. All authored
 posts start with `[Copilot speaking]`.
 
-Reread ownership, package overlap and any parent snapshot after claiming and before
-starting work. If eligibility changed, preserve the admitted session and reconcile
-through its owner rather than starting edits or creating a duplicate. The earlier
-unreleased claim wins a collision; withdraw without removing its assignment.
+Reread every member's state, blockers, ownership, package overlap and any parent
+snapshot after claiming and before starting work. The earlier unreleased claim
+wins a collision; withdraw from that member without removing the winner's
+assignment. If a companion is no longer eligible, record its withdrawal, release
+only this admission's uncontested claim on it, and reassess the remaining group.
+Publish final membership on the remaining claims before startup. If the primary
+claim fails, membership is uncertain, or the remaining blockers, scope or parent
+snapshot no longer permit admission, do not start the worker. Preserve the
+admitted session, record the partial admission and reconcile or explicitly release
+only this admission's own claims without disturbing other owners. Do not create
+a duplicate executor.
 Claims are an ordinary collaboration convention, not an atomic lock. No timeout authorizes
 takeover. If you cannot proceed, retain a concrete blocker or explicitly release
 your claim with enough information for a new worker.
@@ -335,9 +398,11 @@ notify its active prerequisite owner using the Stage 2 relationship handoff.
 Identify the actual new session and branch, and give both workers each other's
 session and issue/PR links so they can coordinate directly.
 
-Send `scheduled-repair` to the claimed session with the issue URL and goal:
-confirm the failure, make the justified repair, and follow the ordinary PR through
-checks and review to human disposition. Include scope/overlap evidence and any
+Send `scheduled-repair` to the claimed session with the primary and every companion
+issue URL, the grouping rationale and each issue's acceptance criteria. The goal
+is to confirm the failures, make the justified combined repair, and follow one
+ordinary PR through checks and review to human disposition, accounting for every
+member separately. Include combined scope/overlap evidence and any
 agreed stack dependency, parent snapshot and additional-version requirement.
 The worker uses this executor and creates only its own PR. Use `send_session_message`
 with `delivery_mode: immediate` and `mode: autopilot` after the claim is established;
@@ -352,8 +417,10 @@ notifications, recovery requests and specific admission blockers in the native s
 For recovery, report the stopped session and evidence, whether delivery or resumed
 execution was observed, and any uncertainty or operator action; do not equate
 message acceptance with successful repair. Explain package-overlap deferrals,
-unresolved scope and the evidence for any admitted
-stacking relationship. Do not turn operator housekeeping into an admission
+unresolved scope and the evidence for any admitted stacking relationship.
+Identify the full admitted issue group, its primary issue and shared session,
+why the findings belong together, and any companions left out or claims that
+could not be established. Do not turn operator housekeeping into an admission
 blocker or emit a PR-monitoring report. Post on GitHub only for
 substantive progress, handoff or blockers, not heartbeats or empty scans. Include
 decision diagnostics in a collapsible section when posting a summary. Do not

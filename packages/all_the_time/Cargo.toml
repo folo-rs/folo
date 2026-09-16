@@ -2,7 +2,7 @@
 name = "all_the_time"
 description = "Processor time tracking utilities for benchmarks and performance analysis"
 publish = true
-version = "0.6.8"
+version = "0.6.9"
 
 authors.workspace = true
 edition.workspace = true
@@ -29,6 +29,7 @@ criterion = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "all_the_time_example"
@@ -44,5 +45,4 @@ harness = false
 
 [lints]
 workspace = true
-
 

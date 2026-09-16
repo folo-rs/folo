@@ -1,15 +1,17 @@
 ---
 name: scheduled-repair
-description: Repair one claimed scheduled-finding issue in its Local App session, coordinating package scope and any stable stacked prerequisite, with complete version planning, relevant deep checks and PR follow-up until human disposition.
+description: Repair a claimed scheduled-finding issue or coherent group in one Local App session and PR, accounting for every issue while coordinating combined package scope and any stable stacked prerequisite, with complete version planning, relevant deep checks and follow-up until human disposition.
 ---
 
 # Scope
 
-Work on one claimed issue in its native issue/PR-linked Local App session. Read
-repository/package instructions and [scheduled validation](../../../docs/scheduled-validation.md).
+Work on the admitted issue or coherent group in its shared Local App session,
+branch and PR. The primary issue supplies the native issue link; companion
+ownership comments identify the same executor. Do not open sessions for companions.
+Read repository/package instructions and [scheduled validation](../../../docs/scheduled-validation.md).
 An admitted stacked layer uses the session identified by its issue ownership
 comment until its own PR supplies the native link; do not create another executor.
-The issue, branch and linked PR contain the handoff; do not require private state,
+The issues, branch and linked PR contain the handoff; do not require private state,
 schema markers or access to a prior conversation. Preserve the selected personal
 account/model and existing worktree.
 
@@ -21,14 +23,18 @@ hide a failure or claim success for blocked work.
 
 # Stage 1: Verify the claim and current work
 
-On continuation, first inspect the disposition of the issue and any linked PR.
-If the repair is merged, resolved without a PR or explicitly abandoned, preserve
-any remaining local work for the operator and end the worker turn. Do not revive
+On continuation, first recover the full admitted issue list from the GitHub claims
+and PR, including documented scope changes. Inspect every member's disposition
+and any linked PR. If the whole repair is merged, resolved without a PR or
+explicitly abandoned, preserve any remaining local work for the operator and end
+the worker turn. Do not revive
 a released claim, rerun completed checks or start another repair merely to keep
 the session active.
 
-Read the issue's current discussion, assignees and linked PRs, and confirm this
-session and branch match its plain ownership comment. Follow the
+Read every remaining issue's current discussion, assignees and linked PRs, and
+confirm this session and branch match its plain ownership comment. A claim on the
+primary issue is not a claim on its companions; a closed primary does not resolve the others.
+Continue only the still-authorized unresolved scope in this same session. Follow the
 [ownership convention](../../../docs/scheduled-validation.md#ownership-and-handoff).
 Reread before editing. The earlier unreleased claim wins a collision; no idle
 status or timeout authorizes takeover. Missing or conflicting ownership requires
@@ -43,7 +49,7 @@ This correction is not permission to waive checks. Retain the claim. On
 continuation, inspect the existing PR and current branch/head, previous
 resolutions and human changes; do not reset or force-push unexpected work.
 
-Read the issue's package-scope and prerequisite notes, related active repair PRs
+Read all members' package-scope and prerequisite notes, related active repair PRs
 and their current release plans. Before edits, confirm the
 [package-overlap policy](../../../docs/scheduled-validation.md#package-overlap-and-stacked-repairs)
 still permits this work. Read-only investigation may clarify uncertain scope.
@@ -51,6 +57,8 @@ If a likely collision was missed or the scope expands into another repair,
 publish the evidence and coordinate through the existing owners/intake before
 making conflicting changes. Retain ownership and existing work while deferred;
 routine package waiting is not `needs-human` and needs no timer.
+Assess the union of the members' edited/version-moving packages and group/dependent
+effects. Overlap among members in this session is not competing ownership.
 Existing ancestors and descendants in the agreed stack are coordinated work,
 not competing repairs; necessary parent fixes proceed with downstream handoff.
 
@@ -65,10 +73,25 @@ rebase or modify another owner's branch, spawn layers or merge.
 # Stage 2: Confirm and repair the actual problem
 
 Read relevant source and current main before fixing a historical failure.
-Reproduce the recorded failure with the applicable toolchain, target, flags,
-mutant and seed details where feasible. Establish the unmutated baseline when
-testing mutations. Preserve the full affected scope; interleaved Miri output or a
+For each admitted issue, reproduce the recorded failure with the applicable
+toolchain, target, flags, mutant and seed details where feasible. Establish the
+unmutated baseline when testing mutations. Preserve the full affected scope; interleaved Miri output or a
 post-suite diagnostic does not justify inventing a single failing test or seed.
+
+Keep a concise per-issue mapping of the observed problem, acceptance criteria,
+correction and verification evidence in ordinary GitHub progress/handoff notes.
+Reuse shared investigation, regression coverage and validation where they genuinely
+cover several members; similar symptoms do not prove the same cause or fix.
+Account for distinct missed mutants, timeout mechanisms, platforms and seeds
+rather than treating one successful replay as resolution of the whole group.
+
+If investigation shows that a member is unrelated, blocked or already resolved,
+record its individual disposition and reconcile the remaining shared scope.
+An issue-specific blocker does not automatically block unrelated authorized work;
+a blocker affecting the common repair does. Explicitly hand off or release any
+excluded unresolved issue, accounting for existing changes and retaining
+`needs-human` when applicable. Do not silently drop it, close it by association,
+spawn another worker/PR or absorb later findings without an explicit scope handoff.
 
 Publish likely edited and version-moving packages as soon as the diagnosis
 supports them, distinguishing estimates from confirmed scope. Include known
@@ -128,6 +151,9 @@ Obtain an independent critique as required by repository conventions and address
 concrete findings. Invoke `increment-versions` to apply the full current version
 plan without a separate approval gate; human PR review is that gate. Refresh the
 plan after relevant source, baseline or decision changes.
+Assess one combined version plan for the shared PR, not a separate version
+increment per issue. Cover every member's required verification; combined commands
+may supply evidence for several members when the tested scope includes each one.
 
 ## Version planning for a stacked layer
 
@@ -165,7 +191,11 @@ blind arithmetic or reserving distant versions.
 
 Use `create_pull_request` for a new PR and `update_pull_request` for its description.
 Keep the same PR and branch for continuation. Start the body with `[Copilot speaking]`,
-explain motivation and substantive behavior, and include `Fixes #<issue>`.
+explain motivation and substantive behavior, and include a separate
+`Fixes #<issue>` reference for every issue actually resolved by this PR. Identify
+the full admitted group and explain any member resolved separately or excluded,
+using non-closing links for unresolved work. Keep closing references synchronized
+with the actual repair scope; membership alone does not justify closure.
 Maintain the full **Version/release plan**: every affected package/group, previous
 and proposed versions, change levels and reasons, including dependent/group
 movements; explicitly state when released content and versions do not change.
@@ -185,13 +215,16 @@ for otherwise unchanged inherited packages. A native stack requires supported
 same-repository heads; where registration is unsupported, retain the explicit
 dependent-PR chain and disclose that limitation.
 
-Link the PR from the issue. Put validation evidence in a PR comment, not a
-changed-file or validation-log inventory in the description. Record the **tested
+Link the same PR from every admitted issue. Put validation evidence in a PR comment,
+not a changed-file or validation-log inventory in the description. Record the **tested
 commit and scope**, local commands/results, normal CI job links and any remaining
 limitations or human decisions. Relevant subsequent changes require fresh local
 deep results at the reviewed head; unrelated green checks do not demonstrate the
 fix. There is no custom repair merge gate: normal required checks and version
 validation still apply.
+Map the evidence to each member's acceptance criteria, including explicit
+limitations or separate dispositions, so one green check cannot obscure an
+unverified issue.
 
 # Stage 4: Follow checks, review and conflicts
 
@@ -278,6 +311,9 @@ human review/approval/merge, with links and any limitations. Pending low-signal
 optional checks do not prevent this handoff. A genuine human blocker instead
 needs its specific unresolved action, not a ready claim. Post only substantive
 progress; put decision diagnostics in a collapsible section of a summary.
+Account for every admitted issue: fixed by this PR, resolved separately, or
+explicitly excluded with its blocker/release/handoff. Do not claim the whole group
+ready while a retained member's acceptance criteria or disposition remain unmet.
 For a stack, identify the prerequisite PR and required bottom-to-top order;
 readiness for review is not permission to merge a child independently.
 
@@ -289,16 +325,20 @@ but this best-effort recovery does not replace the owner's foreground follow-up
 or authorize overriding an operator pause or human gate. Do not end work expecting
 an intake wake-up, and do not start a timer or hidden watcher.
 
-A merged linked PR closes the issue through ordinary GitHub behavior. A PR closed
-without merging does not resolve the issue: explain the disposition and explicitly
-release or block the claim rather than restarting automatically. No post-merge
-confirmation service or copied local state is needed.
+A merged linked PR closes the issues named by its closing references through
+ordinary GitHub behavior. A PR closed without merging does not resolve its
+issues: explain the disposition and explicitly release or block each remaining
+claim rather than restarting automatically. No post-merge confirmation service
+or copied local state is needed.
 
 Ready for human review is still an incomplete repair for the repository's
 [repair-session limit](../../../docs/scheduled-validation.md#repair-session-capacity).
 Idling an unmerged repair or adding `needs-human` does not release capacity.
-A merged repair no longer consumes a slot once its session stops executing work,
-regardless of retained labels, local work or a final handoff.
+A grouped repair consumes one slot, not one per issue. Once the shared PR covers
+the repair and other members have explicit dispositions, its merge releases that
+slot when the session stops executing work, regardless of retained labels, local
+work or a final handoff. A retained unresolved member not covered by that merge
+keeps the session incomplete.
 
 Once the repair has a final disposition, preserve any unpublished or unmerged work
 and identify it for the operator when a handoff is needed. For a repair without a

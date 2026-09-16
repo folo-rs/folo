@@ -52,6 +52,17 @@ Checker-result handling likewise has an observable diagnostic callback; producti
 sends those diagnostics to stderr, while unit tests verify verdicts, warning
 forwarding and unexpected result rejection.
 
+Verification runs a shared sequence over a repository-evidence interface. The sequence
+owns clean-head and first-parent ordering, tracked manifest selection, locked/offline
+metadata arguments, metadata parsing and package validation, candidate-relative checker
+inputs, repository rechecks and the final success result. In-memory evidence records
+the full sequence and injects failures at each boundary, including rechecks after failed
+operations. Real repository discovery and interface forwarding retain narrow mutation
+exclusions and integration coverage; the verification sequence remains a mutation target.
+The process entry point likewise only connects real arguments and standard streams.
+Its shared argument-to-verdict path is unit-tested for request forwarding, failure
+short-circuiting, exit codes and output selection.
+
 Repository evidence decisions are pure functions over captured commit IDs, status,
 index entries, history and paths. Their unit tests cover acceptance and rejection,
 while an in-memory callback sequence verifies checks before and after either
