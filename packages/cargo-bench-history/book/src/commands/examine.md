@@ -11,6 +11,10 @@ cargo bench-history examine --local=./bench-history \
     --benchmark my_pkg/my_group/my_case --metric instruction_count
 ```
 
+If the finding used additional local measurements, pass the same
+[`--local-input <directory>`](../storage.md#additional-local-results) to inspect that
+combined data rather than the baseline alone.
+
 Two required options name the series, and this is the one command that names a **metric**:
 
 - `--benchmark <qualified-id>` selects exactly one benchmark identity.

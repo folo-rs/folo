@@ -93,6 +93,10 @@ where
         &self.inner
     }
 
+    pub(crate) fn cache(&self) -> &Cache {
+        &self.cache
+    }
+
     /// Reconciles the mirror with the cloud before a load: reads `project`'s
     /// invalidation marker, and if it differs from the epoch the mirror recorded
     /// under the same marker key (or the mirror has none), wipes this project's

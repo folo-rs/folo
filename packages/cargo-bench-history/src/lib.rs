@@ -267,6 +267,13 @@
 //! PATH` to resolve git state from another directory, and `--verbose` to emit a
 //! step-by-step diagnostic trail to standard error.
 //!
+//! `analyze`, `list`, and `examine` also accept `--local-input PATH` to read
+//! locally collected results alongside that baseline. Matching keys use the
+//! local contents. These queries do not modify either source or upload the local
+//! results. The input must be an existing directory; relative paths resolve
+//! against the working directory. An Azure baseline may still use `--cache`,
+//! whose mirror must be disjoint from the local input.
+//!
 //! ## Azure Blob storage
 //!
 //! The Azure backend authenticates with **Microsoft Entra ID** (OAuth): it stores
@@ -280,8 +287,10 @@
 //!    (shared-key access disabled) are supported and preferred — there is then no
 //!    account key to leak. The `bench-history` container does not need to pre-exist;
 //!    `collect` creates it on first use.
-//! 2. **Grant the identity that runs the tool the `Storage Blob Data Contributor`
-//!    role** on the account. This data-plane role covers both the blob read/write
+//! 2. **Grant collection and administration identities the `Storage Blob Data Contributor`
+//!    role** on the account. Read-only queries need only `Storage Blob Data Reader`
+//!    scoped to the existing history container.
+//!    The contributor role covers both the blob read/write
 //!    the tool performs and the container creation `collect` does on first use; the
 //!    broader `Storage Blob Data Owner` is not needed for a flat blob container.
 //!    Locally, that identity is your `az login` user; in CI it is the federated

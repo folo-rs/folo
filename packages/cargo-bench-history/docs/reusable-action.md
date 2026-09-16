@@ -1172,14 +1172,15 @@ fork-aware, and no input configures this.
 **PR analysis reads the same production store as the trunk.** Branch mode compares the PR head
 against the trunk's recorded baseline, so the PR flow must read the very store that holds it —
 a separate PR store is rejected because it would have no baseline to compare against.
-The intended PR path combines a read-only Azure baseline with run-local PR measurements.
-That requires an explicit combined read view, including the matrix artifact handoff for the
-local measurements. **This is a prerequisite, not an existing CLI capability:** `--local`
-selects filesystem storage instead of Azure, while `--cache` only mirrors cloud objects and
-does not add locally collected objects to cloud listings. The current Folo PR workflow
-collects into the shared Azure store. Neither a local-only PR store nor a restored cache
-implements the intended read-only flow; that composition must be implemented and tested
-before the reusable workflow advertises it.
+The PR path combines a read-only Azure baseline with run-local PR measurements:
+`collect --local=<run-results>` records the measurements, and
+`analyze --local-input <run-results>` reads them alongside the configured Azure baseline.
+An optional `--cache=<directory>` mirrors only the baseline. `--local` by itself still
+selects filesystem storage instead of Azure, and a restored cache does not add locally
+collected objects to cloud listings. The workflow must assemble the matrix's result artifacts
+into the input directory and use a read-only Azure identity for analysis. The current Folo PR
+workflow still collects into shared Azure storage; that workflow cutover is separate from the
+implemented combined-view capability.
 
 **Bring-your-own infrastructure.** The action does **not** bundle the Azure provisioning
 (`infra/azure-bench-history-prod/`); that stays in the monorepo as a *referenced example* the
@@ -1600,9 +1601,9 @@ The working design must distinguish those capabilities from the integration prer
   Note that `--include-improvements` no longer exists — direction is now a property of the
   mode (§4.3) — so nothing should pass it.
 * **Read-only PR storage composition is required before advertising that path.** Local PR
-  measurements must be analyzed together with the Azure baseline without writing the PR
-  points to Azure (§6). The mutually exclusive backend selectors and read-through cache do
-  not implement that combined view. The storage integration and matrix data handoff remain
+  measurements are analyzed together with the Azure baseline through `--local-input`,
+  without writing the PR points to Azure (§6). The view rejects mutations and keeps local
+  inputs outside the baseline cache. The workflow credential wiring and matrix data handoff remain
   work; neither is an analysis-policy change.
 * **Workflow computation and publication remain separate responsibilities.** The workflow
   owns package-scope policy and configurable exclusions (§4.7), using Rust for the
@@ -1727,11 +1728,11 @@ These are completion criteria for the existing phases, not additional features. 
 continue to use their current implementation until the cutover gate is satisfied. Neither
 first publication nor a green unit suite substitutes for that gate.
 
-**Next implementation unit.** Add the temporary-PR-results plus Azure-baseline storage view,
-with tests proving PR data can be read with the baseline without mutating Azure. Then wire
-collection receipts, report artifacts, run ownership and isolated publication jobs into the
-monorepo workflows. The companion result handoff and lifecycle guard work is implemented in
-this branch; it does not itself perform that workflow cutover.
+**Next implementation unit.** Wire local collection artifacts, expected/completed platform
+receipts, report artifacts, run ownership and isolated publication jobs into the monorepo
+workflows. The companion lifecycle safeguards and the read-only baseline/local-input storage
+view are implemented; the workflow cutover must supply their inputs and enforce the intended
+credential separation.
 
 **Storage-unit contract.** Collection keeps using `--local=<run-results>`. Read-only queries
 gain `--local-input <run-results>` alongside the ordinary baseline selection, with optional

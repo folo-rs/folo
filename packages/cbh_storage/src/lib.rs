@@ -37,6 +37,8 @@ mod local;
 mod memory;
 mod pending;
 mod port;
+mod read;
+mod read_input;
 #[cfg(any(test, feature = "private-test-util"))]
 mod test_container;
 
@@ -51,7 +53,8 @@ pub(crate) use error::{
     DecompressAzureBlobError, DecompressLocalObjectError, InspectLocalListingEntryError,
     InspectLocalObjectExistenceError, InvalidStorageKeyError, ObjectAlreadyExistsError,
     ObjectNotFoundError, OpenLocalListingDirectoryError, ReadLocalObjectError,
-    RemoveLocalObjectError, StorageConfigurationError, WriteLocalObjectError,
+    ReadOnlyStorageError, RemoveLocalObjectError, StorageConfigurationError,
+    ValidateLocalInputError, WriteLocalObjectError,
 };
 pub use facade::{
     StorageFacade, StorageOverride, azure_backend_from_parts, build_storage, resolve_storage,
@@ -65,5 +68,7 @@ pub use local::LocalStorage;
 pub use memory::MemoryStorage;
 pub(crate) use pending::PendingInvalidation;
 pub use port::Storage;
+pub use read::ReadStorage;
+pub use read_input::resolve_read_storage;
 #[cfg(any(test, feature = "private-test-util"))]
 pub use test_container::unique_test_container;

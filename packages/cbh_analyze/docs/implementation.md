@@ -18,6 +18,12 @@ delegating. Their inner `*_with` orchestrators receive generic ports and explici
 which keeps policy deterministic and same-crate tests in memory. The component crates own the
 adapter implementations; `cbh_analyze` selects and coordinates them.
 
+Read-only command entry points select a read-only storage view, optionally combining local
+input with their baseline before the shared selection pipeline runs. Cache synchronization
+and accounting remain baseline responsibilities. Administrative commands retain their
+ordinary storage facade and do not consume additional local input, keeping source selection
+for writes unambiguous.
+
 Operations cross the crate boundary through a transparent aggregate. Concrete conditions remain
 private to the responsibility that owns their context, while component failures remain attached
 as sources. The shell can therefore convert the aggregate into `ohno::AppError` without exposing

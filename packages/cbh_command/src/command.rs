@@ -252,6 +252,9 @@ pub struct AnalyzeOptions {
     /// under a local directory so repeated reads avoid re-downloading the history.
     /// `None` means `--cache` was not given. Ignored with a `--local` backend.
     pub cache: Option<CacheSelection>,
+    /// Additional local results to read alongside the selected baseline.
+    /// Matching keys use local contents. Relative paths resolve against the working directory.
+    pub local_input: Option<PathBuf>,
     /// Target ref whose history is analyzed; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
@@ -346,6 +349,9 @@ pub struct ListOptions {
     /// under a local directory so repeated reads avoid re-downloading the history.
     /// `None` means `--cache` was not given. Ignored with a `--local` backend.
     pub cache: Option<CacheSelection>,
+    /// Additional local results to read alongside the selected baseline.
+    /// Matching keys use local contents. Relative paths resolve against the working directory.
+    pub local_input: Option<PathBuf>,
     /// Target ref whose history is listed; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or
@@ -400,6 +406,9 @@ pub struct ExamineOptions {
     /// under a local directory so repeated reads avoid re-downloading the history.
     /// `None` means `--cache` was not given. Ignored with a `--local` backend.
     pub cache: Option<CacheSelection>,
+    /// Additional local results to read alongside the selected baseline.
+    /// Matching keys use local contents. Relative paths resolve against the working directory.
+    pub local_input: Option<PathBuf>,
     /// Target ref whose history is examined; defaults to `HEAD`.
     pub context: Option<String>,
     /// Base ref the target's history is split at; defaults to the detected (or

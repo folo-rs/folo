@@ -10,6 +10,10 @@ guessing an order.
 cargo bench-history analyze --local=./bench-history
 ```
 
+To compare separately collected results with the selected baseline, pass
+[`--local-input <directory>`](../storage.md#additional-local-results). The query combines
+the sources without writing to either one.
+
 ## Target, base, and modes
 
 Two refs frame the analysis: a **target** (`--context`, default `HEAD`) whose history is
