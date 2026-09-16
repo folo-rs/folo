@@ -30,18 +30,12 @@ on:
         type: string
         default: ""
 
-# Group by the commit SHA, not the ref. Distinct commits must collect in parallel - each is
-# its own history data point, and cancelling one to favour a newer commit would drop that
-# commit's measurements, defeating the per-commit goal (so the usual ref-keyed
-# cancel-in-progress from standard-validation.yml would be wrong here). cancel-in-progress therefore
-# only dedups a redundant re-trigger of the SAME commit (a re-run, or a workflow_dispatch on
-# an already-pushed commit), which `--skip-existing` would make a no-op append anyway. The
-# recollect commit id is folded into the key because a workflow_dispatch's github.sha is the
-# `main` tip, not the target: without it, two recollects of different commits (or a recollect
-# racing a push of the same tip) would share a group and wrongly cancel each other. The `-<id>`
-# suffix is appended only when a recollect id is supplied (via the `&&`/`||` idiom); pushes and
-# plain dispatches carry an empty id, so the suffix is omitted entirely and their grouping is
-# unchanged (no trailing dash).
+# Deduplicate redundant runs of the same history point without letting a newer commit cancel
+# an older point. Cross-commit push throttling belongs to collect's per-platform queue, not
+# this workflow-level group, so platforms and downstream analysis remain independent.
+# Re-collection includes its target because github.sha identifies the dispatch tip, not the
+# historical commit being repaired: different repair targets must not cancel each other or
+# normal collection at that tip. See design.md#concurrency.
 concurrency:
   group: ${{ github.workflow }}-${{ github.sha }}${{ inputs.recollect_commit_id && format('-{0}', inputs.recollect_commit_id) || '' }}
   cancel-in-progress: true
@@ -62,6 +56,14 @@ jobs:
     # subject and fail at azure/login). Gating here makes such manual runs skip cleanly instead
     # of failing red.
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+
+    # Serialize main-push collection per platform without occupying runners while waiting.
+    # Retain pending commits instead of replacing them; manual runs use their own groups so
+    # repairs do not wait behind the push backlog. See design.md#concurrency.
+    concurrency:
+      group: bench-history-collect-${{ github.event_name == 'push' && 'push-main' || github.run_id }}-${{ matrix.platform }}
+      cancel-in-progress: false
+      queue: max
 
     strategy:
       # One platform's benchmarks failing must not abandon the others' history for this
