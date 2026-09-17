@@ -161,10 +161,20 @@ scope selection to bypass it.
 ## Triage
 
 Use the [scheduled-triage skill](../.github/skills/scheduled-triage/SKILL.md) or the
-same workflow manually. Select open `scheduled-run-failure` issues oldest first,
-claim the report, and process reports sequentially. Read the report, relevant
-jobs/logs and source, then search relevant open and closed issues and related PRs,
-including human-filed issues without automation labels.
+same workflow manually only for failures from this repository's **Deep validation**
+workflow on `main`, including manual dispatches of that workflow and its invoked
+standard checks. Standalone PR/push CI, benchmark history, releases and other
+workflows are outside its scope, even when they run on a schedule.
+
+Verify the linked run and reported attempt before applying ownership, labels or
+closure rules. A generic triage request or a `scheduled-run-failure` label is not
+proof of an eligible run. Leave out-of-scope or unverified reports unchanged under
+this procedure; ordinary triage must not enroll them in scheduled repair intake.
+Process an explicitly requested eligible report, or select open
+`scheduled-run-failure` issues oldest first. Claim verified reports and process
+them sequentially. Read the report, relevant jobs/logs and source, then search
+relevant open and closed issues and related PRs, including human-filed issues
+without automation labels.
 
 Separate independently actionable problems, not jobs. A dependency download
 failure affecting several jobs is one problem; unrelated defects in one job are
@@ -172,10 +182,11 @@ separate problems. A failed prerequisite explains work that never executed, not
 defects in every dependent package. Compare actual problems rather than identical
 log text or generated fingerprints.
 
-Create or update a normal problem issue with `scheduled-finding`, including when
-reusing a human issue. It needs an observed failure and affected scope, known cause
-or explicit uncertainty, useful diagnostics and report/job links, reproduction
-steps with applicable toolchain/target/seed details, and acceptance criteria.
+Create or update a normal problem issue with `scheduled-finding` only when it
+accounts for a failure from the verified run, including when reusing a human
+issue. It needs an observed failure and affected scope, known cause or explicit
+uncertainty, useful diagnostics and report/job links, reproduction steps with
+applicable toolchain/target/seed details, and acceptance criteria.
 Triage need not finish the repair investigation or prescribe a speculative patch.
 Independently actionable problems remain separate issues even when they are
 closely related enough for intake to repair together. Link useful shared

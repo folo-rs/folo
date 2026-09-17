@@ -148,7 +148,12 @@ pub(crate) async fn measure(
             .map_err(|error| fail(format!("{} analysis failed: {error}", mode.keyword())))?;
         drop(span);
         let elapsed = started.elapsed();
-        let attempt_cpu = recorded_cpu(&session);
+        let report = session.to_report();
+        let attempt_cpu = recorded_cpu(
+            report
+                .operations()
+                .map(|(_, operation)| operation.total_processor_time()),
+        );
         if !matches!(outcome, RunOutcome::Analyzed { .. }) {
             return Err(fail("analyze did not return an Analyzed outcome"));
         }
@@ -188,14 +193,13 @@ pub(crate) async fn measure(
     })
 }
 
-/// The process CPU time recorded by the single span held in `session`, or zero
-/// if the session recorded nothing.
-fn recorded_cpu(session: &Session) -> Duration {
-    session
-        .to_report()
-        .operations()
-        .next()
-        .map_or(Duration::ZERO, |(_, op)| op.total_processor_time())
+/// Selects the recorded CPU time, or zero when no operation was recorded.
+///
+/// Each attempt owns a fresh session containing only its analysis operation.
+/// Accepting report durations keeps selection independent of OS clocks; see
+/// docs/implementation.md, "Measurement".
+fn recorded_cpu(mut processor_times: impl Iterator<Item = Duration>) -> Duration {
+    processor_times.next().unwrap_or(Duration::ZERO)
 }
 
 /// Keeps whichever attempt ran in less wall time, carrying its paired CPU time;
@@ -413,28 +417,28 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "all_the_time process timing uses syscalls unsupported under Miri"
-    )]
-    fn recorded_cpu_reflects_a_measured_span() {
-        // A session that recorded nothing has no CPU time to report.
-        let empty = Session::new().no_stdout().no_file();
-        assert_eq!(recorded_cpu(&empty), Duration::ZERO);
+    fn recorded_cpu_is_zero_without_an_operation() {
+        assert_eq!(recorded_cpu([].into_iter()), Duration::ZERO);
+    }
 
-        // A span around a CPU burn records a non-zero process time, which is what
-        // the harness pairs with the wall clock to compute efficiency.
-        let session = Session::new().no_stdout().no_file();
-        let operation = session.operation("analyze-history");
-        {
-            let span = operation.measure_process().iterations(1);
-            let mut acc = 0_u64;
-            for value in 0..50_000_000_u64 {
-                acc = acc.wrapping_add(value);
-            }
-            assert_ne!(acc, 0, "the burn must not be optimized away");
-            drop(span);
-        }
-        assert!(recorded_cpu(&session) > Duration::ZERO);
+    #[test]
+    fn recorded_cpu_preserves_a_measured_zero() {
+        // A later nonzero value distinguishes first-operation selection from
+        // searching for a positive measurement or aggregating operations.
+        let later = Duration::from_secs(1);
+        assert_eq!(
+            recorded_cpu([Duration::ZERO, later].into_iter()),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn recorded_cpu_forwards_the_first_duration_exactly() {
+        // An arbitrary subsecond value checks exact forwarding without depending
+        // on host clock resolution. The distinct later value protects selection.
+        let measured = Duration::from_nanos(123_456_789);
+        let later = Duration::from_secs(1);
+        assert_eq!(recorded_cpu([measured].into_iter()), measured);
+        assert_eq!(recorded_cpu([measured, later].into_iter()), measured);
     }
 }

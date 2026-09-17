@@ -131,6 +131,7 @@ fn write_report(directory: &Path) {
 fn queries_emit_only_json_to_stdout_without_workspace_discovery() {
     let directory = tempdir().unwrap();
     write_report(directory.path());
+    let before = fs::read(directory.path().join("report.json")).unwrap();
     for (subcommand, expected) in [
         (
             "analysis-order",
@@ -153,6 +154,10 @@ fn queries_emit_only_json_to_stdout_without_workspace_discovery() {
         );
         assert!(!output.stderr.is_empty());
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert_eq!(
+            fs::read(directory.path().join("report.json")).unwrap(),
+            before
+        );
     }
 }
 

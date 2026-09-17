@@ -17,8 +17,18 @@ struct AnalysisBatch {
     cyclic: bool,
 }
 
+// Filesystem acquisition is covered by artifact-command integration tests.
+// The shared core retains acquisition failures and serialization under library mutation testing.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_analysis_order(path: &Path, verbose: Verbose) -> Result<String, AppError> {
-    let report = read_report(path)?;
+    analysis_output(|| read_report(path), verbose)
+}
+
+fn analysis_output(
+    read_report: impl FnOnce() -> Result<ReportFile, AppError>,
+    verbose: Verbose,
+) -> Result<String, AppError> {
+    let report = read_report()?;
     Ok(serde_json::to_string(&analysis_order(&report, verbose))
         .expect("analysis batches contain only JSON-compatible data"))
 }
@@ -131,10 +141,46 @@ fn reach(start: &str, edges: &BTreeMap<String, BTreeSet<String>>) -> BTreeSet<St
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
+    use crate::UnsupportedPlanSchemaError;
     use crate::report::fixture::{package, report};
+
+    #[test]
+    fn command_acquires_validated_dependencies_and_serializes_batches() {
+        let data = graph(&[("dependent", &["root"]), ("root", &[])]);
+        let output = analysis_output(
+            || {
+                data.validate()?;
+                Ok(data)
+            },
+            Verbose::new(false),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap(),
+            json!([
+                {"order": 1, "packages": ["root"], "cyclic": false},
+                {"order": 2, "packages": ["dependent"], "cyclic": false}
+            ])
+        );
+    }
+
+    #[test]
+    fn command_propagates_report_validation_failure() {
+        let mut data = report(vec![]);
+        data.schema_version = 0;
+        let error = analysis_output(
+            || {
+                data.validate()?;
+                Ok(data)
+            },
+            Verbose::new(false),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+    }
 
     fn graph(edges: &[(&str, &[&str])]) -> ReportFile {
         report(
