@@ -14,7 +14,7 @@ the installed App's scheduling controls.
 | `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
-| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Local PR collection, read-only production-backed analysis, and advisory GitHub publication for same-repository PRs. |
+| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Local PR collection and combined production-backed analysis/publication for same-repository PRs. |
 
 ```text
 Deep validation on main: plan -> standard + deep checks -> report failures -> run report issue
@@ -41,10 +41,11 @@ Collection and backfill use the fixed `bench-history-setup` local action. Folo's
 selects the existing setup environment with Valgrind enabled; it owns no new setup logic.
 This keeps repository-specific preparation separate from tool installation and GitHub posting.
 
-Benchmark automation separates preparation, collection, analysis and GitHub publication.
+Benchmark automation has preparation, collection, combined analysis/publication and
+independently scheduled lifecycle work.
 Preparation builds the Linux companion with the repository's pinned Rust toolchain and
-archives its executable permissions. Posting jobs download that run-scoped archive rather
-than installing the full development environment, and have no Azure federation permission.
+archives its executable permissions. The combined job and lifecycle jobs reuse that run-scoped
+archive rather than independently rebuilding the companion.
 A failed companion build or unavailable executable remains a failed workflow check; no
 notification is reported as successful when its executable could not run.
 
@@ -60,6 +61,9 @@ artifacts remain visible. Rust reconciles receipts with each platform's latest j
 then writes the selected machine keys and assembles only successful PR result trees. It
 rejects missing, conflicting or mismatched evidence instead of silently narrowing success.
 The local input and collection artifacts are outside the persisted history cache.
+Artifact downloads pass the ambient GitHub token, repository and run ID explicitly with
+Actions-read permission. Fork-origin PR runs have a read-only base-repository token capable
+of artifact reads; the same-repository workflow gate is independent of that capability.
 
 Automation and measured source are separate for PR runs. The workflow's merge checkout
 supplies current helpers, tool builds and configuration. The full real-head checkout under
@@ -69,10 +73,12 @@ repository and the frozen event head/base. This preserves real commit attributio
 requiring every open PR head to contain new automation files.
 
 The analysis bundle always contains the tool's full Markdown, JSON and summary. The companion
-projects validated JSON into outcome, all-clear and publication-state outputs; publication
-receives the same report and completed-platform set. Main issue writers share an instance concurrency
-group, and PR comment writers share a project/PR group. Standard project-derived markers
-identify reports; old output formats are not adopted. Titles, advisory wording and book links
+projects validated JSON into outcome, all-clear and publication-state outputs. The same job
+uploads the reports, then publishes using those local files and the artifact link.
+Main issue writers share an instance concurrency group, and PR comment writers share a project/PR
+group. Issue lookup uses project-qualified title search followed by a current read by number;
+PR comment lookup remains marker-based. Body markers carry commit and state, and old output
+formats are not adopted. Titles, advisory wording and book links
 come from the companion's message catalogue rather than workflow parameters.
 
 Both sinks use `publish-<sink>-<state>` commands. A successful report selects findings, clean
@@ -84,12 +90,15 @@ preserve the existing investigation rather than creating a status-only issue. Th
 successful-run resolution job. Partial collection can publish qualified findings and alert
 on failed jobs without publishing failed status over those findings.
 
-Reader configuration is checked before collection, except empty PR scope, which needs no
-Azure access. It is intentionally not initialized with the writer client ID. Deployment adds
-the reader first; workflow activation requires its returned client ID in `constants.env`.
-Retire the writer's PR federation only after legacy PR-writing runs have drained. This
-infrastructure safety procedure is independent of report-format adoption. These are maintainer deployment actions, not workflow approval
-prompts or automatic changes to live infrastructure.
+Azure configuration uses `AZURE_PROD_CLIENT_ID` for every production-history operation.
+Empty PR scope needs no Azure access. The shared identity has contributor access and branch/PR
+federation; the analysis/publication job also receives its GitHub posting scope. There is no
+Reader/Writer selector, second client ID, or privilege-driven report transfer.
+
+Ordinary collection, analysis and backfill retain their contracts. There is no recollection
+dispatch input, single-commit repair worktree or companion recipe; manual pruning and normal
+backfill cover the supported data-maintenance path. Benchmark triggers exclude `merge_group`
+and enqueue/dequeue activity because the workflows are advisory.
 
 ## Standard validation structure
 

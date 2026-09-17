@@ -30,9 +30,12 @@ findings or re-derives analysis vocabulary.
 
 Reports use a shared message catalogue, including advisory wording and the public
 [cargo-bench-history guide](https://folo-rs.github.io/folo/cargo-bench-history/).
-Regression issues use the title `Benchmark regressions detected`; workflow-failure issues use
-`Benchmark-history workflow failed`. The caller supplies report artifacts and evidence, not
-titles, introductions, documentation links or comment identities.
+Regression issues use `Benchmark history findings for <project> (updated YYYY-MM-DD)`.
+The project-qualified prefix identifies the rolling issue; the suffix is the UTC date of
+the companion's last body update, not the last measurement. No-op operations leave it unchanged.
+Workflow-failure issues use `Benchmark history workflow failed for <project> (run <run-id>)`.
+The caller supplies report artifacts and evidence, not titles, introductions, documentation
+links or comment identities.
 
 Regression issues remain open after all-clear so their rolling history is retained. Failure
 alerts describe individual workflow runs and stay unchanged when later runs succeed.
@@ -156,25 +159,32 @@ produces a visible warning rather than unqualified fresh-looking results.
 
 ## Identity
 
-Every rolling artifact carries a hidden marker derived from the configured project ID and
-artifact kind. Workflows pass that namespace as internal instance data, including in receipts
-and collection-job identities; it is not a consumer override. Rolling issues use `regression`;
-pull requests carry one `pr-comment` artifact per instance. Displayed titles are not identities
-and may be edited.
+Identities derive from the configured project ID. Workflows pass that namespace as internal
+instance data, including in receipts and collection-job identities; it is not a consumer override.
 
-No issue labels are applied. Rolling issues are found by enumerating open issues and matching
-the hidden marker in the body.
+Rolling issues use server-side `in:title` phrase search restricted to open issues in the
+repository, excluding the date suffix from the query. Candidates must match the exact
+project-qualified title form, not merely contain similar words. The companion reads the
+selected issue by number before acting, rather than trusting indexed body/state data.
+Its title prefix is reserved for this purpose and must be retained for discovery.
+No issue labels or whole-repository body scans are needed.
 
-Run ownership, status and staleness markers share the same instance namespace. Artifacts without
-the current instance/kind marker are ignored, even when their titles match. The companion does
-not adopt or clean up issues, comments or placeholders from other output formats.
+PR comments still use project/kind markers within the one PR. Issue bodies retain run ownership,
+report commit and status markers, but these are not the repository-wide search key. No path
+adopts older output formats. A matching issue whose body cannot be interpreted is an explicit
+error, not permission to overwrite it or create another.
+
+Multiple exact matches, incomplete searches and search failures are errors. Search indexing can
+lag writes: issue creation is not an atomic upsert or an exactly-once guarantee. Ambiguous creates
+receive bounded reconciliation reads; inability to establish success remains a failure without
+another create. Known issue numbers use direct reads, avoiding unnecessary index dependence.
 
 ## One-off failure alerts
 
-`alert` is separate from rolling-issue publication. Its marker identifies the repository,
-project namespace, `failure-alert` kind and workflow run ID. The run URL must identify the same
+`alert` is separate from rolling-issue publication. Its title identifies the repository-scoped
+project and workflow run ID. The run URL must identify the same
 repository and run. Attempts share the run's alert; distinct failed runs receive distinct
-issues. Existing alerts are left unchanged, including a human-closed alert found by searching
+issues. Existing alerts are left unchanged, including a human-closed alert found by title search over
 closed as well as open issues. A retry neither recreates nor reopens it.
 
 A successful run does not update or resolve earlier alerts. Human investigation owns their
@@ -187,3 +197,6 @@ The real adapter reads `GITHUB_TOKEN`, falling back to `GH_TOKEN`, and uses the 
 No personal access token or other long-lived credential is introduced.
 Analysis preparation requires Actions-read access; offline matrix setup, receipt creation and
 report inspection do not read either credential variable.
+The companion can run in the same job as Azure-backed analysis. The binary boundary separates
+reporting responsibilities, not credentials; GitHub's token and the shared Azure identity
+authenticate to their respective services.

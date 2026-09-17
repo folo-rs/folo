@@ -226,8 +226,7 @@ other scheduled runs cancel that full-scope backstop. The close companion stays
 pull-request-only. The exception
 is history collection on `main`, whose workflow-level group is keyed on the commit **SHA**:
 each commit is a distinct measurement, so only a redundant re-trigger of the *same* commit
-is deduplicated. Manual re-collection also keys on its repair target so different historical
-points remain independent.
+is deduplicated.
 
 Push-to-main history collection runs at most one job per platform across workflow runs.
 Linux and Windows have separate queues, so one platform does not wait for the other.
@@ -414,22 +413,21 @@ presents `repo:folo-rs/folo:ref:refs/heads/<branch>` (e.g. `…:ref:refs/heads/m
 pull-request run presents `repo:folo-rs/folo:pull_request`. The audience is always
 `api://AzureADTokenExchange`. The two non-secret identifiers a job needs — the managed
 identity's client id and the tenant id — live in `constants.env` and are remapped to the
-standard `AZURE_*` names by the shared federation helper. Production writers select
-`AZURE_PROD_CLIENT_ID`; readers select `AZURE_PROD_READER_CLIENT_ID`. Reader selection never
-falls back to the writer, and using the same client ID for both is a configuration error.
+standard `AZURE_*` names by the shared federation helper. All production-history consumers
+select `AZURE_PROD_CLIENT_ID`; analysis does not need another identity.
 
 Azure-touching work is restricted to **same-repo** PRs by an explicit head-repository check.
 The `pull_request` subject does not encode whether the head comes from a fork, so subject
 matching and the absence of stored secrets do not replace that workflow gate.
 
-Managed identities separate durable production writes, production reads, and disposable tests:
+One production identity serves history; disposable backend tests retain their own test identity:
 
 | Event | OIDC subject | Identity | Consumer |
 | --- | --- | --- | --- |
-| push to `main` | `…:ref:refs/heads/main` | prod writer | History collection |
-| schedule on `main` | `…:ref:refs/heads/main` | prod writer | History backfill |
-| push/dispatch on `main` | `…:ref:refs/heads/main` | prod reader | History analysis |
-| pull request | `…:pull_request` | prod reader | PR analysis |
+| push to `main` | `…:ref:refs/heads/main` | prod | History collection and analysis |
+| schedule on `main` | `…:ref:refs/heads/main` | prod | History backfill |
+| dispatch on `main` | `…:ref:refs/heads/main` | prod | History collection and analysis |
+| pull request | `…:pull_request` | prod | PR analysis |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
 | schedule/manual dispatch on `main` | `…:ref:refs/heads/main` | test | Scheduled `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
@@ -437,24 +435,24 @@ Managed identities separate durable production writes, production reads, and dis
 `merge_group` is not a trusted subject. Queue validation does not include `test-azure`,
 avoiding an exchange that cannot succeed.
 
-The production writer retains `Storage Blob Data Contributor` for collection and backfill.
-The production reader has `Storage Blob Data Reader` scoped to the history container.
-PR collection holds no Azure federation permission and writes only run-local files. Analysis
-reads those files together with the production baseline through `--local-input`; publication
-runs in another job with GitHub write scopes and no Azure federation.
+The production identity has account-scoped `Storage Blob Data Contributor`. Analysis and
+GitHub publication share a job with Azure federation and the required GitHub posting scope.
+PR collection writes run-local files because branch measurements are disposable, not because
+analysis has a distinct Reader role. Analysis reads those files together with the production
+baseline through `--local-input`.
 
-Deployment is reader-first: add the reader and record its non-secret client ID before
-activating its consumers. Preserve an existing writer PR credential until legacy PR-writing
-runs have drained, then explicitly retire it. Incremental ARM deployment does not delete an
-omitted credential. Fresh writer identities are main-only, and later deployments preserve
-retired trust rather than recreating it. The deployment wrapper owns that policy; see
+Deployment provisions one production identity with branch and PR federation and preserves
+existing storage settings and history. There is no reader-first activation or writer-PR-trust
+retirement procedure. Disposable tests remain outside the production account because their
+fixtures are created and deleted independently. See
 [`infra/azure-bench-history-prod`](../../infra/azure-bench-history-prod/README.md).
 
 ## Benchmark history
 
-History collection runs on every push to `main` rather than on a schedule, so it captures
-exactly one data point per commit instead of re-measuring an unchanged tip and missing
-intermediate commits. It writes to a dedicated production storage account under a dedicated
+History collection runs on every push to `main`, measuring the pushed tip rather than
+repeatedly measuring an unchanged scheduled tip. A push may contain several commits, including
+batched queue merges; ordinary backfill supplies additional history within its window.
+Collection writes to a dedicated production storage account under a dedicated
 production managed identity, kept entirely separate from the throwaway account the test jobs
 use, so the long-lived data store never depends on test infrastructure. Collection is
 append-only and idempotent, which is what makes a re-run safe and lets a read-through cache
@@ -463,7 +461,7 @@ of the bulk history persist between runs.
 Collection excludes the slow, special-purpose `benchmarks` package and the deprecated
 `infinity_pool` package. `infinity_pool` is retained for legacy use, not ongoing performance
 development, so measuring it would consume CI time and regression-triage effort without
-supporting active maintenance goals. Main collection, re-collection and nightly backfill use the same
+supporting active maintenance goals. Main collection and nightly backfill use the same
 package exclusion list; PR collection removes those packages from its affected set before
 deciding whether there is anything to measure. Deprecation does not require deleting a
 package's benchmark suite.
@@ -480,9 +478,11 @@ single shared key would blend genuinely different machines into one jittery seri
 fingerprinting instead splits the pool into one clean series per hardware type. Because
 collection is a matrix and analysis is a single job that cannot re-derive those keys from its
 own hardware, each collect leg writes a run/attempt-bound receipt with its fingerprint and the analysis job
-threads exactly the successfully collected keys into its selection — scoping the analysis to the
-machines that actually measured this commit, without assuming anything about other data in
-the shared store. The cost of that split is sparseness: consecutive commits land on whatever
+threads exactly the successfully collected keys into its selection. This selects partitions
+from the action's collection, not every source that measured the same commit: a manual
+collection on a different PC does not join just because its commit matches. The key describes
+comparable hardware, not collection provenance; measurements sharing a key remain comparable.
+The cost of that split is sparseness: consecutive commits land on whatever
 hardware the pool handed out, so each per-key series sees only a fraction of `main`'s commits.
 The nightly backfill below exists to densify them.
 
@@ -499,23 +499,13 @@ minutes producing series no one reads.
 
 Every selected package is benchmarked with all Cargo features enabled. This makes Cargo include
 benchmark targets guarded by `required-features` and builds each selected package in its
-all-features configuration. The push, PR, re-collection and nightly-backfill paths all obtain this
+all-features configuration. The push, PR and nightly-backfill paths all obtain this
 feature selection from the same command builder, so a stored point is never made incomparable by
 one path using narrower feature coverage.
 
-Even with those defences, a single day of a badly degraded runner can still leave one commit's
-data point corrupted. Collection is therefore also manually re-runnable against a specific
-historical commit: a `workflow_dispatch` with a `recollect_commit_id` re-measures just that
-commit and *overwrites* its stored point instead of appending the pushed tip. The subtlety this
-resolves is that the collection tool lives in the same repository as the benchmarks, so a naive
-"check out that commit and re-run" would also run the tool as it shipped at that commit. Instead
-the re-collection benchmarks the code *at* the target commit in a throwaway worktree while
-running the current tool, so the measured code and the compiler that builds it come from that
-commit while the collection logic does not. The overwrite bumps the cache-invalidation marker
-so downstream analysis refreshes,
-and it deliberately discards any blessings recorded at that commit, since a fresh measurement
-invalidates a level that was previously accepted. Analysis is unaffected by the input and always
-surveys the current `main` tip.
+Unsuitable measurements are removed by a maintainer's manual `prune` invocation. A gap after
+pruning is acceptable; ordinary backfill may fill it within its scope. The workflows expose
+no targeted historical recollection or additional hole-filling path.
 
 The stored history can also change *out of band* — a blessing or unblessing, a `prune`, or an
 administrative overwrite performed from a developer machine. Those surface in the rolling issue on
@@ -523,11 +513,13 @@ the next push, which re-lists the store (so out-of-band additions are seen) whil
 overwrites bump the cache-invalidation marker (so those are seen too). There is deliberately no
 "analysis only" dispatch mode: analysis threads the *exact machine keys collected this run* from the
 collect matrix into the single analyze job (see below), so a mode that skipped collection would have
-no keys to analyze. To force a refresh out of band, push a commit or dispatch a `recollect_commit_id`
-run (which still collects, hence still produces keys).
-A downstream analysis job reads the accumulated
-history and publishes through a separate GitHub-only job. A rolling, advisory issue is
-identified by its instance/kind marker, not its mutable title or a label. History preflight
+no keys to analyze. A subsequent ordinary collection/analysis run picks up the storage change.
+The downstream job reads accumulated history, uploads its report and publishes without a
+cross-job report handoff. A rolling, advisory issue is found by server-side title search for
+`Benchmark history findings for <project>`, with a locally checked exact project identity.
+Its `(updated YYYY-MM-DD)` suffix records the UTC date of the last body update; the measured
+commit and freshness remain explicit in the body. There are no labels or whole-repository
+body scans. History preflight
 marks old findings stale; findings replace the report, while fully judged, complete clean
 evidence writes all-clear without automatically closing the issue. Incomplete or unjudged
 analysis annotates the existing report without clearing findings; a failed pending run
@@ -548,7 +540,7 @@ fits while complete results, including quiet or partial reports, remain accessib
 Benchmark preparation uses the fixed repository-local
 `.github/actions/bench-history-setup/action.yml` convention. Folo's hook wraps its ordinary
 setup action with the Valgrind requirement enabled, and collection/backfill jobs share that
-configuration. Analysis and publication retain their own environment responsibilities.
+configuration. The combined analysis/publication job prepares its own environment.
 
 The generic workflows treat an absent hook as no custom setup. There is no arbitrary
 setup path/ref selector or hook-input map. A repository can configure ordinary static action
@@ -617,10 +609,10 @@ expands impacted packages to dependents, and the shared collection exclusions re
 that this workflow does not maintain. An empty scope routes directly to an explanatory
 comment, without collecting or requiring Azure configuration.
 
-The collection matrix has no Azure federation or GitHub posting permission. Each successful
-leg uploads its local store and a run/attempt-bound receipt. Analysis combines only validated
-successful inputs with the production baseline through `--local-input`, using the reader
-identity. It restores the main history cache without saving PR entries; artifact staging is
+Each successful collection leg uploads its local store and a run/attempt-bound receipt.
+Analysis combines only validated successful inputs with the production baseline through
+`--local-input`, using the shared production identity, then publishes in the same job.
+It restores the main history cache without saving PR entries; artifact staging is
 outside the persisted cache path.
 
 Analysis remains unscoped by package name. Benchmark identities are engine-dependent, so
@@ -640,8 +632,8 @@ or adds a replaceable staleness banner to older results. The analyzed commit is 
 full machine marker and a human-readable commit link. Unknown commit distance is disclosed
 rather than presented as fresh.
 
-Analysis and publication use `!cancelled()` so superseded work does not publish. The separate
-GitHub-only publication job also checks the live head immediately before writing: stale or
+Analysis and publication use `!cancelled()` so superseded work does not publish. The companion
+also checks the live head immediately before writing: stale or
 unverified freshness is qualified, and already-current newer results are preserved. Comment
 writers share one per-instance/per-PR concurrency group.
 
@@ -651,6 +643,19 @@ measurements. Only complete clean evidence uses `clean`; partial findings remain
 `publish-comment-failed` may run after failure or cancellation, but changes only the placeholder
 owned by that exact run, attempt and head; it never replaces real results or a newer placeholder.
 The close event enters workflow concurrency without starting benchmark or posting jobs.
+
+### Merge queues and advisory benchmarks
+
+The benchmark workflows are not required checks and do not run on `merge_group` or enqueue/
+dequeue activity. PR feedback describes the frozen PR head/base; it does not claim to benchmark
+the combined queue candidate. Push-to-main collection measures the merged branch tip, including
+batched changes, and ordinary backfill fills its configured history window. No queue-specific
+Azure trust, result storage or publication flow is needed.
+
+GitHub requires merge-group results for required checks. The repository's ordinary
+`required-checks` validation covers that role; benchmark jobs must not be added to required
+checks without a queue-compatible implementation. The action repository's release-availability
+check is separately required and therefore also runs for its own merge candidates.
 
 ## Failure alerting
 

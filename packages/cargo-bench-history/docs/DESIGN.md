@@ -845,7 +845,7 @@ a real history.
 
 ### 7.10 `setup-azure`
 
-`cargo-bench-history setup-azure` provisions the Azure storage and federated identities used
+`cargo-bench-history setup-azure` provisions the Azure storage and federated identity used
 by the [GitHub automation](reusable-action.md). It removes the need to obtain deployment
 files from a Folo checkout. Provisioning is an explicit maintainer operation, never a side
 effect of collection, analysis, or an action invocation.
@@ -868,8 +868,8 @@ The command has separate execution and export modes:
 Execution requires an explicit subscription ID, resource group, location, storage account,
 GitHub `owner/repository`, and history branch. It does not infer a target subscription from
 the active Azure CLI default or inherit Folo's deployment names. The container defaults to
-`bench-history`; identity names derive from the selected account, with optional explicit writer
-and reader names for existing deployments. Optional local access takes a principal ID and its
+`bench-history`; the identity name derives from the selected account, with an optional explicit
+name for existing deployments. Optional local access takes a principal ID and its
 `User` or `Group` type together. These inputs describe actual resource placement and access;
 resource tuning beyond the standard setup belongs in an exported bundle, not additional knobs.
 
@@ -880,23 +880,20 @@ resource-provisioning, role-assignment and federated-credential-management privi
 Azure authorization remains authoritative for each operation; a successful prerequisite check
 does not promise that every requested mutation will be authorized.
 
-The deployment supplies a private, Entra-only history container, a writer for the selected
-history branch, and a separate container-scoped reader for that branch and PR analysis.
-The writer has account-scoped Blob Data Contributor access; the reader has only container-scoped
-Blob Data Reader access. Optional local contributor access is independent. The PR federated
-subject does not distinguish same-repository and fork heads; workflow policy supplies that gate.
-Provisioning OIDC trust requires no GitHub API access or stored credential.
+The deployment supplies a private, Entra-only history container and one managed identity with
+account-scoped Blob Data Contributor access. It federates the selected history branch and the
+repository's PR subject, supporting collection, backfill and analysis without reader/writer
+roles. Optional local contributor access is independent. The PR federated subject does not
+distinguish same-repository and fork heads; workflow policy supplies that gate. Provisioning
+OIDC trust requires no GitHub API access or stored credential.
 
-Repeated deployments preserve existing storage properties and history, existing optional local
-grants, and the presence or absence of writer PR trust. Fresh writers trust only the selected
-branch. `--retire-writer-pull-request-trust` explicitly removes only the selected writer's PR
-federated credential after successful deployment. The operator uses it only after reader-based
-workflows are active and previous PR-writing runs have drained. Ordinary deployment never
-recreates retired writer PR trust. Deployment and retirement for the same stack must be serialized.
+Repeated deployments preserve existing storage properties, history and optional local grants
+while ensuring the configured identity and federated subjects exist. Deployment is incremental,
+not a cleanup of unrelated resources. Deployments for the same stack must be serialized.
 
 Successful execution reports the account, container, endpoint, tenant and subscription IDs, and
-both identities' client and principal IDs. It explains which non-secret values configure storage,
-writer collection and reader analysis. It does not edit the caller's repository, GitHub settings
+the identity's client and principal IDs. It explains which non-secret values configure storage
+and the workflows. It does not edit the caller's repository, GitHub settings
 or credentials. Export includes parameter guidance and a deployment example; neither mode exports
 or invokes destructive teardown.
 

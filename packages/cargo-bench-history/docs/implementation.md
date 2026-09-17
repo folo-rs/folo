@@ -92,7 +92,8 @@ Folo's infrastructure entry point supplies Folo-specific parameters to this same
 it does not maintain another copy of the Bicep or deployment policy.
 
 Bicep owns resource definitions. The single PowerShell driver owns Azure CLI discovery,
-state-preserving bootstrap decisions, deployment and explicit writer-PR-trust retirement.
+state-preserving bootstrap decisions and deployment of one production identity with branch
+and PR federation.
 Rust owns parameter validation, prerequisite orchestration, bundle materialization, process
 invocation and output/error handling, not a second implementation of those Azure decisions.
 The PowerShell boundary is deliberate: an exported bundle remains independently editable and
@@ -109,5 +110,5 @@ and execution of an extracted bundle; deployment policy retains its mocked-Azure
 
 Packaging coverage builds the published archive and exports its bundle without a Folo checkout.
 Offline Bicep compilation and standalone-script checks establish that exported imports resolve.
-Fresh, repeated and retirement deployments share the same policy tests through both entry points.
+Fresh and repeated deployments share the same policy tests through both entry points.
 These checks do not deploy live resources; real provisioning remains an explicit maintainer action.

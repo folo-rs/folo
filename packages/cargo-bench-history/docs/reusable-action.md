@@ -19,7 +19,7 @@ The components have distinct roles:
 | `cargo-bench-history` | Measure, store, compare and render history; provision Azure without GitHub API access | [Application design](DESIGN.md) |
 | `cargo-bench-history-github` | Reconcile workflow evidence and manage GitHub issues/comments around tool-rendered reports | [Companion design](../../cargo-bench-history-github/docs/design.md) |
 | Composite action and reusable workflows | Give other repositories a small, standardized way to invoke those binaries | This document |
-| Production Azure infrastructure | Separate durable-history writers from reader-only analysis | [Access model and rollout](../../../infra/azure-bench-history-prod/README.md) |
+| Production Azure infrastructure | Store durable history using one federated managed identity | [Azure setup](DESIGN.md#710-setup-azure) |
 
 ## 1. Problem & goals
 
@@ -282,8 +282,10 @@ their own jobs at different points. A `command` selector keeps a single Marketpl
 (only the root action is listed; sub-path actions are not) while letting each invocation play
 one role. The split of `analyze` into `analyze-history` and `analyze-pr` is deliberate:
 each carries a **cohesive, independently-validated input group** and feeds a **different report
-sink**. Publication is a separate invocation after the workflow uploads the reports, preserving
-the capability separation in §6; the analysis commands themselves never post.
+sink**. Publication is a separate invocation after the workflow uploads the reports, so the
+artifact link exists before the companion composes the message. The predefined workflows run
+analysis, upload and publication as successive steps in one job; the analysis command itself
+never posts.
 
 Inputs that do not apply to the selected command are **rejected, not ignored**: the action
 validates the combination up front (e.g. `command: collect` with an analysis-only `since`, or
@@ -359,14 +361,10 @@ bill of health than it earned. That is why coverage is disclosed rather than ass
 the two decisions are a package, and tolerating partial failure without the disclosure would
 be the genuinely wrong design.
 
-**Recollect (repair one historical point).** A `recollect-commit` input switches `collect`
-to re-measure a single past commit and *overwrite* its stored point instead of appending the
-pushed tip — the manual repair path for a data point corrupted by a badly degraded runner.
-The action checks out that commit's code in a throwaway worktree while running the *current*
-tool, so only the measured code, never the collection logic, comes from the past (the tool's
-`backfill` command over a one-commit range with `--overwrite`). It needs full history
-(`fetch-depth: 0`). This is a push/history-flow capability only; there is no recollect on a
-PR, whose points are transient.
+**Bad data is removed, not repaired by a special workflow.** A maintainer removes unsuitable
+measurements with the tool's manual `prune` command. The resulting gap is acceptable.
+Ordinary backfill may fill it if it falls within that flow's scope; targeted historical
+recollection and other hole-filling automation are outside the action's scope.
 
 ### 4.2 `analyze-history` (→ rolling issue)
 
@@ -408,8 +406,11 @@ PR, whose points are transient.
      or a cache key.
    * **Machine keys.** The facets default to surveying every engine and triple (`all`), but
      the machine key is **not** `all`: it is the exact set of fingerprints collected this run,
-     threaded from the collect matrix (§4.6), so the survey is scoped to the machines that
-     actually measured this commit and never mixes in a stray key from the shared store.
+     threaded from the collect matrix (§4.6), so the survey follows the data partitions
+     selected by this action's collection, rather than every source that happened to measure
+     the same commit. For example, a manual collection on another PC does not join merely
+     because its commit matches. Machine keys identify comparable hardware, not provenance:
+     other measurements under the same key remain part of that partition's history.
    * **Coverage is disclosed, not assumed.** Because the matrix tolerates a partially failed
      collect (§4.1), the set of platforms that *contributed* can be smaller than the set that
      was *intended* — and the difference is invisible in the findings themselves. The action
@@ -440,13 +441,13 @@ PR, whose points are transient.
    fixture that analyzed nothing. Callers may branch on it too, but that is a side benefit,
    not the justification. Execution failure and partial platform coverage stay separate
    workflow facts, because both can coexist with any analysis verdict.
-6. **Hand reports to publication.** The workflow uploads the full Markdown + JSON reports,
-   the summary, and the outcome and collection-coverage metadata as an **artifact**. A separate
-   publication job invokes `publish-issue-findings` when publication is enabled and the outcome
+6. **Publish after report upload.** The job uploads the full Markdown + JSON reports,
+   the summary, and the outcome and collection-coverage metadata as an **artifact**, then
+   invokes `publish-issue-findings` when publication is enabled and the outcome
    is **findings**, including when platform coverage is partial. It finds the open rolling
-   issue by its hidden instance/kind marker, never its title, then creates or updates the body
+   issue through its stable project-qualified title (§5.1), then creates or updates the body
    with the tool-composed summary, any missing-platform qualification, and the artifact link.
-   Only the publication job needs `issues: write`; analysis holds no posting rights.
+   The job has Azure access and `issues: write`; no cross-job report handoff is required.
    A fully covered clean run routes to `publish-issue-clean`, leaving the issue open.
    Other successful verdicts route to `publish-issue-no-data`, preserving existing findings
    with an explanation rather than implying recovery (§4.4).
@@ -459,8 +460,8 @@ not an analysis report; notification belongs to the failure lifecycle (§4.4).
 ### 4.3 `analyze-pr` (→ rolling PR comment)
 
 Structurally the same install → validate-history → scratch-outside-checkout → analyze →
-outcome pipeline as `analyze-history`, retuned for the PR branch view. Its reports feed a
-separate comment-publication job:
+outcome pipeline as `analyze-history`, retuned for the PR branch view. The same job uploads
+its reports and invokes comment publication:
 
 * **Checkout is the PR head's *real* commit, with full history** — not the synthetic
   `pull_request` merge ref, whose first parent is the base branch and would corrupt the
@@ -501,7 +502,7 @@ separate comment-publication job:
 * **Cache is restore-only.** PR runs read the shared history cache but never save, keeping the
   baseline warm without accumulating per-PR cache entries (safe against the append-only store
   even when slightly stale).
-* **Sink: a rolling PR comment.** After the artifact handoff, the appropriate
+* **Sink: a rolling PR comment.** After report upload, the appropriate
   `publish-comment-findings`, `publish-comment-clean` or `publish-comment-no-data` command posts
   the condensed summary as a single comment on the
   PR, deduped by a hidden marker and updated in place on every push, by the companion
@@ -617,7 +618,7 @@ alert-resolution command and no shared rolling failure issue.
 
 The identity is repository, project namespace and **workflow run ID**, not run attempt.
 Repeated calls and reruns reuse that run's alert; another failed workflow run gets another
-issue. Discovery includes closed issues, so a human-closed alert is not recreated or reopened
+issue. Title search includes closed issues, so a human-closed alert is not recreated or reopened
 on retry. An existing alert is left unchanged. Creates use the same ambiguous-create
 reconciliation as other publication, not blind retries. This is deduplication of one event,
 not aggregation of unrelated failures.
@@ -627,7 +628,7 @@ job in the same workflow. It must not call `publish-issue-failed` over the succe
 The companion owns these GitHub status messages; analysis vocabulary still comes from the
 tool's rendered report.
 
-### 4.5 Collect write mode, inferred analysis mode, recollect
+### 4.5 Collect write mode and inferred analysis mode
 
 **Collect write mode is an input, not a constant.** Because the action is trigger-agnostic
 (§1), `collect` maps the `on-existing` input onto the tool's write-collision flags — `skip`
@@ -659,8 +660,8 @@ select. This is a deliberate acceptance, not an oversight. Two consequences foll
 series is fed by the **history flow and
 the densification pass**, never by PR runs, so nothing downstream depends on PR points
 surviving; and because those points are disposable, a PR run has no need to *write* to the
-shared store at all. Realizing that read-only PR design requires the storage composition
-described in §6; disposable data alone does not provide that capability.
+shared store at all. The storage composition in §6 supplies baseline plus disposable input.
+This is a data-lifetime choice, not a requirement for a separate read-only Azure identity.
 
 **Analysis mode is inferred by the tool, not selected by the action.** There is no `--mode`
 flag: `analyze` auto-detects **history** vs **branch** from git topology and the recorded
@@ -695,7 +696,21 @@ The action therefore treats the handoff as a first-class concern:
   artifacts it needs were produced by a *previous* attempt, and `actions/download-artifact`
   only resolves across attempts when it is given an explicit `github-token`. Without it a
   partial re-run 404s on the machine-key artifact and the analyze job dies. The reusable
-  workflow (§4.7) wires the token in by default; a hand-assembled caller must do it.
+  workflow (§4.7) passes `github-token: ${{ github.token }}`, `repository:
+  ${{ github.repository }}` and `run-id: ${{ github.run_id }}`, with `actions: read`;
+  a hand-assembled caller must do the same.
+
+**Artifact authentication is available to fork-origin PR runs.** GitHub runs those
+`pull_request` workflows in the base repository and supplies a read-only `GITHUB_TOKEN`.
+That token can read the run's artifacts with `actions: read`; it is not an Azure OIDC token
+or a caller-maintained secret. Repository policy may require approval before a fork workflow
+starts. A workflow actually running in the fork has the fork's token, not unrestricted access
+to another repository's artifacts.
+
+The action still skips fork PRs (§6); artifact download is not the reason for that policy.
+See GitHub's [fork workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflows-in-forked-repositories),
+the [artifact action inputs](https://github.com/actions/download-artifact#inputs), and the
+[run-artifact API](https://docs.github.com/en/rest/actions/artifacts#list-workflow-run-artifacts).
 
 **Fingerprints are versioned, and a version bump partitions history.** The fingerprint is
 derived from the usable hardware the runner actually exposes, and it carries an explicit
@@ -885,9 +900,25 @@ collection per platform across PRs, and push collection per platform across comm
 job-level `cancel-in-progress: false` with `queue: max`, and namespace the group by repository,
 instance, flow and platform. Different platforms and analysis/publication jobs remain
 independent. Workflow-level cancellation still replaces an older run of the same PR; history
-deduplication targets the same commit and recollection target, not different commits. Manual
-history runs use their own groups so repairs do not sit behind the push backlog. Queueing
+deduplication targets the same commit, not different commits. Manual
+history runs use their own groups rather than waiting behind the push backlog. Queueing
 belongs to GitHub, not a running worker waiting on a lock.
+
+**Merge queues do not add a benchmark flow.** Benchmark feedback is advisory and is not a
+required branch-protection check. The PR workflow measures its frozen real head, not a
+`merge_group` SHA, and does not subscribe to enqueue/dequeue activity. The history workflow
+collects the actual branch tip after merge; backfill covers its ordinary history window.
+Neither temporary queue refs nor their measurements need storage or Azure federation.
+
+A queue can combine changes into a main push; per-push collection is not a promise to
+measure every intermediate queued PR as a separate main commit. Squash/rebase still do not
+promise that the original PR head survives. PR comments remain comparisons of the named PR
+head/base, not a verdict on the queue's combined candidate.
+
+GitHub requires **required checks** to run on `merge_group`. A repository must not make these
+advisory benchmark jobs required without providing a queue-compatible check. This differs
+from the action repository's required `install-tools` release gate, which does run for
+merge candidates (§8.1). See [GitHub's merge-queue configuration](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue#configuring-continuous-integration-ci-workflows-for-merge-queues).
 
 ### 4.8 The densification flow (`backfill`)
 
@@ -941,7 +972,7 @@ inputs.
 **Runtime behaviour still comes from action inputs**, passed as CLI flags rather than baked
 into the config file: `local-path` (→ `--local=<path>`), `cache` (→ `--cache=<dir>`, cloud
 read-through cache, mutually exclusive with `--local`), the `collect` scope (`exclude` /
-`packages` / `bench`), `best-of`, `on-existing` write mode, `recollect-commit`, the
+`packages` / `bench`), `best-of`, `on-existing` write mode, the
 `machine-keys` handoff directory, the analysis context/base, and `since`. Collection,
 backfill and import always derive the machine key from the real host; `--machine-key` is a
 query filter, not a writing-side override.
@@ -969,8 +1000,8 @@ therefore have distinct comments, issues, artifacts, caches and concurrency grou
 resolved namespace may be passed internally between workflow stages; it is data, not an
 additional consumer setting.
 
-Namespacing is part of the identity contract: the comment marker and issue identity are the
-deduplication keys. Keeping them tied to the project avoids cross-project interference
+Namespacing is part of the identity contract: the comment marker and stable issue-title
+prefix are lookup keys. Keeping them tied to the project avoids cross-project interference
 without requiring a second identity setting.
 
 ### 5.1 Where the logic lives — Rust binaries, not shell
@@ -1069,20 +1100,17 @@ design previously relied on:
   stated per operation: **reads** retry with backoff behind a transient-fault classifier (a
   non-transient client or auth failure still surfaces at once); **updating a known issue or
   comment is idempotent** and retries too; only a **create** is genuinely ambiguous, because a failure
-  may have taken effect. A create therefore does not blind-retry — it re-reads by marker
-  first to confirm whether the marked resource exists rather than posting a duplicate.
-  This is why identity is a
-  hidden marker rather than a displayed title: a rolling issue found by title alone would be
-  abandoned the moment someone edited its displayed title, and could hijack an unrelated issue
-  that happened to match.
+  may have taken effect. A create therefore does not blind-retry: issue discovery uses title
+  search, comment discovery uses its marker, and reconciliation checks the intended content.
+  A known issue number is read directly rather than rediscovered through the search index.
 
   The ambiguous-create case is not hypothetical, and the storage backend already solves its
   own version of it: a conditional create can commit and then lose its response, so the SDK's
   automatic retry sees "already exists" for an object *it* just wrote. The fix there was to
   carry an opaque request identity on the object and reconcile against it — a matching identity
   proves this writer committed, anything else is a genuine collision. The sink layer faces the
-  same shape with the same answer: the hidden marker *is* that identity, so a create that
-  cannot confirm its outcome reconciles by reading rather than by guessing.
+  same shape: a create that cannot confirm its outcome reconciles against its intended
+  identity and content rather than guessing that another create is safe.
 
 **No labels.** The action applies none, and offers no input to configure any. Labels look like
 free triage value, but they cost more than they return here: `gh issue create` rejects an
@@ -1098,21 +1126,51 @@ on the issues, so that is what ships. Consumers who want labels can add them by 
 their own automation, and label support can arrive later without breaking anyone, because
 adding labels to an issue nobody was labelling is not a behaviour change.
 
-**Rolling issues are found by marker, never by label, title or author.** Dropping labels removes
-the narrowing mechanism the monorepo's shell layer uses today — it lists issues carrying a
-known label and then matches the title client-side — so the companion lists the repository's
-open issues and matches the **hidden marker** in the body. The marker decides identity exactly,
-which title-matching never did: a title is consumer-editable, so matching on it means an edited
-title silently abandons the issue it was tracking, and could adopt an unrelated issue that
-happens to collide. Author is not part of identity either; the per-run Actions token does not
-offer a useful portable "viewer login" contract, and changing the posting identity must not
-strand an existing rolling issue.
+**Rolling issues use server-side title search.** The standard title is:
 
-The issue marker carries both the project namespace and an **issue kind**. Regression issues
-use the rolling `regression` identity. One-off `failure-alert` markers additionally identify
-the workflow run and are searched among open and closed issues (§4.4). The same marker is
-the identity a create reconciles against when its outcome is uncertain, so one mechanism
-serves lookup, deduplication and retry safety.
+```text
+Benchmark history findings for <project> (updated YYYY-MM-DD)
+```
+
+The stable `Benchmark history findings for <project>` prefix is the lookup identity; the
+date is not part of it. The companion queries GitHub's issue search rather than enumerating
+every open issue and inspecting bodies:
+
+```text
+repo:owner/repository is:issue is:open in:title "Benchmark history findings for project-id"
+```
+
+GitHub supports quoted title phrases, not arbitrary substring or regular-expression matching.
+The companion checks the returned title's exact project-qualified form locally, so similarly
+named projects cannot match accidentally, then reads the candidate by issue number for its
+current title, state and body. It paginates the narrow result set, not the repository's whole
+issue list. Search errors, incomplete results, result-limit exhaustion and multiple exact
+candidates are explicit failures, never evidence that a new issue should be created.
+See [title search](https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests#search-by-the-title-body-or-comments)
+and the [search API](https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests).
+
+The prefix is maintained by the companion, not a cosmetic override; it must be retained for
+the issue to remain discoverable. No fallback scans all issues for renamed titles or adopts
+older output formats. Body markers still carry report commit, run ownership and status, but
+are not the repository-wide lookup mechanism. PR comments retain marker lookup within their
+single PR, where issue-title search does not apply.
+
+**The date means last report-body update, not last measurement.** Each body-changing operation
+updates the title's UTC calendar date in the same issue update, including preflight, all-clear,
+no-data and failed annotations. A no-op does not refresh the date. The body continues to name
+the measured commit and any stale/incomplete state, so a recent title date cannot imply that
+old findings were remeasured.
+
+One-off alerts use the title `Benchmark history workflow failed for <project> (run <run-id>)`.
+The same title-search mechanism omits the open-state filter for alerts, retaining closed-issue
+deduplication without scanning historical issue bodies. Their run-specific titles do not roll.
+
+**Search is not an atomic upsert.** Index visibility can lag writes; serialization of issue
+writers does not make the search index read-after-write consistent. After an ambiguous create,
+bounded reconciliation reads verify the intended identity and content. If they cannot establish
+success, the operation reports failure and does not create again. Normal lookup uses the latest
+available index; the design does not promise exactly-once creation in the face of index lag.
+Detected duplicates require explicit resolution, not silently choosing one or deleting a thread.
 
 ### 5.2 Standard reports
 
@@ -1180,18 +1238,19 @@ fork-aware, and no input configures this.
 **PR analysis reads the same production store as the trunk.** Branch mode compares the PR head
 against the trunk's recorded baseline, so the PR flow must read the very store that holds it —
 a separate PR store is rejected because it would have no baseline to compare against.
-The PR path combines a read-only Azure baseline with run-local PR measurements:
+The PR path combines the Azure baseline with run-local PR measurements:
 `collect --local=<run-results>` records the measurements, and
 `analyze --local-input <run-results>` reads them alongside the configured Azure baseline.
 An optional `--cache=<directory>` mirrors only the baseline. `--local` by itself still
 selects filesystem storage instead of Azure, and a restored cache does not add locally
-collected objects to cloud listings. The workflow must assemble the matrix's result artifacts
-into the input directory and use a read-only Azure identity for analysis. The reusable
-workflows own this handoff; integration and deployment requirements are in §12.
+collected objects to cloud listings. The workflow assembles the matrix's result artifacts
+into the input directory. Queries do not mutate the baseline, but use the same Azure identity
+as collection and backfill; local PR storage is not a privilege boundary. The reusable
+workflows own this handoff; integration requirements are in §12.
 
 **Provisioning is an explicit tool command, not an action side effect.**
 [`cargo-bench-history setup-azure`](DESIGN.md#710-setup-azure) supplies the standard storage
-and writer/reader identities without copying Folo's infrastructure files. Execution validates
+and one federated managed identity without copying Folo's infrastructure files. Execution validates
 Azure CLI, Bicep, PowerShell and the selected Azure login context, then runs the embedded
 deployment bundle from a temporary directory. `--out-dir` exports the self-contained bundle
 for review or modification without running anything or requiring cloud tooling. The book
@@ -1202,24 +1261,25 @@ usable directly; the action never provisions resources during a benchmark workfl
 `actions: read` (cross-attempt artifact download, §4.6); `id-token: write` (Entra OIDC
 self-minting); `issues: write` (history publication and the
 one-off `alert`); `pull-requests: write` (branch flow's comment and
-its lifecycle). These are listed **per command**, not as one union: a job should hold only
-what the command it runs actually needs.
+its lifecycle). A job requests the permissions needed by its combined steps.
 
-**No job holds both storage credentials and posting rights.** Analysis reads
-the history store; publishing writes to the repository; neither needs the other's access. The
-flows therefore split them across two jobs, passing the report between them as an artifact:
+**One Azure identity; no mandatory analysis/publication job split.** The standard setup grants
+one managed identity `Storage Blob Data Contributor` on the history account and federates the
+selected history branch and PR subject. Collection, backfill and analysis use that same client
+ID. The predefined history/PR workflows analyze, upload reports, and publish in one job.
+Lifecycle jobs remain separate only where their timing requires it, such as preflight while
+collection is running or terminal reporting after failure.
 
-| Job | Granted access | Not granted |
-| --- | --- | --- |
-| analyze | Azure reader federation, `contents: read`, `actions: read` | Issue/comment write permissions |
-| publish | Required issue/comment write permission, `contents: read`, `actions: read` | Azure federation |
+Azure and GitHub still authenticate to different services: the Azure identity is obtained
+through OIDC, and GitHub operations use the job's built-in `GITHUB_TOKEN`. Neither credential
+replaces the other, and neither requires a stored user token. Combining these capabilities
+is intentional for the repository-owned workflows; same-repository code and actions running
+with them are trusted with the granted access. There is no separate Azure Reader role,
+reader client ID or workflow handoff solely to enforce a privilege partition.
 
-The isolation boundary is the **job**, not the binary name. Code executing in analysis has
-the reader job's access but no posting rights; code executing in publication has posting
-rights but no Azure federation. The companion also runs offline evidence helpers in
-collection and analysis, so it would be incorrect to claim that every companion process is
-isolated from storage credentials. The same reasoning is why the release manifest pins what
-it pins (§8.1): both the selected executable and the job's granted access matter.
+Fork exclusion remains explicit. Artifact-read token availability (§4.6) does not grant
+GitHub posting rights or establish that running fork code with the production Azure identity
+is supported. The design does not rely on a blanket claim that fork runs receive no token.
 
 ## 7. Interface summary (inputs / outputs)
 
@@ -1245,8 +1305,7 @@ a feature would silently measure nothing.
 **`collect` inputs:** `packages` (comma-separated list → `--package` per name; empty → whole
 workspace); `exclude`, `bench` (→ repeated flags); `best-of` (→ `--best-of`, default 1);
 `on-existing` (`error` (default here) | `skip` |
-`overwrite` → neither / `--skip-existing` / `--overwrite`; §4.5); `recollect-commit` (a SHA →
-backfill-and-overwrite that commit in a throwaway worktree; §4.1). **Output:** `machine-key`
+`overwrite` → neither / `--skip-existing` / `--overwrite`; §4.5). **Output:** `machine-key`
 (this leg's fingerprint, for the analyze handoff).
 
 **`analyze-history` inputs:** `machine-keys` (directory of collected per-platform keys →
@@ -1337,14 +1396,14 @@ test their tool/action selection; the action does not add a `report-schema` or t
     artifact), then an `analyze-history` job (`needs: collect`, `fetch-depth: 0`, downloading
     the key artifacts into the `machine-keys` dir **with an explicit `github-token`** so
     partial re-runs resolve, §4.6, an `actions/cache` step feeding `cache`), then the workflow's
-    report upload and a separate issue-publication job selecting findings, clean or no-data.
+    report upload and issue publication selecting findings, clean or no-data in that same job.
     `publish-issue-preflight` and `publish-issue-failed` maintain existing issue status;
     `alert` files one-off workflow failures independently.
   * A **per-PR branch** workflow — a delta preflight computing the touched benchmarkable
     packages, a `publish-comment-preflight` job (in parallel with collect), a matrix `collect` job
     scoped by `packages`, an `analyze-pr` job (checkout `head.sha`, `fetch-depth: 0`,
-    restore-only cache), then report upload and a separate comment-publication job selecting
-    findings, clean or no-data.
+    restore-only cache), then report upload and comment publication selecting
+    findings, clean or no-data in that same job.
     Analysis and publication use `!cancelled()` so a superseded run never posts.
     The empty-scope `publish-comment-no-data` and terminal `publish-comment-failed` paths
     sit alongside them — all behind the same-repo check (§6).
@@ -1465,12 +1524,11 @@ so both the install branching and the actual installs are exercised, not just mo
    seeded with **enough points for branch mode to judge against** — a two-commit fixture cannot
    clear the detector's minimum evidence — so this fixture uses the faker→`import` path (§11)
    rather than real benchmark runs to populate the comparison window cheaply.
-5. A **recollect** leg (`recollect-commit`) asserts a single historical point is overwritten.
-6. **Caller canaries for the reusable workflows.** The action repo carries its own caller
+5. **Caller canaries for the reusable workflows.** The action repo carries its own caller
    workflows that invoke `history.yml`, `pr.yml`, and `backfill.yml` exactly as an external
    consumer would, because none of the other levels exercise the layer that is now doing the
    most work: matrix expansion from the `platforms` input, fan-out-then-converge onto one
-   analyze, permission narrowing, the same-repo check, artifact aggregation, and concurrency.
+   analyze/upload/publish job, the same-repo check, artifact aggregation, and concurrency.
    The canaries deliberately include the ugly cases — a **partially failed** matrix that
    preserves findings while marking missing platforms in both sinks, a **fully failed**
    matrix, a malformed `platforms` list, an **empty package scope** (which must route
@@ -1489,6 +1547,13 @@ scope and failed execution, including issue preservation when no all-clear is ju
 Run/attempt races preserve newer placeholders and pending annotations. Alert cases distinguish
 same-run retries from different failed runs, preserve human-closed issues, and prove that a
 successful run does not mutate prior alerts.
+
+Issue discovery cases exercise server-side title query construction, exact project matching,
+dated suffix changes, fresh reads by issue number, incomplete searches, duplicates and delayed
+index visibility after a create. An injected clock proves UTC title dates change with body
+updates, not with no-ops, without real-time waits. Unrelated repository issues must not cause
+whole-repository enumeration. Workflow canaries retain the artifact handoff while proving there
+is no report download or second Azure identity solely for publication.
 
 The installation canaries also drive the required release gate (§8.1). Cases cover an
 unpublished package, a registry version whose promised archive is absent, stale cached tools,
@@ -1624,7 +1689,7 @@ The tool, companion and workflow layer have separate responsibilities:
   History analysis supplies the same context and base explicitly (§4.2).
   Note that `--include-improvements` no longer exists — direction is now a property of the
   mode (§4.3) — so nothing should pass it.
-* **PR storage combines local measurements with a read-only baseline.** Local PR
+* **PR storage combines local measurements with the durable baseline.** Local PR
   measurements are analyzed together with the Azure baseline through `--local-input`,
   without writing the PR points to Azure (§6). The view rejects mutations and keeps local
   inputs outside the baseline cache. The workflow layer supplies credential wiring and
@@ -1634,10 +1699,10 @@ The tool, companion and workflow layer have separate responsibilities:
   the [command contract](DESIGN.md#710-setup-azure) and
   [bundle ownership](implementation.md#azure-provisioning-bundle) define prerequisites,
   safe deployment and the parameter handoff.
-* **Workflow computation and publication remain separate responsibilities.** The workflow
+* **Workflow computation and publication have separate owners, not separate credentials.** The workflow
   owns package-scope policy and configurable exclusions (§4.7), using Rust for the
   computations and passing the final scope to the lower composite. Analysis emits reports;
-  artifact steps and a separate publication job connect them to the companion (§6). The
+  report upload and companion publication run in the same job (§6). The
   monorepo wiring does not itself deliver the external reusable workflows, and in-process
   lifecycle/HTTP tests are not live-GitHub validation (§9).
 * **The synthetic-history testing enablers already exist** (§9). The hidden
@@ -1663,7 +1728,7 @@ The tool, companion and workflow layer have separate responsibilities:
   * **Adopting the action** — the full input surface and the hand-assembled recipes, with the
     action's README reduced to a quick start that links here (§8).
   * **Azure setup** — `setup-azure` execution, prerequisite checks and `--out-dir` export;
-    non-secret configuration handoff; reader/writer isolation and explicit trust retirement.
+    non-secret configuration handoff and one shared production identity.
   * **Deployment profiles** — the shared, rotating, ephemeral runner pool versus dedicated
     self-hosted benchmark machines. These differ in almost every way that matters (machine-key
     stability, noise floor, whether densification is needed at all, useful `best-of` values),
@@ -1692,8 +1757,8 @@ The tool, companion and workflow layer have separate responsibilities:
 ### Workflow execution
 
 Source-built Folo automation uses a preparation job to build the companion from the
-automation checkout and publish it as a run-scoped Linux executable archive. Posting jobs
-download that executable; they have GitHub write scopes but no Azure federation. All
+automation checkout and publish it as a run-scoped Linux executable archive. The combined
+analysis/publication job and the independently scheduled lifecycle jobs use that executable. All
 required Folo binaries use the selected installation method and source checkout (§3, §10).
 
 Source-built PR automation uses the event's merge checkout while benchmarking and topology use a
@@ -1714,14 +1779,14 @@ The companion projects validated reports into workflow outputs selecting finding
 no-data publication. Failed execution uses the separately owned terminal-status path.
 History all-clear is permitted only by the complete clean-evidence projection. Publication
 always receives the JSON, summary and exact platform set from that analysis, and reports
-remain downloadable even when they contain no findings. The companion selects only its
-standard project-derived markers. Outputs using older identity formats are not adopted,
-rewritten or removed.
+remain downloadable even when they contain no findings. Issue discovery uses project-qualified
+title search; PR comments and report-state metadata use standard markers. Outputs using older
+identity formats are not adopted, rewritten or removed.
 
-Azure activation is staged: provision the reader first, record its non-secret client ID,
-then activate the reader-only analysis jobs and local PR collection. Retire the writer's PR
-federated credential only after legacy PR-writing runs are drained. A missing or reused writer
-client ID is a configuration error, never permission to fall back to write-capable analysis.
+Azure configuration supplies one production managed-identity client ID and tenant ID.
+The identity supports history-branch and same-repository PR workflows; analysis may use it
+alongside the GitHub posting token in one job. Local PR collection remains a data-lifetime
+choice. No reader provisioning or writer-PR-trust retirement is part of activation.
 The preparation artifact is also required by notification jobs; inability to build or obtain
 the companion remains a failed workflow check rather than a successful notification.
 
@@ -1736,12 +1801,12 @@ scheduled-validation infrastructure.
 
 Deployment and publication require maintainer actions independent of the workflow runs.
 General provisioning uses [Azure setup](DESIGN.md#710-setup-azure); Folo-specific parameters
-and retirement procedures are documented in the
+are documented in the
 [production deployment guide](../../../infra/azure-bench-history-prod/README.md).
 
 | # | Action | Gates | Notes |
 | --- | --- | --- | --- |
-| 1 | **Configure production readers and writers** | Using the Azure-backed workflows | Deploy the identities, record their non-secret identifiers, and verify their access. When migrating legacy PR writers, retain their trust until those runs are drained, then explicitly retire only the writer's PR federated credential. Incremental ARM omission is not deletion. |
+| 1 | **Configure production storage and its identity** | Using the Azure-backed workflows | Use one federated managed identity for the history branch and PR analysis, record its non-secret identifiers, and verify storage access. An existing correctly configured identity needs no reader companion or staged retirement. |
 | 2 | **Bootstrap new crates, then configure Trusted Publishing** | Installing published tool and companion versions | Follow `RELEASING.md`: first publication is a maintainer operation from clean `main` after review and merge; subsequent releases use the configured `folo-rs/folo` / `release.yml` Trusted Publisher. |
 | 3 | **Configure Marketplace publishing** — agreement, category and listing | Public action release | A one-time UI flow tied to the account, not to a release run (§8.1). |
 | 4 | **Define the `v1` compatibility promise** | Publishing and moving the floating major tag | Consumers inherit the release that the tag identifies; breaking changes require an appropriate new major. |
@@ -1749,8 +1814,8 @@ and retirement procedures are documented in the
 
 The design does not require:
 
-* **New stored secrets or tokens.** Workflows use the per-run `GITHUB_TOKEN` (§9) or
-  Azure federation. The additional reader identity has a non-secret client ID and short-lived
+* **New stored secrets or tokens.** Workflows use the per-run `GITHUB_TOKEN` (§9) and
+  Azure federation. The production identity has a non-secret client ID and short-lived
   OIDC exchanges, not a maintained credential. The one-time crates.io bootstrap uses the maintainer's manual
   publication process; ongoing automation introduces no stored user credential.
 * **A separate test repository.** Testing happens in the repository that runs it (§9), which

@@ -4,10 +4,10 @@ Pure marker and message composition is synchronous. Lifecycle orchestration is g
 `GitHub` port; unit tests use an in-memory fake and `futures::executor::block_on`, with no runtime,
 network or real-time delay. The production `RestGitHub` adapter is the only HTTP boundary.
 
-The port exposes semantic GitHub operations—list, create, update, compare and read
-the pull-request head—rather than a raw HTTP passthrough. Idempotent operations retry transient
-failures in the adapter. Creates never retry blindly: orchestration reads by marker after an
-error and treats a matching artifact as the successful result of the ambiguous request.
+The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
+update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent
+operations retry transient failures in the adapter. Creates never retry blindly: orchestration
+reconciles the intended identity and content after an error.
 
 The binary is a thin Clap and Tokio entry point. `lib.rs` and `main.rs` contain only crate-level
 documentation, attributes, re-exports and entry-point wiring.
@@ -43,25 +43,40 @@ Preflight records ownership so delayed terminal work cannot retire a newer pendi
 Absence of an issue is diagnosed after input validation; only findings can create one.
 
 An ambiguous create is reconciled against both the artifact identity and the desired body.
-Finding the same marker with different content is not proof that this publication committed;
+Finding the same identity with different content is not proof that this publication committed;
 the other content is preserved and the original failure remains visible.
 
 ## Report identity and composition
 
-Rolling discovery matches exact instance/kind marker lines in the complete open-issue or comment list.
-Displayed titles and author metadata do not participate in identity selection. Artifacts without
-the current marker are outside the lifecycle; there is no adoption or migration path.
+Issue discovery sends a repository-scoped, quoted `in:title` query to GitHub's search endpoint.
+It filters candidate metadata by the exact project-qualified title form, without using the
+rolling date suffix as identity. The selected number is read through the ordinary issue
+endpoint so stale indexed content does not drive a mutation. Comment discovery matches
+instance/kind markers only within the target PR. No operation scans all repository issue bodies
+or relies on author identity, and there is no title-renaming fallback or migration path.
+
+The search adapter validates `total_count`, `incomplete_results` and pagination before treating
+the result set as complete. It URL-encodes the query and treats project text as a literal search
+value, not additional qualifiers. Multiple exact matches, the search result cap and failed or
+incomplete discovery surface explicitly. An empty index result does not prove the outcome of
+an ambiguous create; bounded reconciliation may still end with the original error. Serializing
+issue writers prevents ordinary concurrent creation, not search-index lag.
+Search rate limits use the adapter's bounded retry policy; authorization and query-validation
+errors are not treated as empty results or transient indexing delays.
 
 The lifecycle context carries repository, internal instance namespace and verbosity only.
 Message composition derives all markers from that namespace and owns the standard titles,
-advisory wording and documentation link. Publication passes the optional artifact URL directly
+advisory wording and documentation link. An injected clock supplies the UTC date captured for
+an issue body update, and retries reuse that date. Title and body are sent together in the
+same issue update. No-op paths do not refresh titles; measured-commit freshness remains in
+the body, independently of the title date. Publication passes the optional artifact URL directly
 as report data alongside validated evidence and the tool-rendered summary.
 
 Clean issue publication only updates the all-clear body. There is no issue-closing operation
 in the companion. Empty-scope comment publication shares ordinary update/create reconciliation
 and always writes the explanatory note.
 
-One-off alert discovery uses a run-qualified failure marker and includes closed issues.
+One-off alert discovery searches its exact project/run-qualified title and includes closed issues.
 Existing alerts are not updated or reopened. An ambiguous create still requires the exact
 intended body as well as identity to establish success; a different body discovered after
 the failed request is not evidence that the request committed. Distinct run IDs do not
@@ -171,7 +186,7 @@ Lifecycle commands use the same common options and repository fallback. Rolling 
 | `publish-issue-failed` | `--head SHA --run-url URL --conclusion failure\|cancelled` |
 
 `alert --run-id N --run-url URL` uses no report or attempt ownership. Its validated run
-identity determines the one-off marker; the URL names that same repository and run.
+identity determines the one-off title; the URL names that same repository and run.
 
 Matrix setup appends these outputs, with one sorted platform set shared by JSON and CSV:
 
