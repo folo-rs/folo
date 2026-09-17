@@ -161,19 +161,17 @@ Every published release also carries **prebuilt, `cargo-binstall`-consumable bin
 [`../../../docs/release-automation.md`](../../../docs/release-automation.md)), so the action
 has both a from-source path and a download-a-binary fast path.
 
-The action exposes an **`install-method`** input with four modes. **The chosen method applies
+The action exposes an **`install-method`** input. **The chosen method applies
 to every binary the action needs**, not just the tool: the companion (§5.1), and any other
 `folo-rs/folo` binary a command depends on, are obtained the same way. A consumer who chose
-`binstall` because their runners cannot afford a compile must not have that choice silently
-ignored for the second binary, and one who pre-seeded `PATH` expects *nothing* to be
-downloaded. Each command installs only the binaries it actually uses.
+`binstall` must not have that choice silently ignored for the second binary. Each command
+installs only the binaries it actually uses.
 
 | `install-method` | How | When |
 | --- | --- | --- |
 | `binstall` | Install `cargo-binstall`, then `cargo binstall <package> --version <v> --locked` for each required binary | **Default.** Downloads the prebuilt archive from each package's GitHub Release (seconds), automatically falling back to a source build if no asset matches the runner target. Best for `cargo-bench-history`, whose Azure SDK + `mimalloc` dependencies are slow to compile. |
 | `install` | `cargo install <package> --version <v> --locked` for each required binary | Pure source build, no extra tooling. Always works once published; pays the full cold-cache compile. The escape hatch when a prebuilt asset is unavailable or unwanted. |
 | `path` | `cargo install --path <source-path>/packages/<package> --locked` for each required binary | Dogfooding (§10): one Folo source checkout supplies every required binary. |
-| `none` | (nothing) | A prior step, devcontainer or warmed tool cache supplies the required binaries on `PATH`. The action performs no installation; the caller supplies the builds corresponding to the action's tested combination. |
 
 **The action version selects the binary versions.** For `binstall` and `install`, every
 binary version comes from the action release's manifest. There is no caller version
@@ -183,7 +181,7 @@ remain independent, and an action need not adopt every tool release.
 
 A pinned action release or commit selects an exact tested combination. The floating `v1`
 tag advances only among action releases with their own tested manifests. `path` deliberately
-builds unreleased code from the supplied Folo checkout; `none` uses caller-provisioned binaries.
+builds unreleased code from the supplied Folo checkout.
 
 **`binstall` — the fast default.** `cargo-binstall` resolves the package's GitHub Release,
 verifies the `.sha256`, and unpacks the binary; if the runner's target has no published
@@ -212,14 +210,13 @@ numbers. The action manifest records a tested combination across those independe
 
 **Released installation uses published binaries.** Every tool and companion version pinned
 by an action release is available through its supported installation methods. Source
-dogfooding with `path`, or `none` with a prebuilt companion, does not prove the released install
+dogfooding with `path` does not prove the released install
 path; the pre-tag resolvability gate (§8.1) exercises that path independently. New crates use
 the first-publication process in [`RELEASING.md`](../../../RELEASING.md).
 
 Each command installs only what it uses: `collect`, `backfill`, and `analyze-*` need the tool;
-publication and lifecycle commands need the companion. `install-method: none` therefore
-requires whichever of the two that command uses to be on `PATH` already. `path` accepts
-one `source-path`, the root of the Folo source checkout.
+publication and lifecycle commands need the companion. `path` accepts one `source-path`,
+the root of the Folo source checkout.
 
 **The failure-reporting path must not itself be fragile.** `alert` (§4.4) runs *because*
 something already went wrong, so it is the one command that cannot afford a flaky install: if
@@ -234,7 +231,7 @@ companion cannot be installed.
 **All install modes stay testable.** Method selection, version resolution, and the binary
 cache are unit-tested in the same Rust layer as the rest of the action's logic (§5.1), with
 mocked tool output; and the CI matrix (§9) additionally runs each *real* method (`binstall`,
-`install`, `path`; `none` against a pre-seeded `PATH`) against a published version, so
+`install`, and `path`) against the corresponding release or source checkout, so
 both the branching and the actual installs stay covered.
 
 **No test scaffolding is ever shipped to consumers.** `cargo install cargo-bench-history` (or a
@@ -1212,7 +1209,7 @@ sees only the inputs their flow actually varies.
 `publish-issue` | `publish-pr-comment` | `issue-preflight` | `issue-cleanup` |
 `pr-comment-preflight` | `pr-comment-cleanup` |
 `pr-comment-finalize` | `alert` | `resolve-alert`, required);
-`install-method` (`binstall` | `install` | `path` | `none`, default `binstall`; applies to
+`install-method` (`binstall` | `install` | `path`, default `binstall`; applies to
 every binary the command needs, §3);
 `source-path` (the Folo workspace root for `install-method: path`); `config` (path to a
 `bench_history.toml`; default: the tool's own `.cargo/bench_history.toml` discovery);
@@ -1405,7 +1402,7 @@ layer below; neither fake-driven suite substitutes for it.
 
 **Layer 2 — local-storage end-to-end on the CI matrix (every push, minutes, no secrets).** `test.yml` runs the *real* action against **local filesystem storage**
 (`local-path` under `${RUNNER_TEMP}`) across the platform matrix and across *each* real
-`install-method` (`binstall`, `install`, `path`, and `none` against a pre-seeded `PATH`),
+`install-method` (`binstall`, `install`, and `path`),
 so both the install branching and the actual installs are exercised, not just mocked:
 
 1. A tiny checked-in throwaway Rust project with one fast Criterion benchmark.
