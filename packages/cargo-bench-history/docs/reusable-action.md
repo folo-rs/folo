@@ -7,19 +7,10 @@ action: its command surface, distribution model, configuration surface, and host
 tool's own data model, commands, storage, auth, and analysis modes live in `DESIGN.md`;
 this document does not restate them, only how they are wrapped for external consumers.
 
-**This is a working document, not a finished reference.** It exists to be *consumed* while
-the design is implemented: expect it to be split, rewritten, and largely dismantled as the
-implementation lands, whether as one pull request or a stack of them. Sections graduate out
-of it as they find permanent homes — user-facing material into the book's GitHub-automation
-section (§11) and the action repo's README, internal decisions into the owning package's
-design and implementation guides — and what remains here shrinks accordingly. Existing
-capability claims must match the source; approved behavior that still needs implementation
-is identified as a prerequisite rather than presented as already available.
-
 **Reading guide.** For a refresher, read sections 1–2 for the purpose and ownership,
 section 4 for the history/PR/backfill flows, and sections 5–6 for reporting and credentials.
-[Section 12](#12-implementation-plan) records implementation progress and activation gates;
-the earlier sections describe the complete intended action, not a claim that it is released.
+[Section 12](#12-integration-and-deployment) describes integration contracts and maintainer
+setup. Every section describes the complete intended design.
 
 The components have distinct roles:
 
@@ -32,8 +23,8 @@ The components have distinct roles:
 
 ## 1. Problem & goals
 
-Folo drives the tool from a set of in-tree workflows, all consuming the committed
-`.cargo/bench_history.toml` (prod account baked in) through automation-only `just` recipes:
+Folo's benchmark automation follows these flows, using the committed
+`.cargo/bench_history.toml` for its history configuration:
 
 * [`bench-history.yml`](../../../.github/workflows/bench-history.yml) collects the
   workspace's benchmarks into Azure on **every push to `main`**, analyzes the accumulated
@@ -225,11 +216,11 @@ Workspace release groups are derived from exact first-party dependency requireme
 packages. The companion has no first-party dependency and needs none merely to align version
 numbers. The action manifest records a tested combination across those independent releases.
 
-**Released-companion installation requires its first publication.** The companion is not
-yet published on crates.io, so `binstall` / `install` cannot currently supply it. Source
+**Released installation uses published binaries.** Every tool and companion version pinned
+by an action release is available through its supported installation methods. Source
 dogfooding with `path`, or `none` with a prebuilt companion, does not prove the released install
-path. The first-publication handoff in §11 must complete before a released action can pin an
-installable companion.
+path; the pre-tag resolvability gate (§8.1) exercises that path independently. New crates use
+the first-publication process in [`RELEASING.md`](../../../RELEASING.md).
 
 Each command installs only what it uses: `collect`, `backfill`, and `analyze-*` need the tool;
 publication and lifecycle commands need the companion. `install-method: none` therefore
@@ -963,8 +954,7 @@ envelope in the companion avoids that duplication.
 
 **The rule this design adopts: if logic can live in a Rust binary, it does.** The remaining
 YAML holds job orchestration and input/file wiring, not report interpretation or semantic
-evidence decisions. Transitional monorepo helpers and their replacement phases are described
-in §12.
+evidence decisions. Integration and deployment responsibilities are described in §12.
 
 The split is drawn by **vocabulary ownership**, not by the more obvious-looking
 "composition versus transport" line. Two questions separate cleanly:
@@ -1185,8 +1175,8 @@ The PR path combines a read-only Azure baseline with run-local PR measurements:
 An optional `--cache=<directory>` mirrors only the baseline. `--local` by itself still
 selects filesystem storage instead of Azure, and a restored cache does not add locally
 collected objects to cloud listings. The workflow must assemble the matrix's result artifacts
-into the input directory and use a read-only Azure identity for analysis. The prepared
-monorepo wiring implements this handoff; its deployment and activation gates are in §12.
+into the input directory and use a read-only Azure identity for analysis. The reusable
+workflows own this handoff; integration and deployment requirements are in §12.
 
 **Bring-your-own infrastructure.** The action does **not** bundle the Azure provisioning
 (`infra/azure-bench-history-prod/`); that stays in the monorepo as a *referenced example* the
@@ -1463,9 +1453,9 @@ so both the install branching and the actual installs are exercised, not just mo
    binaries, decides the outcome. The two layers' input lists are contract-tested against
    each other so a new composite input cannot silently go unexposed by the workflows.
 
-These are required canaries, not completed validation. They run without publishing to GitHub
+The caller canaries run without publishing to GitHub
 (`sink: none` for reusable-workflow calls); composed-body checks use the fake transport.
-They prove neither real posting nor the read-only Azure/local composition required by §6.
+Live posting and Azure authorization are covered by their dedicated validation layers.
 
 **Layer 3 — trend-dependent, real-GitHub-write validation.** The remaining gap is the behaviour
 that needs (a) a benchmark history long enough to make analysis "notable" and (b) the action
@@ -1532,8 +1522,8 @@ so none of these layers needs to reach the cloud.
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo migrates **all** of its bench-history workflows — the push flow, the PR flow, and the
-nightly densification pass — to consume the published action, but with **`install-method:
+Folo's bench-history workflows — the push flow, the PR flow, and the nightly densification
+pass — consume the published action, but with **`install-method:
 path`** pointed at the workspace checkout, so its collection keeps measuring `main`'s HEAD
 tool rather than waiting for a release (preserving the property that a tool change is
 exercised the same push it lands). External repos use the default `binstall` install. This
@@ -1542,13 +1532,10 @@ dogfoods the action's entire input-driven path
 `packages`, the machine-key artifact handoff, the `--cache` read-through cache, the notable
 signal, and *both* report sinks with their lifecycles.
 
-The migration is also the clearest measure of whether this design achieved its first two
-goals (§1): Folo's full benchmark job graphs should collapse to reusable-workflow calls,
-and superseded `scripts/bench-history/*.psm1` modules with their Pester suites
-should be **deleted rather than generalized** — their composition logic having moved into the
-tool and their transport logic into the companion binary (§5.1). Anything that resists
-deletion is a signal that some behaviour was repo-specific after all, and belongs in the
-action's input surface.
+Folo's entry points are reusable-workflow calls rather than a parallel implementation of
+the full job graphs. Domain rendering belongs to the tool, GitHub reporting belongs to the
+companion, and configurable workflow policy belongs to the shared layer (§5.1). Repository
+choices are inputs rather than duplicated shell logic.
 
 **What `install-method: path` requires, concretely.** The action executes inside the *caller's*
 job, so the workspace it builds from is the caller's own checkout — nothing needs to be shared
@@ -1565,10 +1552,9 @@ The cost is a source build in the job, which for Folo is already paid — the wo
 compiled to benchmark it. The payoff is that a tool change is exercised by the same push that
 lands it, rather than waiting for a release.
 
-## 11. Tool / repo changes this design implies
+## 11. Tool and repository responsibilities
 
-The analysis model and synthetic-history enablers already support the intended comparisons.
-The working design must distinguish those capabilities from the integration prerequisites:
+The tool, companion and workflow layer have separate responsibilities:
 
 * **The tool owns the coverage verdict and named outcome.** `cbh_render::Coverage` already
   supplies the judged-set qualification to the human renderings and the structured census
@@ -1590,10 +1576,9 @@ The working design must distinguish those capabilities from the integration prer
   likewise preserve newer issue content when commit ordering cannot be established.
   `--comment-marker` supports an existing PR comment's identity without changing the
   instance-scoped lifecycle markers.
-* **The companion requires an independent first publication.** It has not yet been published
-  on crates.io. Follow the first-publication handoff in
-  [`RELEASING.md`](../../../RELEASING.md), then configure Trusted Publishing for subsequent
-  releases. Version groups come from exact dependency edges, not an explicit metadata group:
+* **The companion is published and versioned independently.** New crates follow the
+  first-publication process in [`RELEASING.md`](../../../RELEASING.md), with Trusted Publishing
+  for subsequent releases. Version groups come from exact dependency edges, not an explicit metadata group:
   the tool and its `cbh_*` implementation packages move together, while the companion and
   faker are independent. Do not add a synthetic dependency to force lockstep. Subsequent
   released-content changes follow the ordinary version-increment process; the action
@@ -1606,11 +1591,11 @@ The working design must distinguish those capabilities from the integration prer
   History analysis supplies the same context and base explicitly (§4.2).
   Note that `--include-improvements` no longer exists — direction is now a property of the
   mode (§4.3) — so nothing should pass it.
-* **Read-only PR storage composition is required before advertising that path.** Local PR
+* **PR storage combines local measurements with a read-only baseline.** Local PR
   measurements are analyzed together with the Azure baseline through `--local-input`,
   without writing the PR points to Azure (§6). The view rejects mutations and keeps local
-  inputs outside the baseline cache. The monorepo credential wiring and matrix handoff are
-  prepared in Phase 3; deployment remains a separate gate.
+  inputs outside the baseline cache. The workflow layer supplies credential wiring and
+  the matrix artifact handoff.
 * **Workflow computation and publication remain separate responsibilities.** The workflow
   owns package-scope policy and configurable exclusions (§4.7), using Rust for the
   computations and passing the final scope to the lower composite. Analysis emits reports;
@@ -1627,17 +1612,14 @@ The working design must distinguish those capabilities from the integration prer
 * **No fake-engine handling needed** — the fake engine is its own separate package
   (`cargo-bench-history-faker`) with its own binary, so the published `cargo-bench-history`
   already ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
-* **Remaining monorepo helpers have explicit replacement phases.** Collection argument
-  assembly, scope selection, backfill windows, filesystem setup and federation wiring
-  remain during the monorepo cutover. The report-sink PowerShell modules are removed.
-  Later phases replace superseded helpers rather than generalizing them into a second
-  implementation of the action. PR-close cancellation belongs to the PR workflow itself.
-* **Docs — the book gains a "GitHub automation" section.** The user guide currently
-  documents the tool as something you run by hand (Installation, Commands, Concepts,
-  Appendix), which leaves its most common *real* deployment undocumented. Running
-  `cargo-bench-history` from automation is not a footnote to local use; it is the primary use,
-  and it raises questions that have no local analogue. The book therefore gains a section
-  covering:
+* **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
+  backfill, artifact and reporting policy belong to the shared Rust and workflow layers.
+  PowerShell is limited to boundaries such as bootstrap and Azure provisioning where a
+  prepared Rust environment is not available. PR-close cancellation belongs to the PR
+  workflow itself.
+* **The book has a "GitHub automation" section.** Running `cargo-bench-history` from
+  automation is a primary deployment model, with questions that have no local analogue.
+  The section covers:
   * **The three flows** — per-push history, per-PR branch, nightly densification — and why a
     useful setup runs all three rather than just the first.
   * **Adopting the action** — the full input surface and the hand-assembled recipes, with the
@@ -1663,103 +1645,23 @@ The working design must distinguish those capabilities from the integration prer
 
   The division of labour: the **book** owns tool-level concepts, the deployment thinking, and
   the action's reference material; the action repo's **README** is a quick start that links
-  here. This file and the pointer from `DESIGN.md` §7.3 remain the design record until it is
-  dismantled into those homes.
+  there. Behavioral design and internal architecture belong to their owning package guides.
 
-## 12. Implementation plan
+## 12. Integration and deployment
 
-### Current implementation and activation state
+### Workflow execution
 
-This section distinguishes code prepared on the feature branch from deployed behavior.
-The permanent design and implementation guides describe the prepared target state; they are
-not evidence that the production rollout has happened.
+Source-built Folo automation uses a preparation job to build the companion from the
+automation checkout and publish it as a run-scoped Linux executable archive. Posting jobs
+download that executable; they have GitHub write scopes but no Azure federation. All
+required Folo binaries use the selected installation method and source checkout (§3, §10).
 
-| Area | State |
-| --- | --- |
-| Tool-side outcomes and combined local/Azure reads | Implemented, including `--outcome` and `--local-input` |
-| GitHub companion | Implemented, including lifecycle, workflow evidence and explicit legacy adoption |
-| Monorepo workflow and Azure infrastructure changes | Prepared on this branch; production activation is blocked on reader configuration |
-| External composite action, reusable workflows and their adoption by Folo | Not implemented; the dedicated repository exists |
-| Public action release and Marketplace listing | Not completed |
-
-The immediate gate is the production reader identity and its non-secret
-`AZURE_PROD_READER_CLIENT_ID` in `constants.env`. The reader-first deployment is prepared,
-but the client ID has not been recorded. After that handoff, review and exercise the
-prepared workflow cutover. Live Azure authorization and GitHub lifecycle behavior still
-need rollout confirmation; local validation does not establish them.
-
-Keep an existing writer's PR federation until legacy PR-writing runs have drained, then
-retire it explicitly. The companion also needs its independent first publication from
-clean `main` after review and merge, before any flow installs it from crates.io. Exact
-maintainer actions are in §12.1 and the
-[production deployment guide](../../../infra/azure-bench-history-prod/README.md).
-
-### Phase responsibilities
-
-The work splits into phases that each **land independently, prove themselves, and leave the
-system working**. Two properties drive the ordering. First, every phase before the last is
-invisible to consumers, so a stalled effort never leaves a half-published action in the
-Marketplace. Second, the risky, hard-to-test parts are pulled early and validated *inside the
-monorepo*, before releasing the public action for other repositories to consume.
-
-The phases are ordered so that each is testable by the layer below it, and the monorepo's own
-bench-history workflows act as the integration test throughout: at every phase they keep
-working, first unchanged, then progressively rewired.
-
-**Phase 0 — Manual preparation (you).** Detailed in §12.1; the only phase requiring repository
-administration. Implementation can be prepared in parallel; activating Phase 3 depends on
-the reader deployment and configuration gate.
-
-**Phase 1 — Tool-side outcome.** The coverage verdict in prose already lives in
-`cbh_render::Coverage` and is shared by text, Markdown, summary and JSON output, so this phase
-does not add a second rendering. It adds the missing **named analysis outcome** to `analyze`:
-`findings`, `clean`, `insufficient_baseline`, `nothing_in_scope` or `partial`. The value is
-carried in the JSON report and, when `--outcome <path>` is requested, written as that one stable
-wire name so automation does not have to parse JSON merely to select a message. `notable`
-remains for compatibility and is exactly `outcome == findings`.
-
-The outcome is the primary verdict of a **successful analysis**. Execution failure cannot be
-written by a command that did not complete, so the workflow synthesises `failed` from the
-non-zero exit. Likewise, a missing matrix leg is orthogonal to what the surviving analysis
-found: the workflow carries that platform shortfall separately and the companion qualifies the
-message (§4.2). A run may therefore have `outcome: findings` and partial platform coverage;
-collapsing both dimensions into one enum would hide one of them.
-
-These are pure additions to an existing command, testable as ordinary Rust unit tests beside
-the renderer and output writer, with no GitHub or workflow involvement.
-
-**Phase 2 — The companion binary.** Create `cargo-bench-history-github` (§5.1) with its GitHub
-transport behind a port trait and an in-memory fake, following the package's existing ports-and-
-fakes convention. This phase covers the whole message catalogue and every lifecycle command,
-and is where the bulk of the logic lands — all of it unit-testable against the fake with no
-network. The companion versions independently because it has no exact dependency linking it to
-the tool's implementation group. The action release manifest selects the tested combination of
-tool, companion and test-only faker versions; no artificial dependency is added for grouping.
-The prepared monorepo workflows consume the companion through source builds in Phase 3.
-
-**Phase 3 — Cut the monorepo over to the companion.** Replace the report-sink PowerShell
-modules with calls to the companion, preserving the benchmark triggers, collection and analysis
-semantics while separating credentialed analysis from publication. This is the highest-value
-validation in the plan: the monorepo's real push and PR flows start exercising the companion
-against real issues, real comments, and real history, with a focused cutover that can be
-reverted. Delete each replaced module and its tests only when all its callers have migrated;
-collection, scope, artifact and authentication helpers remain until their owning phases replace
-them. The new lifecycle commands (`issue-preflight`,
-`issue-cleanup`, `pr-comment-finalize`) land here too, so their behaviour is observed on a real
-repository before anyone else can adopt them.
-
-**Phase 3 execution contract.** A preparation job builds the companion from the workflow's
-automation checkout and publishes it as a run-scoped Linux executable archive. Posting jobs
-download that executable; they have GitHub write scopes but no Azure federation. Collection
-and analysis retain source-built tools during this monorepo cutover, so the unpublished
-companion does not need a bootstrap release before the change can be prepared.
-
-PR automation is built from the event's merge checkout while benchmarking and topology use a
+Source-built PR automation uses the event's merge checkout while benchmarking and topology use a
 separate full checkout of the frozen PR head. This makes updated automation available to PRs
 whose head predates it without recording the synthetic merge commit as a measurement.
 Collection passes that repository explicitly to the tool; analysis passes both it and the
-event's frozen base commit. The ordinary collection/exclusion helpers remain until the
-predefined-workflow phase replaces their scope logic.
+event's frozen base commit. The reusable workflow owns collection-scope policy and passes
+the selected scope to the lower action layer.
 
 Successful collection writes a receipt containing repository, instance, run, attempt, frozen
 head, platform and the actual machine key. The artifact also carries the local result store
@@ -1771,8 +1673,8 @@ synthetic report. Only selected successful platform data enters the local analys
 The companion projects validated reports into workflow outputs for publication and cleanup.
 History all-clear is permitted only by the complete clean-evidence projection. Publication
 always receives the JSON, summary and exact platform set from that analysis, and reports
-remain downloadable even when they contain no findings. The cutover explicitly adopts the
-legacy rolling issue title and PR placeholder marker; new sinks use instance markers.
+remain downloadable even when they contain no findings. Migration from legacy sinks uses
+explicit issue-title and placeholder-marker adoption; normal identity uses instance markers.
 
 Azure activation is staged: provision the reader first, record its non-secret client ID,
 then activate the reader-only analysis jobs and local PR collection. Retire the writer's PR
@@ -1781,25 +1683,6 @@ client ID is a configuration error, never permission to fall back to write-capab
 The preparation artifact is also required by notification jobs; inability to build or obtain
 the companion remains a failed workflow check rather than a successful notification.
 
-**Phase 4 — The composite action.** Add `action.yml` and the
-`command` surface (§4, §7), implemented as thin wiring over the binaries from phases 1–3. Its
-repository exists. Rust unit tests remain with the Rust packages in the monorepo; the action
-repository tests its installation and invocation wiring against those binaries. Still
-unlisted on the Marketplace.
-
-**Phase 5 — The reusable workflows.** Add `history.yml`, `pr.yml`, and `backfill.yml` (§4.7),
-including the scope preflight and the matrix. Validated by the caller canaries (§9), which are
-the only test of this layer.
-
-**Phase 6 — Dogfood.** Point the monorepo's workflows at the reusable workflows with
-`install-method: path` (§10). Folo's job graphs collapse into calls to the reusable workflows.
-This is the last chance to find interface problems while we are the only consumer, and
-the phase where the design's central claim is either demonstrated or falsified.
-
-**Phase 7 — Publish.** Cut `v1`, list on the Marketplace (§8.1), and write the book's
-GitHub-automation section and the action README (§11). Documentation lands with the release
-rather than before it, since it describes behaviour the previous phases have by then proven.
-
 **Validation follows the current repository recipes.** `just validate-local` performs shallow
 validation. Miri, mutation testing, many-seed Miri and careful checking are separate deep
 checks, invoked through their scoped recipes or `validate-deep-local`; they are not implied by
@@ -1807,41 +1690,40 @@ a shallow pass. The Standard validation workflow and the Deep validation workflo
 respective scheduling. Updating the action does not require reproducing the monorepo's
 scheduled-validation infrastructure.
 
-### 12.1 Phase 0 — what needs your hands
+### 12.1 Maintainer setup
 
-These actions do not block preparing the implementation, but deployment and publication have
-explicit maintainer gates. Repository changes can prepare them without changing live resources.
+Deployment and publication require maintainer actions independent of the workflow runs.
+Provisioning and retirement procedures are documented in the
+[production deployment guide](../../../infra/azure-bench-history-prod/README.md).
 
 | # | Action | Gates | Notes |
 | --- | --- | --- | --- |
-| 1 | **Deploy the production reader identity and complete writer-PR retirement** | Activating Phase 3's read-only Azure path | Deploy the prepared Bicep change additively, record `AZURE_PROD_READER_CLIENT_ID`, and verify reader access. After the new workflows replace legacy PR collection and old writers are drained, explicitly retire only the writer's PR federated credential. Omitting a resource from an incremental ARM deployment does not delete it. |
-| 2 | **Bootstrap `cargo-bench-history-github`, then configure Trusted Publishing** | Before any flow installs the released companion | Complete the cutover-readiness work, merge, and perform the first manual publication from a clean `main` checkout as described in `RELEASING.md`. Then configure owner `folo-rs`, repository `folo`, workflow `release.yml` on crates.io. The companion is not yet published; do not assume it is installable. |
-| 3 | **Enable Marketplace publishing** on the action repo — accept the agreement, choose a category, verify the listing | Phase 7 | A one-time UI flow tied to the account, not to a release run (§8.1). |
-| 4 | **Decide the `v1` promise** — when the floating major tag starts moving, its consumers inherit whatever it points at | Phase 7 | A decision, not a setting. Worth making deliberately rather than discovering it after the first breaking change. |
-| 5 | **Repository settings** (§12.2) | Nothing | Hygiene. Worth doing, but no phase waits on it. |
+| 1 | **Configure production readers and writers** | Using the Azure-backed workflows | Deploy the identities, record their non-secret identifiers, and verify their access. When migrating legacy PR writers, retain their trust until those runs are drained, then explicitly retire only the writer's PR federated credential. Incremental ARM omission is not deletion. |
+| 2 | **Bootstrap new crates, then configure Trusted Publishing** | Installing published tool and companion versions | Follow `RELEASING.md`: first publication is a maintainer operation from clean `main` after review and merge; subsequent releases use the configured `folo-rs/folo` / `release.yml` Trusted Publisher. |
+| 3 | **Configure Marketplace publishing** — agreement, category and listing | Public action release | A one-time UI flow tied to the account, not to a release run (§8.1). |
+| 4 | **Define the `v1` compatibility promise** | Publishing and moving the floating major tag | Consumers inherit the release that the tag identifies; breaking changes require an appropriate new major. |
+| 5 | **Repository settings** (§12.2) | Repository governance | Protection and merge policies are separate from runtime requirements. |
 
-Four things I want to flag as **not** needed, because they would each be reasonable to assume:
+The design does not require:
 
-* **No new stored secrets or tokens.** Every phase runs on the per-run `GITHUB_TOKEN` (§9) or
+* **New stored secrets or tokens.** Workflows use the per-run `GITHUB_TOKEN` (§9) or
   Azure federation. The additional reader identity has a non-secret client ID and short-lived
   OIDC exchanges, not a maintained credential. The one-time crates.io bootstrap uses the maintainer's manual
   publication process; ongoing automation introduces no stored user credential.
-* **No separate test repository.** Testing happens in the repository that runs it (§9), which
+* **A separate test repository.** Testing happens in the repository that runs it (§9), which
   is what removes the cross-repository credential problem entirely.
-* **No issue labels.** The action applies none and configures none (§5.1), so no repository
+* **Issue labels.** The action applies none and configures none (§5.1), so no repository
   needs labels created before it can file.
-* **No blanket write-token default.** Workflow/job `permissions:` blocks request their own
+* **A blanket write-token default.** Workflow/job `permissions:` blocks request their own
   minimum scopes. Repository policy still controls whether test workflows may create pull
   requests (§12.2).
 
 ### 12.2 Configuring the action repository
 
-**Almost none of this is a prerequisite.** The repository needs no configuration to be worked
-in, and the design does not depend on any particular setting. Two facts are worth stating
-plainly so effort goes where it matters:
+Runtime permissions, test-fixture permissions and repository governance are separate:
 
-* **The repository already exists and is public.** The root action metadata and Marketplace
-  listing requirements are completed in the action implementation and publication phases.
+* **The action repository is public**, with action metadata at its root and its own
+  release/tag stream (§2).
 * **Workflow permissions are a default, not a ceiling.** A repository whose default token
   permission is read-only can still run workflows that request `issues: write`,
   `contents: write`, or `id-token: write` through a job's `permissions:` block — the monorepo
@@ -1864,9 +1746,8 @@ rather than because anything waits on it:
   reviewed commits there; `uses: …@v1` resolves to the major tag, not to the branch tip.
 * **Require a pull request to merge**, with the repository's CI as the required check. Wire the
   requirement as a single fan-in job rather than naming individual matrix jobs, matching how the
-  monorepo does it, so adding a canary (§9) does not require a settings change. The check cannot
-  be named until Phase 4 creates the workflow that produces it, so set protection now and add
-  the requirement then.
+  monorepo does it, so adding a canary (§9) does not require a settings change. Select the
+  fan-in check actually emitted by the action repository's validation workflow.
 * **Merge policy is yours.** Squash, merge commit, or a merge queue — nothing depends on it.
   The action repo has no benchmark history, so the squash-merge consideration of §4.5 does not
   apply here.

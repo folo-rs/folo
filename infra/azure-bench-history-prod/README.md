@@ -104,8 +104,8 @@ Reader provisioning alone does not activate any workflow.
 | `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | `tenantId` / `subscriptionId` |
 
 `managedIdentityPrincipalId`, `readerManagedIdentityPrincipalId` and `blobEndpoint`
-are also available as deployment outputs. Activation of reader-based workflows
-remains blocked until a maintainer deploys the reader and supplies its client ID.
+are also available as deployment outputs. Configure the reader client ID before
+enabling reader-based workflows.
 
 ## Retire the writer's PR credential
 
