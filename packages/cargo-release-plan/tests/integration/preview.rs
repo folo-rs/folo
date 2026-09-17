@@ -12,13 +12,22 @@ use crate::harness::check;
 
 fn prepare(fixture: &Fixture) -> PathBuf {
     let output = fixture.path().join("prepared");
-    run(&RunInput::Prepare {
+    let RunOutcome::Prepare { message } = run(&RunInput::Prepare {
         output: output.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
         verbose: true,
     })
-    .unwrap();
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        message,
+        format!(
+            "Refreshed the workspace lockfile offline and prepared release evidence in {}",
+            output.display()
+        )
+    );
     output.join("prepared.json")
 }
 
@@ -30,14 +39,23 @@ fn preview(fixture: &Fixture, prepared: PathBuf, increments: &Value) -> PathBuf 
     )
     .unwrap();
     let output = fixture.path().join("preview");
-    run(&RunInput::Preview {
+    let RunOutcome::Preview { message } = run(&RunInput::Preview {
         plan: proposed,
         prepared,
         output: output.clone(),
         manifest_path: fixture.manifest(),
         verbose: true,
     })
-    .unwrap();
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        message,
+        format!(
+            "Wrote complete resolved plan to {}",
+            output.join("plan.json").display()
+        )
+    );
     output.join("plan.json")
 }
 

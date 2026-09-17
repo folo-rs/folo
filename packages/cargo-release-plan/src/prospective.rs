@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use ohno::AppError;
 
@@ -113,55 +113,78 @@ impl Prospective {
         Ok(destination.join(manifest))
     }
 
+    // Cargo manifest acquisition and process execution require integration coverage.
+    // The shared core retains the actual offline arguments and error propagation.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn resolve(&self, verbose: Verbose) -> Result<(), AppError> {
         // Captured identity keeps the filesystem spelling; Cargo requires its conventional
         // manifest filename at the subprocess boundary even when another spelling aliases it.
         let manifest = cargo_manifest_path(&self.manifest);
-        verbose.note(|| {
-            format!(
-                "resolving {} with cargo update --offline --workspace before release decisions; \
-             existing third-party locks are retained where Cargo permits, but dependency edges \
-             can be reselected and must be classified",
-                quote_path(&manifest.to_string_lossy())
-            )
-        });
-        _ = run_capture_os(
-            "cargo",
-            [
-                OsStr::new("update"),
-                OsStr::new("--offline"),
-                OsStr::new("--workspace"),
-                OsStr::new("--manifest-path"),
-                manifest.as_os_str(),
-            ],
+        resolve_offline(
+            &manifest,
             self.manifest.parent().expect("a manifest has a parent"),
-        )?;
-        Ok(())
+            verbose,
+            |args, root| run_capture_os("cargo", args.iter().copied(), root).map(|_| ()),
+        )
     }
 
+    // The Cargo workspace query is integration-only; capture_artifacts owns selection and bytes.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn artifacts(&self, inputs: &Inputs) -> Result<Vec<Artifact>, AppError> {
         let (work_tree, _) = load_tracked_work_tree(&self.manifest)?;
         let mut paths: BTreeSet<PathBuf> = work_tree.member_manifests.into_iter().collect();
         paths.insert(work_tree.workspace_root.join("Cargo.toml"));
         paths.insert(work_tree.workspace_root.join("Cargo.lock"));
-        let mut artifacts = Vec::new();
-        for path in paths {
-            let relative = relative(&self.root, &path)?;
-            let contents = fs::read_to_string(&path)
-                .map_err(|error| ReadFileError::caused_by(&path, error))?;
-            if fs::read_to_string(inputs.root().join(&relative))
-                .ok()
-                .as_ref()
-                != Some(&contents)
-            {
-                artifacts.push(Artifact {
-                    path: relative,
-                    contents,
-                });
-            }
-        }
-        Ok(artifacts)
+        capture_artifacts(&self.root, inputs.root(), paths, |path| {
+            fs::read_to_string(path)
+        })
     }
+}
+
+fn resolve_offline(
+    manifest: &Path,
+    root: &Path,
+    verbose: Verbose,
+    run: impl FnOnce(&[&OsStr], &Path) -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    verbose.note(|| {
+        format!(
+            "resolving {} with cargo update --offline --workspace before release decisions; \
+             existing third-party locks are retained where Cargo permits, but dependency edges \
+             can be reselected and must be classified",
+            quote_path(&manifest.to_string_lossy())
+        )
+    });
+    run(
+        &[
+            OsStr::new("update"),
+            OsStr::new("--offline"),
+            OsStr::new("--workspace"),
+            OsStr::new("--manifest-path"),
+            manifest.as_os_str(),
+        ],
+        root,
+    )
+}
+
+fn capture_artifacts(
+    root: &Path,
+    original: &Path,
+    paths: BTreeSet<PathBuf>,
+    mut read: impl FnMut(&Path) -> io::Result<String>,
+) -> Result<Vec<Artifact>, AppError> {
+    let mut artifacts = Vec::new();
+    for path in paths {
+        let relative = relative(root, &path)?;
+        let contents = read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
+        if read(&original.join(&relative)).ok().as_ref() != Some(&contents) {
+            artifacts.push(Artifact {
+                path: relative,
+                contents,
+            });
+        }
+    }
+    Ok(artifacts)
 }
 
 impl Drop for Prospective {
@@ -183,9 +206,136 @@ struct EvidenceWorkspaceOccupied;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::io::ErrorKind;
+
     use tempfile::tempdir;
 
     use super::*;
+    use crate::resolved::UnsupportedInput;
+
+    #[test]
+    fn offline_resolution_preserves_manifest_arguments_working_directory_and_errors() {
+        let manifest = Path::new("candidate/nested/Cargo.toml");
+        let root = Path::new("candidate/nested");
+        for fail in [false, true] {
+            let mut called = false;
+            let result = resolve_offline(manifest, root, Verbose::new(false), |args, cwd| {
+                called = true;
+                assert_eq!(cwd, root);
+                assert_eq!(
+                    args,
+                    [
+                        OsStr::new("update"),
+                        OsStr::new("--offline"),
+                        OsStr::new("--workspace"),
+                        OsStr::new("--manifest-path"),
+                        manifest.as_os_str(),
+                    ]
+                );
+                if fail {
+                    Err(ResolutionFailure::new().into())
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(called);
+            if fail {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .find_source::<ResolutionFailure>()
+                        .is_some()
+                );
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn artifact_capture_emits_only_changed_or_unreadable_originals_with_exact_bytes() {
+        let root = Path::new("candidate");
+        let original = Path::new("original");
+        let paths = ["Cargo.toml", "Cargo.lock", "member/Cargo.toml"].map(|path| root.join(path));
+        for original_error in [ErrorKind::NotFound, ErrorKind::PermissionDenied] {
+            let mut reads = Vec::new();
+            let artifacts = capture_artifacts(root, original, paths.clone().into(), |path| {
+                reads.push(path.to_owned());
+                if path == root.join("Cargo.toml") || path == original.join("Cargo.toml") {
+                    Ok("unchanged".to_owned())
+                } else if path == root.join("Cargo.lock") {
+                    Ok("resolved lockfile\n".to_owned())
+                } else if path == original.join("Cargo.lock") {
+                    Err(original_error.into())
+                } else if path == root.join("member/Cargo.toml") {
+                    Ok("new manifest\n".to_owned())
+                } else {
+                    assert_eq!(path, original.join("member/Cargo.toml"));
+                    Ok("old manifest\n".to_owned())
+                }
+            })
+            .unwrap();
+            assert_eq!(
+                artifacts,
+                [
+                    Artifact {
+                        path: "Cargo.lock".into(),
+                        contents: "resolved lockfile\n".to_owned()
+                    },
+                    Artifact {
+                        path: "member/Cargo.toml".into(),
+                        contents: "new manifest\n".to_owned()
+                    },
+                ]
+            );
+            assert_eq!(
+                reads,
+                [
+                    "candidate/Cargo.lock",
+                    "original/Cargo.lock",
+                    "candidate/Cargo.toml",
+                    "original/Cargo.toml",
+                    "candidate/member/Cargo.toml",
+                    "original/member/Cargo.toml"
+                ]
+                .map(PathBuf::from)
+            );
+        }
+        assert!(
+            capture_artifacts(root, original, paths.into(), |_| Ok("same".to_owned()))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn artifact_capture_propagates_candidate_read_and_rebasing_errors() {
+        let root = Path::new("candidate");
+        let path = root.join("Cargo.toml");
+        let error = capture_artifacts(
+            root,
+            Path::new("original"),
+            BTreeSet::from([path.clone()]),
+            |requested| {
+                assert_eq!(requested, path);
+                Err(ErrorKind::PermissionDenied.into())
+            },
+        )
+        .unwrap_err();
+        assert!(error.find_source::<ReadFileError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            ErrorKind::PermissionDenied
+        );
+        let error = capture_artifacts(
+            root,
+            Path::new("original"),
+            BTreeSet::from([PathBuf::from("outside/Cargo.toml")]),
+            |_| panic!(),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UnsupportedInput>().is_some());
+    }
 
     fn candidate(root: &Path) -> Prospective {
         fs::create_dir_all(root).unwrap();
@@ -312,4 +462,8 @@ mod tests {
             assert!(!output.exists());
         }
     }
+
+    /// Records an offline process failure independently of its rendered diagnostic.
+    #[ohno::error]
+    struct ResolutionFailure;
 }

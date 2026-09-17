@@ -9,7 +9,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::WriteFileError;
-use crate::apply::compute_edits;
+use crate::apply::{ManifestEdit, compute_edits};
 use crate::artifact_path::{resolve_path, same_path};
 use crate::check::{CheckFormat, releases_breaking_change, run_check};
 use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify};
@@ -34,6 +34,10 @@ struct Prepared {
     inputs: Inputs,
 }
 
+// Preparation owns real clone/resolver lifetimes and publication of captured files. Its
+// end-to-end side effects and output belong in integration tests; file admission remains
+// unit-tested by validate_preparation_files. See docs/implementation.md, "Test boundaries".
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_prepare(
     output: &Path,
     base: Option<&str>,
@@ -74,6 +78,10 @@ pub(crate) fn run_prepare(
     ))
 }
 
+// This adapter coordinates real Git/Cargo workspaces and artifact publication. Integration
+// tests verify the command and output; unit-tested cores retain rewriting, convergence,
+// consequence expansion and final evidence decisions rather than simulating a second workflow.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_preview(
     plan: &Path,
     prepared: &Path,
@@ -97,12 +105,10 @@ pub(crate) fn run_preview(
 
     let (resolved, files) = resolve_until_stable(resolved, &prospective.root, |resolved| {
         let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
-        for edit in compute_edits(&work_tree, resolved, verbose)? {
-            if edit.original != edit.updated {
-                fs::write(&edit.path, edit.updated)
-                    .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
-            }
-        }
+        install_preview_edits(compute_edits(&work_tree, resolved, verbose)?, |edit| {
+            fs::write(&edit.path, &edit.updated)
+                .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
+        })?;
         prospective.resolve(verbose)?;
         classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
         let files = prospective.artifacts(&prepared.inputs)?;
@@ -147,6 +153,18 @@ pub(crate) fn run_preview(
         "Wrote complete resolved plan to {}",
         output.join("plan.json").display()
     ))
+}
+
+fn install_preview_edits(
+    edits: Vec<ManifestEdit>,
+    mut write: impl FnMut(&ManifestEdit) -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    for edit in edits {
+        if edit.original != edit.updated {
+            write(&edit)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_until_stable(
@@ -424,6 +442,45 @@ mod tests {
     use crate::lockfile::InstallationGraph;
     use crate::metadata::{DepKind, ExactDependency, ReportedDep, VersionTarget};
     use crate::resolved::StaleInputs;
+
+    #[test]
+    fn prospective_writes_skip_unchanged_manifests_and_stop_on_failure() {
+        for fail in [false, true] {
+            let edits = [("same", "same"), ("old", "new"), ("later", "updated")]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (original, updated))| ManifestEdit {
+                    path: PathBuf::from(format!("member{index}/Cargo.toml")),
+                    original: original.to_owned(),
+                    updated: updated.to_owned(),
+                })
+                .collect();
+            let mut writes = Vec::new();
+            let result = install_preview_edits(edits, |edit| {
+                writes.push((edit.path.clone(), edit.updated.clone()));
+                if fail {
+                    Err(InvalidPreparation::new().into())
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(
+                writes,
+                if fail {
+                    vec![(PathBuf::from("member1/Cargo.toml"), "new".to_owned())]
+                } else {
+                    vec![
+                        (PathBuf::from("member1/Cargo.toml"), "new".to_owned()),
+                        (PathBuf::from("member2/Cargo.toml"), "updated".to_owned()),
+                    ]
+                }
+            );
+            assert_eq!(result.is_err(), fail);
+            if let Err(error) = result {
+                assert!(error.find_source::<InvalidPreparation>().is_some());
+            }
+        }
+    }
 
     #[test]
     #[cfg_attr(

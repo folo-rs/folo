@@ -1,6 +1,8 @@
 //! Captured-state rejection boundaries and nested workspace input identity.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
@@ -12,6 +14,68 @@ use serde_json::Value;
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::seeded_package;
+
+#[test]
+#[cfg_attr(miri, ignore = "captures and modifies an optional filesystem input")]
+fn missing_captured_configuration_is_distinct_from_an_empty_file() {
+    let fixture = seeded_package();
+    let prepared = fixture.path().join("prepared");
+    run(&RunInput::Prepare {
+        output: prepared.clone(),
+        base: Some("HEAD".to_owned()),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    fixture.write(".cargo/config.toml", "");
+    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared: prepared.join("prepared.json"),
+        output: fixture.path().join("preview"),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap_err();
+    assert!(!fixture.path().join("preview/plan.json").exists());
+}
+
+#[test]
+#[cfg(unix)]
+#[cfg_attr(miri, ignore = "changes real Unix permissions on captured source")]
+fn executable_mode_changes_invalidate_captured_evidence_without_changing_bytes() {
+    let fixture = seeded_package();
+    let source = fixture.path().join("packages/demo/src/lib.rs");
+    let contents = fs::read(&source).unwrap();
+    let prepared = fixture.path().join("prepared");
+    run(&RunInput::Prepare {
+        output: prepared.clone(),
+        base: Some("HEAD".to_owned()),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let mut permissions = fs::metadata(&source).unwrap().permissions();
+    // Toggle executable status, preserving every unrelated permission bit.
+    let mode = permissions.mode();
+    permissions.set_mode(if mode & 0o111 == 0 {
+        mode | 0o100
+    } else {
+        mode & !0o111
+    });
+    fs::set_permissions(&source, permissions).unwrap();
+    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    run(&RunInput::Preview {
+        plan: fixture.path().join("proposal.json"),
+        prepared: prepared.join("prepared.json"),
+        output: fixture.path().join("preview"),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap_err();
+    assert_eq!(fs::read(source).unwrap(), contents);
+    assert!(!fixture.path().join("preview/plan.json").exists());
+}
 
 #[test]
 #[cfg_attr(
