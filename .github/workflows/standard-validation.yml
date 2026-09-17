@@ -260,7 +260,7 @@ jobs:
           just package="$env:SEMVER_TARGETS" semver-checks
 
   # Formatting, dev Clippy, documentation and minimum-dependency compilation share setup.
-  # PRs omit only the macOS documentation steps, retaining their compile-platform coverage.
+  # Documentation builds and doctests use the same platform coverage as compilation, including PRs.
   # Ref: .github/workflows/implementation.md#standard-validation-structure.
   clippy-dev-docs:
     needs: [prepare]
@@ -300,7 +300,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" clippy dev
 
       - name: Run docs on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'macos-latest') }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -309,7 +309,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" docs
 
       - name: Run docs-default-features on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'macos-latest') }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -318,7 +318,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" docs-default-features
 
       - name: Run test-docs on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'macos-latest') }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -669,9 +669,7 @@ jobs:
 
   # File a GitHub issue whenever any job above fails on a push to `main`, so a push-to-main
   # failure is tracked rather than lost. PR runs surface a failure as the red check and need
-  # no issue - and this workflow now leans more heavily on push-to-main as the backstop for
-  # the shallow checks pruned from PR validation (macOS doctests/docs),
-  # so a green PR does not imply those passed.
+  # no issue. Main pushes validate the full workspace without PR change selection.
   #
   # A fresh issue is filed per failing run - no dedup, no auto-close - mirroring the release
   # workflow's per-run alert: each failure is investigated and closed individually, and a
@@ -725,9 +723,7 @@ jobs:
           $body = @"
           The Standard validation workflow failed on a push to ``main``.
 
-          Push-to-``main`` validation is the backstop for the checks pruned from PR validation
-          (macOS doctest/docs runs), so this failure may be
-          in a check a PR never ran.
+          Push-to-``main`` validation checks the full workspace without PR change selection.
 
           Failed run: $env:RUN_URL
           "@

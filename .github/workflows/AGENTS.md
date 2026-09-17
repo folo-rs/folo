@@ -76,7 +76,8 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   `required-checks` fan-in name and requiring every queue job to succeed. Run only
   full-workspace dev Clippy, formatting and version readiness there; do not add delta.
 - Keep Standard validation reusable by Deep validation. Only PR events may prune its
-  package/tooling scope or platform matrices. Scheduled/manual calls must not share
+  package/tooling scope; keep platform matrices identical across PR, push and reusable runs.
+  Scheduled/manual calls must not share
   a cancellation group with main pushes, and their failures belong to the parent reporter.
 - Keep PR/push CI shallow. Repair PRs use ordinary required checks and human review of relevant
   deep-check results; do not introduce a repair registry or special merge gate.

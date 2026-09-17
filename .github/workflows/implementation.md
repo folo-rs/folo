@@ -51,8 +51,8 @@ of preparation, with separately reported steps in one environment.
 The `clippy-dev-docs` matrix shares setup for dev-profile Clippy, documentation and
 minimum-dependency compilation; its Ubuntu leg first checks workspace formatting.
 Documentation steps build all-feature and default-feature documentation and run doctests.
-Only those steps skip macOS on pull requests; Clippy and minimum-dependency compilation
-retain the full platform matrix. `check-frozen` runs last because it
+They use the same Linux, macOS and Windows matrix as Clippy and minimum-dependency compilation,
+including on pull requests. `check-frozen` runs last because it
 rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
 Each platform proceeds independently rather than waiting for other platforms' Clippy results.
 The `test-x64` matrix shares its Linux/Windows environment across coverage-instrumented tests,
@@ -60,8 +60,8 @@ benchmark smoke tests and external-type checks. Test or upload failures do not s
 benchmark or external-type checks. Coverage reporting consumes successful measurement;
 uploading consumes the generated report.
 
-Only pull requests use the pruned validation set. Pushes to `main` and scheduled/manual
-main runs use the full set without invoking delta.
+Only pull requests use affected-package and tooling-input selection. Pushes to `main` and
+scheduled/manual main runs use the full set without invoking delta.
 
 ### Azure emulator coverage
 
@@ -286,8 +286,9 @@ The `standard` job calls `standard-validation.yml` after the main-only plan gate
 the workflow includes its complete check graph and platform matrices instead of maintaining
 a nightly copy. GitHub preserves the caller's `schedule` or `workflow_dispatch` event in
 the reusable workflow. Both scope planners select full-workspace/full-tooling outputs for
-these events, and only pull requests omit the macOS documentation steps. All jobs check out the
-same event commit; main release validation uses that immutable commit as its baseline.
+these events. The standard platform matrices are shared with PR and main-push validation.
+All jobs check out the same event commit; main release validation uses that immutable commit
+as its baseline.
 
 The caller forwards the Codecov secret and grants the permissions declared by the called
 jobs, including the test identity's OIDC permission. Main-branch federation works for these

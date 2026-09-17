@@ -34,7 +34,7 @@ GitHub-hosted workflows do not invoke AI. Final approval and merge remain human.
 **Standard validation** runs the ordinary shallow PR and push checks.
 **Merge queue validation** runs a lightweight full-workspace gate for combined candidates.
 **Deep validation** runs the full standard and deep suites at the main commit selected by its event,
-without affected-package or PR-platform pruning. It reuses Standard validation rather than
+without affected-package or tooling-input selection. It reuses Standard validation rather than
 maintaining a separate copy of its checks.
 Deep validation covers ordinary Miri, many-seed Miri, mutation testing and careful checks.
 It also runs release-profile Clippy and builds (`build-release`),
@@ -154,25 +154,17 @@ coverage includes architecture-gated paths as declared by its manifest. Platform
 (formatting, workflow validation, script tests) run on a single Linux runner because their result cannot
 vary by platform.
 
-Not every shallow check earns its place on every pull request. The
-full shallow matrix runs on each push to `main`, but pull-request validation prunes the rarely-informative
-legs to cut runner cost, leaning on push-to-`main` as the backstop for what it drops. PRs run the
-test and docs suites only on the x86_64 Windows and Linux runners. The macOS doctest and
-docs steps run on main pushes and scheduled/manual main runs, because re-running these
-platform-independent suites on macOS is rarely informative.
-Release-profile Clippy runs only in Deep validation. The
-compile-oriented passes in Standard validation (dev Clippy and frozen-minimum check)
-deliberately keep their macOS leg on PRs, because a cheap macOS cross-compile still catches
-macOS-specific build breaks that the pruned runtime passes would not. MSRV *compilation*
-therefore stays covered on every PR by `check-frozen`, which compiles all targets on the
-MSRV toolchain against the frozen minimum-version lockfile even though the ARM MSRV test
-pass runs in Deep validation. Because a push to `main` is the first place Standard
-validation's pruned checks can fail,
-that event — unlike a PR — files a tracking issue (see Failure alerting).
+Dev-profile Clippy, documentation builds, doctests and minimum-dependency compilation share
+the Linux, macOS and Windows matrix on pull requests, main pushes and scheduled/manual main
+runs. Documentation generation on each platform checks its platform-specific API surface,
+while sharing the compilation environment keeps runner demand low.
+MSRV *compilation* stays covered on every PR by `check-frozen`, which compiles all targets on
+the MSRV toolchain against the frozen minimum-version lockfile even though the ARM MSRV test
+pass runs in Deep validation. Release-profile Clippy also runs only in Deep validation.
 
-Only pull-request events prune the macOS docs/doctest steps. Main pushes and
-scheduled/manual main runs use the full matrix and skip delta. Pull-request delta analysis
-uses `origin/main`.
+Only pull-request events select affected packages and tooling inputs. Main pushes and
+scheduled/manual main runs use the full scope and skip delta. Pull-request delta analysis
+uses `origin/main`. Main-push failures file tracking issues (see Failure alerting).
 
 ## Merge queue validation
 
@@ -689,9 +681,9 @@ opens a *per-run* issue (identified by the failing run) that stays open until a 
 investigates; each failed release is tracked individually rather than folded into a
 rolling issue. A push-to-`main` Standard validation failure follows the same per-run shape as the
 release alert — a fresh `ci-failure` issue per failing run, no dedup and no auto-close —
-because it now backstops the checks pruned from PR validation, so each such failure warrants
-individual triage. It fires *only* on push to `main`: a PR failure is already self-evident as
-the red check and needs no issue, so the alert is gated on the `main` ref (which a
+because failures on merged code warrant individual triage. It fires *only* on push to `main`:
+a PR failure is already self-evident as the red check and needs no issue, so the alert is
+gated on the `main` ref (which a
 `pull_request` run never presents) and on `failure()`, leaving a green or skipped-only run to
 file nothing.
 

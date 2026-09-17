@@ -64,7 +64,7 @@ independent: deep validation does not implicitly rerun the shallow suite.
 The **Standard validation** workflow performs shallow PR/push checks.
 **Merge queue validation** runs full-workspace dev Clippy, formatting and version readiness.
 **Deep validation** reuses the complete standard suite and runs the full deep suite on merged
-`main`, without delta or PR-platform pruning.
+`main`, without affected-package or tooling-input selection.
 Scheduled checks invoke the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes used locally. Recipes own the toolchains, test runners,
 helper preparation and check behavior; scheduling only selects platform, packages
