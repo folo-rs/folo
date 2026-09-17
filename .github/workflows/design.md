@@ -530,7 +530,8 @@ history and publishes through a separate GitHub-only job. A rolling, advisory is
 identified by its instance/kind marker, not its mutable title or a label. History preflight
 marks old findings stale; findings replace the report, while fully judged, complete clean
 evidence writes all-clear without automatically closing the issue. Incomplete or unjudged
-analysis never clears findings. Regressions never fail the run.
+analysis annotates the existing report without clearing findings; a failed pending run
+replaces only its own status annotation. Regressions never fail the run.
 
 Partial collection is disclosed in the published body without suppressing findings. Receipts
 are reconciled with each platform's latest job attempt: failed retries cannot reuse old
@@ -644,24 +645,25 @@ GitHub-only publication job also checks the live head immediately before writing
 unverified freshness is qualified, and already-current newer results are preserved. Comment
 writers share one per-instance/per-PR concurrency group.
 
-Empty-scope cleanup creates or updates a brief explanatory note instead of silently deleting
-the comment. A finalizer may run after failure or cancellation, but changes only the placeholder
-owned by that exact run and head; it never replaces real results or a newer run's placeholder.
+Publication uses the companion's `publish-comment-<state>` family. Empty scope and successful
+but inconclusive reports use `no-data`, with the actual reason rather than a claim of zero
+measurements. Only complete clean evidence uses `clean`; partial findings remain `findings`.
+`publish-comment-failed` may run after failure or cancellation, but changes only the placeholder
+owned by that exact run, attempt and head; it never replaces real results or a newer placeholder.
 The close event enters workflow concurrency without starting benchmark or posting jobs.
 
 ## Failure alerting
 
-The push-triggered history collection, release, and validation workflows all open a GitHub
-issue on failure, but with
-deliberately different lifecycles matched to what failed. A benchmark-history failure is
-a recurring condition on a rolling target, so it opens a *deduplicated* tracking issue
-(keyed on its instance/failure marker, with no label requirement) that the companion closes automatically once the workflow is
-green again — exactly one open issue per persistent failure, cleared without manual
-intervention. The nightly backfill is deliberately outside this scheme and files nothing (see
-Nightly history backfill). A release failure is a discrete event tied to one publish attempt, so it
-opens a *per-run* issue (identified by the failing run) that stays open until a human
-investigates; each failed release is tracked individually rather than folded into a
-rolling issue. A push-to-`main` Standard validation failure follows the same per-run shape as the
+The push-triggered history collection, release and validation workflows open one-off issues
+on failure. Benchmark-history `alert` identifies the project and workflow run, without labels.
+Retries and reruns find the same alert among open and closed issues and leave it unchanged;
+another failed run receives another issue. A later successful run neither closes nor rewrites
+earlier alerts. These are records requiring investigation, not a rolling workflow-health
+indicator. They are separate from the rolling regression issue and its status annotations.
+The nightly backfill files no alert (see Nightly history backfill).
+
+A release failure also opens a per-run issue that stays open for human investigation.
+A push-to-`main` Standard validation failure follows the same per-run shape as the
 release alert — a fresh `ci-failure` issue per failing run, no dedup and no auto-close —
 because failures on merged code warrant individual triage. It fires *only* on push to `main`:
 a PR failure is already self-evident as the red check and needs no issue, so the alert is

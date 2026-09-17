@@ -43,6 +43,12 @@ CI automates the *publish* and *binary* halves. Version numbers are decided in
 the pull request, with `cargo-semver-checks` as a floor — see
 [`release-versioning.md`](release-versioning.md).
 
+Tool versions consumed by `folo-rs/cargo-bench-history-action` also have a
+[paired action PR](release-versioning.md#paired-benchmark-action-releases).
+That PR waits for both registry publication and its promised prebuilt assets,
+not merely the monorepo merge. Its author reruns the action's installation gate
+after publication; this workflow does not dispatch cross-repository checks.
+
 ### `verify-semver-checks` canary
 
 `just verify-semver-checks` proves that `cargo-semver-checks` can actually run

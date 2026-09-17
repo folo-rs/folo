@@ -17,7 +17,7 @@ The companion:
 * publishes and updates the rolling regression issue and pull-request comment;
 * marks an existing report stale while a new benchmark run is in flight;
 * replaces a recovered regression issue with an all-clear state while leaving it open;
-* reports and resolves workflow failures;
+* files one-off workflow-failure alerts without automatically resolving them;
 * retires pull-request placeholders after failure or when nothing benchmarkable changed;
 * binds successful collection to actual workflow job attempts and measured machine keys; and
 * reconciles an ambiguous create against the intended identity and content rather than retrying
@@ -35,8 +35,35 @@ Regression issues use the title `Benchmark regressions detected`; workflow-failu
 titles, introductions, documentation links or comment identities.
 
 Regression issues remain open after all-clear so their rolling history is retained. Failure
-issues close automatically when a later workflow run succeeds. Empty pull-request scope always
-creates or updates an explanatory note rather than deleting the rolling comment.
+alerts describe individual workflow runs and stay unchanged when later runs succeed.
+Empty pull-request scope always creates or updates an explanatory note rather than deleting
+the rolling comment.
+
+## Publication states
+
+Commands use `publish-<sink>-<state>`, with `comment` or `issue` as the sink and `findings`,
+`clean`, `preflight`, `no-data` or `failed` as the state. The action uses the same names.
+The successful report and its platform evidence select findings, clean or no-data; callers
+cannot use a command name to bypass the corresponding evidence requirement.
+
+`findings` retains findings even when coverage is partial. `clean` requires a fully judged,
+nonempty analysis and complete intended-platform coverage. `no-data` means no complete verdict
+is available, not necessarily that no measurements exist: its message includes the actual
+insufficient-baseline, unjudged-series or missing-platform explanation and any useful partial
+result. An explicit empty-scope input covers preflight selecting no benchmarkable packages
+without running analysis; omission of report evidence alone is never that signal. `failed`
+records failure or cancellation rather than inventing an analysis outcome.
+
+Comment findings, clean and no-data publication create or update the rolling comment.
+Comment preflight seeds an owned placeholder or marks existing results stale; failed
+publication changes only its own unfinished placeholder and never creates a comment.
+
+Only issue findings publication creates a rolling regression issue. Issue clean publishes
+all-clear; preflight marks a pending run; no-data explains why recovery could not be established;
+failed retires only its own pending annotation. No-data and failed preserve the previous report,
+its measured commit and staleness. These issue commands are a logged no-op when no issue is
+open, but still reject invalid evidence. Their role is to keep an existing investigation
+accurate, not create issues merely to announce workflow status.
 
 ## Publication evidence
 
@@ -63,9 +90,10 @@ unrelated history or an unavailable comparison preserves the existing issue and 
 Delayed preflight also leaves a provably newer report unchanged rather than marking it stale
 against an older frozen head. Unorderable commits retain the unknown-distance warning.
 
-Publication uses `--report-file` plus `--expected-platforms` and `--completed-platforms`.
-`publish-issue` and `publish-pr-comment` additionally take the rendered `--body-file` and
-`--analyzed-sha`; `issue-cleanup` verifies the same JSON against `--clean-commit`.
+Report-bearing publication uses `--report-file`, the rendered `--body-file`, `--analyzed-sha`,
+and `--expected-platforms` / `--completed-platforms`, identically for findings, clean and
+no-data. The no-report no-data form requires an explicit empty-scope result and rejects
+report-bearing inputs.
 The report's existing JSON metadata is the integration boundary, not a new versioned report
 schema or a dependency on the tool's private implementation packages.
 
@@ -104,19 +132,22 @@ one; the real analyzer determines the resulting nothing-in-scope outcome. Input 
 only ordinary directories and regular files, and destinations must be absent or empty, separate
 from inputs and from each other. Existing unrelated data is never deleted.
 
-Report inspection projects the same validated evidence used by publication into workflow outputs.
-Only findings are notable. Only a clean history report with a full series census and complete
-expected-platform coverage can authorize all-clear. The workflow must not infer these decisions
+Report inspection projects the same validated evidence used by publication into workflow outputs,
+including the publication state. Only findings are notable. Only a clean report with a full
+series census and complete expected-platform coverage can authorize clean publication.
+Issue all-clear additionally requires history mode. The workflow must not infer these decisions
 from Markdown.
 
 ## Pull-request lifecycle
 
-Preflight carries the frozen `--head` and `--run-id`. A placeholder records that ownership
-so a finalizer from an older workflow cannot retire the new run's placeholder. Terminal failure
-and empty-scope notes become new placeholders when benchmarking is requested again.
+Preflight carries the frozen `--head`, `--run-id` and `--run-attempt`. A placeholder records
+that ownership so failed publication from an older workflow or attempt cannot retire the new
+placeholder. Terminal failure and empty-scope notes become new placeholders when benchmarking
+is requested again.
 
-Empty-scope cleanup writes the explanatory note even when no comment exists. Preflight and
-cleanup require their frozen head to match the live head before modifying the comment.
+Empty-scope no-data publication writes the explanatory note even when no comment exists.
+Preflight and empty-scope publication require their frozen head to match the live head before
+modifying the comment.
 
 Publication checks the live head immediately before writing, after finding the existing
 comment. If the PR has advanced, results receive a staleness warning; if fresh results for the
@@ -127,9 +158,9 @@ produces a visible warning rather than unqualified fresh-looking results.
 
 Every rolling artifact carries a hidden marker derived from the configured project ID and
 artifact kind. Workflows pass that namespace as internal instance data, including in receipts
-and collection-job identities; it is not a consumer override. Issues distinguish `regression`
-from `failure-alert`; pull requests carry one
-`pr-comment` artifact per instance. Displayed titles are not identities and may be edited.
+and collection-job identities; it is not a consumer override. Rolling issues use `regression`;
+pull requests carry one `pr-comment` artifact per instance. Displayed titles are not identities
+and may be edited.
 
 No issue labels are applied. Rolling issues are found by enumerating open issues and matching
 the hidden marker in the body.
@@ -137,6 +168,18 @@ the hidden marker in the body.
 Run ownership, status and staleness markers share the same instance namespace. Artifacts without
 the current instance/kind marker are ignored, even when their titles match. The companion does
 not adopt or clean up issues, comments or placeholders from other output formats.
+
+## One-off failure alerts
+
+`alert` is separate from rolling-issue publication. Its marker identifies the repository,
+project namespace, `failure-alert` kind and workflow run ID. The run URL must identify the same
+repository and run. Attempts share the run's alert; distinct failed runs receive distinct
+issues. Existing alerts are left unchanged, including a human-closed alert found by searching
+closed as well as open issues. A retry neither recreates nor reopens it.
+
+A successful run does not update or resolve earlier alerts. Human investigation owns their
+disposition. Qualified findings and an alert can coexist when some collection platforms failed;
+failed-state publication must not overwrite the successful qualified report.
 
 ## Authentication
 

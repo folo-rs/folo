@@ -76,6 +76,46 @@ updated plan and PR section. Human review concerns the final current release, no
 Automatic application preserves SemVer floors, canonical expansion, publication checks, and
 the prohibition on publishing from the skill.
 
+### Paired benchmark action releases
+
+`folo-rs/cargo-bench-history-action` releases pin exact monorepo tool versions. Whenever a
+monorepo PR moves one of those versions, its author also creates or updates a linked PR in
+the action repository with the corresponding pins and an appropriate action-version increment.
+This applies regardless of the reason for the tool's movement: source changes, dependency or
+group effects, version-only increments, and first publication all count.
+
+The action's release manifest defines the tool set, including test-only tools. It covers
+`cargo-bench-history`, `cargo-bench-history-github`, `cargo-bench-history-faker`, and the
+`cargo-detect-package` dependency used by workflow scope selection. Check the actual manifest
+for additional pins; do not maintain a second machine-readable list in this repository.
+Private implementation packages matter through the pinned binary version they move, not
+through independent action pins.
+
+Cross-link the PRs and identify their release dependency. Reuse an existing paired PR when it
+already covers the same release work. Refresh the action PR whenever the final monorepo plan
+changes, including after release-baseline recovery. If version planning precedes PR creation,
+retain the pairing obligation in the local handoff and fulfill it when creating the monorepo PR.
+An unavailable action checkout or missing repository permission is an explicit handoff blocker,
+not permission to omit the paired change.
+
+Merge order is monorepo first, action second. Monorepo merge starts asynchronous registry and
+prebuilt-binary publication; it does not prove that the selected versions are installable.
+The action repository's required `install-tools` check must install the exact manifest
+versions and prove availability of the promised prebuilt archives. Its early failure while
+publication is pending is expected **and still merge-blocking**. Source fallback, an existing
+binary cache, or a source-checkout build is not proof of published-binary availability.
+
+External publication does not rerun a failed GitHub check. The paired PR's author follows the
+monorepo release and explicitly reruns the action check after its required packages and archives
+are available. No cross-repository dispatch service or stored credential is needed. An action
+merge triggers its own release workflow, which rechecks availability before creating the action
+release and moving the floating major tag. A later successful run never justifies waiving the
+gate on an untested manifest.
+
+The action's installation and release mechanics are defined in its
+[design](../packages/cargo-bench-history/docs/reusable-action.md#81-releasing-the-action-operator-flow);
+PR presentation belongs in [git-workflow.md](git-workflow.md#paired-action-pull-requests).
+
 ### Release-branch movement during planning
 
 The release branch can advance while a pull request is being prepared, invalidating its release

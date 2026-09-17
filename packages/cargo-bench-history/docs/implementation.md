@@ -75,3 +75,39 @@ public constructor and inject it as an override.
 Integration-only benchmark engines and stress tools remain outside the production dependency
 boundary. They drive the same public shell or persisted format without adding test-only behavior
 to the shipped application.
+
+## Azure provisioning bundle
+
+The shell owns `setup-azure` execution and export; `cbh_cli` parses its arguments and
+`cbh_command` carries the typed options, following the ordinary command boundary. It does not
+construct benchmark storage, probe the measured machine, or resolve a Git checkout. Its
+behavioral contract is [Azure setup](DESIGN.md#710-setup-azure).
+
+One package-owned bundle contains the Bicep resource definitions, parameter template, deployment
+script and its PowerShell module dependencies. The binary embeds these files at compile time.
+Keep them under the shell's source tree so the ordinary package allow-list includes them; a
+registry source install must not rely on repository-root `infra/` or `scripts/` files.
+The export is self-contained, with bundle-relative imports and no dependency on `constants.env`.
+Folo's infrastructure entry point supplies Folo-specific parameters to this same implementation;
+it does not maintain another copy of the Bicep or deployment policy.
+
+Bicep owns resource definitions. The single PowerShell driver owns Azure CLI discovery,
+state-preserving bootstrap decisions, deployment and explicit writer-PR-trust retirement.
+Rust owns parameter validation, prerequisite orchestration, bundle materialization, process
+invocation and output/error handling, not a second implementation of those Azure decisions.
+The PowerShell boundary is deliberate: an exported bundle remains independently editable and
+executable with Azure tooling, without a Rust toolchain or this application. Porting the driver
+to Rust solely to remove `pwsh` would require a replacement standalone deployment path; that
+additional maintenance is not justified by this command.
+
+All prerequisite probes precede mutations. Process arguments are passed structurally rather
+than interpolated into executable shell text, and the chosen subscription is explicit on Azure
+operations. Export bypasses process and credential adapters entirely. Filesystem/process ports
+let in-process tests prove dispatch, argv, prerequisite ordering and error propagation without
+starting tools. Native integration tests cover temporary-directory ownership, export destinations
+and execution of an extracted bundle; deployment policy retains its mocked-Azure coverage.
+
+Packaging coverage builds the published archive and exports its bundle without a Folo checkout.
+Offline Bicep compilation and standalone-script checks establish that exported imports resolve.
+Fresh, repeated and retirement deployments share the same policy tests through both entry points.
+These checks do not deploy live resources; real provisioning remains an explicit maintainer action.

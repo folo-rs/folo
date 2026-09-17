@@ -12,7 +12,7 @@ analyzes that history for trends that snapshot / "previous run" tools cannot see
 It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only where results are
 not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `examine`,
-`backfill`, `list`, `prune`, `bless`, and `unbless`.
+`backfill`, `list`, `prune`, `bless`, `unbless`, and `setup-azure`.
 
 ## 1. Benchmark engines and what they emit
 
@@ -842,6 +842,67 @@ lets a test attribute a whole synthetic series across history from a single HEAD
 `--dirty` records the run as a dirty snapshot rather than a clean point. The commit must
 still exist: `import` never invents git topology, so real integration testing still requires
 a real history.
+
+### 7.10 `setup-azure`
+
+`cargo-bench-history setup-azure` provisions the Azure storage and federated identities used
+by the [GitHub automation](reusable-action.md). It removes the need to obtain deployment
+files from a Folo checkout. Provisioning is an explicit maintainer operation, never a side
+effect of collection, analysis, or an action invocation.
+
+The command has separate execution and export modes:
+
+* **Execution:** validate inputs and prerequisites, materialize the deployment bundle in a
+  uniquely owned temporary directory, and run its deployment script with the supplied
+  parameters. Clean up that directory after execution, preserving diagnostics in the command
+  output. Deployment errors identify the failed operation and remain errors; Azure changes
+  already made are not claimed to have been rolled back.
+* **Export:** `setup-azure --out-dir <directory>` writes the self-contained Bicep, parameter
+  and PowerShell files for review, modification and direct execution. It runs no deployment
+  or prerequisite probes and needs no Azure login, Azure CLI, Bicep, PowerShell, or repository
+  checkout. Deployment parameters are optional in this mode: supplied values populate the
+  parameter file, while omitted values remain for the user to supply before deployment.
+  The output directory must be absent or empty; relative paths resolve against the invocation
+  working directory. Export never overwrites an existing deployment bundle.
+
+Execution requires an explicit subscription ID, resource group, location, storage account,
+GitHub `owner/repository`, and history branch. It does not infer a target subscription from
+the active Azure CLI default or inherit Folo's deployment names. The container defaults to
+`bench-history`; identity names derive from the selected account, with optional explicit writer
+and reader names for existing deployments. Optional local access takes a principal ID and its
+`User` or `Group` type together. These inputs describe actual resource placement and access;
+resource tuning beyond the standard setup belongs in an exported bundle, not additional knobs.
+
+Before any cloud mutation, execution verifies Azure CLI, PowerShell 7.6 or later, an already
+installed Bicep CLI accessible through Azure CLI, and an authenticated context for the selected
+subscription. It installs no tooling and does not initiate login. The operator must have
+resource-provisioning, role-assignment and federated-credential-management privileges.
+Azure authorization remains authoritative for each operation; a successful prerequisite check
+does not promise that every requested mutation will be authorized.
+
+The deployment supplies a private, Entra-only history container, a writer for the selected
+history branch, and a separate container-scoped reader for that branch and PR analysis.
+The writer has account-scoped Blob Data Contributor access; the reader has only container-scoped
+Blob Data Reader access. Optional local contributor access is independent. The PR federated
+subject does not distinguish same-repository and fork heads; workflow policy supplies that gate.
+Provisioning OIDC trust requires no GitHub API access or stored credential.
+
+Repeated deployments preserve existing storage properties and history, existing optional local
+grants, and the presence or absence of writer PR trust. Fresh writers trust only the selected
+branch. `--retire-writer-pull-request-trust` explicitly removes only the selected writer's PR
+federated credential after successful deployment. The operator uses it only after reader-based
+workflows are active and previous PR-writing runs have drained. Ordinary deployment never
+recreates retired writer PR trust. Deployment and retirement for the same stack must be serialized.
+
+Successful execution reports the account, container, endpoint, tenant and subscription IDs, and
+both identities' client and principal IDs. It explains which non-secret values configure storage,
+writer collection and reader analysis. It does not edit the caller's repository, GitHub settings
+or credentials. Export includes parameter guidance and a deployment example; neither mode exports
+or invokes destructive teardown.
+
+PowerShell remains a prerequisite for executing the bundle. The same script drives the command
+and standalone exported deployments, avoiding two implementations of state-preserving provisioning.
+The [implementation guide](implementation.md#azure-provisioning-bundle) defines that ownership.
 
 ## 8. Analysis
 

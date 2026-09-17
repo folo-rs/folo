@@ -64,6 +64,11 @@ directly:
   version changes. Keep `[Copilot speaking]` first in agent-authored PR bodies.
   Follow [docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section) and
   [docs/release-versioning.md](docs/release-versioning.md#on-a-pull-request).
+* **Keep action releases paired with tool releases.** A PR moving any monorepo
+  tool version pinned by `folo-rs/cargo-bench-history-action` also needs a linked
+  PR there updating the pins and action version. Follow the
+  [paired-release policy](docs/release-versioning.md#paired-benchmark-action-releases),
+  including the required installation gate and its rerun after asynchronous publication.
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.

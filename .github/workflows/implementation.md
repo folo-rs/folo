@@ -68,12 +68,21 @@ passes its repository and the automation configuration explicitly; analysis pass
 repository and the frozen event head/base. This preserves real commit attribution without
 requiring every open PR head to contain new automation files.
 
-The analysis bundle always contains the tool's full Markdown, JSON and summary. The
-companion projects validated JSON into outcome and all-clear outputs; publication receives
-the same report and completed-platform set. Main issue writers share an instance concurrency
+The analysis bundle always contains the tool's full Markdown, JSON and summary. The companion
+projects validated JSON into outcome, all-clear and publication-state outputs; publication
+receives the same report and completed-platform set. Main issue writers share an instance concurrency
 group, and PR comment writers share a project/PR group. Standard project-derived markers
 identify reports; old output formats are not adopted. Titles, advisory wording and book links
 come from the companion's message catalogue rather than workflow parameters.
+
+Both sinks use `publish-<sink>-<state>` commands. A successful report selects findings, clean
+or no-data from validated evidence; scope preflight supplies explicit empty scope when no
+analysis is needed. Preflight and failed-state commands share run/attempt/head ownership,
+and failed publication never replaces a completed report. Issue no-data/failed annotations
+preserve the existing investigation rather than creating a status-only issue. The separate
+`alert` uses project/run identity, includes closed issues in deduplication and has no
+successful-run resolution job. Partial collection can publish qualified findings and alert
+on failed jobs without publishing failed status over those findings.
 
 Reader configuration is checked before collection, except empty PR scope, which needs no
 Azure access. It is intentionally not initialized with the writer client ID. Deployment adds

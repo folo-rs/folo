@@ -56,6 +56,23 @@ the final approval, including the release it causes.
 
 See [release-versioning.md](release-versioning.md).
 
+### Paired action pull requests
+
+Apply the [paired-release policy](release-versioning.md#paired-benchmark-action-releases)
+when a monorepo PR moves a tool pinned by `folo-rs/cargo-bench-history-action`.
+Create or update the action PR alongside the monorepo PR, cross-link both descriptions, and
+keep the action's pins and release version synchronized with the final monorepo plan.
+Include the linked action PR and its publication dependency in the monorepo's
+**Version/release plan** section.
+
+Describe pending tool publication as the action PR's merge dependency, not as a defect to
+bypass. The author follows the monorepo release and reruns the action's required
+`install-tools` check once publication finishes; GitHub does not do this automatically.
+This gate is required even when the only missing input is an asynchronously published archive.
+The optional-check waiting policy does not waive it. Report any access or publication blocker
+in the handoff, and do not merge or publish either repository merely because the pairing
+obligation exists.
+
 ### Version/release plan section
 
 Every pull request description must contain a clearly identified

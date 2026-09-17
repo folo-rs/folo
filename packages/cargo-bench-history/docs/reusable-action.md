@@ -16,7 +16,7 @@ The components have distinct roles:
 
 | Component | Responsibility | Focused reference |
 | --- | --- | --- |
-| `cargo-bench-history` | Measure, store, compare, and render benchmark history without GitHub coupling | [Application design](DESIGN.md) |
+| `cargo-bench-history` | Measure, store, compare and render history; provision Azure without GitHub API access | [Application design](DESIGN.md) |
 | `cargo-bench-history-github` | Reconcile workflow evidence and manage GitHub issues/comments around tool-rendered reports | [Companion design](../../cargo-bench-history-github/docs/design.md) |
 | Composite action and reusable workflows | Give other repositories a small, standardized way to invoke those binaries | This document |
 | Production Azure infrastructure | Separate durable-history writers from reader-only analysis | [Access model and rollout](../../../infra/azure-bench-history-prod/README.md) |
@@ -63,7 +63,7 @@ the README matrix does.)
 
 **Both report sinks are first-class.** The per-push history view lands in a rolling
 **issue**; the per-PR branch view lands in a rolling **PR comment** with its own lifecycle
-(a while-you-wait placeholder, a staleness banner, and cleanup). These are genuinely
+(a while-you-wait placeholder, a staleness banner, and terminal states). These are genuinely
 different reporting shapes, so the action exposes each as its **own command** (§4) rather
 than a single analyze with a mode switch — the *kind* of analysis is inferred by the tool
 from git topology (§4.5), while the *sink and its lifecycle* are what the caller selects.
@@ -169,15 +169,16 @@ installs only the binaries it actually uses.
 
 | `install-method` | How | When |
 | --- | --- | --- |
-| `binstall` | Install `cargo-binstall`, then `cargo binstall <package> --version <v> --locked` for each required binary | **Default.** Downloads the prebuilt archive from each package's GitHub Release (seconds), automatically falling back to a source build if no asset matches the runner target. Best for `cargo-bench-history`, whose Azure SDK + `mimalloc` dependencies are slow to compile. |
-| `install` | `cargo install <package> --version <v> --locked` for each required binary | Pure source build, no extra tooling. Always works once published; pays the full cold-cache compile. The escape hatch when a prebuilt asset is unavailable or unwanted. |
+| `binstall` | Install `cargo-binstall`, then `cargo binstall <package> --version =<v> --locked` for each required binary | **Default.** Downloads the prebuilt archive from each package's GitHub Release (seconds), automatically falling back to a source build if no asset matches the runner target. Best for `cargo-bench-history`, whose Azure SDK + `mimalloc` dependencies are slow to compile. |
+| `install` | `cargo install <package> --version =<v> --locked` for each required binary | Pure source build, no extra tooling. Always works once published; pays the full cold-cache compile. The escape hatch when a prebuilt asset is unavailable or unwanted. |
 | `path` | `cargo install --path <source-path>/packages/<package> --locked` for each required binary | Dogfooding (§10): one Folo source checkout supplies every required binary. |
 
 **The action version selects the binary versions.** For `binstall` and `install`, every
 binary version comes from the action release's manifest. There is no caller version
 override or independently moving latest-tool selection. Updating the tested combination is
 an action release, which may change only that manifest. Tool and action version numbers
-remain independent, and an action need not adopt every tool release.
+remain independent. Every monorepo PR moving a pinned tool version has a paired action PR
+to adopt it, following the [release policy](../../../docs/release-versioning.md#paired-benchmark-action-releases).
 
 A pinned action release or commit selects an exact tested combination. The floating `v1`
 tag advances only among action releases with their own tested manifests. `path` deliberately
@@ -190,17 +191,19 @@ The action caches the resolved binaries with `actions/cache` keyed by `(runner.o
 runner.arch, manifest versions)` so even a source-fallback compile is paid at most once per
 version per platform. `--locked` pins the published `Cargo.lock` for reproducibility.
 
-**Two runtime binaries, resolved from one manifest.** A sink-using flow needs the tool *and*
-the companion (§5.1). Each action release therefore carries a **release manifest** naming the
-exact versions it was tested against — the tool, the companion, and (for the action's own CI
-only) the faker. These are separate version selections, not a promise that the binaries have
-the same package version:
+**One manifest for the tested tool set.** A sink-using flow needs the tool *and*
+the companion (§5.1); workflow scope selection also uses `cargo-detect-package` (§4.7).
+The **release manifest** records the action's own release version and exact versions of every
+monorepo binary used by the action, workflows or their tests. These are separate version
+selections, not a promise that the binaries have the same package version:
 
 * The **tool** is the public dependency, pinned to its tested version.
 * The **companion** is an action-internal implementation detail with no stable CLI, so it is
   **pinned by the action release** to the version tested with that tool.
 * The **faker** is independently pinned for the action's tests. Its version is not inferred
   from the tool or companion version.
+* **Workflow helpers**, including `cargo-detect-package`, use explicit pins under the same
+  installation and paired-release policy.
 
 Workspace release groups are derived from exact first-party dependency requirements
 ([release versioning](../../../docs/release-versioning.md#version-groups)). The tool and its
@@ -211,7 +214,7 @@ numbers. The action manifest records a tested combination across those independe
 **Released installation uses published binaries.** Every tool and companion version pinned
 by an action release is available through its supported installation methods. Source
 dogfooding with `path` does not prove the released install
-path; the pre-tag resolvability gate (§8.1) exercises that path independently. New crates use
+path; the required installation gate (§8.1) exercises that path independently. New crates use
 the first-publication process in [`RELEASING.md`](../../../RELEASING.md).
 
 Each command installs only what it uses: `collect`, `backfill`, and `analyze-*` need the tool;
@@ -260,18 +263,21 @@ and lifecycle operations are independently schedulable:
 | `backfill` | Densify recent history for this machine key; no analysis, no sink (§4.8). |
 | `analyze-history` | Trend analysis of the selected history branch, emitting reports once after the matrix. |
 | `analyze-pr` | Branch-vs-base analysis of a PR, emitting reports once after the matrix. |
-| `publish-issue` | Publish history findings to the rolling **issue**, in a separate job. |
-| `publish-pr-comment` | Publish the PR report to the rolling **PR comment**, in a separate job. |
-| `pr-comment-preflight` | Keep the PR comment honest at run *start* (staleness + in-progress seeding). |
-| `pr-comment-cleanup` | Replace the PR comment with a note when the PR touches nothing benchmarkable. |
-| `pr-comment-finalize` | Retire the in-progress placeholder when the run failed (§4.4). |
-| `issue-preflight` | Flag the open regression issue as stale at run *start* (§4.4). |
-| `issue-cleanup` | Move the regression issue to all-clear when a run comes back clean (§4.4). |
-| `alert` / `resolve-alert` | The failure-issue open / close lifecycle for the history flow. |
+| `publish-comment-findings` | Publish PR findings, retaining any incomplete-coverage qualification. |
+| `publish-comment-clean` | Publish a fully covered clean PR result. |
+| `publish-comment-preflight` | Mark prior PR results stale or seed an in-progress placeholder. |
+| `publish-comment-no-data` | Explain empty scope or a successful analysis without a complete verdict. |
+| `publish-comment-failed` | Replace this run's unfinished PR placeholder with a failure/cancellation notice. |
+| `publish-issue-findings` | Create or update the rolling regression issue from history findings. |
+| `publish-issue-clean` | Move an existing regression issue to all-clear, leaving it open. |
+| `publish-issue-preflight` | Mark an existing regression issue stale while another run is in progress. |
+| `publish-issue-no-data` | Annotate an existing regression issue when this run cannot establish recovery. |
+| `publish-issue-failed` | Annotate an existing regression issue when its pending run fails. |
+| `alert` | File a one-off workflow-failure issue, separate from the rolling regression issue. |
 
 A single monolithic "do everything" action cannot express these shapes: `collect` runs
 *per platform in a matrix* while every `analyze-*` runs *once, after the matrix*, and the
-report-sink lifecycle steps (`pr-comment-preflight`, `cleanup`, `alert`, `resolve-alert`) run in
+report-sink lifecycle steps (`publish-comment-preflight`, `publish-comment-failed`, `alert`) run in
 their own jobs at different points. A `command` selector keeps a single Marketplace listing
 (only the root action is listed; sub-path actions are not) while letting each invocation play
 one role. The split of `analyze` into `analyze-history` and `analyze-pr` is deliberate:
@@ -281,7 +287,7 @@ the capability separation in §6; the analysis commands themselves never post.
 
 Inputs that do not apply to the selected command are **rejected, not ignored**: the action
 validates the combination up front (e.g. `command: collect` with an analysis-only `since`, or
-`command: publish-pr-comment` without a PR number) and fails with a clear error. Silently
+`command: publish-comment-findings` without a PR number) and fails with a clear error. Silently
 ignoring a misplaced input is how a caller ends up believing a sink is configured when nothing
 will post.
 
@@ -398,7 +404,8 @@ PR, whose points are transient.
      branch that accumulates a continuous series** — the trunk, in practice — because a history
      is only comparable along a line of commits that share ancestry. Running the history flow
      against a second branch is supported, but it is a second history: give it its own
-     `instance` (§5) so the two do not share a rolling issue, an artifact name, or a cache key.
+     configured project ID (§5) so the two do not share a rolling issue, an artifact name,
+     or a cache key.
    * **Machine keys.** The facets default to surveying every engine and triple (`all`), but
      the machine key is **not** `all`: it is the exact set of fingerprints collected this run,
      threaded from the collect matrix (§4.6), so the survey is scoped to the machines that
@@ -435,12 +442,14 @@ PR, whose points are transient.
    workflow facts, because both can coexist with any analysis verdict.
 6. **Hand reports to publication.** The workflow uploads the full Markdown + JSON reports,
    the summary, and the outcome and collection-coverage metadata as an **artifact**. A separate
-   `publish-issue` job invokes the companion when publication is enabled and the outcome
+   publication job invokes `publish-issue-findings` when publication is enabled and the outcome
    is **findings**, including when platform coverage is partial. It finds the open rolling
    issue by its hidden instance/kind marker, never its title, then creates or updates the body
    with the tool-composed summary, any missing-platform qualification, and the artifact link.
    Only the publication job needs `issues: write`; analysis holds no posting rights.
-   A later fully covered clean run routes to `issue-cleanup`, which leaves the issue open (§4.4).
+   A fully covered clean run routes to `publish-issue-clean`, leaving the issue open.
+   Other successful verdicts route to `publish-issue-no-data`, preserving existing findings
+   with an explanation rather than implying recovery (§4.4).
 
 **Empty-run degeneracy.** When every collect leg failed there are no successful machine-key
 artifacts to thread. The workflow skips analysis and records execution failure, not a
@@ -451,7 +460,7 @@ not an analysis report; notification belongs to the failure lifecycle (§4.4).
 
 Structurally the same install → validate-history → scratch-outside-checkout → analyze →
 outcome pipeline as `analyze-history`, retuned for the PR branch view. Its reports feed a
-separate `publish-pr-comment` job:
+separate comment-publication job:
 
 * **Checkout is the PR head's *real* commit, with full history** — not the synthetic
   `pull_request` merge ref, whose first parent is the base branch and would corrupt the
@@ -492,8 +501,9 @@ separate `publish-pr-comment` job:
 * **Cache is restore-only.** PR runs read the shared history cache but never save, keeping the
   baseline warm without accumulating per-PR cache entries (safe against the append-only store
   even when slightly stale).
-* **Sink: a rolling PR comment.** After the artifact handoff, `publish-pr-comment` posts the
-  condensed summary as a single comment on the
+* **Sink: a rolling PR comment.** After the artifact handoff, the appropriate
+  `publish-comment-findings`, `publish-comment-clean` or `publish-comment-no-data` command posts
+  the condensed summary as a single comment on the
   PR, deduped by a hidden marker and updated in place on every push, by the companion
   transport binary (§5.1). The
   comment is strictly advisory (findings never affect the check's exit code), reports
@@ -505,12 +515,14 @@ separate `publish-pr-comment` job:
   same partial-coverage hazard, and this is the more widely read of the two sinks: a reviewer
   deciding whether a change is safe to merge must be able to see that a platform went
   unmeasured. Missing platforms qualify the comment without replacing the analysis outcome:
-  `findings` still reports findings, and `clean` describes only the contributing platforms.
+  `findings` still reports findings. A tool verdict of `clean` with missing platforms routes
+  to `publish-comment-no-data`, retaining that limited clean result and its qualification
+  rather than presenting a complete all-clear.
   The tool's `partial` outcome instead means some in-scope series went unjudged with no findings.
   It records **which commit it measured** (a bare full SHA
   that GitHub autolinks, plus a hidden full-SHA marker) so staleness can be judged later
-  (§4.4). A run *failure* surfaces only as the red check — no comment — because a PR failure
-  is transient, not the persistent condition the issue lifecycle tracks. The caller grants
+  (§4.4). A run *failure* produces no fabricated report or new failure comment;
+  `publish-comment-failed` only retires its own unfinished placeholder. The caller grants
   `pull-requests: write`.
 * **Never presents already-stale results as fresh.** A run takes hours, so its results can be
   obsolete by the time it posts. Two guards cover the finish side. First, analysis and
@@ -518,7 +530,7 @@ separate `publish-pr-comment` job:
   on `!cancelled()` (not `always()`): a *superseded* run — cancelled by the next push's
   concurrency group (§8) — never reaches the post step, while a merely partially-failed collect
   still reports what landed. Second, for the narrow window where a new push *races* the final
-  post faster than cancellation can stop it, `publish-pr-comment` **re-reads the live PR head just
+  post faster than cancellation can stop it, comment publication **re-reads the live PR head just
   before posting** and, when it no longer matches the analyzed (frozen) SHA, injects the same
   staleness banner into the body *before* posting — so a superseded result never appears fresh.
   The check **fails closed**: if the live head cannot be read at all, the body is posted with a
@@ -528,86 +540,92 @@ separate `publish-pr-comment` job:
 
 ### 4.4 Report-sink lifecycle commands
 
-Because a full run takes hours and a new push *cancels* the in-flight one (§8 concurrency),
-each sink needs upkeep beyond analysis and publication. These are **explicit
-commands** so the caller schedules them in their own jobs at the right point:
+Each rolling sink uses **`publish-<sink>-<state>`**, with `comment` or `issue` as the sink.
+The action and companion use the same names. Commands describe the state being published,
+not a vague maintenance operation. Their scheduling remains the workflow's responsibility.
+
+**Publication state is derived from evidence, not a caller's preferred wording.** The
+companion validates the successful report and platform coverage once and projects the state:
+
+| Evidence | State |
+| --- | --- |
+| Findings, even with missing platforms or unjudged series | `findings`, with coverage qualifications |
+| Clean analysis, every in-scope series judged, every expected platform completed | `clean` |
+| Successful analysis without findings but with insufficient baseline, empty scope, unjudged series or missing platforms | `no-data`, with the actual limited result and reason |
+| Scope preflight selected no benchmarkable packages, so analysis did not run | `no-data`, explicitly saying nothing benchmarkable changed |
+| Collection, analysis or publication failed or was cancelled | `failed`, never an analysis verdict |
+
+`no-data` means **no complete analysis verdict is available**, not necessarily zero samples.
+Its message states the actual reason and preserves any useful partial report; it never says
+that no measurements exist merely because some could not be judged. Failed execution cannot
+be presented as `no-data`. Each report-bearing publication command revalidates that its named
+state agrees with the evidence; the workflow does not infer this from Markdown.
 
 **PR-comment sink (branch flow).**
 
-* **`pr-comment-preflight`** runs at the *start* of each run, in parallel with the multi-hour
-  collect. When the PR has **no comment yet**, it seeds a *"benchmarking in progress"*
-  placeholder (same hidden dedup marker, disclosing the collection scope) so the author knows
-  results are coming; on later pushes it refreshes that placeholder's scope. When a comment
-  **already carries results**, it prepends a staleness banner — *"N commits behind HEAD"* (the
-  distance from the GitHub compare API's `ahead_by`, which needs no clone and still resolves a
-  force-pushed commit), degrading to a numberless *"out of date"* when the two share no history
-  or the marker is absent. The banner is sentinel-bounded so a re-run *replaces* rather than
-  stacks it, and the next completed `publish-pr-comment` — which rewrites the body from scratch —
-  drops it automatically. The banner wording is shared with `publish-pr-comment`'s finish-side
-  self-check (§4.3): this start-of-run pass only flags a *prior* run's stale results, while the
-  self-check guards *this* run's own results at post time, so both angles are covered. This
-  command is gated on the same non-empty scope as collect, so it never races the cleanup path.
-* **`pr-comment-cleanup`** runs when a PR touches **no** benchmarkable package (including a PR
-  that touched one earlier and then reverted). It replaces any rolling comment a prior push
-  left behind with a **one-line note saying nothing benchmarkable changed**, or creates that
-  note when no comment exists, rather than deleting it outright. Silence is the wrong answer
-  here: an absent comment is
-  indistinguishable from a workflow that is broken, skipped, or still running, and a reader
-  who expected benchmark feedback has no way to tell which. Stating the reason costs one line
-  and removes the ambiguity. Cleanup always leaves this explanatory note.
-* **`pr-comment-finalize`** runs *last* after failure or cancellation and closes the one hole the two
-  above leave open. A placeholder promises results are coming; if collection, analysis or
-  publication then fails, no results replace it (§4.3), so without a terminal step the
-  placeholder would sit on the PR claiming work is in progress forever — the run that would
-  have replaced it is gone, and only a *further push* would ever revisit it. Finalize replaces
-  the placeholder with a short terminal notice pointing at the failed run. It fires only for
-  a placeholder still owned by that run and head. A superseding run's placeholder and any
-  completed report are left untouched.
+* **`publish-comment-preflight`** runs alongside collection for nonempty scope. It creates or
+  refreshes a scope-disclosing in-progress placeholder when no completed report exists.
+  Otherwise it retains the report and adds a replaceable staleness banner. GitHub's commit
+  comparison supplies the distance when available; an unknown distance is disclosed rather
+  than presented as fresh. The same banner logic qualifies finish-side publication (§4.3).
+* **`publish-comment-findings` / `publish-comment-clean`** create or update the one rolling
+  comment with the corresponding validated report. Findings include improvements in branch
+  mode and remain visible when coverage is incomplete. A clean comment requires complete
+  evidence; absence of findings alone is insufficient.
+* **`publish-comment-no-data`** creates or updates the comment with the applicable explanation.
+  Empty package scope produces the short nothing-benchmarkable-changed note, including when
+  no comment exists. A successful but inconclusive analysis retains its tool-rendered summary
+  and coverage explanation. A missing comment would make either case indistinguishable from
+  broken or still-running automation, so neither path deletes the comment.
+* **`publish-comment-failed`** is the terminal step after failure or cancellation. It replaces
+  only an in-progress placeholder owned by this workflow run, attempt and frozen head, linking
+  the run and distinguishing failure from cancellation. It creates no new comment and leaves
+  completed results and a superseding run's placeholder untouched.
 
-**Regression-issue sink (history flow).** The rolling regression issue needs the same upkeep
-as the PR comment, and for the same reason: it is a long-lived artefact that keeps asserting
-something after the run that wrote it has become history. Without upkeep it goes stale
-silently — an issue filed six commits ago still reads as a current statement about `main` —
-and it never acknowledges being fixed, so a maintainer cannot tell "still broken" from
-"nobody has looked". Two commands mirror the PR pair:
+Preflight and empty-scope publication require the frozen head to match the live PR head.
+Report publication carries the analyzed commit and checks freshness immediately before the
+write, preserving a newer current-head report. Run-attempt ownership also prevents a delayed
+failure step from retiring a placeholder created by a rerun of the same head.
 
-* **`issue-preflight`** runs at the *start* of each history run. When an open regression issue
-  exists, it prepends the same sentinel-bounded staleness banner the PR sink uses — *"findings
-  are N commits behind HEAD"*, from the compare distance — so a reader who arrives mid-run
-  knows the issue describes an older state of `main` and that a fresher answer is on its way.
-  It is a no-op when no issue is open; unlike the PR sink it seeds **no placeholder**, because
-  an issue that exists only to say "benchmarking in progress" would be noise in the issue
-  tracker rather than context on something already being read.
-* **`issue-cleanup`** runs at the *end* when the outcome is **clean** (§4.2), all intended
-  platforms completed successfully, and an issue filed by an earlier run is still open.
-  It rewrites the body to an **all-clear** state
-  naming the commit that came back clean, so the issue stops asserting a regression that no
-  longer reproduces. It **leaves the issue open**: the tool detects that the numbers
-  recovered, which is not the same as the underlying problem being understood — a regression
-  may have been masked, worked around, or accepted, and closing it would discard a thread a
-  human may still want. Closing a regression investigation is a maintainer decision.
-  Missing platforms, unjudged series, `nothing_in_scope`, and execution failure never trigger
-  all-clear; absence of findings alone does not establish recovery.
+**Regression-issue sink (history flow).**
 
-This is deliberately asymmetric with the failure alert below, and the distinction is the point:
-a **failure** is a machine condition that is definitively over when the next run goes green, so
-it auto-closes; a **regression finding** is a statement about the code that a green run does
-not by itself resolve. The different lifecycles answer different questions for their
-readers.
+* **`publish-issue-findings`** is the only rolling-issue command that creates an issue. It
+  publishes validated history findings and their coverage qualifications.
+* **`publish-issue-clean`** rewrites an existing open issue to all-clear at the analyzed commit,
+  but leaves it open. Recovery of the numbers does not establish that the underlying problem
+  is understood; closing the investigation remains a maintainer decision.
+* **`publish-issue-preflight`** marks an existing report stale and records the pending run,
+  attempt and head. It creates no placeholder issue: an issue merely announcing a benchmark
+  run would be tracker noise rather than useful context on an existing finding.
+* **`publish-issue-no-data`** preserves the existing report and replaces its pending/staleness
+  annotation with the reason this run could not establish recovery, linking the available
+  report. The previous report's analyzed commit and staleness remain visible. It never turns
+  missing evidence into all-clear.
+* **`publish-issue-failed`** replaces only this run's pending annotation with a short terminal
+  notice and run link, preserving the report beneath it. It is status on an existing
+  regression investigation, not a newly filed workflow-failure alert.
 
-**Failure-alert sink (history flow).** Separately, the *failure* of a run — distinct from a
-regression *finding* — is a recurring condition on a rolling target, so it gets its own
-deduplicated tracking issue that **does** auto-close on recovery:
+All issue commands except findings are a logged no-op when no rolling issue is open. Evidence
+is still validated before lookup, so absence of an issue never hides invalid inputs. Commit
+ordering and run ownership protect newer reports and pending annotations from delayed work;
+an unverified ordering preserves existing findings with an explicit diagnostic.
 
-* **`alert`** opens or refreshes a dedup failure issue when the run fails.
-* **`resolve-alert`** closes it when a subsequent run succeeds.
+**One-off failure alerts (history flow).** `alert` files an issue about a particular failed
+workflow run, independently of the rolling regression issue. A later successful run neither
+closes nor rewrites it: success does not explain the earlier failure. There is no automatic
+alert-resolution command and no shared rolling failure issue.
 
-The issue commands share the companion's rolling-issue path (§4.2). Preflight, publication
-and cleanup use the regression identity; alert and resolution share the distinct failure-alert
-identity. Every message named in this section — placeholder,
-staleness banners, all-clear, terminal failure notice, failure alert — has no analysis behind
-it, which is precisely why the companion owns the whole catalogue (§5.1) rather than splitting
-it with the tool.
+The identity is repository, project namespace and **workflow run ID**, not run attempt.
+Repeated calls and reruns reuse that run's alert; another failed workflow run gets another
+issue. Discovery includes closed issues, so a human-closed alert is not recreated or reopened
+on retry. An existing alert is left unchanged. Creates use the same ambiguous-create
+reconciliation as other publication, not blind retries. This is deduplication of one event,
+not aggregation of unrelated failures.
+
+Partial collection may therefore publish qualified findings and file an alert for the failed
+job in the same workflow. It must not call `publish-issue-failed` over the successful report.
+The companion owns these GitHub status messages; analysis vocabulary still comes from the
+tool's rendered report.
 
 ### 4.5 Collect write mode, inferred analysis mode, recollect
 
@@ -763,7 +781,7 @@ therefore computes it, in three steps:
    a changed excluded package can still affect a maintained dependent.
 
 The result is the `packages` scope that drives collect (§4.1), and an empty result routes to
-the cleanup path instead of an analysis that would find nothing. It must never reach
+`publish-comment-no-data` instead of an analysis that would find nothing. It must never reach
 `collect` as an empty list, because the lower-level command interprets that as the whole
 workspace. The workflow owns this policy; a Rust helper performs its files-to-packages,
 dependency-closure and metadata computations, rather than duplicating them in shell.
@@ -939,7 +957,8 @@ default to a single constant:
 | Derived identity | Collision if shared |
 | --- | --- |
 | PR comment marker | Two instances overwrite each other's comment on the same PR. |
-| Failure-issue identity | One instance's `resolve-alert` closes the other's open alert. |
+| Regression-issue identity | Two projects overwrite each other's findings or all-clear state. |
+| Failure-alert identity | One project's failure is mistaken for another project's already-reported run. |
 | Machine-key artifact name | Matrix legs of different instances clobber each other. |
 | Binary/history cache key | One instance's cache is served to the other. |
 | Concurrency group | One instance cancels the other's in-flight run. |
@@ -983,7 +1002,8 @@ fell short. The shared `cbh_render::Coverage` projection owns that vocabulary; t
 embeds it rather than adding another mapping of unjudged reasons. The named `outcome` is
 available in JSON and through `--outcome <path>`; the action derives its convenience
 `notable` output as `outcome == findings`. Nothing
-GitHub-shaped enters the tool: it never learns what a comment marker or an artifact URL is.
+report-publication logic enters the tool: it never learns what a comment marker or an artifact
+URL is. Azure setup configures federated trust but makes no GitHub API calls.
 
 **The GitHub envelope and the whole sink lifecycle live in the companion binary,
 `cargo-bench-history-github`.** The name states what it is — the GitHub adapter for
@@ -995,10 +1015,9 @@ itself is a GitHub adapter that would still make sense driven by a hand-written 
 tying its name to the wrapper would misstate that. It wraps
 the tool's rendered summary in the report body, adds the markers and the artifact link, and
 owns *every* message — including the ones with no analysis behind them: the in-progress
-placeholder, the staleness banner, the terminal failure notice, and the rolling failure
-issue. It then performs the API work: finding the rolling comment by its marker, deciding
-create-versus-edit, leaving the cleanup note (or optionally deleting), opening and closing
-the failure issue, and reading
+placeholder, the staleness banner, the terminal failure notice, and the one-off failure
+alert. It then performs the API work: finding the rolling comment by its marker, deciding
+create-versus-edit, leaving the empty-scope note, filing the alert, and reading
 the live PR head to detect a race.
 
 **Ordering is why the envelope cannot live in `analyze`.** Two of the values the body needs
@@ -1048,10 +1067,8 @@ design previously relied on:
   writes never do — is coarser than it needs to be, and it makes ordinary transient GitHub
   failures visible to users from the very component built to absorb them. In Rust the rule is
   stated per operation: **reads** retry with backoff behind a transient-fault classifier (a
-  non-transient client or auth failure still surfaces at once); **updating a known comment,
-  closing an issue,
-  and deleting a known comment are idempotent** and retry too (a delete that 404s on the
-  second attempt has succeeded); only a **create** is genuinely ambiguous, because a failure
+  non-transient client or auth failure still surfaces at once); **updating a known issue or
+  comment is idempotent** and retries too; only a **create** is genuinely ambiguous, because a failure
   may have taken effect. A create therefore does not blind-retry — it re-reads by marker
   first to confirm whether the marked resource exists rather than posting a duplicate.
   This is why identity is a
@@ -1091,10 +1108,11 @@ happens to collide. Author is not part of identity either; the per-run Actions t
 offer a useful portable "viewer login" contract, and changing the posting identity must not
 strand an existing rolling issue.
 
-The issue marker carries both the `instance` and an **issue kind** (`regression` or
-`failure-alert`), since both lifecycles share one repository and neither has a label to
-distinguish it. The same marker is the identity a create reconciles against when its outcome is
-uncertain (above), so one mechanism serves lookup, deduplication and retry safety.
+The issue marker carries both the project namespace and an **issue kind**. Regression issues
+use the rolling `regression` identity. One-off `failure-alert` markers additionally identify
+the workflow run and are searched among open and closed issues (§4.4). The same marker is
+the identity a create reconciles against when its outcome is uncertain, so one mechanism
+serves lookup, deduplication and retry safety.
 
 ### 5.2 Standard reports
 
@@ -1171,14 +1189,19 @@ collected objects to cloud listings. The workflow must assemble the matrix's res
 into the input directory and use a read-only Azure identity for analysis. The reusable
 workflows own this handoff; integration and deployment requirements are in §12.
 
-**Bring-your-own infrastructure.** The action does **not** bundle the Azure provisioning
-(`infra/azure-bench-history-prod/`); that stays in the monorepo as a *referenced example* the
-README links to. A consumer points the action at whatever account/identity they already have.
+**Provisioning is an explicit tool command, not an action side effect.**
+[`cargo-bench-history setup-azure`](DESIGN.md#710-setup-azure) supplies the standard storage
+and writer/reader identities without copying Folo's infrastructure files. Execution validates
+Azure CLI, Bicep, PowerShell and the selected Azure login context, then runs the embedded
+deployment bundle from a temporary directory. `--out-dir` exports the self-contained bundle
+for review or modification without running anything or requiring cloud tooling. The book
+documents the parameter and non-secret identifier handoff. Existing infrastructure remains
+usable directly; the action never provisions resources during a benchmark workflow.
 
 **Caller permissions** (documented in the README): `contents: read` (checkout);
 `actions: read` (cross-attempt artifact download, §4.6); `id-token: write` (Entra OIDC
 self-minting); `issues: write` (history publication and the
-`alert`/`resolve-alert` failure lifecycle); `pull-requests: write` (branch flow's comment and
+one-off `alert`); `pull-requests: write` (branch flow's comment and
 its lifecycle). These are listed **per command**, not as one union: a job should hold only
 what the command it runs actually needs.
 
@@ -1205,10 +1228,8 @@ workflows (§4.7) accept a smaller, flow-shaped subset of the same names (plus `
 the comma-separated runner matrix) and pass the rest through, so a consumer on the default path
 sees only the inputs their flow actually varies.
 
-**Common inputs:** `command` (`collect` | `analyze-history` | `analyze-pr` | `backfill` |
-`publish-issue` | `publish-pr-comment` | `issue-preflight` | `issue-cleanup` |
-`pr-comment-preflight` | `pr-comment-cleanup` |
-`pr-comment-finalize` | `alert` | `resolve-alert`, required);
+**Common inputs:** `command` (required; `collect`, `analyze-history`, `analyze-pr`, `backfill`,
+the `publish-comment-*` / `publish-issue-*` states listed in §4, or `alert`);
 `install-method` (`binstall` | `install` | `path`, default `binstall`; applies to
 every binary the command needs, §3);
 `source-path` (the Folo workspace root for `install-method: path`); `config` (path to a
@@ -1241,23 +1262,28 @@ pass the PR's actual base explicitly when it differs from that default);
 `context` (→ `--context`; default `HEAD`); `machine-keys`; `cache`. Improvements are reported
 unconditionally in branch mode, so there is no direction input.
 
-**Publication inputs:** the rendered summary, analyzed commit, artifact URL, named outcome,
-and intended/contributing platforms. `publish-pr-comment` additionally takes `pr-number`
-and `packages`. Titles and markers are standardized; these commands hold no storage inputs.
-The companion's `--body-file` supplies the rendered summary and `--report-file` the same
-analysis pass's JSON metadata. `--analyzed-sha` must match the report's clean commit.
+**Report-publication inputs:** `publish-<sink>-findings`, `publish-<sink>-clean` and the
+report-bearing form of `publish-<sink>-no-data` receive the rendered summary, JSON report,
+analyzed commit, artifact URL and intended/contributing platforms. Comment commands additionally
+take `pr-number` and `packages`. Titles and markers are standardized; these commands hold no
+storage inputs. The companion's `--body-file` supplies the summary and `--report-file` the same
+analysis pass's JSON metadata. `--analyzed-sha` must match the report's unmodified commit.
 `--expected-platforms` and `--completed-platforms` carry nonempty CSV matrix identifiers;
-the latter lists only successful legs. The predefined workflows assemble these inputs from
-the artifact handoff and the project identity.
+the latter lists only successful legs. No separate caller-supplied outcome overrides the JSON.
 
-**Lifecycle-command inputs:** `pr-comment-preflight` / `pr-comment-cleanup` /
-`pr-comment-finalize` take `pr-number`, plus (preflight) the `packages`
-scope to disclose and (finalize) the failed run's URL. PR commands use the frozen `head`;
-preflight and finalize also share `run-id` to bind placeholder ownership. `issue-preflight`
-identifies the regression issue from the resolved project namespace; `issue-cleanup`
-consumes the same JSON and platform evidence, checked against `clean-commit`, and leaves
-the issue open. `alert` and `resolve-alert` use the project's standard failure-issue identity.
-Empty-scope PR cleanup always leaves its explanatory note.
+**Lifecycle inputs:** rolling publication carries `run-id` and `run-attempt` for ownership.
+Preflight, failed and empty-scope commands use the frozen `head`; report commands use
+`analyzed-sha`. Comment commands take `pr-number`; preflight also takes its nonempty package
+scope. Failed commands take `run-url` and the terminal workflow conclusion (`failure` or
+`cancelled`) so the notice does not call a cancellation a failed analysis.
+The no-report form of `publish-<sink>-no-data` requires the explicit `empty-scope` preflight
+result and rejects report evidence; omission of a report alone never means empty scope.
+This is execution data, not configurable reporting policy. The predefined workflows derive
+it from events, scope selection and validated artifacts.
+
+`alert` takes the failed workflow's `run-id` and `run-url`, bound to the repository.
+Attempts share the same run identity. It has no resolution counterpart or auto-close input.
+The names and required evidence agree between the composite and companion layers.
 
 **`backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
 `best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
@@ -1291,8 +1317,7 @@ test their tool/action selection; the action does not add a `report-schema` or t
   re-pointed by the action repo's `release.yml`).
 * **An action release selects an exact tested binary combination.** Tool and action version
   numbers are independent, but consumers do not override the manifest's binary versions.
-  Adopting another tool version is an action release; not every tool release needs to be
-  adopted (§8.1).
+  Each monorepo PR moving a pinned tool version has a paired action-release PR (§8.1).
 * **README is a quick start; the book is the reference.** Two documents describing the same
   action drift, and the one that drifts is always the one a maintainer forgets — so they get
   clearly different jobs rather than overlapping scopes. The **README** answers "what is this
@@ -1312,16 +1337,17 @@ test their tool/action selection; the action does not add a `report-schema` or t
     artifact), then an `analyze-history` job (`needs: collect`, `fetch-depth: 0`, downloading
     the key artifacts into the `machine-keys` dir **with an explicit `github-token`** so
     partial re-runs resolve, §4.6, an `actions/cache` step feeding `cache`), then the workflow's
-    report upload and a separate `publish-issue` job when publication is enabled,
-    plus the `issue-preflight` / `issue-cleanup` upkeep and the
-    `alert` / `resolve-alert` failure lifecycle.
+    report upload and a separate issue-publication job selecting findings, clean or no-data.
+    `publish-issue-preflight` and `publish-issue-failed` maintain existing issue status;
+    `alert` files one-off workflow failures independently.
   * A **per-PR branch** workflow — a delta preflight computing the touched benchmarkable
-    packages, a `pr-comment-preflight` job (in parallel with collect), a matrix `collect` job
+    packages, a `publish-comment-preflight` job (in parallel with collect), a matrix `collect` job
     scoped by `packages`, an `analyze-pr` job (checkout `head.sha`, `fetch-depth: 0`,
-    restore-only cache), then report upload and a separate `publish-pr-comment` job.
+    restore-only cache), then report upload and a separate comment-publication job selecting
+    findings, clean or no-data.
     Analysis and publication use `!cancelled()` so a superseded run never posts.
-    The `pr-comment-cleanup` and `pr-comment-finalize` paths sit alongside them — all behind the
-    same-repo check (§6).
+    The empty-scope `publish-comment-no-data` and terminal `publish-comment-failed` paths
+    sit alongside them — all behind the same-repo check (§6).
   * A **nightly densification** workflow (§4.8) — a matrix `backfill` job over the same
     platforms and window, with no analyze job and no sink.
   * The **concurrency** pattern: PR-driven runs
@@ -1334,46 +1360,67 @@ test their tool/action selection; the action does not add a `report-schema` or t
 
 ### 8.1 Releasing the action (operator flow)
 
-The action is distributed as **git tags on its own repo** — the composite action and the
-reusable workflows are both plain files resolved by ref, and the binaries they invoke are
-installed at run time — so "releasing" it is a small, deliberate operation, entirely separate
-from the monorepo's automated package/binary releases
-([`../../../docs/release-automation.md`](../../../docs/release-automation.md)). The action
-repo carries its own tiny release tooling:
+The action is distributed as git tags in its own repository. Its PR carries the manifest's
+action version and tested tool pins; merging that PR to `main` triggers `release.yml`.
+There is no manual tag-preparation step or crates.io publication in the action repository.
 
-**`just release <version>`** (a recipe in the action repo) that:
+**Paired releases follow this order:**
 
-1. checks the working tree is clean and on `main`;
-2. optionally updates the **release manifest** (§3) — the tool version this action version is
-   validated against, and the pinned companion version — committing that change;
-3. creates the annotated tag `vX.Y.Z` and pushes it.
+1. A monorepo PR changes a pinned tool version, for any reason.
+2. Its author creates or updates the linked action PR with the final pins and an appropriate
+   action-version increment. The required `install-tools` check can fail while those versions
+   are unpublished; the action PR remains blocked, not exempt.
+3. The monorepo PR merges. Its asynchronous release workflow publishes packages, then the
+   corresponding prebuilt archives. A merge or a successful registry-only publish is not
+   evidence that the whole installation path is ready.
+4. The author follows that publication and **reruns the action check** when its exact
+   dependencies are available. Publication in another repository does not automatically rerun
+   failed checks. Use ordinary authenticated maintainer/agent follow-up; no cross-repository
+   dispatch service, polling workflow or stored credential is required.
+5. Once the current action PR passes its required checks and review, it can merge.
+6. The action's release workflow publishes the reviewed version and advances its floating
+   major after the final availability gate.
 
-A **`release.yml`** workflow in the action repo, triggered on the `v*.*.*` tag push, then
-does the parts that must happen server-side:
+The [monorepo release policy](../../../docs/release-versioning.md#paired-benchmark-action-releases)
+and `increment-versions` skill require this pairing, including dependency/group and version-only
+movements. The manifest is the scope authority, including its test-only faker pin and workflow
+helpers. Reuse an existing pairing when appropriate and refresh both PRs after any version-plan
+change. A tool-pin-only action change still carries an action-version increment.
 
-* **verifies every binary in the manifest actually resolves** — the tool and the companion, on
-  each supported target — *before* anything else. Moving the floating major tag to a release
-  whose companion is not yet installable would break every consumer at once, including the
-  `alert` path that exists to report breakage;
-* **creates a GitHub Release** for the tag — publishing a Release is the event that
-  (re)publishes the Marketplace listing;
-* **force-moves the major tag** (`v1` → the tagged commit) so `uses: …@v1` consumers pick
-  up the release. Because the reusable workflows reference the root action through
-  self-repository syntax (§4.7), moving the tag advances both layers together and cannot
-  leave a workflow calling a mismatched action.
+**`install-tools` is a required, fail-closed availability check.** It reads the PR's own
+manifest and invokes the shared installation canaries, not a second installer and not the
+already-released action. For each manifest package and supported target, it:
 
-**The maintainer's responsibility** is therefore deliberately small:
+* installs the exact registry version through `install` with the published lockfile;
+* installs its promised prebuilt archive through `binstall` with source fallback disabled;
+* verifies the selected executable version and exercises the command contracts used by
+  the action and workflows.
 
-* decide the semver bump and confirm the manifest names a tested, installable binary combination;
-* run `just release X.Y.Z`;
-* **first release only:** complete the one-time Marketplace listing form in the GitHub UI
-  (accept the agreement, choose a category, confirm the root `action.yml` carries
-  `name` / `description` / `branding`). Every later release re-publishes automatically.
+The availability runs bypass the installed-binary cache and use isolated installation roots.
+A version-range match, a source fallback, or `path` dogfooding cannot satisfy this check.
+Normal consumer `binstall` retains source fallback (§3); only the release gate must distinguish
+an absent archive from a working fast path. Missing packages/assets fail with their exact
+version and target identified. No checksum manifest or alternate version-selection mechanism
+is added. The gate also runs for the final merge candidate when a merge queue is used.
 
-There is no crates.io or binary publishing in this flow — the *tool* is released from the
-monorepo's automated pipeline
-([`../../../docs/release-automation.md`](../../../docs/release-automation.md)); this action
-pins the exact binary versions in its release manifest.
+**The action's `release.yml` runs on pushes to `main` and supports rerunning failed releases.**
+It reads the checked-in action version and pins from that immutable commit, reruns the shared
+availability gate, then creates the immutable `vX.Y.Z` tag and GitHub Release and moves the
+matching major tag. These operations are serialized and retry-safe: a publication retry's
+existing version tag must name its original release commit, and an older run must not move
+the major backwards.
+Later commits with unchanged release-bearing content and manifest cause no new release and
+leave the existing tag untouched. Changed action/workflow behavior or pins require a version
+increment. A failure before the gate passes creates no release or tag movement; a partial
+publication is reconciled on rerun.
+
+The reusable workflows reference the root action at their own commit (§4.7), so a tag advances
+both layers together. All tag/release operations occur within the same workflow; a tag created
+with `GITHUB_TOKEN` is not assumed to trigger another workflow.
+
+Maintainers review the chosen action-version increment and compatibility promise. For the first
+Marketplace release they also complete the listing form (agreement, category and action metadata).
+Subsequent action publication follows merge, independently of the monorepo's package publication.
 
 ## 9. Testing the action
 
@@ -1386,7 +1433,7 @@ of that, so the action repo layers three of them, each stronger and slower than 
 **Layer 1 — Rust unit tests (every push, seconds, no network).** The action's behaviour lives
 in Rust (§5.1), so every non-trivial branch is unit-testable against fakes: install-method
 selection and version resolution (§3), machine-key gathering, and the whole PR-comment
-lifecycle — placeholder seeding, staleness-banner insertion/replacement, cleanup note/deletion —
+lifecycle — placeholder seeding, staleness-banner insertion/replacement, empty-scope notes —
 asserted against a faked GitHub transport with **no live issue or PR**. This is also where
 the exact composed issue/comment *bodies* are pinned (hidden markers, scope line, coverage
 verdict, banner text), so a formatting regression fails here first — and because the
@@ -1427,7 +1474,7 @@ so both the install branching and the actual installs are exercised, not just mo
    The canaries deliberately include the ugly cases — a **partially failed** matrix that
    preserves findings while marking missing platforms in both sinks, a **fully failed**
    matrix, a malformed `platforms` list, an **empty package scope** (which must route
-   to cleanup, not analyze or workspace collection), a **fork PR** (which must stop with the
+   to `publish-comment-no-data`, not analyze or workspace collection), a **fork PR** (which must stop with the
    skip message, §6), and a cancelled run — since each is a path where the graph, not the
    binaries, decides the outcome. The two layers' input lists are contract-tested against
    each other so a new composite input cannot silently go unexposed by the workflows.
@@ -1435,6 +1482,20 @@ so both the install branching and the actual installs are exercised, not just mo
 The caller canaries run without publishing to GitHub
 (`publish: false` for reusable-workflow calls); composed-body checks use the fake transport.
 Live posting and Azure authorization are covered by their dedicated validation layers.
+
+Publication cases assert the selected command and resulting state, not just `notable == false`.
+They cover fully clean reports, findings with missing platforms, inconclusive reports, empty
+scope and failed execution, including issue preservation when no all-clear is justified.
+Run/attempt races preserve newer placeholders and pending annotations. Alert cases distinguish
+same-run retries from different failed runs, preserve human-closed issues, and prove that a
+successful run does not mutate prior alerts.
+
+The installation canaries also drive the required release gate (§8.1). Cases cover an
+unpublished package, a registry version whose promised archive is absent, stale cached tools,
+and an available exact tuple. A fresh check after publication must install the newly available
+tuple without changing the manifest. Release orchestration covers gate failure before any tag
+write, unchanged-version no-op, partial-release recovery, conflicting immutable tags and
+out-of-order major-tag updates.
 
 **Layer 3 — trend-dependent, real-GitHub-write validation.** The remaining gap is the behaviour
 that needs (a) a benchmark history long enough to make analysis "notable" and (b) the action
@@ -1460,7 +1521,8 @@ checks without a separate checked-in store or a maintained test credential.
   in, and needs no setup or rotation — so a job in the action repo that grants itself
   `issues: write` and `pull-requests: write` can exercise every write path the companion has:
   open a scratch issue, update it, resolve it to all-clear, open a throwaway PR, post the
-  comment, re-post to prove in-place update, apply the staleness banner, finalize, clean up —
+  comment, re-post to prove in-place update, apply staleness and terminal notices, publish
+  empty scope, and verify one-off alert deduplication without automatic closure —
   each asserted by reading the live repository back. A *separate* sandbox repository is what
   would force a long-lived credential, because cross-repository access needs either a personal
   access token or a GitHub App private key, both of which are exactly the maintained secret we
@@ -1531,19 +1593,20 @@ The tool, companion and workflow layer have separate responsibilities:
   supplies the judged-set qualification to the human renderings and the structured census
   to JSON. `analyze` exposes the named verdict in JSON and via `--outcome <path>`, with
   `notable` retained in JSON as the findings convenience. No additional coverage formatter
-  or standalone `--notable` flag is needed. Nothing GitHub-shaped enters the tool.
+  or standalone `--notable` flag is needed. GitHub report publication stays outside the tool.
 * **The companion validates publication evidence.** Publication consumes `--report-file`
   from the tool's JSON output alongside the rendered `--body-file`, and comma-separated
   `--expected-platforms` / `--completed-platforms`. The report must name the requested clean
   commit, the correct analysis mode, and consistent outcome/coverage facts. Missing platforms
-  are disclosed in both sinks without hiding findings. `issue-cleanup` requires the same
+  are disclosed in both sinks without hiding findings. `publish-issue-clean` requires the same
   evidence and refuses all-clear unless the outcome is clean and collection is complete.
   The command's explicit expected commit prevents silently using a report for another run.
-* **PR lifecycle operations retain ownership.** Preflight records the frozen `--head` and
-  workflow `--run-id`; finalization only retires its own placeholder. Cleanup creates the
+* **Rolling lifecycle operations retain ownership.** Preflight records the frozen `--head`,
+  workflow `--run-id` and `--run-attempt`; failed publication only retires its own pending state.
+  Empty-scope publication creates the
   explanatory empty-scope note even when there is no previous comment, and terminal notes
   become fresh placeholders when work resumes. Publication checks live-head freshness after
-  comment lookup and preserves a newer current-head report. History publication and cleanup
+  comment lookup and preserves a newer current-head report. History publication and all-clear
   likewise preserve newer issue content when commit ordering cannot be established.
   Markers are derived from the project namespace, with no custom-marker or legacy-adoption path.
 * **The companion is published and versioned independently.** New crates follow the
@@ -1552,8 +1615,8 @@ The tool, companion and workflow layer have separate responsibilities:
   the tool and its `cbh_*` implementation packages move together, while the companion and
   faker are independent. Do not add a synthetic dependency to force lockstep. Subsequent
   released-content changes follow the ordinary version-increment process; the action
-  manifest pins separately tested tool, companion and faker versions (§3), and its pre-tag
-  resolvability gate checks that those releases are installable (§8.1).
+  manifest pins separately tested runtime and test tools (§3). A paired action PR adopts
+  each pinned tool version movement; required installation checks gate its merge and release (§8.1).
 * **CLI wiring must follow each command's actual contract.** `--config`, `--local=<path>`,
   `--cache=<path>`, `--best-of`, `--context` / `--base`, the query-only `--machine-key`,
   scope flags, and inclusive `backfill FROM TO` all exist. `collect` and `import` offer
@@ -1566,6 +1629,11 @@ The tool, companion and workflow layer have separate responsibilities:
   without writing the PR points to Azure (§6). The view rejects mutations and keeps local
   inputs outside the baseline cache. The workflow layer supplies credential wiring and
   the matrix artifact handoff.
+* **The tool supplies reusable Azure provisioning.** `setup-azure` executes or exports the
+  package-owned, self-contained deployment bundle. The action never deploys infrastructure;
+  the [command contract](DESIGN.md#710-setup-azure) and
+  [bundle ownership](implementation.md#azure-provisioning-bundle) define prerequisites,
+  safe deployment and the parameter handoff.
 * **Workflow computation and publication remain separate responsibilities.** The workflow
   owns package-scope policy and configurable exclusions (§4.7), using Rust for the
   computations and passing the final scope to the lower composite. Analysis emits reports;
@@ -1584,9 +1652,9 @@ The tool, companion and workflow layer have separate responsibilities:
   already ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
   backfill, artifact and reporting policy belong to the shared Rust and workflow layers.
-  PowerShell is limited to boundaries such as bootstrap and Azure provisioning where a
-  prepared Rust environment is not available. PR-close cancellation belongs to the PR
-  workflow itself.
+  PowerShell is limited to bootstrap and the independently executable Azure deployment
+  bundle; its driver is shared by `setup-azure` and export, not reimplemented in Rust.
+  PR-close cancellation belongs to the PR workflow itself.
 * **The book has a "GitHub automation" section.** Running `cargo-bench-history` from
   automation is a primary deployment model, with questions that have no local analogue.
   The section covers:
@@ -1594,6 +1662,8 @@ The tool, companion and workflow layer have separate responsibilities:
     useful setup runs all three rather than just the first.
   * **Adopting the action** — the full input surface and the hand-assembled recipes, with the
     action's README reduced to a quick start that links here (§8).
+  * **Azure setup** — `setup-azure` execution, prerequisite checks and `--out-dir` export;
+    non-secret configuration handoff; reader/writer isolation and explicit trust retirement.
   * **Deployment profiles** — the shared, rotating, ephemeral runner pool versus dedicated
     self-hosted benchmark machines. These differ in almost every way that matters (machine-key
     stability, noise floor, whether densification is needed at all, useful `best-of` values),
@@ -1640,7 +1710,8 @@ retry cannot reuse an older receipt, while an untouched successful leg retains i
 one. Missing evidence for a successful job is an error; total collection failure produces no
 synthetic report. Only selected successful platform data enters the local analysis input.
 
-The companion projects validated reports into workflow outputs for publication and cleanup.
+The companion projects validated reports into workflow outputs selecting findings, clean or
+no-data publication. Failed execution uses the separately owned terminal-status path.
 History all-clear is permitted only by the complete clean-evidence projection. Publication
 always receives the JSON, summary and exact platform set from that analysis, and reports
 remain downloadable even when they contain no findings. The companion selects only its
@@ -1664,7 +1735,8 @@ scheduled-validation infrastructure.
 ### 12.1 Maintainer setup
 
 Deployment and publication require maintainer actions independent of the workflow runs.
-Provisioning and retirement procedures are documented in the
+General provisioning uses [Azure setup](DESIGN.md#710-setup-azure); Folo-specific parameters
+and retirement procedures are documented in the
 [production deployment guide](../../../infra/azure-bench-history-prod/README.md).
 
 | # | Action | Gates | Notes |
@@ -1673,7 +1745,7 @@ Provisioning and retirement procedures are documented in the
 | 2 | **Bootstrap new crates, then configure Trusted Publishing** | Installing published tool and companion versions | Follow `RELEASING.md`: first publication is a maintainer operation from clean `main` after review and merge; subsequent releases use the configured `folo-rs/folo` / `release.yml` Trusted Publisher. |
 | 3 | **Configure Marketplace publishing** — agreement, category and listing | Public action release | A one-time UI flow tied to the account, not to a release run (§8.1). |
 | 4 | **Define the `v1` compatibility promise** | Publishing and moving the floating major tag | Consumers inherit the release that the tag identifies; breaking changes require an appropriate new major. |
-| 5 | **Repository settings** (§12.2) | Repository governance | Protection and merge policies are separate from runtime requirements. |
+| 5 | **Require the action installation gate** (§12.2) | Merging and releasing the action | Protect `main` with PR review and a required check that cannot pass unless `install-tools` succeeds; asynchronous tool publication does not waive it. |
 
 The design does not require:
 
@@ -1710,18 +1782,18 @@ fixture PR avoids this setting; issue/comment tests need only their correspondin
 permissions. This setting is a test-fixture prerequisite, not a prerequisite for implementing
 or locally exercising the companion.
 
-Everything below is **hygiene, doable at any time**, and listed because it is worth doing
-rather than because anything waits on it:
+**The release-availability gate is required configuration, not optional hygiene.** Protect
+`main` against direct/force pushes and require a reviewed PR. Require the action repository's
+`required-checks` fan-in, which must require `install-tools` to succeed and reject skipped,
+cancelled or failed installation legs. Run it for PRs without path-based omission, and for
+merge candidates if a merge queue is enabled. This prevents merging a release manifest
+whose selected tools are not yet installable (§8.1). The release workflow repeats the gate
+before publication; it does not replace the merge gate.
 
-* **Protect `main`**: no direct pushes, no force-pushes, no deletion. Releases are prepared from
-  reviewed commits there; `uses: …@v1` resolves to the major tag, not to the branch tip.
-* **Require a pull request to merge**, with the repository's CI as the required check. Wire the
-  requirement as a single fan-in job rather than naming individual matrix jobs, matching how the
-  monorepo does it, so adding a canary (§9) does not require a settings change. Select the
-  fan-in check actually emitted by the action repository's validation workflow.
-* **Merge policy is yours.** Squash, merge commit, or a merge queue — nothing depends on it.
-  The action repo has no benchmark history, so the squash-merge consideration of §4.5 does not
-  apply here.
+Additional governance is independent of runtime behavior. The repository can use squash,
+merge commits or a merge queue; its own commit history is not benchmark data. The release
+workflow needs `contents: write` only in its tag/release job; availability checks need no
+posting permission and no Azure identity.
 
 One trap is worth recording, because it is the only setting that can silently break a release:
 **if tag protection is ever added, it must exempt the release workflow.** Releases work by

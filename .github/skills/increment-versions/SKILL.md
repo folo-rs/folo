@@ -458,3 +458,29 @@ Reconcile the section with final evidence, covering every resolved target and re
 release. Later source, base, group, or decision changes require fresh assessment and an updated
 section before the PR is ready for human review. Human review and merge of the complete PR remain
 the final approval; completing this skill authorizes neither.
+
+# Stage 8: Coordinate a paired action release
+
+Read the action repository's current release manifest and apply the
+[paired-release policy](../../../docs/release-versioning.md#paired-benchmark-action-releases).
+Compare its pinned monorepo packages with the complete verified release set, including retained
+pending increments and first-publication packages. A dependency/group or version-only movement
+counts just as a direct source change does; do not restrict this step to entries newly applied
+by Stage 6.
+
+When a pinned tool moves, create or update the corresponding
+`folo-rs/cargo-bench-history-action` PR with the final tool pins and action-version increment.
+Follow [paired PR presentation](../../../docs/git-workflow.md#paired-action-pull-requests),
+reuse an existing pairing when appropriate, and cross-link both PRs. If the monorepo PR has not
+yet been created, record the pairing obligation in the local release handoff and fulfill it
+when creating that PR. Report missing repository access as a blocker rather than silently
+omitting the action change. Do not create an unrelated PR when no manifest pin is affected.
+
+Keep the pair current after any reassessment. The action PR remains blocked on its required
+installation check until the monorepo publishes the exact packages and promised archives.
+Its author follows publication and explicitly reruns that check; an expected early failure
+is not a reason to weaken it or substitute source dogfooding.
+
+Include the pairing disposition in the skill handoff: the affected pins and linked PR, a
+pending-PR-creation obligation, an access/publication blocker, or no affected pins. Completing
+this stage does not authorize merging either PR or publishing anything.

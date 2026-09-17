@@ -4,7 +4,7 @@ Pure marker and message composition is synchronous. Lifecycle orchestration is g
 `GitHub` port; unit tests use an in-memory fake and `futures::executor::block_on`, with no runtime,
 network or real-time delay. The production `RestGitHub` adapter is the only HTTP boundary.
 
-The port exposes semantic GitHub operations—list, create, update, close, compare and read
+The port exposes semantic GitHub operations—list, create, update, compare and read
 the pull-request head—rather than a raw HTTP passthrough. Idempotent operations retry transient
 failures in the adapter. Creates never retry blindly: orchestration reads by marker after an
 error and treats a matching artifact as the successful result of the ambiguous request.
@@ -21,11 +21,15 @@ it does not scrape Markdown or map the tool's individual unjudged-reason vocabul
 
 All-clear validation happens before issue lookup or mutation. This makes a contradictory report
 or a missing platform an error even when the rolling issue happens not to exist. The CLI
-supplies the same evidence to publish and cleanup, avoiding independent definitions of clean.
+supplies the same evidence to findings, clean and no-data publication, avoiding independent
+definitions of clean. Shared validation projects a publication state for workflow dispatch and
+rechecks it at the named command boundary. An explicit empty-scope variant carries no report;
+it cannot be confused with a missing or malformed artifact.
 
-PR placeholder ownership combines workflow run ID and frozen head. Finalization acts only on its
-own in-progress marker. Freshness and distance queries are distinct: inability to compute a
-distance produces an explicit qualification, while a known newer result is preserved.
+Pending ownership combines workflow run ID, attempt and frozen head. Failed-state publication
+acts only on its own in-progress placeholder or issue annotation. Freshness and distance queries
+are distinct: inability to compute a distance produces an explicit qualification, while a known
+newer result is preserved.
 History issue replacement also checks commit ordering: the same commit or a verified forward
 comparison may replace existing findings, while an absent, backward or unknown ordering leaves
 them intact. Both publication and all-clear share this guard.
@@ -33,13 +37,18 @@ Serialized writers can still arrive with out-of-order frozen heads. Preflight pr
 proven newer by a reverse commit comparison; without a proved relationship it retains the
 unknown-distance warning.
 
+Issue no-data and failed states share the bounded annotation mechanism rather than replacing
+the previous report. They retain its analyzed-commit identity and freshness qualification.
+Preflight records ownership so delayed terminal work cannot retire a newer pending annotation.
+Absence of an issue is diagnosed after input validation; only findings can create one.
+
 An ambiguous create is reconciled against both the artifact identity and the desired body.
 Finding the same marker with different content is not proof that this publication committed;
 the other content is preserved and the original failure remains visible.
 
 ## Report identity and composition
 
-Discovery matches exact instance/kind marker lines in the complete open-issue or comment list.
+Rolling discovery matches exact instance/kind marker lines in the complete open-issue or comment list.
 Displayed titles and author metadata do not participate in identity selection. Artifacts without
 the current marker are outside the lifecycle; there is no adoption or migration path.
 
@@ -48,9 +57,15 @@ Message composition derives all markers from that namespace and owns the standar
 advisory wording and documentation link. Publication passes the optional artifact URL directly
 as report data alongside validated evidence and the tool-rendered summary.
 
-Regression cleanup only updates the all-clear body; closing belongs exclusively to failure-alert
-resolution. Empty-scope comment cleanup shares ordinary update/create reconciliation and always
-writes the explanatory note.
+Clean issue publication only updates the all-clear body. There is no issue-closing operation
+in the companion. Empty-scope comment publication shares ordinary update/create reconciliation
+and always writes the explanatory note.
+
+One-off alert discovery uses a run-qualified failure marker and includes closed issues.
+Existing alerts are not updated or reopened. An ambiguous create still requires the exact
+intended body as well as identity to establish success; a different body discovered after
+the failed request is not evidence that the request committed. Distinct run IDs do not
+aggregate into a shared issue, and run attempts do not create additional alert identities.
 
 ## HTTP adapter
 
@@ -134,22 +149,29 @@ hexadecimal commit ID. Run IDs and attempts are positive. Machine-key files cont
 letters normalized to lowercase. Matrix, receipt and preparation platform identifiers use ASCII
 letters, digits, `.`, `_` and `-`, excluding `.` and `..` as entire identifiers.
 
-Lifecycle commands use the same common options and repository fallback:
+Lifecycle commands use the same common options and repository fallback. Rolling commands carry
+`--run-id N --run-attempt N`; report-bearing commands use this shared evidence group:
 
 ```text
-issue-preflight --head SHA
-publish-issue --body-file PATH --analyzed-sha SHA
+--body-file PATH --analyzed-sha SHA
   --report-file PATH --expected-platforms CSV --completed-platforms CSV [--artifact-url URL]
-issue-cleanup --clean-commit SHA
-  --report-file PATH --expected-platforms CSV --completed-platforms CSV
-alert --run-url URL
-resolve-alert --run-url URL
-pr-comment-preflight --pull-request N --packages CSV --head SHA --run-id N
-publish-pr-comment --pull-request N --analyzed-sha SHA --body-file PATH --packages CSV
-  --report-file PATH --expected-platforms CSV --completed-platforms CSV [--artifact-url URL]
-pr-comment-cleanup --pull-request N --head SHA
-pr-comment-finalize --pull-request N --run-url URL --head SHA --run-id N
 ```
+
+| Command | Additional inputs |
+| --- | --- |
+| `publish-comment-findings` | Report evidence, `--pull-request N --packages CSV` |
+| `publish-comment-clean` | Report evidence, `--pull-request N --packages CSV` |
+| `publish-comment-preflight` | `--pull-request N --packages CSV --head SHA` |
+| `publish-comment-no-data` | `--pull-request N`, plus either report evidence and `--packages CSV`, or `--empty-scope --head SHA` |
+| `publish-comment-failed` | `--pull-request N --head SHA --run-url URL --conclusion failure\|cancelled` |
+| `publish-issue-findings` | Report evidence |
+| `publish-issue-clean` | Report evidence |
+| `publish-issue-preflight` | `--head SHA` |
+| `publish-issue-no-data` | Either report evidence, or `--empty-scope --head SHA` |
+| `publish-issue-failed` | `--head SHA --run-url URL --conclusion failure\|cancelled` |
+
+`alert --run-id N --run-url URL` uses no report or attempt ownership. Its validated run
+identity determines the one-off marker; the URL names that same repository and run.
 
 Matrix setup appends these outputs, with one sorted platform set shared by JSON and CSV:
 
@@ -196,5 +218,8 @@ Platform and deduplicated key lists are sorted. `complete` measures platform cov
 The optional results destination exists even when selected collection produced no objects.
 Both destination directories must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
 file with an existing parent directory; output appending preserves earlier workflow values.
-Inspection appends `outcome=<wire value>`, `notable=<bool>` and `can-clear=<bool>` in that order,
-using lowercase booleans and the tool's existing outcome spelling.
+Inspection appends `outcome=<wire value>`, `notable=<bool>`, `can-clear=<bool>` and
+`publication-state=findings|clean|no-data`, using lowercase booleans and the tool's existing
+outcome spelling. `can-clear` retains its history-only meaning; `publication-state` also
+serves comment publication. The latter is a projection of existing report/platform evidence,
+not another tool verdict or a caller override.
