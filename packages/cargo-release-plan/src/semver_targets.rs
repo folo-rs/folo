@@ -10,8 +10,17 @@ use crate::quote_path;
 use crate::report::{ReportFile, read_report};
 use crate::verbose::Verbose;
 
+// Only the filesystem adapter is excluded; artifact-command integration tests cover it.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_semver_targets(path: &Path, verbose: Verbose) -> Result<String, AppError> {
-    let report = read_report(path)?;
+    targets_output(|| read_report(path), verbose)
+}
+
+fn targets_output(
+    read_report: impl FnOnce() -> Result<ReportFile, AppError>,
+    verbose: Verbose,
+) -> Result<String, AppError> {
+    let report = read_report()?;
     Ok(serde_json::to_string(&semver_targets(&report, verbose))
         .expect("package names are JSON-compatible strings"))
 }
@@ -68,9 +77,10 @@ fn semver_targets(report: &ReportFile, verbose: Verbose) -> BTreeSet<String> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
+    use crate::UnsupportedPlanSchemaError;
     use crate::report::fixture::{package, report};
 
     #[test]
@@ -126,13 +136,43 @@ mod tests {
     }
 
     #[test]
-    fn empty_selection_serializes_as_an_array() {
-        for packages in [vec![], vec![package("private", "needs-increment", false)]] {
-            assert_eq!(
-                serde_json::to_string(&semver_targets(&report(packages), Verbose::new(false)))
-                    .unwrap(),
-                "[]"
-            );
+    fn command_acquires_validated_report_and_serializes_package_arrays() {
+        for (packages, expected) in [
+            (vec![], json!([])),
+            (
+                vec![package("private", "needs-increment", false)],
+                json!([]),
+            ),
+            (
+                vec![package("api", "needs-increment", true)],
+                json!(["api"]),
+            ),
+        ] {
+            let data = report(packages);
+            let output = targets_output(
+                || {
+                    data.validate()?;
+                    Ok(data)
+                },
+                Verbose::new(false),
+            )
+            .unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&output).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn command_propagates_report_validation_failure() {
+        let mut data = report(vec![]);
+        data.schema_version = 0;
+        let error = targets_output(
+            || {
+                data.validate()?;
+                Ok(data)
+            },
+            Verbose::new(false),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
     }
 }

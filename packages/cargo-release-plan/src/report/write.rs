@@ -1,18 +1,17 @@
 // `report` command: write report.json and per-package diffs.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
-use crate::WriteFileError;
 use crate::classify::{
     AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, classify,
 };
 use crate::metadata::ReportedDep;
 use crate::plan::SCHEMA_VERSION;
+use crate::report::output::{FileOutput, ReportOutput};
 use crate::text::quote_path;
 use crate::verbose::Verbose;
 
@@ -68,21 +67,48 @@ pub(crate) struct ReportGroup {
     pub(crate) version: String,
 }
 
+// Only the Git/Cargo and filesystem adapter wiring is excluded from library mutations.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_report(
     out_dir: &Path,
     base: Option<&str>,
     manifest_path: &Path,
     verbose: Verbose,
 ) -> Result<String, AppError> {
-    let classification = classify(manifest_path, base, verbose)?;
-    write_report(out_dir, &classification)
+    create_report(
+        out_dir,
+        || classify(manifest_path, base, verbose),
+        &mut FileOutput { directory: out_dir },
+    )
 }
 
+// Preview already has a classification; this adapter supplies the real publication operations.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn write_report(
     out_dir: &Path,
     classification: &Classification,
 ) -> Result<String, AppError> {
-    fs::create_dir_all(out_dir).map_err(|error| WriteFileError::caused_by(out_dir, error))?;
+    emit_report(
+        out_dir,
+        classification,
+        &mut FileOutput { directory: out_dir },
+    )
+}
+
+fn create_report(
+    out_dir: &Path,
+    classify: impl FnOnce() -> Result<Classification, AppError>,
+    output: &mut impl ReportOutput,
+) -> Result<String, AppError> {
+    let classification = classify()?;
+    emit_report(out_dir, &classification, output)
+}
+
+fn emit_report(
+    out_dir: &Path,
+    classification: &Classification,
+    output: &mut impl ReportOutput,
+) -> Result<String, AppError> {
     let diff_names: Vec<Option<String>> =
         classification.packages.iter().map(diff_file_name).collect();
     let packages = classification
@@ -134,39 +160,15 @@ pub(crate) fn write_report(
     let report = serde_json::to_string_pretty(&report)
         .expect("the report body contains only JSON-serializable fields");
 
-    // `report.json` is the completion marker. Remove an earlier marker before
-    // touching its patch tree so an interrupted rerun cannot present stale JSON
-    // alongside missing or partially replaced patches.
-    let report_path = out_dir.join("report.json");
-    if report_path.exists() {
-        fs::remove_file(&report_path)
-            .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
-    }
-    // Consumer-facing layout: README "report".
-    //
-    // The subtree belongs to this tool, and the report contract is that it
-    // holds the patches of the current classification, so it is replaced whole
-    // rather than merged into: a reused output directory would otherwise offer
-    // a patch from an earlier run as evidence for this one.
-    let diffs_dir = out_dir.join("diffs");
-    if diffs_dir.exists() {
-        fs::remove_dir_all(&diffs_dir)
-            .map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;
-    }
-    fs::create_dir_all(&diffs_dir).map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;
-
+    output.reset()?;
     for (package, diff_name) in classification.packages.iter().zip(&diff_names) {
-        write_diff(&diffs_dir, package, diff_name.as_deref())?;
+        if let Some(diff_name) = diff_name {
+            output.write_patch(diff_name, package.patch())?;
+        }
     }
+    output.complete(&report)?;
 
-    // Write through a staging path so even a partial write is not mistaken for
-    // the completion marker. Keeping both paths together avoids a cross-filesystem rename.
-    let staged_report_path = report_path.with_extension("json.tmp");
-    fs::write(&staged_report_path, report.as_bytes())
-        .map_err(|error| WriteFileError::caused_by(&staged_report_path, error))?;
-    fs::rename(&staged_report_path, &report_path)
-        .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
-
+    let report_path = out_dir.join("report.json");
     let needing_increment = classification
         .packages
         .iter()
@@ -187,22 +189,6 @@ fn diff_file_name(package: &PackageClass) -> Option<String> {
     Some(format!("{}.patch", package.name))
 }
 
-// Patch files are a dump of `package.patch`; bytes are covered by `naive_patch`.
-#[cfg_attr(test, mutants::skip)]
-fn write_diff(
-    diffs_dir: &Path,
-    package: &PackageClass,
-    file_name: Option<&str>,
-) -> Result<(), AppError> {
-    let Some(file_name) = file_name else {
-        return Ok(());
-    };
-    let path = diffs_dir.join(file_name);
-    fs::write(&path, package.patch().as_bytes())
-        .map_err(|error| WriteFileError::caused_by(&path, error))?;
-    Ok(())
-}
-
 fn report_package(package: &PackageClass, diff_path: Option<String>) -> ReportPackage {
     ReportPackage {
         name: package.name.clone(),
@@ -221,4 +207,247 @@ fn report_package(package: &PackageClass, diff_path: Option<String>) -> ReportPa
         consumer_contract: package.consumer_contract,
         untracked: package.untracked.clone(),
     }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    use semver::Version;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::classify::fixture::{classification, package};
+    use crate::groups::Groups;
+    use crate::metadata::{DepKind, ReportedDep, VersionTarget};
+
+    #[test]
+    fn command_publishes_current_patches_and_complete_report_metadata() {
+        let mut api = package("api", PackageStatus::NeedsIncrement, "-old\n+new\n");
+        api.group = Some("api".to_owned());
+        api.consumer_contract = true;
+        api.untracked = vec!["untracked.rs".to_owned()];
+        api.dependencies = vec![ReportedDep {
+            name: "pending".to_owned(),
+            req: "1.0.1".to_owned(),
+            exact_pin: false,
+            kind: DepKind::Normal,
+            public: true,
+        }];
+        let mut pending = package(
+            "pending",
+            PackageStatus::PendingRelease,
+            "-before\n+after\n",
+        );
+        pending.dependents = vec!["api".to_owned()];
+        let mut data = classification(vec![
+            api,
+            package("inherited", PackageStatus::NeedsIncrement, ""),
+            pending,
+        ]);
+        data.work_tree.version_targets.push(VersionTarget {
+            name: "helper".to_owned(),
+            version: Version::new(1, 0, 0),
+            manifest_path: PathBuf::from("helper/Cargo.toml"),
+            publishable: false,
+        });
+        data.work_tree.groups = Groups::from_edges(
+            data.work_tree
+                .version_targets
+                .iter()
+                .map(|target| target.name.clone()),
+            [("api".to_owned(), "helper".to_owned())],
+        );
+        data.groups = data
+            .work_tree
+            .groups
+            .verdicts(&data.work_tree.target_versions(), &HashSet::new());
+        let mut output = MemoryOutput {
+            report: Some("old completion".to_owned()),
+            patches: BTreeMap::from([("stale.patch".to_owned(), "stale".to_owned())]),
+            ..MemoryOutput::default()
+        };
+        let directory = Path::new("report output");
+        let message = create_report(directory, || Ok(data), &mut output).unwrap();
+        assert_eq!(
+            output.operations,
+            [
+                Operation::Reset,
+                Operation::Patch,
+                Operation::Patch,
+                Operation::Complete
+            ]
+        );
+        assert_eq!(
+            output.patches,
+            BTreeMap::from([
+                ("api.patch".to_owned(), "-old\n+new\n".to_owned()),
+                ("pending.patch".to_owned(), "-before\n+after\n".to_owned()),
+            ])
+        );
+        let json: Value = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
+        assert_eq!(json.get("schema_version"), Some(&json!(SCHEMA_VERSION)));
+        assert_eq!(json.get("head"), Some(&json!("classified-head")));
+        assert_eq!(json.get("packages").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(
+            json.pointer("/packages/0").unwrap(),
+            &json!({
+                "name": "api", "declared_version": "1.0.0", "group": "api",
+                "status": "needs-increment",
+                "anchor": {"commit": "package-anchor", "version": "1.0.0"},
+                "changed": [{"source": "package", "path": "src/lib.rs", "change": "modified"}],
+                "stat": {"files": 1, "insertions": 1, "deletions": 1},
+                "diff_path": "diffs/api.patch",
+                "dependencies": [{"name": "pending", "req": "1.0.1", "exact_pin": false, "public": true}],
+                "dependents": [], "consumer_contract": true, "untracked": ["untracked.rs"]
+            })
+        );
+        assert_eq!(
+            json.pointer("/packages/2/diff_path"),
+            Some(&json!("diffs/pending.patch"))
+        );
+        assert_eq!(
+            json.pointer("/packages/2/dependents"),
+            Some(&json!(["api"]))
+        );
+        assert!(json.pointer("/packages/1/diff_path").is_none());
+        assert_eq!(
+            json.get("non_publishable_packages").unwrap(),
+            &json!([
+                {"name": "helper", "declared_version": "1.0.0", "group": "api"}
+            ])
+        );
+        assert_eq!(
+            json.get("groups").unwrap(),
+            &json!({
+                "api": {"members": ["api", "helper"], "consistent": true, "version": "1.0.0"}
+            })
+        );
+        assert_eq!(
+            message,
+            format!(
+                "Wrote {} (2 needing an increment)",
+                quote_path(&directory.join("report.json").display().to_string()),
+            )
+        );
+    }
+
+    #[test]
+    fn unchanged_and_new_packages_have_no_patch_name() {
+        for data in [
+            package("unchanged", PackageStatus::Unchanged, ""),
+            PackageClass::new_package(
+                "new",
+                Version::new(1, 0, 0),
+                PathBuf::from("new/Cargo.toml"),
+            ),
+        ] {
+            assert!(diff_file_name(&data).is_none());
+        }
+    }
+
+    #[test]
+    fn classification_failure_does_not_start_publication() {
+        let mut output = MemoryOutput::default();
+        let error = create_report(
+            Path::new("out"),
+            || Err(PublicationFailure::new().into()),
+            &mut output,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<PublicationFailure>().is_some());
+        assert!(output.operations.is_empty());
+    }
+
+    #[test]
+    fn publication_errors_propagate_without_completing_a_partial_report() {
+        for (fail, expected) in [
+            (Operation::Reset, vec![Operation::Reset]),
+            (Operation::Patch, vec![Operation::Reset, Operation::Patch]),
+            (
+                Operation::Complete,
+                vec![Operation::Reset, Operation::Patch, Operation::Complete],
+            ),
+        ] {
+            let data = classification(vec![package("api", PackageStatus::NeedsIncrement, "patch")]);
+            let mut output = MemoryOutput {
+                fail: Some(fail),
+                ..MemoryOutput::default()
+            };
+            let error = emit_report(Path::new("out"), &data, &mut output).unwrap_err();
+            assert!(error.find_source::<PublicationFailure>().is_some());
+            assert_eq!(output.operations, expected);
+            assert!(output.report.is_none());
+        }
+    }
+
+    #[test]
+    fn empty_report_completes_with_no_patches_or_pending_increment() {
+        let mut output = MemoryOutput::default();
+        let message = emit_report(Path::new("out"), &classification(vec![]), &mut output).unwrap();
+        assert_eq!(output.operations, [Operation::Reset, Operation::Complete]);
+        assert!(output.patches.is_empty());
+        let report: Value = serde_json::from_str(output.report.as_ref().unwrap()).unwrap();
+        assert_eq!(report.get("packages"), Some(&json!([])));
+        assert!(message.contains("(0 needing an increment)"));
+    }
+
+    /// Records publication effects without consulting a filesystem or rebuilding classification.
+    #[derive(Default)]
+    struct MemoryOutput {
+        operations: Vec<Operation>,
+        patches: BTreeMap<String, String>,
+        report: Option<String>,
+        fail: Option<Operation>,
+    }
+
+    impl MemoryOutput {
+        fn record(&mut self, operation: Operation) -> Result<(), AppError> {
+            self.operations.push(operation);
+            if self.fail == Some(operation) {
+                return Err(PublicationFailure::new().into());
+            }
+            Ok(())
+        }
+    }
+
+    impl ReportOutput for MemoryOutput {
+        fn reset(&mut self) -> Result<(), AppError> {
+            self.record(Operation::Reset)?;
+            self.patches.clear();
+            self.report = None;
+            Ok(())
+        }
+
+        fn write_patch(&mut self, name: &str, patch: &str) -> Result<(), AppError> {
+            self.record(Operation::Patch)?;
+            assert!(self.report.is_none());
+            assert!(
+                self.patches
+                    .insert(name.to_owned(), patch.to_owned())
+                    .is_none()
+            );
+            Ok(())
+        }
+
+        fn complete(&mut self, report: &str) -> Result<(), AppError> {
+            self.record(Operation::Complete)?;
+            assert!(self.report.replace(report.to_owned()).is_none());
+            Ok(())
+        }
+    }
+
+    /// Publication milestones whose ordering makes a completed artifact usable.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Operation {
+        Reset,
+        Patch,
+        Complete,
+    }
+
+    /// Identifies a publication/acquisition failure without asserting its wording.
+    #[ohno::error]
+    struct PublicationFailure;
 }

@@ -10,6 +10,14 @@ use tempfile::{TempDir, tempdir};
 
 use crate::git::{GitRepo, TreeEntry};
 
+/// An inert handle for in-process orchestration fixtures; it acquires no repository state.
+pub(crate) fn unopened(root: &Path) -> GitRepo {
+    GitRepo {
+        root: root.to_path_buf(),
+        prefix: String::new(),
+    }
+}
+
 /// An independently mutable repository for exercising one acquisition boundary.
 pub(crate) struct Repository {
     directory: TempDir,

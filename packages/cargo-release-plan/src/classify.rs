@@ -43,6 +43,10 @@ use crate::{
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod dependency_tests;
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) mod fixture;
+
 /// Name Cargo requires for a workspace lockfile.
 const LOCKFILE_FILE_NAME: &str = "Cargo.lock";
 /// Name Cargo requires for a package manifest.
