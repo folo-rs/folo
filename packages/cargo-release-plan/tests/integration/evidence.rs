@@ -62,7 +62,9 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     );
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let candidate = evidence_manifest(&plan);
-    let root = candidate.parent().unwrap();
+    // Mutations of emitted paths must never control fixture writes or recursive cleanup.
+    let root = fixture.path().join("preview/workspace");
+    assert_eq!(candidate, root.join("Cargo.toml"));
     assert!(
         fs::read_to_string(root.join("packages/tool/Cargo.toml"))
             .unwrap()
@@ -87,7 +89,7 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     );
 
     let output = Command::new("cargo")
-        .current_dir(root)
+        .current_dir(&root)
         .args([
             "metadata",
             "--locked",

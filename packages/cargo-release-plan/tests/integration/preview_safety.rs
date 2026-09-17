@@ -8,6 +8,26 @@ use tempfile::tempdir;
 use crate::harness::seeded_package;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reserves an owned prospective directory through preparation"
+)]
+fn preparation_preserves_an_occupied_prospective_directory() {
+    let fixture = seeded_package();
+    fixture.write("prepared/.prospective/keep", "another owner");
+    run(&RunInput::Prepare {
+        output: fixture.path().join("prepared"),
+        base: Some("HEAD".to_owned()),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap_err();
+    assert_eq!(fixture.read("prepared/.prospective/keep"), "another owner");
+    assert!(!fixture.path().join("prepared/prepared.json").exists());
+    assert!(!fixture.path().join("Cargo.lock").exists());
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "uses owned preview artifact files")]
 fn preview_output_cannot_destroy_an_input_document() {
     let directory = tempdir().unwrap();
