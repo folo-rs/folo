@@ -399,7 +399,7 @@ when no emulator or account is reachable, so the ordinary multi-platform test jo
 green without one; the Azure jobs flip that skip into a hard failure so a misconfigured job
 can never silently pass by testing nothing. All Azure authentication uses GitHub OIDC
 workload-identity federation — no long-lived secret is stored — and is gated to same-repo
-runs, since a fork cannot federate into the tenant.
+runs by explicit workflow policy.
 
 Real-Azure authentication modes share a job and run sequentially against independently
 created test containers. Each pass selects its credential through step-local configuration;
@@ -421,8 +421,9 @@ standard `AZURE_*` names by the shared federation helper. Production writers sel
 `AZURE_PROD_CLIENT_ID`; readers select `AZURE_PROD_READER_CLIENT_ID`. Reader selection never
 falls back to the writer, and using the same client ID for both is a configuration error.
 
-Federation only works for **same-repo** runs: a fork's run cannot mint a token whose subject
-names this repository, so fork PRs skip the Azure-touching jobs rather than fail.
+Azure-touching work is restricted to **same-repo** PRs by an explicit head-repository check.
+The `pull_request` subject does not encode whether the head comes from a fork, so subject
+matching and the absence of stored secrets do not replace that workflow gate.
 
 Managed identities separate durable production writes, production reads, and disposable tests:
 

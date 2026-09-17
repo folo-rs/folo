@@ -190,7 +190,7 @@ cargo run -p cargo-bench-history --bin cargo-bench-history -- collect --workspac
 ```
 
 This writes the configured production account and requires local contributor
-access. Use `--local <path>` for a throwaway run that never accesses Azure.
+access. Use `--local=<path>` for a throwaway run that never accesses Azure.
 
 `teardown.ps1` deletes the entire production resource group and **permanently
 deletes collected history**, both identities and their access configuration.

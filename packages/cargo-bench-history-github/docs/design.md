@@ -6,7 +6,8 @@ the main tool remains independent of GitHub.
 
 The complete action design lives in
 [`../../cargo-bench-history/docs/reusable-action.md`](../../cargo-bench-history/docs/reusable-action.md).
-This package implements that document's report-sink commands. It deliberately has no stable API
+This package implements its GitHub lifecycle and workflow-evidence responsibilities.
+It deliberately has no stable API
 or command-line contract; the separately versioned action pins a tested companion version.
 
 ## Responsibilities
@@ -19,7 +20,8 @@ The companion:
 * reports and resolves workflow failures;
 * retires pull-request placeholders after failure or when nothing benchmarkable changed;
 * binds successful collection to actual workflow job attempts and measured machine keys; and
-* reconciles an ambiguous create by looking up the hidden identity marker before retrying.
+* reconciles an ambiguous create against the intended identity and content rather than retrying
+  it blindly.
 
 It embeds the Markdown summary rendered by `cargo-bench-history` verbatim. It never interprets
 findings or re-derives analysis vocabulary.
