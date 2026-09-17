@@ -38,16 +38,27 @@ target are exactly `required-checks`.
 ## Standard validation structure
 
 `standard-validation.yml` groups related checks into shared environments, with sequential
-steps that stop on the first failure. Independent jobs and platform legs retain parallel execution.
+steps that retain independent findings after a failure. Independent jobs and platform legs
+retain parallel execution with matrix fail-fast disabled. Check-step conditions use
+`!cancelled()` and successful setup outcomes rather than GitHub's implicit `success()` gate.
+They preserve the original scope conditions and any check-specific prerequisites. Failed steps
+keep their failure status, so the combined job fails without a separate verdict step or
+`continue-on-error`. Setup and other genuine prerequisite chains still stop when an input fails.
 The `prepare` job publishes the affected-package set and the independent path plan, supplemented by native-helper package
 impact for script integration tests. Release validation remains unconditional and independent
 of preparation, with separately reported steps in one environment.
 
-The `clippy-dev` matrix runs dev-profile Clippy followed by minimum-dependency compilation;
-its Ubuntu leg first checks workspace formatting. `check-frozen` runs last because it
+The `clippy-dev-docs` matrix shares setup for dev-profile Clippy, documentation and
+minimum-dependency compilation; its Ubuntu leg first checks workspace formatting.
+Documentation steps build all-feature and default-feature documentation and run doctests.
+Only those steps skip macOS on pull requests; Clippy and minimum-dependency compilation
+retain the full platform matrix. `check-frozen` runs last because it
 rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
 Each platform proceeds independently rather than waiting for other platforms' Clippy results.
-The `docs` matrix builds all-feature and default-feature documentation and then runs doctests.
+The `test-x64` matrix shares its Linux/Windows environment across coverage-instrumented tests,
+benchmark smoke tests and external-type checks. Test or upload failures do not suppress
+benchmark or external-type checks. Coverage reporting consumes successful measurement;
+uploading consumes the generated report.
 
 Only pull requests use the pruned validation set. Pushes to `main` and scheduled/manual
 main runs use the full set without invoking delta.
@@ -63,6 +74,8 @@ network paths. The combined selection contributes their coverage to the same Azu
 
 `test-azure` runs `just test-azure` with the developer credential and then with the application's
 self-minting GitHub OIDC credential. Setup, compilation and `azure/login` are shared.
+Both credential passes require successful login, but either pass can report failures
+independently of the other.
 An empty step-local `AZURE_CLIENT_ID` selects the developer credential; the self-minting
 step sets it to `AZURE_TEST_CLIENT_ID`. The latter ignores the Azure CLI session for application
 storage access, while test-container cleanup still uses that session.
@@ -103,7 +116,8 @@ directories containing no tests fail rather than producing a successful empty ru
 
 The `test-scripts` job also runs static analysis in the same environment. It is selected when
 either analysis or tests are needed, while each step keeps its own path/domain condition.
-Analysis runs first; diagnostics are uploaded even after a failure.
+Analysis runs first; its failure does not suppress selected tests. Diagnostics are uploaded
+even after a failure.
 
 Recipe files follow their automation responsibility: benchmark history and release commands
 have separate imports, while setup installers live beside the setup module. Workflow
@@ -131,6 +145,7 @@ other concurrency diagnostics and other workflows remain checked.
 The queue workflow is independent of Standard validation and has no preparation/delta job.
 Its Clippy matrix runs `just clippy dev` with no package selector on the same platforms as
 standard dev Clippy. The Ubuntu leg first runs `just format-check`, sharing setup.
+Clippy still runs after a formatting failure when setup succeeded.
 A separate full-history job runs only `just validate-versions` with
 `RELEASE_PLAN_BASE` set to the event's immutable `merge_group.base_sha`. This prevents a
 moving `origin/main` from changing the candidate's release baseline.
@@ -184,8 +199,10 @@ across live binstall metadata validation, version readiness and semantic-version
 Release-target and archive-shape obligations follow Cargo's discovered binary targets,
 including source additions that do not edit a manifest. Steps run in order: binstall validation,
 version readiness, the SemVer canary and the scoped comparison. The comparison consumes the
-version step's consumer-contract targets directly. Any failed step ends further validation
-and fails the combined job.
+version step's consumer-contract targets directly, which are emitted before its readiness
+verdict. Binstall validation, readiness and the canary run independently after successful
+setup. The comparison requires a successful canary and nonempty report-selected targets;
+a missing version increment does not suppress it. Every failed check fails the combined job.
 
 Rust plan-generation tests assert properties of the generated plan over a matrix of report
 states, not only by testing individual guards. The properties are that every entry is well formed
@@ -269,7 +286,7 @@ The `standard` job calls `standard-validation.yml` after the main-only plan gate
 the workflow includes its complete check graph and platform matrices instead of maintaining
 a nightly copy. GitHub preserves the caller's `schedule` or `workflow_dispatch` event in
 the reusable workflow. Both scope planners select full-workspace/full-tooling outputs for
-these events, and only pull requests select the reduced docs matrix. All jobs check out the
+these events, and only pull requests omit the macOS documentation steps. All jobs check out the
 same event commit; main release validation uses that immutable commit as its baseline.
 
 The caller forwards the Codecov secret and grants the permissions declared by the called
@@ -290,7 +307,10 @@ commit, installs the environment and invokes the same Just recipe used locally.
 The catalog defines recipes, platforms, packages and shards; there
 is no hosted selection of a different source commit or reduced scope.
 
-Each execution leg runs independently with fail-fast disabled. Always-upload steps
+Each execution leg runs independently with fail-fast disabled. Jobs combining independent
+checks use the same setup-gated continuation as standard validation: release compilation
+continues after release Clippy fails, and ARM benchmark smoke tests continue after test or
+upload failures. Always-upload steps
 preserve its readable summary and raw diagnostics even after failure. The thin
 capture wrapper records the exact Just command and preserves its exit status.
 Generic process capture owns stream handling and child cleanup, not checker behavior.

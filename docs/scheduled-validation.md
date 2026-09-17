@@ -56,8 +56,9 @@ and formats diagnostics.
 
 A checker finding fails its Actions job and the validation run. Missed mutations,
 mutation timeouts, setup failures and incomplete execution remain failures.
-Independent matrix jobs continue after another job fails, and diagnostic uploads
-run even on failure.
+Independent matrix jobs and check steps continue after another check fails, provided their
+setup and check-specific prerequisites succeeded and the run is not cancelled. Any failed
+check fails its job, and diagnostic uploads run even on failure.
 
 Planning, standard and deep checks, and failure reporting belong to the same main-only workflow.
 Main pushes do not cancel its standard checks. Publication remains independent of post-merge

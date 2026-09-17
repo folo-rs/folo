@@ -69,7 +69,9 @@ execution and reporting do not depend on the availability of a Local App.
 ### Failure diagnostics
 
 Checker findings and execution failures make the Actions job and workflow fail.
-Independent matrix jobs continue so one failed shard does not cancel the others.
+Independent matrix jobs and check steps continue so a failed check does not suppress other findings.
+Checks require successful setup and any check-specific prerequisites, and cancellation stops
+further validation.
 Readable reports include useful diagnostics, source and direct job links; full logs
 and tool artifacts supplement rather than replace the explanation. Setup failures
 are reported even when no checker artifact exists.
@@ -101,11 +103,13 @@ do not select permissions or opt out of jobs.
 ## Job granularity and gating
 
 Validation groups short, related checks that share a runner environment into named steps,
-avoiding queue and setup costs that outweigh the checks themselves. Preparation shares a
-checkout and runner; version readiness and API compatibility share their release-validation
+reducing concurrent runner demand and avoiding queue and setup costs that outweigh the checks
+themselves. Preparation shares a checkout and runner; version readiness and API compatibility share their release-validation
 environment. Independent expensive checks retain parallel jobs when that improves feedback
-time. Separate steps preserve failure attribution, and each job stops checking at its first
-failure. Artifact collection and resource cleanup still run after failure. The local recipes
+time. Separate steps preserve failure attribution. After successful setup, independent checks
+continue after earlier failures and the job fails if any check fails. A failed prerequisite
+blocks only the work that depends on it; cancellation stops further checks. Artifact collection
+and resource cleanup still run after failure. The local recipes
 define the local check suites, while workflow jobs own execution cadence, platform selection,
 prerequisites and evidence capture. Clippy stands in for a bare `cargo check` here: Clippy compiles the code as a
 prerequisite to linting it, so a standalone `check` job would only re-prove what a green
@@ -135,8 +139,9 @@ before downstream checks can run or be accepted as intentionally skipped.
 Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
 base. Live binstall metadata validation accompanies it because Cargo target discovery can
-change release obligations without a manifest edit. API compatibility follows successful
-version readiness in the same job using the report's consumer-contract selection.
+change release obligations without a manifest edit. API compatibility uses the report's
+consumer-contract selection and a working compatibility tool; a failed version-readiness
+verdict does not suppress comparisons when the report supplied targets.
 
 ## Platform strategy
 
@@ -153,8 +158,8 @@ Not every shallow check earns its place on every pull request. The
 full shallow matrix runs on each push to `main`, but pull-request validation prunes the rarely-informative
 legs to cut runner cost, leaning on push-to-`main` as the backstop for what it drops. PRs run the
 test and docs suites only on the x86_64 Windows and Linux runners. The macOS doctest and
-docs jobs wait for a push to `main`, because re-running these platform-independent
-suites on macOS is rarely informative.
+docs steps run on main pushes and scheduled/manual main runs, because re-running these
+platform-independent suites on macOS is rarely informative.
 Release-profile Clippy runs only in Deep validation. The
 compile-oriented passes in Standard validation (dev Clippy and frozen-minimum check)
 deliberately keep their macOS leg on PRs, because a cheap macOS cross-compile still catches
@@ -165,7 +170,7 @@ pass runs in Deep validation. Because a push to `main` is the first place Standa
 validation's pruned checks can fail,
 that event — unlike a PR — files a tracking issue (see Failure alerting).
 
-Only pull-request events select the pruned docs/doctest matrix. Main pushes and
+Only pull-request events prune the macOS docs/doctest steps. Main pushes and
 scheduled/manual main runs use the full matrix and skip delta. Pull-request delta analysis
 uses `origin/main`.
 
@@ -190,9 +195,9 @@ Workflow changes alone do not change that live repository policy.
 
 ## External type surface
 
-A dedicated job fails validation when a library exposes an external type — one that is
-neither a standard-library type nor defined by the crate itself (a type from another crate,
-first-party or not) — in its public API without that type being listed in the crate's
+A dedicated check step in the x64 test job fails validation when a library exposes an external
+type — one that is neither a standard-library type nor defined by the crate itself (a type from
+another crate, first-party or not) — in its public API without that type being listed in the crate's
 allow-list. The intent is to catch *accidental* additions to the external surface (a leaked
 dependency type, a forgotten `pub`), not to prohibit external types outright; an intentional
 exposure is admitted by adding it to the crate's
