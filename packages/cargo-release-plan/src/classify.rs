@@ -43,6 +43,10 @@ use crate::{
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod dependency_tests;
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) mod fixture;
+
 /// Name Cargo requires for a workspace lockfile.
 const LOCKFILE_FILE_NAME: &str = "Cargo.lock";
 /// Name Cargo requires for a package manifest.
@@ -264,6 +268,46 @@ enum Verdict {
         changed: Vec<ChangedItem>,
         patch: String,
     },
+}
+
+impl Verdict {
+    /// Classifies acquired release evidence without accessing the repository.
+    fn anchored(
+        name: &str,
+        declared: &Version,
+        anchor: Anchor,
+        changed: Vec<ChangedItem>,
+        patch: String,
+    ) -> Result<Self, AppError> {
+        // The release anchor bounds every declared version, independently of content changes.
+        // Ref: docs/design.md, "Version monotonicity".
+        if *declared < anchor.version {
+            return Err(VersionRegressionError::new(
+                name,
+                declared.clone(),
+                anchor.version.clone(),
+                &anchor.commit,
+            )
+            .into());
+        }
+
+        let status =
+            PackageStatus::from_evidence(declared, Some(&anchor.version), !changed.is_empty())
+                .expect("the anchor is present and version regression was rejected");
+        Ok(match status {
+            PackageStatus::PendingRelease => Self::PendingRelease {
+                anchor,
+                changed,
+                patch,
+            },
+            PackageStatus::Unchanged => Self::Unchanged { anchor },
+            PackageStatus::NeedsIncrement => Self::NeedsIncrement {
+                anchor,
+                changed,
+                patch,
+            },
+        })
+    }
 }
 
 /// Classification status of one publishable package.
@@ -611,39 +655,7 @@ fn classify_one(
         });
     }
 
-    // A declared version below the anchor cannot describe a release: the anchor
-    // version is already on the base line, so the work tree would re-publish an
-    // existing version with different content. Ref: docs/design.md,
-    // "Version monotonicity".
-    if package.manifest.version < anchor.version {
-        return Err(VersionRegressionError::new(
-            name,
-            package.manifest.version.clone(),
-            anchor.version.clone(),
-            &anchor.commit,
-        )
-        .into());
-    }
-
-    let status = PackageStatus::from_evidence(
-        &package.manifest.version,
-        Some(&anchor.version),
-        !changed.is_empty(),
-    )
-    .expect("the anchor is present and version regression was rejected");
-    let verdict = match status {
-        PackageStatus::PendingRelease => Verdict::PendingRelease {
-            anchor,
-            changed,
-            patch,
-        },
-        PackageStatus::Unchanged => Verdict::Unchanged { anchor },
-        PackageStatus::NeedsIncrement => Verdict::NeedsIncrement {
-            anchor,
-            changed,
-            patch,
-        },
-    };
+    let verdict = Verdict::anchored(name, &package.manifest.version, anchor, changed, patch)?;
     let class = PackageClass {
         name: name.clone(),
         declared_version: package.manifest.version.clone(),
@@ -2200,6 +2212,89 @@ mod tests {
                 PackageStatus::from_evidence(&declared, previous, changed),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn anchored_classification_rejects_regression_with_or_without_content_changes() {
+        // The digit boundary distinguishes parsed version ordering from lexical ordering.
+        let anchor = Anchor {
+            commit: "released".to_owned(),
+            version: Version::new(1, 10, 0),
+        };
+        for changed in [
+            Vec::new(),
+            vec![ChangedItem::Inherited {
+                field: "package.rust-version".to_owned(),
+            }],
+        ] {
+            let error = Verdict::anchored(
+                "library",
+                &Version::new(1, 9, 0),
+                anchor.clone(),
+                changed,
+                String::new(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .find_source::<VersionRegressionError>()
+                    .unwrap()
+                    .package(),
+                "library"
+            );
+        }
+    }
+
+    #[test]
+    fn anchored_classification_preserves_equal_and_increased_release_evidence() {
+        let anchor = Anchor {
+            commit: "released".to_owned(),
+            version: Version::new(1, 9, 0),
+        };
+        for declared in [anchor.version.clone(), Version::new(1, 10, 0)] {
+            for has_changes in [false, true] {
+                let (changed, patch) = if has_changes {
+                    (
+                        vec![ChangedItem::Package {
+                            path: "src/lib.rs".to_owned(),
+                            change: "modified".to_owned(),
+                        }],
+                        "-old\n+new\n".to_owned(),
+                    )
+                } else {
+                    (Vec::new(), String::new())
+                };
+                let verdict = Verdict::anchored(
+                    "library",
+                    &declared,
+                    anchor.clone(),
+                    changed.clone(),
+                    patch.clone(),
+                )
+                .unwrap();
+                let class = PackageClass::with_verdict(
+                    "library",
+                    declared.clone(),
+                    verdict,
+                    PathBuf::from("library/Cargo.toml"),
+                );
+                let expected = if declared == anchor.version {
+                    if has_changes {
+                        PackageStatus::NeedsIncrement
+                    } else {
+                        PackageStatus::Unchanged
+                    }
+                } else {
+                    PackageStatus::PendingRelease
+                };
+                assert_eq!(class.status(), expected);
+                let actual_anchor = class.anchor().unwrap();
+                assert_eq!(actual_anchor.version, anchor.version);
+                assert_eq!(actual_anchor.commit, anchor.commit);
+                assert_eq!(class.changed(), changed);
+                assert_eq!(class.patch(), patch);
+            }
         }
     }
 

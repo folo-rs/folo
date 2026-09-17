@@ -64,14 +64,15 @@ independent: deep validation does not implicitly rerun the shallow suite.
 The **Standard validation** workflow performs shallow PR/push checks.
 **Merge queue validation** runs full-workspace dev Clippy, formatting and version readiness.
 **Deep validation** reuses the complete standard suite and runs the full deep suite on merged
-`main`, without delta or PR-platform pruning.
+`main`, without affected-package or tooling-input selection.
 Scheduled checks invoke the same `just miri`, `just miri-harder`, `just mutants`
 and `just careful` recipes used locally. Recipes own the toolchains, test runners,
 helper preparation and check behavior; scheduling only selects platform, packages
 and shards and captures diagnostics.
 CI groups related commands into sequential steps in shared jobs and diagnostic-producing
-matrix entries rather than running one monolithic local recipe. A job stops checking on its
-first failure, while diagnostic collection and resource cleanup remain available.
+matrix entries rather than running one monolithic local recipe. Failed prerequisites and
+cancellation block dependent work, but check failures do not suppress independent checks.
+Any failed check fails the job; diagnostic collection and resource cleanup remain available.
 Repair authors also run the particular deep checks needed to verify
 their repair locally and link the results for review. Scheduling belongs to workflow orchestration, not
 to the definitions of the local recipes. To run just mutation testing, use

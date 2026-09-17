@@ -28,8 +28,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        id: setup
       - name: Run format-check
-        if: matrix.platform == 'ubuntu-latest'
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.platform == 'ubuntu-latest' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -37,6 +38,9 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just format-check
       - name: Run clippy dev on ${{ matrix.platform }}
+        # Formatting failures must not suppress independent compiler/lint findings.
+        # Ref: .github/workflows/design.md#job-granularity-and-gating.
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest

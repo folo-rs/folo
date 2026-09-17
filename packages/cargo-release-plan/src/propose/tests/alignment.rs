@@ -222,3 +222,53 @@ fn sufficient_group_decision_is_dropped_but_drift_is_aligned() {
     let plan = generate(&report, &[("nm", "patch")]).unwrap();
     assert_eq!(entries(&plan), json!([{"name": "nm", "version": "1.1.0"}]));
 }
+
+#[test]
+fn moving_published_member_can_rewrite_its_external_dependency_at_exact_alignment() {
+    let report = report(
+        vec![
+            package("library", "1.1.0", Some("1.1.0")),
+            depends(
+                package("library_impl", "1.0.0", Some("1.0.0")),
+                "dependency",
+                false,
+            ),
+            needs(package("dependency", "1.0.0", Some("1.0.0"))),
+        ],
+        vec![],
+        &[&["library", "library_impl"]],
+    );
+    let plan = generate(&report, &[("dependency", "patch")]).unwrap();
+    assert_versions(
+        &report,
+        &plan,
+        &json!({"library": "1.1.0", "library_impl": "1.1.0", "dependency": "1.0.1"}),
+    );
+}
+
+#[test]
+fn pending_leader_can_rewrite_its_laggard_requirement_without_an_extra_increment() {
+    assert_unpublished_alignment(Some("1.0.0"));
+}
+
+#[test]
+fn new_leader_can_rewrite_its_laggard_requirement_without_an_extra_increment() {
+    assert_unpublished_alignment(None);
+}
+
+fn assert_unpublished_alignment(anchor: Option<&str>) {
+    let report = report(
+        vec![
+            depends(package("library", "1.1.0", anchor), "library_impl", false),
+            package("library_impl", "1.0.0", Some("1.0.0")),
+        ],
+        vec![],
+        &[&["library", "library_impl"]],
+    );
+    let plan = generate(&report, &[]).unwrap();
+    assert_versions(
+        &report,
+        &plan,
+        &json!({"library": "1.1.0", "library_impl": "1.1.0"}),
+    );
+}

@@ -12,7 +12,7 @@ use crate::ReadFileError;
 use crate::plan::{IncrementLevel, PlanIncrement, increment_version};
 use crate::propose::generate::Proposal;
 use crate::text::{Quotable as _, quote_path};
-use crate::verbose::Verbose;
+use crate::verbose::NoteSink;
 
 /// Local decision-file revision used by the increment-versions skill.
 const DECISION_SCHEMA_VERSION: u32 = 1;
@@ -118,7 +118,7 @@ impl Proposal<'_> {
     pub(crate) fn decision_increments(
         &self,
         levels: &BTreeMap<String, ChangeLevel>,
-        verbose: Verbose,
+        verbose: &impl NoteSink,
     ) -> Result<Vec<PlanIncrement>, AppError> {
         let mut increments = Vec::new();
         for (name, level) in levels {
@@ -222,6 +222,8 @@ struct PrereleaseDecision {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::RefCell;
+
     use serde_json::json;
 
     use super::*;
@@ -234,7 +236,10 @@ mod tests {
             vec![
                 package("breaking", "1.0.0", Some("1.0.0")),
                 package("feature", "1.0.0", Some("1.0.0")),
-                package("pending", "1.0.1", Some("1.0.0")),
+                package("patch", "1.0.0", Some("1.0.0")),
+                package("pending-breaking", "2.0.0", Some("1.0.0")),
+                package("pending-feature", "1.1.0", Some("1.0.0")),
+                package("pending-patch", "1.0.1", Some("1.0.0")),
             ],
             vec![],
             &[],
@@ -243,10 +248,14 @@ mod tests {
         let levels = BTreeMap::from([
             ("breaking".to_owned(), ChangeLevel::Breaking),
             ("feature".to_owned(), ChangeLevel::Nonbreaking),
-            ("pending".to_owned(), ChangeLevel::Patch),
+            ("patch".to_owned(), ChangeLevel::Patch),
+            ("pending-breaking".to_owned(), ChangeLevel::Breaking),
+            ("pending-feature".to_owned(), ChangeLevel::Nonbreaking),
+            ("pending-patch".to_owned(), ChangeLevel::Patch),
         ]);
+        let notes = RefCell::new(Vec::new());
         let increments = Proposal::new(&report)
-            .decision_increments(&levels, Verbose::new(true))
+            .decision_increments(&levels, &notes)
             .unwrap();
         assert_eq!(
             increments,
@@ -261,8 +270,33 @@ mod tests {
                     level: Some("minor".to_owned()),
                     version: None,
                 },
+                PlanIncrement {
+                    name: "patch".to_owned(),
+                    level: Some("patch".to_owned()),
+                    version: None,
+                },
             ]
         );
+        let notes = notes.into_inner();
+        assert_eq!(notes.len(), levels.len());
+        for (name, semantic_level, declared, minimum, emitted) in [
+            ("breaking", "breaking", "1.0.0", "2.0.0", true),
+            ("feature", "nonbreaking", "1.0.0", "1.1.0", true),
+            ("patch", "patch", "1.0.0", "1.0.1", true),
+            ("pending-breaking", "breaking", "2.0.0", "2.0.0", false),
+            ("pending-feature", "nonbreaking", "1.1.0", "1.1.0", false),
+            ("pending-patch", "patch", "1.0.1", "1.0.1", false),
+        ] {
+            let note = notes
+                .iter()
+                .find(|note| note.contains(&format!("package {}", quote_path(name))))
+                .unwrap();
+            assert!(note.contains(&format!("semantic level '{semantic_level}'")));
+            assert!(note.contains(&format!("declared version {declared}")));
+            assert!(note.contains(&format!("minimum version {minimum}")));
+            assert!(note.contains("anchor 1.0.0"));
+            assert_eq!(note.contains("not emitted"), !emitted);
+        }
     }
 
     #[test]

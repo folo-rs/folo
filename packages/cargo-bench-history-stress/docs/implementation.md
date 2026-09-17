@@ -35,13 +35,44 @@ binary integration scenarios, outside library mutation testing. Only these acqui
 adapters carry justified mutation exclusions; their parsing and decision logic remains
 instrumented and mutation-tested without a runtime, filesystem or subprocess fixture.
 
+## Configuration writes
+
+Storage targets render their backend configuration without performing I/O. The writer
+accepts those rendered contents, derives the same destination used by measurement,
+awaits parent creation before writing, and forwards failures with the attempted path.
+Small asynchronous operations keep that sequencing and error reporting independent of
+Tokio and the filesystem. The execution coordinator logs the returned destination only
+after a successful write.
+
+The nonpublished library exposes the filesystem writer directly to Cargo integration
+tests. Those tests cover parent creation, replacement with local and Azure configuration
+contents, truncation and filesystem failures without constructing storage staging areas
+or cloud resources. Only the thin Tokio delegation carries a mutation exclusion;
+configuration rendering, destination selection, sequencing and error forwarding remain
+library mutation targets.
+
+## Measurement
+
+Each analysis attempt owns a fresh process-CPU measurement session and pairs its
+recorded duration with that attempt's wall time. The real-system coordinator passes
+the report's operation durations to an in-memory selector. Selection preserves the
+first operation's duration exactly, including zero, and returns zero for an empty
+report. Fastest-attempt selection carries the corresponding CPU duration with the
+wall time and keeps the incumbent on ties.
+
+Library tests supply controlled durations to exercise empty reports, measured zero,
+exact nonzero forwarding and paired attempt selection without sampling OS clocks.
+The seeded binary integration tests exercise real measurement and report acquisition
+without asserting elapsed times. No published clock or report-construction testing
+API is needed at this boundary.
+
 ## Validation boundaries
 
 Library tests exercise scenario validation, its use by parsed-input execution,
-exit mapping and configuration writes. Validation and exit mapping need no
-runtime or operating-system fixture. Configuration writes use isolated temporary
-directories and cover replacement and filesystem failures without network access.
-These filesystem tests are excluded from Miri, not from native mutation testing.
+exit mapping, configuration serialization and write orchestration in memory.
+Configuration callbacks record requested paths and contents and inject errors without
+a runtime, filesystem or storage target. These cases run under Miri as well as native
+mutation testing; real filesystem tests belong to integration targets.
 
 Seeded-object tests use small fixed scenarios and independent model expectations
 to verify storage keys, compressed contents and reported byte totals. Single-object
@@ -65,7 +96,7 @@ They verify analysis modes, findings and retained data without timing assertions
 They remain outside the library-only mutation build and execution selection.
 The process-argument/runtime wrapper is a trivial forwarder and carries a
 justified mutation exclusion; scenario decisions, parsed-input execution,
-configuration side effects and exit mapping remain mutation targets.
+configuration decisions and exit mapping remain mutation targets.
 
 The process-facing wrapper and real-I/O coordinator are excluded from line
 coverage; the seeded binary assertions protect their complete execution.

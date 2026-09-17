@@ -76,6 +76,27 @@ updated plan and PR section. Human review concerns the final current release, no
 Automatic application preserves SemVer floors, canonical expansion, publication checks, and
 the prohibition on publishing from the skill.
 
+### Release-branch movement during planning
+
+The release branch can advance while a pull request is being prepared, invalidating its release
+baseline or consuming versions selected by an applied plan. A declared version below the latest
+release anchor is an expected symptom of an out-of-date feature branch, not a decision requiring
+human confirmation. Confirm that the release branch moved rather than treating every version
+failure as stale evidence.
+
+Recover automatically: undo only the version increments, dependency requirement rewrites and
+lockfile edits attributable to the superseded release-planning run, if any; merge the latest
+release branch into the feature branch; then rerun `increment-versions` against the updated
+baseline. Use fresh working directories for the regenerated evidence and plan, and refresh the
+PR's Version/release plan section. Do not increment stale proposed versions by hand or reuse
+compatibility evidence from the old baseline.
+
+Retain enough before-and-after evidence to identify the generated edits when applying a plan.
+Rollback must preserve source changes, independent manifest or lockfile edits, and upstream
+changes; do not reset the worktree or revert an entire mixed-purpose commit. No rollback is
+needed when no generated edits were applied. Stop for genuine execution failures or conflicts
+that cannot be resolved safely, not merely because the release branch moved.
+
 ## The anchor and the rule
 
 The version increment *is* the release event, so the git repository holds everything needed to

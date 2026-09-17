@@ -37,6 +37,10 @@ permissions:
   contents: read
 
 jobs:
+  # Independent check steps bypass GitHub's implicit success() gate after setup succeeds.
+  # Failures remain failures; cancellation and unavailable prerequisites still stop dependent work.
+  # Ref: .github/workflows/design.md#job-granularity-and-gating.
+
   # One checkout and runner prepare both non-Cargo and Cargo validation scope.
   # Complete history supports the whole PR and release-version anchors;
   # PowerShell plans paths before setup, then Cargo impact adds native-helper test domains.
@@ -125,10 +129,11 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup environment
+        id: setup
         uses: ./.github/actions/setup-environment
 
       - name: Validate scripts (PSScriptAnalyzer)
-        if: fromJSON(needs.prepare.outputs.plan).script_analysis
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && fromJSON(needs.prepare.outputs.plan).script_analysis }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -137,7 +142,7 @@ jobs:
           just validate-scripts
 
       - name: Run script test suites
-        if: needs.prepare.outputs.script_domains != '[]'
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.script_domains != '[]' }}
         shell: pwsh
         env:
           SCRIPT_DOMAINS: ${{ needs.prepare.outputs.script_domains }}
@@ -183,7 +188,7 @@ jobs:
 
   # Workspace-wide release-plan generation: every publishable package's released content
   # versus its version anchor. Delta cannot narrow that set, so this job is not gated on
-  # skip_all. Version readiness and compatibility share setup and stop at the first failure.
+  # skip_all. Independent release checks share setup without suppressing later findings.
   # Ref: .github/workflows/implementation.md#release-validation.
   validate-versions:
     runs-on: ubuntu-latest
@@ -197,12 +202,14 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
+        id: setup
         uses: ./.github/actions/setup-environment
 
       # Live Cargo metadata belongs with unconditional release validation: target autodiscovery
       # can change the binary set without a manifest edit.
       # Ref: .github/workflows/implementation.md#release-validation.
       - name: Validate binstall metadata
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -212,6 +219,7 @@ jobs:
 
       - name: Check package versions
         id: check
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         env:
           # The release baseline is the tip of the branch releases are made from, which is
           # not the branch a pull request targets: a stacked pull request targets an
@@ -228,6 +236,8 @@ jobs:
       # Never interpret a broken compatibility tool as evidence of no breaking changes.
       # Ref: .github/workflows/implementation.md#release-validation.
       - name: Verify cargo-semver-checks can run
+        id: semver-canary
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -236,8 +246,10 @@ jobs:
           just verify-semver-checks
 
       # The report owns consumer-contract selection, including version-group closure.
-      # The recipe checks all features and treats an empty selection as no comparison.
+      # Targets are emitted before the readiness verdict, so a missing version increment does not
+      # suppress compatibility findings. No comparison is possible without targets or a working tool.
       - name: Run cargo-semver-checks on releasing packages
+        if: ${{ !cancelled() && steps.semver-canary.outcome == 'success' && steps.check.outputs.semver_targets != '' }}
         shell: pwsh
         env:
           SEMVER_TARGETS: ${{ steps.check.outputs.semver_targets }}
@@ -247,33 +259,10 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just package="$env:SEMVER_TARGETS" semver-checks
 
-  # Fails when a library's public API exposes an external type that is not on its allow-list, so an
-  # accidental addition to the external surface is caught in review. Uses an
-  # Ubuntu + Windows matrix, because the public surface is platform-dependent (cfg-gated items) and
-  # macOS (also cfg(unix)) is redundant with ubuntu here. Delta-scoped like the other package jobs.
-  check-external-types:
-    needs: [prepare]
-    if: needs.prepare.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run check-external-types on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" check-external-types
-
-  # Formatting, dev Clippy and minimum-dependency compilation share each platform's environment.
+  # Formatting, dev Clippy, documentation and minimum-dependency compilation share setup.
+  # Documentation builds and doctests use the same platform coverage as compilation, including PRs.
   # Ref: .github/workflows/implementation.md#standard-validation-structure.
-  clippy-dev:
+  clippy-dev-docs:
     needs: [prepare]
     if: needs.prepare.outputs.skip_all != 'true'
     strategy:
@@ -288,11 +277,12 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup environment
+        id: setup
         uses: ./.github/actions/setup-environment
 
       # Formatting is platform-independent; the Ubuntu leg performs the workspace-wide check.
       - name: Run format-check
-        if: matrix.platform == 'ubuntu-latest'
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.platform == 'ubuntu-latest' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -301,6 +291,7 @@ jobs:
           just format-check
 
       - name: Run clippy dev on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -308,9 +299,37 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just package="${{ needs.prepare.outputs.packages }}" clippy dev
 
+      - name: Run docs on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" docs
+
+      - name: Run docs-default-features on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" docs-default-features
+
+      - name: Run test-docs on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just package="${{ needs.prepare.outputs.packages }}" test-docs
+
       # Freezing rewrites manifests and the lockfile, so nothing using the original inputs follows.
       # Ref: .github/workflows/implementation.md#standard-validation-structure.
       - name: Run check-frozen on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -321,8 +340,8 @@ jobs:
   # The x86_64 test pass (ubuntu-latest and windows-latest - both x86_64). Runs the full
   # test suite (unit, integration and example tests) with coverage instrumentation, so the
   # coverage report is a side effect of the regular test run rather than a second,
-  # separately re-executed pass. Also runs the benchmark targets once to verify they do not
-  # panic. Uploads both the coverage report and the test results to Codecov.
+  # separately re-executed pass. Benchmark smoke tests and external-type checks share its setup.
+  # Uploads both the coverage report and the test results to Codecov.
   #
   # macOS is deliberately not here: GitHub's `macos-latest` runner is Apple Silicon (arm64),
   # so macOS is exercised by Deep validation's `test-arm` job. Keeping this job x86_64-only keeps
@@ -356,6 +375,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup environment
+        id: setup
         # The benchmark smoke check below runs every bench target once, and on Linux the
         # `*_cg` targets are real Gungraun harnesses that execute under Valgrind.
         uses: ./.github/actions/setup-environment
@@ -364,6 +384,7 @@ jobs:
 
       - name: Run tests with coverage on ${{ matrix.platform }}
         id: coverage
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -377,7 +398,7 @@ jobs:
           "report=$report" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
       - name: Upload coverage to Codecov
-        if: steps.coverage.outputs.report == 'true'
+        if: ${{ !cancelled() && steps.coverage.outputs.report == 'true' }}
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -394,51 +415,24 @@ jobs:
           report_type: test_results
 
       - name: Run benchmark targets on ${{ matrix.platform }}
-        run: just package="${{ needs.prepare.outputs.packages }}" test-benches
-
-  # Documentation builds and doctests share setup. The macOS leg adds little on PRs, so
-  # main pushes and scheduled/manual main runs retain the full platform matrix.
-  # Ref: .github/workflows/implementation.md#standard-validation-structure.
-  docs:
-    needs: [prepare]
-    if: needs.prepare.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest", "windows-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run docs on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          just package="${{ needs.prepare.outputs.packages }}" docs
+          just package="${{ needs.prepare.outputs.packages }}" test-benches
 
-      - name: Run docs-default-features on ${{ matrix.platform }}
+      # Unix and Windows public APIs need separate checks; macOS adds no distinct public cfg here.
+      # Ref: .github/workflows/design.md#external-type-surface.
+      - name: Run check-external-types on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          just package="${{ needs.prepare.outputs.packages }}" docs-default-features
-
-      - name: Run test-docs on ${{ matrix.platform }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just package="${{ needs.prepare.outputs.packages }}" test-docs
+          just package="${{ needs.prepare.outputs.packages }}" check-external-types
 
   # Azure Blob storage backend tests against the Azurite emulator.
   #
@@ -540,6 +534,7 @@ jobs:
             Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
 
       - name: Sign in to Azure (OIDC workload identity federation)
+        id: login
         uses: azure/login@v3
         with:
           client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
@@ -547,6 +542,7 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Run real-Azure storage tests via the developer credential
+        if: ${{ !cancelled() && steps.login.outcome == 'success' }}
         env:
           AZURE_CLIENT_ID: ""
         shell: pwsh
@@ -559,6 +555,7 @@ jobs:
       # This step opts into the production credential; the Azure CLI login serves cleanup only.
       # Ref: .github/workflows/implementation.md#real-azure-authentication.
       - name: Run real-Azure storage tests via the self-minting OIDC credential
+        if: ${{ !cancelled() && steps.login.outcome == 'success' }}
         env:
           AZURE_CLIENT_ID: ${{ env.AZURE_TEST_CLIENT_ID }}
         shell: pwsh
@@ -644,10 +641,8 @@ jobs:
       - test-scripts
       - validate-workflows
       - validate-versions
-      - check-external-types
-      - clippy-dev
+      - clippy-dev-docs
       - test-x64
-      - docs
       - test-azurite
       - test-azure
     runs-on: ubuntu-latest
@@ -674,9 +669,7 @@ jobs:
 
   # File a GitHub issue whenever any job above fails on a push to `main`, so a push-to-main
   # failure is tracked rather than lost. PR runs surface a failure as the red check and need
-  # no issue - and this workflow now leans more heavily on push-to-main as the backstop for
-  # the shallow checks pruned from PR validation (macOS doctests/docs),
-  # so a green PR does not imply those passed.
+  # no issue. Main pushes validate the full workspace without PR change selection.
   #
   # A fresh issue is filed per failing run - no dedup, no auto-close - mirroring the release
   # workflow's per-run alert: each failure is investigated and closed individually, and a
@@ -694,10 +687,8 @@ jobs:
       - test-scripts
       - validate-workflows
       - validate-versions
-      - check-external-types
-      - clippy-dev
+      - clippy-dev-docs
       - test-x64
-      - docs
       - test-azurite
       - test-azure
       - coverage-notify
@@ -732,9 +723,7 @@ jobs:
           $body = @"
           The Standard validation workflow failed on a push to ``main``.
 
-          Push-to-``main`` validation is the backstop for the checks pruned from PR validation
-          (macOS doctest/docs runs), so this failure may be
-          in a check a PR never ran.
+          Push-to-``main`` validation checks the full workspace without PR change selection.
 
           Failed run: $env:RUN_URL
           "@
