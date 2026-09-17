@@ -276,7 +276,11 @@ strict mode once at the top rather than per function.)
 ### PowerShell linting
 
 `just validate-scripts` runs [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
-over everything under `scripts/`, gating on Error/Warning findings. The rule set lives in
+over everything under `scripts/` and the embedded deployment bundle under
+`packages/cargo-bench-history/src/azure_bundle/`, together with that package's native
+PowerShell fixtures, gating on Error/Warning findings. The bundle is shipped application
+code even though its driver executes in PowerShell.
+The rule set lives in
 `PSScriptAnalyzerSettings.psd1`, supplemented by repo-local custom rules in
 `scripts/analyzer/FoloAnalyzerRules.psm1` - which catch classes the built-in rules (and strict
 mode) miss, such as a `foreach` whose loop variable case-insensitively collides with the

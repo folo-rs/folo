@@ -6,14 +6,13 @@ use std::num::NonZero;
 use ohno::AppError;
 
 use crate::errors::{AmbiguousCreateError, RequestFailedError};
-use crate::github::{Comment, Comparison, GitHub, Issue, WorkflowJob};
+use crate::github::{Comment, Comparison, GitHub, Issue, IssueCandidate, WorkflowJob};
 use crate::model::{CommitSha, Repository};
 
 /// An in-memory GitHub port for orchestration tests.
 #[derive(Debug, Default)]
 pub(crate) struct FakeGitHub {
     issues: RefCell<BTreeMap<u64, Issue>>,
-    closed_issues: RefCell<Vec<Issue>>,
     comments: RefCell<BTreeMap<u64, (u64, Comment)>>,
     pull_heads: RefCell<BTreeMap<u64, CommitSha>>,
     comparisons: RefCell<BTreeMap<(String, String), Comparison>>,
@@ -44,8 +43,12 @@ impl FakeGitHub {
         self.issues.borrow().values().cloned().collect()
     }
 
-    pub(crate) fn closed_issues(&self) -> Vec<Issue> {
-        self.closed_issues.borrow().clone()
+    pub(crate) fn seed_issue(&self, issue: Issue) {
+        self.issues.borrow_mut().insert(issue.number, issue);
+    }
+
+    pub(crate) fn human_close(&self, number: u64) {
+        self.issues.borrow_mut().get_mut(&number).unwrap().open = false;
     }
 
     pub(crate) fn comments_for(&self, pull_request: u64) -> Vec<Comment> {
@@ -112,10 +115,12 @@ impl GitHub for FakeGitHub {
         ready(Ok(self.jobs.borrow().clone()))
     }
 
-    fn open_issues(
+    fn search_issues(
         &self,
         _repository: &Repository,
-    ) -> impl Future<Output = Result<Vec<Issue>, AppError>> {
+        phrase: &str,
+        include_closed: bool,
+    ) -> impl Future<Output = Result<Vec<IssueCandidate>, AppError>> {
         let calls = self.issue_list_calls.get();
         self.issue_list_calls.set(
             calls
@@ -125,7 +130,23 @@ impl GitHub for FakeGitHub {
         if self.fail_issue_list.get() && calls != 0 {
             return ready(Err(RequestFailedError::new("listing fake issues").into()));
         }
-        ready(Ok(self.issues()))
+        ready(Ok(self
+            .issues()
+            .into_iter()
+            .filter(|issue| (include_closed || issue.open) && issue.title.contains(phrase))
+            .map(|issue| IssueCandidate {
+                number: issue.number,
+                title: issue.title,
+            })
+            .collect()))
+    }
+
+    fn read_issue(
+        &self,
+        _repository: &Repository,
+        number: u64,
+    ) -> impl Future<Output = Result<Issue, AppError>> {
+        ready(Ok(self.issues.borrow().get(&number).unwrap().clone()))
     }
 
     fn create_issue(
@@ -138,6 +159,7 @@ impl GitHub for FakeGitHub {
             number: self.next_id(),
             title: _title.to_owned(),
             body: body.to_owned(),
+            open: true,
         };
         self.issues.borrow_mut().insert(issue.number, issue.clone());
         if self.fail_issue_create_after_commit.replace(false) {
@@ -150,25 +172,12 @@ impl GitHub for FakeGitHub {
         &self,
         _repository: &Repository,
         number: u64,
-        title: Option<&str>,
+        title: &str,
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>> {
         if let Some(issue) = self.issues.borrow_mut().get_mut(&number) {
-            if let Some(title) = title {
-                issue.title = title.to_owned();
-            }
+            issue.title = title.to_owned();
             issue.body = body.to_owned();
-        }
-        ready(Ok(()))
-    }
-
-    fn close_issue(
-        &self,
-        _repository: &Repository,
-        number: u64,
-    ) -> impl Future<Output = Result<(), AppError>> {
-        if let Some(issue) = self.issues.borrow_mut().remove(&number) {
-            self.closed_issues.borrow_mut().push(issue);
         }
         ready(Ok(()))
     }

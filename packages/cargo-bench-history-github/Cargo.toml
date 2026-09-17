@@ -41,17 +41,20 @@ private-test-util = []
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+jiff = { workspace = true }
 mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+tick = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

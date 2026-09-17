@@ -18,6 +18,8 @@ use cbh_command::{
 use cbh_model::BenchmarkIdPrefix;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
+use crate::setup_azure::SetupAzureCommand;
+
 const HEADING_ENV: &str = "Environment and execution";
 const HEADING_OUTPUT: &str = "Output";
 const HEADING_DISCRIMINANT: &str = "Discriminant selection";
@@ -94,6 +96,7 @@ impl Cli {
             Subcommand::Examine(command) => Command::Examine(command.into_options()),
             Subcommand::Import(command) => Command::Import(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
+            Subcommand::SetupAzure(command) => Command::SetupAzure(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
@@ -135,6 +138,8 @@ enum Subcommand {
     Import(ImportCommand),
     /// Generate a starter configuration file.
     Install(InstallCommand),
+    /// Provision Azure history resources, or export a standalone deployment bundle.
+    SetupAzure(SetupAzureCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
     /// Print this machine's hardware fingerprint (the machine key).
@@ -1063,7 +1068,7 @@ fn resolve_packages(workspace: bool, package: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
+pub(crate) mod tests {
     #[cfg(miri)]
     use clap::FromArgMatches;
     use clap::error::ErrorKind;
@@ -1084,13 +1089,14 @@ mod tests {
             "list" => ListCommand::augment_args(ClapCommand::new("list")),
             "machine-key" => MachineKeyCommand::augment_args(ClapCommand::new("machine-key")),
             "prune" => PruneCommand::augment_args(ClapCommand::new("prune")),
+            "setup-azure" => SetupAzureCommand::augment_args(ClapCommand::new("setup-azure")),
             "unbless" => UnblessCommand::augment_args(ClapCommand::new("unbless")),
             _ => return None,
         };
         Some(command)
     }
 
-    fn from_args(command_name: &[&str], args: &[&str]) -> Result<Cli, EarlyExit> {
+    pub(crate) fn from_args(command_name: &[&str], args: &[&str]) -> Result<Cli, EarlyExit> {
         #[cfg(not(miri))]
         {
             Cli::from_args(command_name, args)
@@ -1157,8 +1163,16 @@ mod tests {
         let help = Cli::help("cargo-bench-history");
         assert!(!help.is_empty(), "help text is non-empty");
         for command in [
-            "analyze", "backfill", "bless", "collect", "examine", "install", "list", "prune",
+            "analyze",
+            "backfill",
+            "bless",
+            "collect",
+            "examine",
+            "install",
+            "list",
+            "prune",
             "unbless",
+            "setup-azure",
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }

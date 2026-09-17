@@ -103,7 +103,10 @@ pub(crate) fn report_outputs(evidence: &Evidence) -> String {
     // Use the publication gates themselves: their validated parser owns census semantics.
     let notable = evidence.report.outcome == Outcome::Findings;
     let can_clear = evidence.report.mode == AnalysisMode::History && evidence.is_all_clear();
-    format!("outcome={outcome}\nnotable={notable}\ncan-clear={can_clear}\n")
+    let state = evidence.publication_state().as_str();
+    format!(
+        "outcome={outcome}\nnotable={notable}\ncan-clear={can_clear}\npublication-state={state}\n"
+    )
 }
 
 #[cfg(test)]
@@ -252,9 +255,10 @@ mod tests {
             assert_eq!(
                 report_outputs(&evidence),
                 format!(
-                    "outcome={wire}\nnotable={}\ncan-clear={}\n",
+                    "outcome={wire}\nnotable={}\ncan-clear={}\npublication-state={}\n",
                     outcome == Outcome::Findings,
-                    outcome == Outcome::Clean
+                    outcome == Outcome::Clean,
+                    evidence.publication_state().as_str()
                 )
             );
         }
@@ -268,7 +272,10 @@ mod tests {
         ] {
             assert_eq!(
                 report_outputs(&evidence),
-                "outcome=clean\nnotable=false\ncan-clear=false\n"
+                format!(
+                    "outcome=clean\nnotable=false\ncan-clear=false\npublication-state={}\n",
+                    evidence.publication_state().as_str()
+                )
             );
         }
     }

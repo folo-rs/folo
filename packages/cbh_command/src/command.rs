@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use cbh_model::BenchmarkIdPrefix;
 
+use crate::SetupAzureOptions;
+
 /// How a command selects local filesystem storage, from the `--local` flag.
 ///
 /// Local storage paths are machine-dependent, so they are never carried in the
@@ -55,6 +57,8 @@ pub enum Command {
     Import(ImportOptions),
     /// Generate a starter configuration file.
     Install(InstallOptions),
+    /// Provision Azure history resources or export their deployment bundle.
+    SetupAzure(SetupAzureOptions),
     /// Analyze stored history for notable patterns.
     Analyze(AnalyzeOptions),
     /// List the data set a matching `analyze` pass would include.

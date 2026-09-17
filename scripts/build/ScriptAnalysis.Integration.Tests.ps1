@@ -69,6 +69,31 @@ foreach ($target in $Target) { $target }
 '@ | Set-Content -LiteralPath (Join-Path $root PSScriptAnalyzerSettings.psd1)
         { Invoke-WorkspaceScriptAnalysis $root 1.25.0 $diagnostics } | Should -Not -Throw
     }
+
+    It 'applies configured rules to package-owned script <RelativePath>' -ForEach @(
+        @{ RelativePath = 'packages\cargo-bench-history\src\azure_bundle\bundled-rule-canary.ps1' },
+        @{ RelativePath = 'packages\cargo-bench-history\tests\fixtures\native-rule-canary.ps1' }
+    ) {
+        $fixture = Join-Path $root $RelativePath
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $fixture) -Force
+        'gci -Path .' | Set-Content -LiteralPath $fixture
+        @'
+@{
+    Severity = @('Warning')
+    IncludeRules = @('PSAvoidUsingCmdletAliases')
+}
+'@ | Set-Content -LiteralPath (Join-Path $root PSScriptAnalyzerSettings.psd1)
+        $output = @(& {
+            try { Invoke-WorkspaceScriptAnalysis $root 1.25.0 $diagnostics } catch { $_ }
+        } 6>&1)
+        @($output | Where-Object { $_ -is [Management.Automation.ErrorRecord] }).Count | Should -Be 1
+        $messages = @($output | Where-Object { $_ -is [Management.Automation.InformationRecord] } |
+            ForEach-Object ToString)
+        @($messages | Where-Object { $_ -match '\[Warning\] PSAvoidUsingCmdletAliases:' }).Count |
+            Should -Be 2
+        $fileName = [regex]::Escape([IO.Path]::GetFileName($fixture))
+        @($messages | Where-Object { $_ -match $fileName }).Count | Should -Be 1
+    }
 }
 
 Describe 'Real PowerShell command-metadata regression control' {

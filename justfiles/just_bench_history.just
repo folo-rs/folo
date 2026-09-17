@@ -2,8 +2,8 @@
 # publication; these recipes only assemble native invocations through the existing collection,
 # path and machine-key helpers. Ref: .github/workflows/design.md#benchmark-history.
 
-# Main collection is append-only unless an operator explicitly requests re-collection.
-# Re-collection runs historical benchmark code with the current tool through backfill.
+# Main collection leaves stored measurements unchanged. Manual pruning and ordinary backfill
+# cover data maintenance; the workflow has no targeted historical repair mode.
 [group('automation')]
 [script]
 gh-collect-bench-history:
@@ -13,12 +13,12 @@ gh-collect-bench-history:
     Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
 
     $env:RUSTFLAGS = Get-BenchHistoryRustFlag -Existing $env:RUSTFLAGS -Stability $env:BENCH_STABILITY_RUSTFLAGS
-    $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId $env:RECOLLECT_COMMIT_ID -Verbose
+    $toolArgs = Get-BenchHistoryCollectCommand -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
 # PR automation is built from the event's automation checkout, while --repo points at the
-# separately checked-out real PR head. Explicit local storage keeps collection free of Azure
-# credentials. CSV package inputs remain data, not interpolated PowerShell source.
+# separately checked-out real PR head. Explicit local storage avoids persisting disposable PR
+# measurements. CSV package inputs remain data, not interpolated PowerShell source.
 [group('automation')]
 [script]
 gh-collect-pr-bench-history $PACKAGES $STORE $REPOSITORY:

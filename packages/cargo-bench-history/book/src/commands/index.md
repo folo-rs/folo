@@ -7,6 +7,7 @@ runs, analyze what changed, inspect the evidence, and maintain the stored data. 
 | Command | Purpose |
 |---|---|
 | [`install`](install.md) | Write a starter `.cargo/bench_history.toml`. |
+| [`setup-azure`](setup-azure.md) | Provision shared Azure history storage, or export a standalone deployment bundle. |
 | [`collect`](collect.md) | Run the workspace benches for the current commit and store the results. |
 | [`backfill`](backfill.md) | Reconstruct history by benching a range of past commits. |
 | [`analyze`](analyze.md) | Reconstruct series and report regressions and drift. |

@@ -1,5 +1,5 @@
-// Called by main.bicep only for a missing history container, before its reader
-// role assignment. Management-plane provisioning needs no storage account keys.
+// Called by main.bicep only for a missing history container.
+// Management-plane provisioning needs no storage account keys.
 param storageAccountName string
 param historyContainerName string
 

@@ -3,8 +3,8 @@
 # Azure OIDC federation identity plumbing for the benchmark-history workflow
 # (.github/workflows/bench-history.yml).
 #
-# Collection/backfill use the writer identity; analysis uses the separately scoped reader.
-# Their non-secret client IDs and shared tenant live in constants.env. This module keeps the
+# Collection, backfill and analysis share one production identity. Its non-secret client ID
+# and tenant live in constants.env. This module keeps the
 # required-value validation and standard AZURE_* export consistent across workflow jobs.
 #
 # constants.env is read directly (not via `just`'s dotenv) because these steps re-export under
@@ -12,6 +12,8 @@
 # is missing rather than federate later with an empty value and an opaque error.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 function Read-DotEnvFile {
     # Parses a KEY=value dotenv file (constants.env) into an ordered hashtable. Blank lines and
@@ -56,25 +58,19 @@ function Get-RequiredConstant {
 }
 
 function Set-AzureFederationEnv {
-    # Selects the requested capability without a reader-to-writer fallback. Writer is the default
-    # for existing collection/backfill callers; analysis explicitly requests Reader. A source-built
+    # Exports the shared production identity. A source-built
     # preparation job may also call this to validate identifiers without holding id-token permission.
+    # Ref: .github/workflows/design.md#federated-identity.
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)][string] $ConstantsPath,
-        [Parameter(Mandatory)][string] $EnvFilePath,
-        [ValidateSet('Writer', 'Reader')][string] $Access = 'Writer'
+        [Parameter(Mandatory)][string] $EnvFilePath
     )
 
     $constants = Read-DotEnvFile -Path $ConstantsPath
-    $clientConstant = if ($Access -eq 'Reader') { 'AZURE_PROD_READER_CLIENT_ID' } else { 'AZURE_PROD_CLIENT_ID' }
-    $clientId = Get-RequiredConstant -Values $constants -Name $clientConstant
-    if ($Access -eq 'Reader' -and $clientId -eq $constants['AZURE_PROD_CLIENT_ID']) {
-        throw 'The production reader must use its own identity, not AZURE_PROD_CLIENT_ID. Deploy the reader identity before activating analysis.'
-    }
     $exported = [ordered]@{
-        AZURE_CLIENT_ID = $clientId
+        AZURE_CLIENT_ID = Get-RequiredConstant -Values $constants -Name 'AZURE_PROD_CLIENT_ID'
         AZURE_TENANT_ID = Get-RequiredConstant -Values $constants -Name 'AZURE_TENANT_ID'
     }
 
@@ -82,7 +78,7 @@ function Set-AzureFederationEnv {
     if ($PSCmdlet.ShouldProcess($EnvFilePath, 'Append AZURE_CLIENT_ID and AZURE_TENANT_ID')) {
         $lines | Add-Content -Path $EnvFilePath -Encoding utf8
     }
-    Write-Verbose "Selected $Access access from $clientConstant in '$ConstantsPath'; exported its client ID and the tenant to '$EnvFilePath'."
+    Write-Verbose "Using the shared production identity from AZURE_PROD_CLIENT_ID in '$ConstantsPath'; exported its client ID and the tenant to '$EnvFilePath'."
     return $exported
 }
 

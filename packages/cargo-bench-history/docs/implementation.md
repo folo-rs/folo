@@ -85,7 +85,7 @@ behavioral contract is [Azure setup](DESIGN.md#710-setup-azure).
 
 One package-owned bundle contains the Bicep resource definitions, parameter template, deployment
 script and its PowerShell module dependencies. The binary embeds these files at compile time.
-Keep them under the shell's source tree so the ordinary package allow-list includes them; a
+They live in `src/azure_bundle/` so the ordinary package allow-list includes them; a
 registry source install must not rely on repository-root `infra/` or `scripts/` files.
 The export is self-contained, with bundle-relative imports and no dependency on `constants.env`.
 Folo's infrastructure entry point supplies Folo-specific parameters to this same implementation;
@@ -94,8 +94,11 @@ it does not maintain another copy of the Bicep or deployment policy.
 Bicep owns resource definitions. The single PowerShell driver owns Azure CLI discovery,
 state-preserving bootstrap decisions and deployment of one production identity with branch
 and PR federation.
-Rust owns parameter validation, prerequisite orchestration, bundle materialization, process
+Rust owns parameter validation, the PowerShell prerequisite, bundle materialization, process
 invocation and output/error handling, not a second implementation of those Azure decisions.
+The standalone driver verifies Azure CLI, installed Bicep and an authenticated enabled
+subscription (including token acquisition) before any resource mutation. JSON parameter
+values remain literal data; script flags may explicitly override them for standalone use.
 The PowerShell boundary is deliberate: an exported bundle remains independently editable and
 executable with Azure tooling, without a Rust toolchain or this application. Porting the driver
 to Rust solely to remove `pwsh` would require a replacement standalone deployment path; that

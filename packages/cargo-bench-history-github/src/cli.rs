@@ -1,7 +1,7 @@
 use std::num::NonZero;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::model::{CommitSha, Instance, Repository};
 use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
@@ -12,7 +12,6 @@ use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 pub struct Cli {
     #[command(flatten)]
     common: CommonArgs,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -35,146 +34,201 @@ impl Cli {
     }
 }
 
-/// Arguments shared by every lifecycle operation.
+/// Common namespace and diagnostic inputs; offline commands need no repository.
 #[derive(Args, Debug)]
 struct CommonArgs {
-    /// Repository in `owner/name` form; defaults to `GITHUB_REPOSITORY`.
+    /// Repository in owner/name form; defaults to `GITHUB_REPOSITORY`.
     #[arg(long)]
     repository: Option<Repository>,
-
     /// Internal namespace derived from the configured project ID.
     #[arg(long, default_value = "default")]
     instance: Instance,
-
     /// Emit explanatory diagnostics to standard error.
     #[arg(long)]
     verbose: bool,
 }
 
-/// One companion lifecycle or workflow evidence operation.
+/// State-specific entry points prevent callers from choosing unsupported verdicts.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    /// Prepare shared matrix, platform and collection-job identity outputs without GitHub access.
+    /// Prepare matrix and collection-job identities without GitHub access.
     WorkflowMatrix(MatrixArgs),
-    /// Record successful collection and its actual machine key without GitHub access.
+    /// Record successful collection and its actual machine key.
     CollectionReceipt(CollectionArgs),
-    /// Reconcile all collection job attempts and prepare selected analysis inputs.
+    /// Reconcile collection attempts and prepare selected analysis inputs.
     PrepareAnalysis(PrepareArgs),
-    /// Project validated analysis evidence into workflow outputs without GitHub access.
+    /// Project validated analysis evidence into workflow outputs.
     InspectReport(InspectArgs),
-    /// Mark an open regression issue stale before a new history run.
-    IssuePreflight {
-        /// Commit the new run is analyzing.
+    /// Publish findings, including qualified partial findings.
+    PublishCommentFindings(CommentReportArgs),
+    /// Publish a completely covered clean analysis.
+    PublishCommentClean(CommentReportArgs),
+    /// Seed a placeholder or qualify an existing report as stale.
+    PublishCommentPreflight {
         #[arg(long)]
-        head: CommitSha,
-    },
-    /// Create or update the rolling regression issue.
-    PublishIssue {
-        /// Markdown summary rendered by cargo-bench-history.
-        #[arg(long)]
-        body_file: PathBuf,
-        /// Commit the summary describes.
-        #[arg(long)]
-        analyzed_sha: CommitSha,
+        pull_request: NonZero<u64>,
+        #[arg(long, value_parser = package_list)]
+        packages: String,
         #[command(flatten)]
-        evidence: ResultArgs,
-        /// URL of the complete report artifact.
-        #[arg(long)]
-        artifact_url: Option<String>,
+        pending: PendingArgs,
     },
-    /// Replace a recovered regression issue with an all-clear state.
-    IssueCleanup {
-        /// Commit that analyzed cleanly.
+    /// Explain empty scope or a successful analysis without a complete verdict.
+    PublishCommentNoData {
         #[arg(long)]
-        clean_commit: CommitSha,
+        pull_request: NonZero<u64>,
+        #[arg(long, required_unless_present = "empty_scope", conflicts_with = "empty_scope",
+            value_parser = package_list)]
+        packages: Option<String>,
         #[command(flatten)]
-        evidence: ResultArgs,
+        data: NoDataArgs,
     },
-    /// Create or update the rolling automation-failure issue.
+    /// Retire only this run's unfinished placeholder.
+    PublishCommentFailed {
+        #[arg(long)]
+        pull_request: NonZero<u64>,
+        #[command(flatten)]
+        failed: FailedArgs,
+    },
+    /// Create or update the rolling findings issue.
+    PublishIssueFindings(ReportArgs),
+    /// Publish all-clear to an existing issue, leaving it open.
+    PublishIssueClean(ReportArgs),
+    /// Mark an existing issue stale and record the pending run.
+    PublishIssuePreflight(PendingArgs),
+    /// Annotate an existing issue without replacing its previous report.
+    PublishIssueNoData(NoDataArgs),
+    /// Retire only this run's pending annotation.
+    PublishIssueFailed(FailedArgs),
+    /// File a one-off issue for a failed workflow run.
     Alert {
-        /// URL of the failed workflow run.
-        #[arg(long)]
-        run_url: String,
-    },
-    /// Close the rolling automation-failure issue.
-    ResolveAlert {
-        /// URL of the successful workflow run.
-        #[arg(long)]
-        run_url: String,
-    },
-    /// Seed or mark stale the rolling pull-request comment.
-    PrCommentPreflight {
-        /// Pull-request number.
-        #[arg(long)]
-        pull_request: NonZero<u64>,
-        /// Comma-separated benchmarked packages.
-        #[arg(long)]
-        packages: String,
-        /// Frozen PR head this run will measure.
-        #[arg(long)]
-        head: CommitSha,
-        /// Workflow run that owns the in-progress placeholder.
         #[arg(long)]
         run_id: NonZero<u64>,
-    },
-    /// Create or update the rolling pull-request results comment.
-    PublishPrComment {
-        /// Pull-request number.
-        #[arg(long)]
-        pull_request: NonZero<u64>,
-        /// Commit the summary describes.
-        #[arg(long)]
-        analyzed_sha: CommitSha,
-        #[command(flatten)]
-        evidence: ResultArgs,
-        /// Markdown summary rendered by cargo-bench-history.
-        #[arg(long)]
-        body_file: PathBuf,
-        /// Comma-separated benchmarked packages.
-        #[arg(long)]
-        packages: String,
-        /// URL of the complete report artifact.
-        #[arg(long)]
-        artifact_url: Option<String>,
-    },
-    /// Write an explanatory note when nothing benchmarkable changed.
-    PrCommentCleanup {
-        /// Pull-request number.
-        #[arg(long)]
-        pull_request: NonZero<u64>,
-        /// Frozen PR head whose package selection was empty.
-        #[arg(long)]
-        head: CommitSha,
-    },
-    /// Retire an in-progress placeholder after a genuine workflow failure.
-    PrCommentFinalize {
-        /// Pull-request number.
-        #[arg(long)]
-        pull_request: NonZero<u64>,
-        /// URL of the failed workflow run.
         #[arg(long)]
         run_url: String,
-        /// Frozen PR head whose benchmarking failed.
-        #[arg(long)]
-        head: CommitSha,
-        /// Workflow run that owns the failed placeholder.
-        #[arg(long)]
-        run_id: NonZero<u64>,
     },
 }
 
-/// Structured analysis and collection facts shared by publication and all-clear.
+/// A workflow run attempt identifies the writer independently of measured commit.
+#[derive(Args, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct RunArgs {
+    #[arg(long)]
+    pub(crate) run_id: NonZero<u64>,
+    #[arg(long)]
+    pub(crate) run_attempt: NonZero<u64>,
+}
+
+/// Ownership of work against a frozen head.
+#[derive(Args, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingArgs {
+    #[command(flatten)]
+    pub(crate) run: RunArgs,
+    #[arg(long)]
+    pub(crate) head: CommitSha,
+}
+
+/// Report inputs shared by every report-bearing publication.
+#[derive(Args, Debug)]
+pub(crate) struct ReportArgs {
+    #[command(flatten)]
+    pub(crate) run: RunArgs,
+    #[arg(long)]
+    pub(crate) body_file: PathBuf,
+    #[arg(long)]
+    pub(crate) analyzed_sha: CommitSha,
+    #[command(flatten)]
+    pub(crate) evidence: ResultArgs,
+    #[arg(long)]
+    pub(crate) artifact_url: Option<String>,
+}
+
+/// A PR report also discloses the benchmarked package scope.
+#[derive(Args, Debug)]
+pub(crate) struct CommentReportArgs {
+    #[arg(long)]
+    pub(crate) pull_request: NonZero<u64>,
+    #[arg(long, value_parser = package_list)]
+    pub(crate) packages: String,
+    #[command(flatten)]
+    pub(crate) report: ReportArgs,
+}
+
+/// Explicit empty scope and report evidence are mutually exclusive input groups.
+#[derive(Args, Debug)]
+pub(crate) struct NoDataArgs {
+    #[command(flatten)]
+    pub(crate) run: RunArgs,
+    #[arg(long, requires = "head")]
+    pub(crate) empty_scope: bool,
+    #[arg(long, requires = "empty_scope")]
+    pub(crate) head: Option<CommitSha>,
+    #[arg(
+        long,
+        required_unless_present = "empty_scope",
+        conflicts_with = "empty_scope"
+    )]
+    pub(crate) body_file: Option<PathBuf>,
+    #[arg(
+        long,
+        required_unless_present = "empty_scope",
+        conflicts_with = "empty_scope"
+    )]
+    pub(crate) analyzed_sha: Option<CommitSha>,
+    #[arg(
+        long,
+        required_unless_present = "empty_scope",
+        conflicts_with = "empty_scope"
+    )]
+    pub(crate) report_file: Option<PathBuf>,
+    #[arg(
+        long,
+        required_unless_present = "empty_scope",
+        conflicts_with = "empty_scope"
+    )]
+    pub(crate) expected_platforms: Option<String>,
+    #[arg(
+        long,
+        required_unless_present = "empty_scope",
+        conflicts_with = "empty_scope"
+    )]
+    pub(crate) completed_platforms: Option<String>,
+    #[arg(long, conflicts_with = "empty_scope")]
+    pub(crate) artifact_url: Option<String>,
+}
+
+/// Failure is execution status, not a successful analysis verdict.
+#[derive(Args, Debug)]
+pub(crate) struct FailedArgs {
+    #[command(flatten)]
+    pub(crate) pending: PendingArgs,
+    #[arg(long)]
+    pub(crate) run_url: String,
+    #[arg(long)]
+    pub(crate) conclusion: Conclusion,
+}
+
+/// Terminal execution states supported by failure publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum Conclusion {
+    Failure,
+    Cancelled,
+}
+
+/// Structured analysis and collection facts shared by inspection and publication.
 #[derive(Args, Debug)]
 pub(crate) struct ResultArgs {
-    /// JSON report from the same analysis pass as the Markdown body.
     #[arg(long)]
     pub(crate) report_file: PathBuf,
-    /// Comma-separated identifiers of every requested matrix platform.
     #[arg(long)]
     pub(crate) expected_platforms: String,
-    /// Comma-separated identifiers of platforms whose collection completed successfully.
     #[arg(long)]
     pub(crate) completed_platforms: String,
+}
+
+fn package_list(value: &str) -> Result<String, String> {
+    if value.split(',').any(|package| package.trim().is_empty()) {
+        return Err("packages must be a nonempty comma-separated list".to_owned());
+    }
+    Ok(value.to_owned())
 }
 
 #[cfg(test)]
@@ -183,232 +237,27 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use clap::error::ErrorKind;
+    use clap::{Command as ClapCommand, CommandFactory};
     use static_assertions::assert_impl_all;
 
     use super::*;
 
     assert_impl_all!(Cli: Send, Sync, Unpin, UnwindSafe, RefUnwindSafe);
 
-    fn parse(args: &[&str]) -> Cli {
-        Cli::try_parse_from(
-            std::iter::once("cargo-bench-history-github").chain(args.iter().copied()),
-        )
-        .unwrap()
+    const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn args(command: &str) -> Vec<&str> {
+        vec!["companion", command, "--run-id", "42", "--run-attempt", "2"]
     }
 
-    #[test]
-    fn common_arguments_apply_to_every_command() {
-        let cli = parse(&[
-            "--repository",
-            "folo-rs/folo",
-            "--instance",
-            "nightly",
-            "--verbose",
-            "resolve-alert",
-            "--run-url",
-            "https://example.test/run",
-        ]);
-        assert_eq!(
-            cli.repository()
-                .as_ref()
-                .map(ToString::to_string)
-                .as_deref(),
-            Some("folo-rs/folo")
-        );
-        assert_eq!(cli.instance().as_str(), "nightly");
-        assert!(cli.verbose());
-
-        let cli = parse(&[
-            "--repository",
-            "folo-rs/folo",
-            "resolve-alert",
-            "--run-url",
-            "https://example.test/run",
-        ]);
-        assert!(!cli.verbose());
-    }
-
-    fn assert_removed_option(command: &str, option: &str) {
-        let error =
-            Cli::try_parse_from(["cargo-bench-history-github", command, option]).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
-    }
-
-    #[test]
-    fn publication_rejects_custom_intro() {
-        assert_removed_option("publish-pr-comment", "--intro");
-    }
-
-    #[test]
-    fn publication_rejects_custom_documentation() {
-        assert_removed_option("publish-pr-comment", "--docs-url");
-    }
-
-    #[test]
-    fn issue_publication_uses_the_standard_catalogue() {
-        let cli = parse(&[
-            "publish-issue",
-            "--body-file",
-            "summary.md",
-            "--analyzed-sha",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--report-file",
-            "report.json",
-            "--expected-platforms",
-            "linux",
-            "--completed-platforms",
-            "linux",
-        ]);
-        assert!(matches!(cli.into_command(), Command::PublishIssue { .. }));
-    }
-
-    #[test]
-    fn issue_publication_rejects_custom_title() {
-        assert_removed_option("publish-issue", "--title");
-    }
-
-    #[test]
-    fn issue_publication_rejects_custom_intro() {
-        assert_removed_option("publish-issue", "--intro");
-    }
-
-    #[test]
-    fn issue_publication_rejects_custom_documentation() {
-        assert_removed_option("publish-issue", "--docs-url");
-    }
-
-    #[test]
-    fn alert_uses_the_standard_catalogue() {
-        let cli = parse(&["alert", "--run-url", "https://example.test/run"]);
-        assert!(matches!(cli.into_command(), Command::Alert { .. }));
-    }
-
-    #[test]
-    fn alert_rejects_custom_title() {
-        assert_removed_option("alert", "--title");
-    }
-
-    #[test]
-    fn alert_rejects_custom_intro() {
-        assert_removed_option("alert", "--intro");
-    }
-
-    #[test]
-    fn alert_rejects_custom_documentation() {
-        assert_removed_option("alert", "--docs-url");
-    }
-
-    #[test]
-    fn issue_cleanup_rejects_automatic_close() {
-        assert_removed_option("issue-cleanup", "--auto-close");
-    }
-
-    #[test]
-    fn issue_cleanup_rejects_custom_intro() {
-        assert_removed_option("issue-cleanup", "--intro");
-    }
-
-    #[test]
-    fn issue_cleanup_rejects_custom_documentation() {
-        assert_removed_option("issue-cleanup", "--docs-url");
-    }
-
-    #[test]
-    fn empty_scope_rejects_comment_deletion() {
-        assert_removed_option("pr-comment-cleanup", "--delete");
-    }
-
-    #[test]
-    fn preflight_rejects_placeholder_adoption() {
-        assert_removed_option("pr-comment-preflight", "--legacy-in-progress-marker");
-    }
-
-    #[test]
-    fn pull_request_number_must_be_nonzero() {
-        let error = Cli::try_parse_from([
-            "cargo-bench-history-github",
-            "pr-comment-cleanup",
-            "--pull-request",
-            "0",
-            "--head",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ])
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::ValueValidation);
-    }
-
-    #[test]
-    fn preparation_parses_phase_three_paths_without_changing_lifecycle_arguments() {
-        let cli = parse(&[
-            "--repository",
-            "folo-rs/folo",
-            "--instance",
-            "folo",
-            "prepare-analysis",
-            "--run-id",
-            "42",
-            "--head",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--expected-platforms",
-            "linux,windows",
-            "--receipts-dir",
-            "receipts",
-            "--machine-key-dir",
-            "keys",
-            "--github-output",
-            "outputs",
-            "--local-results-dir",
-            "results",
-        ]);
-        let Command::PrepareAnalysis(args) = cli.into_command() else {
-            panic!("expected prepare-analysis");
-        };
-        assert_eq!(args.run_id.get(), 42);
-        assert_eq!(args.expected_platforms, "linux,windows");
-        assert_eq!(args.receipts_dir, PathBuf::from("receipts"));
-        assert_eq!(args.machine_key_dir, PathBuf::from("keys"));
-        assert_eq!(args.github_output, PathBuf::from("outputs"));
-        assert_eq!(args.local_results_dir, Some(PathBuf::from("results")));
-    }
-
-    #[test]
-    fn receipt_run_and_attempt_must_be_positive() {
-        for (run, attempt) in [("0", "1"), ("1", "0")] {
-            let error = Cli::try_parse_from([
-                "cargo-bench-history-github",
-                "collection-receipt",
-                "--run-id",
-                run,
-                "--run-attempt",
-                attempt,
-                "--head",
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "--platform",
-                "linux",
-                "--machine-key-file",
-                "key",
-                "--file",
-                "receipt.json",
-            ])
-            .unwrap_err();
-            assert_eq!(error.kind(), ErrorKind::ValueValidation);
-        }
-    }
-
-    fn publication_args() -> Vec<&'static str> {
+    fn report() -> Vec<&'static str> {
         vec![
-            "cargo-bench-history-github",
-            "publish-pr-comment",
-            "--pull-request",
-            "1",
-            "--analyzed-sha",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "--body-file",
             "summary.md",
-            "--packages",
-            "foo",
             "--report-file",
             "report.json",
+            "--analyzed-sha",
+            SHA,
             "--expected-platforms",
             "linux,windows",
             "--completed-platforms",
@@ -417,94 +266,289 @@ mod tests {
     }
 
     #[test]
-    fn publication_carries_report_and_collection_evidence() {
-        let cli = Cli::try_parse_from(publication_args()).unwrap();
-        let Command::PublishPrComment { evidence, .. } = cli.into_command() else {
-            panic!("expected publish-pr-comment");
-        };
-        assert_eq!(evidence.report_file, PathBuf::from("report.json"));
-        assert_eq!(evidence.expected_platforms, "linux,windows");
-        assert_eq!(evidence.completed_platforms, "linux");
+    #[cfg_attr(
+        miri,
+        ignore = "Exhaustive generated command graph; focused argument groups retain interpreter coverage."
+    )]
+    fn clap_definitions_are_consistent() {
+        Cli::command().debug_assert();
     }
 
-    fn assert_publication_requires(missing: &str) {
-        let mut reduced = Vec::new();
-        let mut args = publication_args().into_iter();
-        while let Some(arg) = args.next() {
-            if arg == missing {
-                args.next();
-            } else {
-                reduced.push(arg);
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exhaustive command/flag cross-product; focused report arguments retain interpreter coverage."
+    )]
+    fn report_commands_require_all_evidence_and_ownership() {
+        for command in [
+            "publish-comment-findings",
+            "publish-comment-clean",
+            "publish-comment-no-data",
+            "publish-issue-findings",
+            "publish-issue-clean",
+            "publish-issue-no-data",
+        ] {
+            let mut arguments = args(command);
+            arguments.extend(report());
+            if command.contains("comment") {
+                arguments.extend(["--pull-request", "7", "--packages", "foo"]);
+            }
+            Cli::try_parse_from(&arguments).unwrap();
+            for flag in [
+                "--run-id",
+                "--run-attempt",
+                "--body-file",
+                "--report-file",
+                "--analyzed-sha",
+                "--expected-platforms",
+                "--completed-platforms",
+            ] {
+                let position = arguments.iter().position(|arg| *arg == flag).unwrap();
+                let mut reduced = arguments.clone();
+                reduced.drain(position..position + 2);
+                assert_eq!(
+                    Cli::try_parse_from(reduced).unwrap_err().kind(),
+                    ErrorKind::MissingRequiredArgument
+                );
             }
         }
-        let error = Cli::try_parse_from(reduced).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]
-    fn publication_requires_report() {
-        assert_publication_requires("--report-file");
+    #[cfg_attr(
+        miri,
+        ignore = "Exhaustive command/flag cross-product; focused no-data arguments retain interpreter coverage."
+    )]
+    fn empty_scope_is_explicit_and_rejects_every_report_input() {
+        for command in ["publish-comment-no-data", "publish-issue-no-data"] {
+            let mut arguments = args(command);
+            arguments.extend(["--empty-scope", "--head", SHA]);
+            if command.contains("comment") {
+                arguments.extend(["--pull-request", "7"]);
+            }
+            Cli::try_parse_from(&arguments).unwrap();
+            for pair in report().as_chunks::<2>().0 {
+                let mut mixed = arguments.clone();
+                mixed.extend(pair);
+                assert_eq!(
+                    Cli::try_parse_from(mixed).unwrap_err().kind(),
+                    ErrorKind::ArgumentConflict
+                );
+            }
+        }
     }
 
     #[test]
-    fn publication_requires_expected_platforms() {
-        assert_publication_requires("--expected-platforms");
+    #[cfg_attr(
+        miri,
+        ignore = "Repeated whole-CLI construction; focused pending and failed arguments retain interpreter coverage."
+    )]
+    fn failed_and_preflight_forms_parse_for_both_sinks() {
+        for sink in ["issue", "comment"] {
+            for state in ["failed", "preflight"] {
+                let command = format!("publish-{sink}-{state}");
+                let mut arguments = args(&command);
+                arguments.extend(["--head", SHA]);
+                if sink == "comment" {
+                    arguments.extend(["--pull-request", "7"]);
+                    if state == "preflight" {
+                        arguments.extend(["--packages", "foo,bar"]);
+                    }
+                }
+                if state == "failed" {
+                    arguments.extend([
+                        "--run-url",
+                        "https://github.com/o/r/actions/runs/42",
+                        "--conclusion",
+                        "cancelled",
+                    ]);
+                }
+                Cli::try_parse_from(arguments).unwrap();
+            }
+        }
     }
 
     #[test]
-    fn publication_requires_completed_platforms() {
-        assert_publication_requires("--completed-platforms");
-    }
-
-    #[test]
-    fn cleanup_carries_report_evidence() {
-        let cli = parse(&[
-            "issue-cleanup",
-            "--clean-commit",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--report-file",
-            "report.json",
-            "--expected-platforms",
-            "linux",
-            "--completed-platforms",
-            "linux",
-        ]);
-        let Command::IssueCleanup { evidence, .. } = cli.into_command() else {
-            panic!("expected issue-cleanup");
-        };
-        assert_eq!(evidence.completed_platforms, "linux");
-    }
-
-    #[test]
-    fn cleanup_requires_report_evidence() {
-        let error = Cli::try_parse_from([
-            "cargo-bench-history-github",
-            "issue-cleanup",
-            "--clean-commit",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ])
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
-    }
-
-    #[test]
-    fn preflight_carries_the_run_that_owns_the_placeholder() {
-        let args = [
-            "pr-comment-preflight",
-            "--pull-request",
-            "1",
-            "--packages",
-            "foo",
-            "--head",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    fn alert_has_run_but_no_attempt_and_common_options_are_retained() {
+        let cli = Cli::try_parse_from([
+            "companion",
+            "--repository",
+            "folo-rs/folo",
+            "--instance",
+            "project",
+            "--verbose",
+            "alert",
             "--run-id",
-            "123",
+            "42",
+            "--run-url",
+            "https://github.com/folo-rs/folo/actions/runs/42",
+        ])
+        .unwrap();
+        assert_eq!(cli.repository().unwrap().to_string(), "folo-rs/folo");
+        assert_eq!(cli.instance().as_str(), "project");
+        assert!(cli.verbose());
+        assert!(matches!(cli.into_command(), Command::Alert { .. }));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exhaustive removed-command and option catalogue; native CLI coverage checks every rejection."
+    )]
+    fn removed_commands_and_cosmetic_options_are_not_aliases() {
+        for command in [
+            "publish-issue",
+            "publish-pr-comment",
+            "resolve-alert",
+            "issue-cleanup",
+            "pr-comment-finalize",
+            "pr-comment-cleanup",
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(["companion", command])
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::InvalidSubcommand
+            );
+        }
+        for option in [
+            "--title",
+            "--intro",
+            "--docs-url",
+            "--auto-close",
+            "--delete",
+            "--legacy-in-progress-marker",
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(["companion", "publish-issue-findings", option])
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::UnknownArgument
+            );
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Exhaustive whole-CLI invalid-input matrix; focused argument groups retain interpreter coverage."
+    )]
+    fn numeric_ownership_and_package_scope_are_nonempty() {
+        for packages in ["", "foo,", ",bar"] {
+            let mut arguments = args("publish-comment-preflight");
+            arguments.extend(["--head", SHA, "--pull-request", "7", "--packages", packages]);
+            assert_eq!(
+                Cli::try_parse_from(arguments).unwrap_err().kind(),
+                ErrorKind::ValueValidation
+            );
+        }
+        for field in ["--run-id", "--run-attempt", "--pull-request"] {
+            let mut arguments = args("publish-comment-preflight");
+            arguments.extend(["--head", SHA, "--pull-request", "7", "--packages", "foo"]);
+            let index = arguments.iter().position(|value| *value == field).unwrap();
+            *arguments.get_mut(index + 1).unwrap() = "0";
+            assert_eq!(
+                Cli::try_parse_from(arguments).unwrap_err().kind(),
+                ErrorKind::ValueValidation
+            );
+        }
+    }
+
+    #[test]
+    fn report_argument_group_accepts_complete_evidence() {
+        let mut arguments = vec!["report", "--run-id", "42", "--run-attempt", "2"];
+        arguments.extend(report());
+        ReportArgs::augment_args(ClapCommand::new("report"))
+            .try_get_matches_from(&arguments)
+            .unwrap();
+    }
+
+    #[test]
+    fn report_argument_group_requires_the_report_artifact() {
+        let mut arguments = vec!["report", "--run-id", "42", "--run-attempt", "2"];
+        arguments.extend(report());
+        let index = arguments
+            .iter()
+            .position(|arg| *arg == "--report-file")
+            .unwrap();
+        arguments.drain(index..index + 2);
+        assert_eq!(
+            ReportArgs::augment_args(ClapCommand::new("report"))
+                .try_get_matches_from(arguments)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn no_data_argument_group_distinguishes_empty_scope_from_missing_report() {
+        let arguments = [
+            "no-data",
+            "--run-id",
+            "42",
+            "--run-attempt",
+            "2",
+            "--empty-scope",
+            "--head",
+            SHA,
         ];
-        let cli = parse(&args);
-        let Command::PrCommentPreflight { head, run_id, .. } = cli.into_command() else {
-            panic!("expected preflight");
-        };
-        assert_eq!(run_id.get(), 123);
-        assert_eq!(head.as_str(), "a".repeat(40));
+        NoDataArgs::augment_args(ClapCommand::new("no-data"))
+            .try_get_matches_from(arguments)
+            .unwrap();
+        assert_eq!(
+            NoDataArgs::augment_args(ClapCommand::new("no-data"))
+                .try_get_matches_from(arguments.into_iter().chain(["--body-file", "summary.md"]))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::ArgumentConflict
+        );
+    }
+
+    #[test]
+    fn failed_argument_group_accepts_cancellation_not_success() {
+        let arguments = [
+            "failed",
+            "--run-id",
+            "42",
+            "--run-attempt",
+            "2",
+            "--head",
+            SHA,
+            "--run-url",
+            "https://github.com/folo-rs/folo/actions/runs/42",
+            "--conclusion",
+        ];
+        FailedArgs::augment_args(ClapCommand::new("failed"))
+            .try_get_matches_from(arguments.into_iter().chain(["cancelled"]))
+            .unwrap();
+        assert_eq!(
+            FailedArgs::augment_args(ClapCommand::new("failed"))
+                .try_get_matches_from(arguments.into_iter().chain(["success"]))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::InvalidValue
+        );
+    }
+
+    #[test]
+    fn pending_argument_group_rejects_zero_attempts_and_scope_parser_rejects_empty_items() {
+        assert_eq!(
+            PendingArgs::augment_args(ClapCommand::new("pending"))
+                .try_get_matches_from([
+                    "pending",
+                    "--run-id",
+                    "42",
+                    "--run-attempt",
+                    "0",
+                    "--head",
+                    SHA
+                ])
+                .unwrap_err()
+                .kind(),
+            ErrorKind::ValueValidation
+        );
+        package_list("foo,bar").unwrap();
+        package_list("foo,").unwrap_err();
     }
 }

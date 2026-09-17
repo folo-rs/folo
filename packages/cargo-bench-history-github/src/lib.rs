@@ -11,6 +11,8 @@
 mod cli;
 mod errors;
 mod github;
+mod identity;
+mod lifecycle;
 mod marker;
 mod message;
 mod model;

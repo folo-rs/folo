@@ -109,35 +109,11 @@ Describe 'Set-AzureFederationEnv' {
             Should -Throw '*AZURE_PROD_CLIENT_ID*'
     }
 
-    It 'selects the distinct reader without exporting the writer' {
+    It 'leaves the environment unchanged when the tenant is missing' {
         Set-Content -LiteralPath $script:ConstantsPath -Encoding utf8 -Value @(
-            'AZURE_PROD_CLIENT_ID=writer-client'
-            'AZURE_PROD_READER_CLIENT_ID=reader-client'
-            'AZURE_TENANT_ID=tenant'
+            'AZURE_PROD_CLIENT_ID=client-456'
         )
-        $result = Set-AzureFederationEnv -ConstantsPath $script:ConstantsPath -EnvFilePath $script:EnvFilePath -Access Reader
-        $result['AZURE_CLIENT_ID'] | Should -Be 'reader-client'
-        Get-Content -LiteralPath $script:EnvFilePath | Should -Contain 'AZURE_CLIENT_ID=reader-client'
-        Get-Content -LiteralPath $script:EnvFilePath | Should -Not -Contain 'AZURE_CLIENT_ID=writer-client'
-    }
-
-    It 'does not fall back to the writer when the reader is unconfigured' {
-        Set-Content -LiteralPath $script:ConstantsPath -Encoding utf8 -Value @(
-            'AZURE_PROD_CLIENT_ID=writer-client'
-            'AZURE_TENANT_ID=tenant'
-        )
-        { Set-AzureFederationEnv -ConstantsPath $script:ConstantsPath -EnvFilePath $script:EnvFilePath -Access Reader } |
-            Should -Throw '*AZURE_PROD_READER_CLIENT_ID*'
-        Get-Content -LiteralPath $script:EnvFilePath | Should -BeNullOrEmpty
-    }
-
-    It 'rejects a reader configured to use the writer identity' {
-        Set-Content -LiteralPath $script:ConstantsPath -Encoding utf8 -Value @(
-            'AZURE_PROD_CLIENT_ID=writer-client'
-            'AZURE_PROD_READER_CLIENT_ID=WRITER-CLIENT'
-            'AZURE_TENANT_ID=tenant'
-        )
-        { Set-AzureFederationEnv -ConstantsPath $script:ConstantsPath -EnvFilePath $script:EnvFilePath -Access Reader } |
+        { Set-AzureFederationEnv -ConstantsPath $script:ConstantsPath -EnvFilePath $script:EnvFilePath } |
             Should -Throw
         Get-Content -LiteralPath $script:EnvFilePath | Should -BeNullOrEmpty
     }

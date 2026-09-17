@@ -1,29 +1,74 @@
 #Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Exercises deploy.ps1's production lifecycle policy through its module with
-# in-process Azure CLI responses. Protects additive updates, fresh-container
-# ordering, persistent writer retirement and fail-closed CLI handling without
-# deploying resources, inspecting copied Bicep text or needing Azure credentials.
-
+# Exercises the canonical exported deployment module with in-process Azure
+# responses. Guards single-identity additive provisioning, prerequisite ordering
+# and fail-closed management-plane discovery, without credentials or mutations.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
 BeforeDiscovery {
-    Import-Module (Join-Path $PSScriptRoot 'ProductionIdentityDeployment.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot '..' '..' 'packages' 'cargo-bench-history' 'src' 'azure_bundle' 'ProductionIdentityDeployment.psm1') -Force
 }
 
 AfterAll {
     Remove-Module ProductionIdentityDeployment -Force
 }
 
+Describe 'Standalone deployment parameter input' {
+    BeforeAll {
+        $script:Driver = Join-Path $PSScriptRoot '..' '..' 'packages' 'cargo-bench-history' 'src' 'azure_bundle' 'deploy.ps1'
+    }
+
+    BeforeEach {
+        $script:Overrides = @{
+            ParametersFile = 'edited-parameters.json'
+            SubscriptionId = 'subscription-one'
+            ResourceGroup = 'group-one'
+            Location = 'westeurope'
+            StorageAccountName = 'historyone'
+            GithubOrg = 'owner-one'
+            GithubRepo = 'repository-one'
+            HistoryBranch = 'main'
+        }
+        # Keep this script-input test in-process and prevent reimport from
+        # replacing the mocked deployment boundary with an Azure-capable one.
+        Mock Import-Module {}
+        Mock Invoke-ProductionIdentityDeployment { throw 'deployment-boundary-canary' }
+    }
+
+    It 'rejects unknown keys even when null and flags supply required inputs: <json>' -ForEach @(
+        @{ json = '{"SubcriptionId":null}' }
+        @{ json = '{"Keys":null}' }
+    ) {
+        Mock Get-Content ({ $json }.GetNewClosure())
+        { & $script:Driver @script:Overrides } | Should -Throw
+        Should -Invoke Invoke-ProductionIdentityDeployment -Times 0 -Exactly
+    }
+
+    It 'rejects a non-object JSON root: <json>' -ForEach @(
+        @{ json = '[{}]' }
+        @{ json = '[]' }
+        @{ json = '"not an object"' }
+        @{ json = 'null' }
+    ) {
+        Mock Get-Content ({ $json }.GetNewClosure())
+        { & $script:Driver @script:Overrides } | Should -Throw
+        Should -Invoke Invoke-ProductionIdentityDeployment -Times 0 -Exactly
+    }
+
+    It 'accepts an object root with required values supplied by explicit flags' {
+        Mock Get-Content { '{}' }
+        { & $script:Driver @script:Overrides } | Should -Throw '*deployment-boundary-canary*'
+        Should -Invoke Invoke-ProductionIdentityDeployment -Times 1 -Exactly
+    }
+}
+
 Describe 'Production identity deployment policy' {
     InModuleScope ProductionIdentityDeployment {
         BeforeAll {
-            # Shadow the executable even on machines with no Azure CLI. An
-            # unexpected unmocked call must fail rather than reach a live account.
             function script:az { throw 'Azure CLI calls must be mocked.' }
         }
 
@@ -31,52 +76,52 @@ Describe 'Production identity deployment policy' {
             $script:Parameters = @{
                 SubscriptionId = 'subscription-one'
                 ResourceGroup = 'group-one'
+                Location = 'westeurope'
                 StorageAccountName = 'historyone'
-                ManagedIdentityName = 'writer-one'
+                ManagedIdentityName = 'identity-one'
                 HistoryContainerName = 'history-one'
+                GithubOrg = 'owner-one'
+                GithubRepo = 'repository-one'
+                HistoryBranch = 'history/main'
             }
             $script:Accounts = @(@{ name = 'unrelated' }, @{ name = 'historyone' })
             $script:Containers = @(@{ name = 'unrelated' }, @{ name = 'history-one' })
-            $script:WriterExists = $true
-            $script:Credentials = [System.Collections.Generic.List[string]]::new()
-            $script:Credentials.AddRange([string[]]@(
-                    'github-branch-main', 'github-pull-request', 'github-branch-maintenance'
-                ))
+            $script:Calls = [System.Collections.Generic.List[string]]::new()
             $script:DeploymentParameters = @{}
-            $script:Deployed = $false
             $script:FailOperation = ''
-            $script:FailAfterDeployment = $false
-            $script:ReaderClientId = [guid]::NewGuid().ToString()
+            $script:FailedStdout = '{}'
+            $script:SubscriptionState = 'Enabled'
+            $script:ReturnedSubscription = 'subscription-one'
+            $script:MissingOutput = $false
 
             Mock az {
                 $global:LASTEXITCODE = 0
-                $operation = ($args[0..1] -join ' ')
-                if ($operation -in @('storage account', 'storage container-rm', 'identity federated-credential', 'deployment group')) {
-                    $operation = ($args[0..2] -join ' ')
+                $operation = if ($args[0] -eq 'version') { 'version' } else { $args[0..1] -join ' ' }
+                if ($operation -in @('storage account', 'storage container-rm', 'deployment group')) {
+                    $operation = $args[0..2] -join ' '
                 }
-                if ($operation -eq $script:FailOperation -and
-                    (-not $script:FailAfterDeployment -or $script:Deployed)) {
+                $script:Calls.Add($operation)
+                if ($operation -eq $script:FailOperation) {
                     $global:LASTEXITCODE = 23
-                    return '{}'
+                    return $script:FailedStdout
                 }
-
                 switch ($operation) {
+                    'version' { return '{}' }
                     'bicep version' { return 'Installed Bicep' }
+                    'account show' {
+                        return ConvertTo-Json -InputObject @{
+                            id = $script:ReturnedSubscription
+                            state = $script:SubscriptionState
+                            tenantId = 'tenant-one'
+                        }
+                    }
+                    'account get-access-token' { return 'expiry-not-token' }
                     'group create' { return }
                     'storage account list' {
                         return ConvertTo-Json -InputObject $script:Accounts -Compress
                     }
                     'storage container-rm list' {
                         return ConvertTo-Json -InputObject $script:Containers -Compress
-                    }
-                    'identity list' {
-                        $items = @(@{ name = 'unrelated' })
-                        if ($script:WriterExists) { $items += @{ name = 'writer-one' } }
-                        return ConvertTo-Json -InputObject $items -Compress
-                    }
-                    'identity federated-credential list' {
-                        $items = @($script:Credentials | ForEach-Object { @{ name = $_ } })
-                        return ConvertTo-Json -InputObject $items -Compress
                     }
                     'deployment group create' {
                         $start = [array]::IndexOf($args, '--parameters') + 1
@@ -91,222 +136,140 @@ Describe 'Production identity deployment policy' {
                         if ($script:DeploymentParameters.createHistoryContainer -eq 'true') {
                             $script:Containers += @{ name = $script:DeploymentParameters.historyContainerName }
                         }
-                        $script:WriterExists = $true
-                        if ($script:DeploymentParameters.trustPullRequests -eq 'true' -and
-                            -not $script:Credentials.Contains('github-pull-request')) {
-                            $script:Credentials.Add('github-pull-request')
+                        $outputs = @{
+                            storageAccountName = @{ value = 'historyone' }
+                            historyContainerName = @{ value = 'history-one' }
+                            blobEndpoint = @{ value = 'https://historyone.blob.core.windows.net/' }
+                            managedIdentityClientId = @{ value = 'client-one' }
+                            managedIdentityPrincipalId = @{ value = 'principal-one' }
+                            tenantId = @{ value = 'tenant-one' }
+                            subscriptionId = @{ value = 'subscription-one' }
                         }
-                        $script:Deployed = $true
-                        return ConvertTo-Json -InputObject @{
-                            readerManagedIdentityClientId = @{ value = $script:ReaderClientId }
-                        } -Compress
-                    }
-                    'identity federated-credential delete' {
-                        # Model only the addressed credential; tests verify both
-                        # ordering and the complete subscription/identity scope.
-                        if (-not $script:Deployed) { throw 'Deletion preceded deployment.' }
-                        $name = $args[[array]::IndexOf($args, '--name') + 1]
-                        $null = $script:Credentials.Remove($name)
-                        return
+                        if ($script:MissingOutput) { $outputs.Remove('managedIdentityPrincipalId') }
+                        return ConvertTo-Json -InputObject $outputs -Compress
                     }
                     default { throw "Unexpected Azure CLI operation: $operation" }
                 }
             }
         }
 
-        It 'adds a default reader while preserving existing storage and writer trust' {
+        It 'ensures one configured identity and branch on repeated deployments while preserving storage' {
             $outputs = Invoke-ProductionIdentityDeployment @script:Parameters
-
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
 
             $script:DeploymentParameters.createStorageAccount | Should -Be 'false'
             $script:DeploymentParameters.createHistoryContainer | Should -Be 'false'
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'true'
-            $script:DeploymentParameters.readerManagedIdentityName | Should -Be 'writer-one-reader'
-            $script:Credentials | Should -Contain 'github-pull-request'
-            $outputs.readerManagedIdentityClientId.value | Should -Be $script:ReaderClientId
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
+            $script:DeploymentParameters.managedIdentityName | Should -Be 'identity-one'
+            $script:DeploymentParameters.historyBranch | Should -Be 'history/main'
+            $outputs.managedIdentityClientId.value | Should -Be 'client-one'
             Should -Invoke az -Times 2 -Exactly -ParameterFilter {
                 $args[0] -eq 'deployment' -and $args -contains 'Incremental'
             }
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args[0] -eq 'identity' }
         }
 
-        It 'bootstraps fresh storage without writer PR trust and preserves that default on repeat deployment' {
+        It 'bootstraps missing storage once and preserves it on repeat deployment' {
             $script:Accounts = @()
             $script:Containers = @()
-            $script:WriterExists = $false
-            $script:Credentials.Clear()
-
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-
             $script:DeploymentParameters.createStorageAccount | Should -Be 'true'
             $script:DeploymentParameters.createHistoryContainer | Should -Be 'true'
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            $script:Credentials | Should -Not -Contain 'github-pull-request'
             Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'container-rm' }
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'federated-credential' }
 
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-
             $script:DeploymentParameters.createStorageAccount | Should -Be 'false'
             $script:DeploymentParameters.createHistoryContainer | Should -Be 'false'
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            $script:Credentials | Should -Not -Contain 'github-pull-request'
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
+            $script:DeploymentParameters.managedIdentityName | Should -Be 'identity-one'
+            $script:DeploymentParameters.historyBranch | Should -Be 'history/main'
         }
 
-        It 'provisions a missing writer without PR trust even when storage already exists' {
-            $script:WriterExists = $false
-            $script:Credentials.Clear()
-
+        It 'creates only a missing container' {
+            $script:Containers = @(@{ name = 'unrelated' })
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-
-            $script:DeploymentParameters.createStorageAccount | Should -Be 'false'
-            $script:DeploymentParameters.createHistoryContainer | Should -Be 'false'
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            $script:Credentials | Should -Not -Contain 'github-pull-request'
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'federated-credential' }
-        }
-
-        It 'creates a missing container without resetting an existing account or blob service' {
-            $script:Containers = @(@{ name = 'other-history' })
-
-            Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-
             $script:DeploymentParameters.createStorageAccount | Should -Be 'false'
             $script:DeploymentParameters.createHistoryContainer | Should -Be 'true'
         }
 
-        It 'preserves absent writer PR trust on an ordinary deployment' {
-            $null = $script:Credentials.Remove('github-pull-request')
-
+        It 'derives the identity from the selected account when omitted' {
+            $script:Parameters.Remove('ManagedIdentityName')
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            $script:Credentials | Should -Not -Contain 'github-pull-request'
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
+            $script:DeploymentParameters.managedIdentityName | Should -Be 'id-historyone-bench-history'
         }
 
-        It 'retires only the selected writer PR credential and keeps it absent across repeat deployments' {
-            Invoke-ProductionIdentityDeployment @script:Parameters -RetireWriterPullRequestTrust | Out-Null
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            $script:Credentials | Should -Not -Contain 'github-pull-request'
-            $script:Credentials | Should -Contain 'github-branch-main'
-            $script:Credentials | Should -Contain 'github-branch-maintenance'
-
-            Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-            Invoke-ProductionIdentityDeployment @script:Parameters -RetireWriterPullRequestTrust | Out-Null
-
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            $script:Credentials | Should -Not -Contain 'github-pull-request'
-            Should -Invoke az -Times 1 -Exactly -ParameterFilter {
-                ($args[0..2] -join ' ') -eq 'identity federated-credential delete' -and
-                $args[[array]::IndexOf($args, '--subscription') + 1] -eq 'subscription-one' -and
-                $args[[array]::IndexOf($args, '--resource-group') + 1] -eq 'group-one' -and
-                $args[[array]::IndexOf($args, '--identity-name') + 1] -eq 'writer-one' -and
-                $args[[array]::IndexOf($args, '--name') + 1] -eq 'github-pull-request' -and
-                $args -contains '--yes'
-            }
-        }
-
-        It 'can bootstrap a writer without PR trust when retirement is explicitly requested' {
-            $script:WriterExists = $false
-            $script:Credentials.Clear()
-
-            Invoke-ProductionIdentityDeployment @script:Parameters -RetireWriterPullRequestTrust | Out-Null
-
-            $script:DeploymentParameters.trustPullRequests | Should -Be 'false'
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
-        }
-
-        It 'forwards custom reader, repository and local-access parameters without widening storage scope' {
-            $script:Parameters.ReaderManagedIdentityName = 'custom-reader'
-            $script:Parameters.HistoryContainerName = 'custom-history'
-            $script:Parameters.GithubOrg = 'owner-one'
-            $script:Parameters.GithubRepo = 'repo-one'
-            $script:Parameters.LocalPrincipalId = 'local-object-id'
+        It 'forwards literal custom parameters and independent local access' {
+            $script:Parameters.ResourceGroup = 'group''"$() literal'
+            $script:Parameters.LocalPrincipalId = 'local-one'
             $script:Parameters.LocalPrincipalType = 'Group'
-            $script:Parameters.Location = 'westeurope'
-
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-
-            $script:DeploymentParameters.readerManagedIdentityName | Should -Be 'custom-reader'
-            $script:DeploymentParameters.historyContainerName | Should -Be 'custom-history'
-            $script:DeploymentParameters.githubOrg | Should -Be 'owner-one'
-            $script:DeploymentParameters.githubRepo | Should -Be 'repo-one'
-            $script:DeploymentParameters.localPrincipalId | Should -Be 'local-object-id'
+            $script:DeploymentParameters.localPrincipalId | Should -Be 'local-one'
             $script:DeploymentParameters.localPrincipalType | Should -Be 'Group'
-            $script:DeploymentParameters.location | Should -Be 'westeurope'
+            $script:DeploymentParameters.githubOrg | Should -Be 'owner-one'
+            $script:DeploymentParameters.githubRepo | Should -Be 'repository-one'
             Should -Invoke az -Times 1 -Exactly -ParameterFilter {
                 $args -contains 'container-rm' -and
-                $args[[array]::IndexOf($args, '--storage-account') + 1] -eq 'historyone' -and
-                $args[[array]::IndexOf($args, '--resource-group') + 1] -eq 'group-one' -and
-                $args[[array]::IndexOf($args, '--subscription') + 1] -eq 'subscription-one'
+                $args[[array]::IndexOf($args, '--resource-group') + 1] -eq 'group''"$() literal'
             }
         }
 
-        It 'rejects using the writer identity as the reader before any CLI call' {
-            { Invoke-ProductionIdentityDeployment @script:Parameters -ReaderManagedIdentityName 'WRITER-ONE' } |
-                Should -Throw
-            Should -Invoke az -Times 0 -Exactly
+        It 'checks tooling and usable subscription authentication before resource-group creation' {
+            Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
+            $script:Calls[0..4] | Should -Be @(
+                'version', 'bicep version', 'account show', 'account get-access-token', 'group create'
+            )
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter {
+                $args[0] -notin @('version', 'bicep') -and
+                ($args -notcontains '--subscription' -or
+                    $args[[array]::IndexOf($args, '--subscription') + 1] -ne 'subscription-one')
+            }
         }
 
-        It 'rejects invalid container names before any CLI call' -ForEach @('ab', 'Upper-case', 'two--hyphens') {
-            $script:Parameters.HistoryContainerName = $_
+        It 'rejects unusable or mismatched subscription context' -ForEach @('disabled', 'mismatched') {
+            if ($_ -eq 'disabled') { $script:SubscriptionState = 'Disabled' }
+            else { $script:ReturnedSubscription = 'other-subscription' }
+            { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'create' }
+        }
+
+        It 'rejects invalid input before Azure calls' -ForEach @(
+            @{ name = 'HistoryContainerName'; value = 'Uppercase' }
+            @{ name = 'HistoryContainerName'; value = 'two--hyphens' }
+            @{ name = 'StorageAccountName'; value = 'Uppercase' }
+            @{ name = 'LocalPrincipalId'; value = 'unpaired' }
+            @{ name = 'LocalPrincipalType'; value = 'User' }
+            @{ name = 'HistoryBranch'; value = 'bad:branch' }
+        ) {
+            $script:Parameters[$name] = $value
             { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
             Should -Invoke az -Times 0 -Exactly
         }
 
-        It 'rejects an uppercase storage account before any CLI call' {
-            $script:Parameters.StorageAccountName = 'Uppercase'
-            { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
-            Should -Invoke az -Times 0 -Exactly
-        }
-
-        It 'fails on <operation> errors without deleting writer trust' -ForEach @(
+        It 'fails closed on <operation>' -ForEach @(
+            @{ operation = 'version' }
             @{ operation = 'bicep version' }
+            @{ operation = 'account show' }
+            @{ operation = 'account get-access-token' }
             @{ operation = 'group create' }
             @{ operation = 'storage account list' }
             @{ operation = 'storage container-rm list' }
-            @{ operation = 'identity list' }
-            @{ operation = 'identity federated-credential list' }
             @{ operation = 'deployment group create' }
         ) {
             $script:FailOperation = $operation
-
-            { Invoke-ProductionIdentityDeployment @script:Parameters -RetireWriterPullRequestTrust } |
-                Should -Throw
-
-            $script:Credentials | Should -Contain 'github-pull-request'
-            $script:Deployed | Should -BeFalse
-            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
-            if ($operation -eq 'bicep version') {
-                Should -Invoke az -Times 0 -Exactly -ParameterFilter {
-                    ($args[0..1] -join ' ') -eq 'group create'
-                }
-            }
-        }
-
-        It 'does not treat a failed retirement probe as an absent credential' {
-            $script:FailOperation = 'identity federated-credential list'
-            $script:FailAfterDeployment = $true
-
-            { Invoke-ProductionIdentityDeployment @script:Parameters -RetireWriterPullRequestTrust } |
-                Should -Throw
-
-            $script:Deployed | Should -BeTrue
-            $script:Credentials | Should -Contain 'github-pull-request'
+            { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
+            $script:Calls[-1] | Should -Be $operation
             Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
         }
 
-        It 'surfaces failed deletion rather than claiming retirement succeeded' {
-            $script:FailOperation = 'identity federated-credential delete'
+        It 'does not claim success for missing deployment outputs' {
+            $script:MissingOutput = $true
+            { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
+        }
 
-            { Invoke-ProductionIdentityDeployment @script:Parameters -RetireWriterPullRequestTrust } |
-                Should -Throw
-
-            $script:Deployed | Should -BeTrue
-            $script:Credentials | Should -Contain 'github-pull-request'
+        It 'retains stdout diagnostics from a failed native operation' {
+            $script:FailOperation = 'deployment group create'
+            $script:FailedStdout = 'operation-detail-canary'
+            { Invoke-ProductionIdentityDeployment @script:Parameters } |
+                Should -Throw '*operation-detail-canary*'
         }
     }
 }

@@ -304,7 +304,7 @@ fn inspected_outputs_append_offline_and_retain_existing_workflow_values() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         fs::read_to_string(fixture.path("github-output")).unwrap(),
-        "earlier=value\noutcome=clean\nnotable=false\ncan-clear=true\n"
+        "earlier=value\noutcome=clean\nnotable=false\ncan-clear=true\npublication-state=clean\n"
     );
     fs::write(
         fixture.path("report.json"),
@@ -315,7 +315,9 @@ fn inspected_outputs_append_offline_and_retain_existing_workflow_values() {
     assert!(
         fs::read_to_string(fixture.path("github-output"))
             .unwrap()
-            .ends_with("outcome=clean\nnotable=false\ncan-clear=false\n")
+            .ends_with(
+                "outcome=clean\nnotable=false\ncan-clear=false\npublication-state=no-data\n"
+            )
     );
 }
 

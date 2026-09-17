@@ -1,3 +1,4 @@
+use crate::cli::{PendingArgs, RunArgs};
 use crate::model::{CommitSha, Instance, IssueKind};
 
 pub(crate) fn issue(instance: &Instance, kind: IssueKind) -> String {
@@ -30,12 +31,58 @@ pub(crate) fn in_progress(instance: &Instance) -> String {
     )
 }
 
-pub(crate) fn run_owner(instance: &Instance, run_id: u64, head: &CommitSha) -> String {
+pub(crate) fn run_owner(instance: &Instance, owner: &PendingArgs) -> String {
     format!(
-        "<!-- cargo-bench-history:{}:run:{}:{} -->",
+        "<!-- cargo-bench-history:{}:run:{}:{}:{} -->",
         instance.as_str(),
-        run_id,
-        head.as_str()
+        owner.run.run_id,
+        owner.run.run_attempt,
+        owner.head.as_str()
+    )
+}
+
+pub(crate) fn find_owner(body: &str, instance: &Instance) -> Option<PendingArgs> {
+    let value = unique_value(body, instance, "run")?;
+    let mut parts = value.split(':');
+    let owner = PendingArgs {
+        run: RunArgs {
+            run_id: parts.next()?.parse().ok()?,
+            run_attempt: parts.next()?.parse().ok()?,
+        },
+        head: parts.next()?.parse().ok()?,
+    };
+    parts.next().is_none().then_some(owner)
+}
+
+pub(crate) fn state(instance: &Instance, state: &str) -> String {
+    format!(
+        "<!-- cargo-bench-history:{}:state:{state} -->",
+        instance.as_str()
+    )
+}
+
+pub(crate) fn find_state<'a>(body: &'a str, instance: &Instance) -> Option<&'a str> {
+    unique_value(body, instance, "state")
+}
+
+pub(crate) fn annotation_start(instance: &Instance) -> String {
+    format!(
+        "<!-- cargo-bench-history:{}:annotation:start -->",
+        instance.as_str()
+    )
+}
+
+pub(crate) fn annotation_end(instance: &Instance) -> String {
+    format!(
+        "<!-- cargo-bench-history:{}:annotation:end -->",
+        instance.as_str()
+    )
+}
+
+pub(crate) fn alert_run(instance: &Instance, run_id: u64) -> String {
+    format!(
+        "<!-- cargo-bench-history:{}:alert-run:{run_id} -->",
+        instance.as_str()
     )
 }
 
@@ -65,14 +112,14 @@ pub(crate) fn stale_end(instance: &Instance) -> String {
 }
 
 pub(crate) fn find_analyzed_sha(body: &str, instance: &Instance) -> Option<CommitSha> {
-    let prefix = format!(
-        "<!-- cargo-bench-history:{}:analyzed-sha:",
-        instance.as_str()
-    );
-    body.lines().find_map(|line| {
-        let value = line.strip_prefix(&prefix)?.strip_suffix(" -->")?;
-        value.parse().ok()
-    })
+    unique_value(body, instance, "analyzed-sha")?.parse().ok()
+}
+
+fn unique_value<'a>(body: &'a str, instance: &Instance, key: &str) -> Option<&'a str> {
+    let prefix = format!("<!-- cargo-bench-history:{}:{key}:", instance.as_str());
+    let mut values = body.lines().filter_map(|line| line.strip_prefix(&prefix));
+    let value = values.next()?.strip_suffix(" -->")?;
+    values.next().is_none().then_some(value)
 }
 
 #[cfg(test)]

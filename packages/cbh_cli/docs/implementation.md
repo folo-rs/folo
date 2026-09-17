@@ -10,3 +10,7 @@ The crate owns the `clap` parsing boundary, help organization, and translation f
 the values owned by `cbh_command`. It also classifies parser exits for the process entry point.
 Command execution and application policy remain outside this crate, keeping parser dependencies
 and parser-specific concerns out of command implementations.
+
+Standalone Azure setup has its own argument group rather than flattening benchmark
+environment options. Export admits partial deployment inputs; execution requires explicit
+placement and repository inputs. Optional local access is a paired CLI constraint.

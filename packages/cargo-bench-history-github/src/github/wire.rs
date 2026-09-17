@@ -7,13 +7,14 @@ use serde_json::Value;
 use crate::errors::InvalidResponseError;
 use crate::github::{Comment, Comparison, Issue};
 
-/// The issue-list representation, which also includes pull requests.
+/// The directly read issue representation, including its current state.
 #[derive(Deserialize)]
 pub(crate) struct IssueResponse {
     pub(crate) number: NonZero<u64>,
     pub(crate) title: String,
     pub(crate) body: Option<String>,
     pub(crate) pull_request: Option<Value>,
+    state: IssueState,
 }
 
 impl From<IssueResponse> for Issue {
@@ -22,8 +23,17 @@ impl From<IssueResponse> for Issue {
             number: value.number.get(),
             title: value.title,
             body: value.body.unwrap_or_default(),
+            open: matches!(value.state, IssueState::Open),
         }
     }
+}
+
+/// Unknown issue states must not be interpreted as open or absent.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum IssueState {
+    Open,
+    Closed,
 }
 
 /// An issue comment returned by GitHub's pull-request conversation endpoints.
@@ -72,7 +82,7 @@ enum CompareStatus {
     Diverged,
 }
 
-/// The complete writable content of a new rolling issue.
+/// The complete writable content of a new issue.
 #[derive(Serialize)]
 pub(crate) struct IssueWrite<'a> {
     pub(crate) title: &'a str,
@@ -85,18 +95,11 @@ pub(crate) struct BodyWrite<'a> {
     pub(crate) body: &'a str,
 }
 
-/// A rolling issue update can preserve the existing title.
+/// Title and body describe the same captured publication date.
 #[derive(Serialize)]
 pub(crate) struct IssueUpdate<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) title: Option<&'a str>,
+    pub(crate) title: &'a str,
     pub(crate) body: &'a str,
-}
-
-/// Closes an issue without replacing its report content.
-#[derive(Serialize)]
-pub(crate) struct IssueStateWrite<'a> {
-    pub(crate) state: &'a str,
 }
 
 pub(crate) fn comparison(value: &CompareResponse) -> Result<Comparison, AppError> {

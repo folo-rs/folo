@@ -40,6 +40,8 @@ unknown-distance warning.
 Issue no-data and failed states share the bounded annotation mechanism rather than replacing
 the previous report. They retain its analyzed-commit identity and freshness qualification.
 Preflight records ownership so delayed terminal work cannot retire a newer pending annotation.
+No-data at the pending head can retire that annotation despite an unknown distance to the
+retained report, including when a successful preflight is reused by a later run attempt.
 Absence of an issue is diagnosed after input validation; only findings can create one.
 
 An ambiguous create is reconciled against both the artifact identity and the desired body.
@@ -54,6 +56,8 @@ rolling date suffix as identity. The selected number is read through the ordinar
 endpoint so stale indexed content does not drive a mutation. Comment discovery matches
 instance/kind markers only within the target PR. No operation scans all repository issue bodies
 or relies on author identity, and there is no title-renaming fallback or migration path.
+Comment identity alone does not permit a lifecycle transition without interpretable
+run-attempt ownership.
 
 The search adapter validates `total_count`, `incomplete_results` and pagination before treating
 the result set as complete. It URL-encodes the query and treats project text as a literal search
@@ -71,6 +75,11 @@ an issue body update, and retries reuse that date. Title and body are sent toget
 same issue update. No-op paths do not refresh titles; measured-commit freshness remains in
 the body, independently of the title date. Publication passes the optional artifact URL directly
 as report data alongside validated evidence and the tool-rendered summary.
+
+The clock is `tick::Clock`; calendar conversion uses Jiff with the UTC time zone, never the
+host's local zone. Tests inject frozen instants. Report metadata and the bounded annotation
+are parsed separately, so a pending run's ownership never replaces the retained report's
+ownership or analyzed commit. Malformed and duplicated identity metadata are errors.
 
 Clean issue publication only updates the all-clear body. There is no issue-closing operation
 in the companion. Empty-scope comment publication shares ordinary update/create reconciliation

@@ -70,11 +70,20 @@ What you get out of it:
   and omit `--local`. This is the shared backend a team and CI read and append to.
   A local path is machine-specific, so it is never written into the shared config.
 
-In CI today, integration is hand-crafted per project: a GitHub Actions workflow
-runs `collect` on the base branch to grow the history, and runs `analyze` on each
-pull request to judge the branch tip against the base, posting the result as a
-**Performance impact** comment. (Reusable actions to make this turnkey are on the
-roadmap; for now the workflow is written by hand.)
+Use `cargo bench-history setup-azure --out-dir ./azure-history` to export a
+self-contained, reviewable Azure deployment bundle without login, tooling probes
+or a checkout. Fill in its parameter file and run its standalone PowerShell
+driver, or use `setup-azure` without `--out-dir` to deploy directly with explicit
+subscription, resource group, location, account, GitHub repository and history
+branch inputs. Execution requires Azure CLI, PowerShell 7.6 or later, installed
+Bicep and an authenticated subscription; it installs no tools or credentials.
+See the [Azure setup guide](https://folo-rs.github.io/folo/cargo-bench-history/commands/setup-azure.html).
+
+The deployment provides one production identity for collection, backfill and
+analysis, preserving existing storage settings and data on repeated deployment.
+Its branch and PR federation subjects need workflow policy that excludes fork
+heads from privileged identity use. The non-secret configuration handoff is
+printed for review; repository and GitHub settings are not edited.
 
 ## Trying it locally
 

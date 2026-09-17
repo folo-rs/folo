@@ -527,6 +527,7 @@ version = "0.2.6"
 dependencies = [
  "clap",
  "futures",
+ "jiff",
  "mimalloc",
  "mutants",
  "ohno",
@@ -534,6 +535,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+ "tick",
  "tokio",
 ]
 

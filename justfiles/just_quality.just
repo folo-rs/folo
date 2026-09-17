@@ -96,7 +96,7 @@ validate-binstall:
 
     Invoke-BinstallValidation
 
-# Statically analyzes every PowerShell script and module under scripts/ with PSScriptAnalyzer
+# Statically analyzes repository scripts and the packaged Azure deployment bundle with PSScriptAnalyzer
 # (installed and version-pinned by `just install-tools`). It runs the built-in rule set filtered by
 # the curated PSScriptAnalyzerSettings.psd1 PLUS the repo-local custom rules in
 # scripts/analyzer/FoloAnalyzerRules.psm1 - which catch classes the built-in rules miss, notably the

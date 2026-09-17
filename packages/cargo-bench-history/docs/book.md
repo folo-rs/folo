@@ -83,8 +83,8 @@ the commands that exercise them and down into the appendix for mechanism.
 - **Teach**: run-time selection (tenet 5); local vs. Azure Blob; the precedence ladder;
   `--no-store` as the exception; the read-through `--cache` for the cloud backend in CI; the
   shallow-clone / append-only CI notes.
-- **Boundary**: describe the *selection model*; defer concrete Azure provisioning and config
-  schema to the generated, commented starter file.
+- **Boundary**: describe the *selection model*; defer Azure provisioning to `setup-azure`
+  and configuration fields to the generated, commented starter file.
 
 ### Part 2 — Command reference
 
@@ -98,6 +98,7 @@ the commands that exercise them and down into the appendix for mechanism.
 | Page | The single thing it must teach |
 |---|---|
 | `install` | Generates a commented starter config; never clobbers; documents the optional Azure backend without storing a machine-local path. |
+| `setup-azure` | Explicit Azure provisioning or probe-free standalone export, one federated identity, state-preserving repeat deployment and non-secret configuration handoff. |
 | `collect` | Harvests whichever engines produced output and persists immediately unless dry-running; `--best-of N` min-of-N noise reduction and its caveats. |
 | `backfill` | Reconstructs history over a first-parent commit range in an isolated worktree; resumable and idempotent. |
 | `analyze` | Reconstructs series from topology and reports regressions/drift; target/base/mode auto-selection; findings never set the exit code. |

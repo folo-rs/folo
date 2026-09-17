@@ -1,8 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Pester suite for BenchHistoryCollect.psm1. Proves the mode selection the bench-history `collect`
-# step depends on - append vs. overwrite, and the untrusted-input validation - without a workflow
-# run: each case asserts the exact argument vector the step would hand the tool.
+# Pester suite for BenchHistoryCollect.psm1. Proves append-only collection, scope selection
+# and native argument forwarding without a workflow run.
 #
 # The nightly backfill's rolling date window is proven the same way: `git` is isolated behind the
 # module's Invoke-GitCapture boundary and mocked here in the module's scope, so the window resolution
@@ -33,8 +32,7 @@ BeforeAll {
         $original
     }
 
-    # Flags shared by both modes; asserted as a slice so a case only spells out what makes it
-    # distinct (the subcommand, its positionals, and the append/overwrite tail).
+    # Collection and backfill must use the same scope, feature and noise-reduction policy.
     $script:Scope = @(
         '--workspace',
         '--exclude', 'excluded-z',
@@ -98,74 +96,16 @@ Describe 'Get-BenchHistoryCollectCommand' {
         }
     }
 
-    Context 'append mode (no recollect commit id)' {
-        It 'collects the pushed commit in append mode for an empty id' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId ''
+    Context 'append-only collection' {
+        It 'collects the pushed commit without replacing stored objects' {
+            $result = Get-BenchHistoryCollectCommand
             $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
         }
 
-
-        It 'treats a null id as append mode' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId $null
-            $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
-        }
-
-        It 'treats a whitespace-only id as append mode' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId "  `t "
-            $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
-        }
-
-        It 'never overwrites in append mode' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId ''
+        It 'never overwrites or switches to historical collection' {
+            $result = Get-BenchHistoryCollectCommand
             $result | Should -Not -Contain '--overwrite'
             $result | Should -Not -Contain 'backfill'
-        }
-    }
-
-    Context 'recollect mode (a commit id set)' {
-        It 'overwrites a single historical commit via backfill for a full SHA' {
-            $sha = '0123456789abcdef0123456789abcdef01234567'
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId $sha
-            $result | Should -Be (@('backfill', $sha, $sha) + $script:Scope + @('--overwrite'))
-        }
-
-        It 'accepts a short SHA and passes it as both range endpoints' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId 'abc1234'
-            $result | Should -Be (@('backfill', 'abc1234', 'abc1234') + $script:Scope + @('--overwrite'))
-        }
-
-        It 'trims surrounding whitespace before use' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '  abc1234  '
-            $result | Should -Be (@('backfill', 'abc1234', 'abc1234') + $script:Scope + @('--overwrite'))
-        }
-
-        It 'never appends in recollect mode' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId 'abc1234'
-            $result | Should -Not -Contain '--skip-existing'
-            $result | Should -Not -Contain 'collect'
-        }
-    }
-
-    Context 'invalid commit ids' {
-        It 'rejects a value shorter than 7 characters' {
-            { Get-BenchHistoryCollectCommand -RecollectCommitId 'abc123' } | Should -Throw '*hex commit SHA*'
-        }
-
-        It 'rejects a value longer than 40 characters' {
-            $tooLong = '0' * 41
-            { Get-BenchHistoryCollectCommand -RecollectCommitId $tooLong } | Should -Throw '*hex commit SHA*'
-        }
-
-        It 'rejects non-hex characters' {
-            { Get-BenchHistoryCollectCommand -RecollectCommitId 'abcdefg' } | Should -Throw '*hex commit SHA*'
-        }
-
-        It 'rejects a ref expression such as HEAD~1' {
-            { Get-BenchHistoryCollectCommand -RecollectCommitId 'HEAD~1' } | Should -Throw '*hex commit SHA*'
-        }
-
-        It 'rejects an id carrying shell metacharacters' {
-            { Get-BenchHistoryCollectCommand -RecollectCommitId "abc1234; rm -rf /" } | Should -Throw '*hex commit SHA*'
         }
     }
 
@@ -186,7 +126,7 @@ Describe 'Get-BenchHistoryCollectCommand' {
         }
 
         It 'scopes to the given packages with repeated --package instead of --workspace' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm', 'many_cpus')
+            $result = Get-BenchHistoryCollectCommand -Package @('nm', 'many_cpus')
             $result | Should -Be @(
                 'collect',
                 '--package', 'nm',
@@ -199,13 +139,13 @@ Describe 'Get-BenchHistoryCollectCommand' {
         }
 
         It 'does not fall back to a whole-workspace scope when packages are given' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm')
+            $result = Get-BenchHistoryCollectCommand -Package @('nm')
             $result | Should -Not -Contain '--workspace'
             $result | Should -Not -Contain '--exclude'
         }
 
         It 'ignores blank entries in the package list' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm', '', '  ')
+            $result = Get-BenchHistoryCollectCommand -Package @('nm', '', '  ')
             $result | Should -Be @(
                 'collect',
                 '--package', 'nm',
@@ -217,7 +157,7 @@ Describe 'Get-BenchHistoryCollectCommand' {
         }
 
         It 'treats an all-blank package list as no scope (whole workspace)' {
-            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('', '  ')
+            $result = Get-BenchHistoryCollectCommand -Package @('', '  ')
             $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
         }
 
@@ -259,7 +199,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
             # A partially-scoped or lower-best-of commit would still count as recorded and never be
             # revisited, so the two builders must emit an identical scope slice. Both are compared
             # between their leading positionals and their distinct trailing flag.
-            $collect = Get-BenchHistoryCollectCommand -RecollectCommitId ''
+            $collect = Get-BenchHistoryCollectCommand
             $backfill = Get-BenchHistoryBackfillCommand
             $collectScope = $collect[1..($collect.Count - 2)]
             $backfillScope = $backfill[3..($backfill.Count - 2)]

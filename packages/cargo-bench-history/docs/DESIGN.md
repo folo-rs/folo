@@ -873,6 +873,12 @@ name for existing deployments. Optional local access takes a principal ID and it
 `User` or `Group` type together. These inputs describe actual resource placement and access;
 resource tuning beyond the standard setup belongs in an exported bundle, not additional knobs.
 
+The explicit command inputs are `--subscription-id`, `--resource-group`, `--location`,
+`--storage-account`, `--github-owner`, `--github-repository` and `--history-branch`.
+`--container` and `--managed-identity` override the resource-name defaults.
+`--local-principal-id` pairs with `--local-principal-type user|group`.
+`--verbose` enables explanatory deployment diagnostics.
+
 Before any cloud mutation, execution verifies Azure CLI, PowerShell 7.6 or later, an already
 installed Bicep CLI accessible through Azure CLI, and an authenticated context for the selected
 subscription. It installs no tooling and does not initiate login. The operator must have

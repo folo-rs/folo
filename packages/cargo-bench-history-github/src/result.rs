@@ -16,15 +16,45 @@ pub(crate) struct Evidence {
 }
 
 impl Evidence {
-    pub(crate) fn require_all_clear(&self) -> Result<(), AppError> {
-        if !self.is_all_clear() {
-            return Err(UnsafeAllClear::new().into());
+    pub(crate) fn require_state(&self, state: PublicationState) -> Result<(), AppError> {
+        if self.publication_state() != state {
+            return Err(WrongPublicationState::new().into());
         }
         Ok(())
     }
 
     pub(crate) fn is_all_clear(&self) -> bool {
-        self.report.outcome == Outcome::Clean && self.platforms.is_complete()
+        self.publication_state() == PublicationState::Clean
+    }
+
+    pub(crate) fn publication_state(&self) -> PublicationState {
+        match self.report.outcome {
+            Outcome::Findings => PublicationState::Findings,
+            Outcome::Clean
+                if self.report.coverage == Coverage::Full && self.platforms.is_complete() =>
+            {
+                PublicationState::Clean
+            }
+            _ => PublicationState::NoData,
+        }
+    }
+}
+
+/// The GitHub lifecycle projection of successful analysis and collection evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PublicationState {
+    Findings,
+    Clean,
+    NoData,
+}
+
+impl PublicationState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Findings => "findings",
+            Self::Clean => "clean",
+            Self::NoData => "no-data",
+        }
     }
 }
 
@@ -83,13 +113,6 @@ impl AnalysisReport {
     pub(crate) fn require_mode(&self, mode: AnalysisMode) -> Result<(), AppError> {
         if self.mode != mode {
             return Err(WrongAnalysisMode::new().into());
-        }
-        Ok(())
-    }
-
-    pub(crate) fn require_findings(&self) -> Result<(), AppError> {
-        if self.outcome != Outcome::Findings {
-            return Err(NoReportableFindings::new().into());
         }
         Ok(())
     }
@@ -229,15 +252,10 @@ pub(crate) struct InconsistentReport;
 #[display("Report analysis mode does not match the publication command")]
 pub(crate) struct WrongAnalysisMode;
 
-/// Only findings create or replace a regression issue.
+/// Explicit publication commands must agree with the supplied evidence.
 #[ohno::error]
-#[display("Publishing a regression issue requires a findings outcome")]
-pub(crate) struct NoReportableFindings;
-
-/// An incomplete analysis or collection must never dismiss a regression.
-#[ohno::error]
-#[display("All-clear requires a clean analysis and every expected platform to complete")]
-pub(crate) struct UnsafeAllClear;
+#[display("Publication state does not match the validated report and platform coverage")]
+pub(crate) struct WrongPublicationState;
 
 /// Successful reports need explicit, nonempty collection evidence.
 #[ohno::error]
@@ -258,10 +276,8 @@ impl UnwindSafe for InconsistentReport {}
 impl RefUnwindSafe for InconsistentReport {}
 impl UnwindSafe for WrongAnalysisMode {}
 impl RefUnwindSafe for WrongAnalysisMode {}
-impl UnwindSafe for NoReportableFindings {}
-impl RefUnwindSafe for NoReportableFindings {}
-impl UnwindSafe for UnsafeAllClear {}
-impl RefUnwindSafe for UnsafeAllClear {}
+impl UnwindSafe for WrongPublicationState {}
+impl RefUnwindSafe for WrongPublicationState {}
 impl UnwindSafe for InvalidPlatformList {}
 impl RefUnwindSafe for InvalidPlatformList {}
 impl UnwindSafe for UnknownCompletedPlatform {}
@@ -320,9 +336,33 @@ pub(crate) mod tests {
             Outcome::Partial,
         ] {
             for complete in [false, true] {
-                let result = evidence(AnalysisMode::History, outcome, complete).require_all_clear();
+                let result = evidence(AnalysisMode::History, outcome, complete)
+                    .require_state(PublicationState::Clean);
                 assert_eq!(result.is_ok(), outcome == Outcome::Clean && complete);
             }
+        }
+    }
+
+    #[test]
+    fn publication_projection_preserves_findings_and_distinguishes_incomplete_clean() {
+        for (outcome, expected) in [
+            (Outcome::Findings, PublicationState::Findings),
+            (Outcome::Clean, PublicationState::Clean),
+            (Outcome::Partial, PublicationState::NoData),
+            (Outcome::InsufficientBaseline, PublicationState::NoData),
+            (Outcome::NothingInScope, PublicationState::NoData),
+        ] {
+            let complete = evidence(AnalysisMode::Branch, outcome, true);
+            assert_eq!(complete.publication_state(), expected);
+            let incomplete = evidence(AnalysisMode::Branch, outcome, false);
+            assert_eq!(
+                incomplete.publication_state(),
+                if outcome == Outcome::Findings {
+                    PublicationState::Findings
+                } else {
+                    PublicationState::NoData
+                }
+            );
         }
     }
 
@@ -334,6 +374,14 @@ pub(crate) mod tests {
         assert!(!platforms.is_complete());
         let platforms = PlatformCoverage::parse("linux,windows", " windows, linux ").unwrap();
         assert!(platforms.is_complete());
+    }
+
+    #[test]
+    fn publication_modes_are_not_interchangeable() {
+        let report = evidence(AnalysisMode::History, Outcome::Clean, true).report;
+        report.require_mode(AnalysisMode::History).unwrap();
+        let error = report.require_mode(AnalysisMode::Branch).unwrap_err();
+        assert!(error.find_source::<WrongAnalysisMode>().is_some());
     }
 
     #[test]

@@ -6,12 +6,20 @@ use ohno::AppError;
 use crate::github::WorkflowJob;
 use crate::model::{CommitSha, Repository};
 
-/// A rolling GitHub issue.
+/// A directly read GitHub issue with its current title, state and body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Issue {
     pub(crate) number: u64,
     pub(crate) title: String,
     pub(crate) body: String,
+    pub(crate) open: bool,
+}
+
+/// Search metadata identifies candidates without trusting indexed issue contents.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct IssueCandidate {
+    pub(crate) number: u64,
+    pub(crate) title: String,
 }
 
 /// A GitHub pull-request comment.
@@ -35,10 +43,18 @@ pub(crate) trait GitHub {
         run_id: NonZero<u64>,
     ) -> impl Future<Output = Result<Vec<WorkflowJob>, AppError>>;
 
-    fn open_issues(
+    fn search_issues(
         &self,
         repository: &Repository,
-    ) -> impl Future<Output = Result<Vec<Issue>, AppError>>;
+        phrase: &str,
+        include_closed: bool,
+    ) -> impl Future<Output = Result<Vec<IssueCandidate>, AppError>>;
+
+    fn read_issue(
+        &self,
+        repository: &Repository,
+        number: u64,
+    ) -> impl Future<Output = Result<Issue, AppError>>;
 
     fn create_issue(
         &self,
@@ -51,14 +67,8 @@ pub(crate) trait GitHub {
         &self,
         repository: &Repository,
         number: u64,
-        title: Option<&str>,
+        title: &str,
         body: &str,
-    ) -> impl Future<Output = Result<(), AppError>>;
-
-    fn close_issue(
-        &self,
-        repository: &Repository,
-        number: u64,
     ) -> impl Future<Output = Result<(), AppError>>;
 
     fn comments(

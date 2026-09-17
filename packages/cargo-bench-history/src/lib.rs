@@ -283,6 +283,16 @@
 //!
 //! To stand up an Entra-ID-backed store:
 //!
+//! Run `cargo bench-history setup-azure --help` for explicit provisioning inputs,
+//! or `cargo bench-history setup-azure --out-dir ./azure-history` to export a
+//! self-contained deployment bundle without invoking tools or checking credentials.
+//! The deployment supplies one identity with account contributor access, history
+//! branch and PR federation, and optional local access. Repeated deployments
+//! preserve existing storage properties and data. Execution requires Azure CLI,
+//! PowerShell 7.6 or later, installed Bicep and an authenticated subscription.
+//!
+//! For a manually managed alternative:
+//!
 //! 1. **Deploy a Storage account** reachable over HTTPS. Entra-only accounts
 //!    (shared-key access disabled) are supported and preferred — there is then no
 //!    account key to leak. The `bench-history` container does not need to pre-exist;
@@ -304,9 +314,9 @@
 //!    `repo:<owner>/<repo>:ref:refs/heads/main`, while a pull-request-triggered run
 //!    (for example a workflow that benchmarks a PR) presents
 //!    `repo:<owner>/<repo>:pull_request` and needs its own credential with that
-//!    subject. Only **same-repo** pull requests can federate — a fork's run cannot
-//!    mint a token whose subject names your repository, so fork PRs cannot reach the
-//!    store and such workflows must skip them. Run the tool from a job that has
+//!    subject. The PR subject cannot distinguish fork heads: workflow policy must
+//!    restrict privileged identity use to **same-repository** pull requests.
+//!    Run the tool from a job that has
 //!    `permissions: { id-token: write }`, with the managed identity's client ID and
 //!    your Entra tenant ID exported as the `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
 //!    environment variables. The tool then mints a fresh OIDC assertion straight from
@@ -316,9 +326,7 @@
 //!    those variables are absent — locally, or in a short job that runs `azure/login`
 //!    — the tool instead picks up the ambient Azure CLI session.)
 //!
-//! Worked, runnable examples of all of the above live in the folo repository as Bicep
-//! templates with PowerShell deploy wrappers: the long-lived store with its own
-//! dedicated managed identity at
+//! The Folo-specific wrapper for the same standalone deployment bundle lives at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
 //! separate test account/identity at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
@@ -339,8 +347,8 @@ pub use cbh_analyze::{AnalysisOutcome, AutoDiscriminants};
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    MachineKeyOptions, PruneOptions, UnblessOptions,
+    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalPrincipalType,
+    LocalStorageSelection, MachineKeyOptions, PruneOptions, SetupAzureOptions, UnblessOptions,
 };
 pub use cbh_config::default_template;
 pub(crate) use cbh_model as model;

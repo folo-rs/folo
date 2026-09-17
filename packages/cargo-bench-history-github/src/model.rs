@@ -99,7 +99,7 @@ impl FromStr for CommitSha {
     }
 }
 
-/// The two independent rolling issue lifecycles.
+/// Independent regression-report and one-off workflow-failure issue kinds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum IssueKind {
     Regression,

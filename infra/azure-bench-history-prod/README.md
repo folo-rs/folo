@@ -22,8 +22,8 @@ repo:folo-rs/folo:ref:refs/heads/main
 repo:folo-rs/folo:pull_request
 ```
 
-`-GithubOrg` and `-GithubRepo` select the repository. Direct Bicep callers can
-configure `githubBranches`, whose default is `main`. The `pull_request` subject does **not**
+`-GithubOrg`, `-GithubRepo` and `-HistoryBranch` select the repository and branch.
+The Folo wrapper defaults to `main`. The `pull_request` subject does **not**
 distinguish same-repository and fork heads. Workflow policy must restrict identity use to
 same-repository PRs and must not expose privileged credentials to fork code.
 The absence of stored secrets is not itself an OIDC authorization boundary.
@@ -77,10 +77,11 @@ Other parameters (see `deploy.ps1 -?`):
 | `-ManagedIdentityName` | `id-folo-bench-history-prod`; shared production identity |
 | `-HistoryContainerName` | `bench-history`; must match repository storage configuration |
 | `-GithubOrg` / `-GithubRepo` | `folo-rs` / `folo` |
+| `-HistoryBranch` | `main`; branch allowed to federate alongside PRs |
 | `-LocalPrincipalId` / `-LocalPrincipalType` | Optional object ID and `User` or `Group` |
 
 For local data-plane access, optionally include
-`-LocalPrincipalId (az ad signed-in-user show --query id -o tsv)`.
+`-LocalPrincipalId (az ad signed-in-user show --query id -o tsv) -LocalPrincipalType User`.
 
 ### Non-secret output handoff
 
@@ -99,7 +100,9 @@ Provisioning alone does not activate any workflow.
 
 ## Deployment behavior
 
-`deploy.ps1` calls the Pester-tested `ProductionIdentityDeployment.psm1` module.
+`deploy.ps1` supplies Folo defaults to the [canonical deployment bundle](../../packages/cargo-bench-history/src/azure_bundle/).
+That bundle is embedded by `cargo-bench-history setup-azure` and exports without a
+checkout. Its driver calls the Pester-tested `ProductionIdentityDeployment.psm1` module.
 This is a thin Azure CLI provisioning boundary usable without a Rust toolchain;
 Bicep remains the resource definition authority.
 
@@ -117,10 +120,9 @@ Bicep remains the resource definition authority.
 
 Always use the wrapper for routine deployments. Direct Bicep/ARM callers bypass
 its state discovery. They must explicitly select the bootstrap flags.
-The optional `main.bicepparam` requires explicit `AZURE_CREATE_STORAGE_ACCOUNT` and
-`AZURE_CREATE_HISTORY_CONTAINER` Boolean environment values. It also accepts
-`AZURE_HISTORY_CONTAINER_NAME`.
-Bootstrap flags must be true only for missing resources.
+The bundle's `parameters.json` is standalone driver input, with explicit required
+placement and repository values rather than Folo defaults.
+Direct Bicep bootstrap flags must be true only for missing resources.
 
 ## Local collection and destructive teardown
 

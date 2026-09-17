@@ -90,6 +90,12 @@ preserve the existing investigation rather than creating a status-only issue. Th
 successful-run resolution job. Partial collection can publish qualified findings and alert
 on failed jobs without publishing failed status over those findings.
 
+Preflight publishes its actual run-attempt as a job output. A partial rerun can reuse that
+successful job, so terminal commands use the preserved owner attempt rather than assuming
+the current execution created the pending marker. Successful reports use the current attempt.
+The combined analysis/publication job waits for preflight to finish but can still publish
+after a failed preflight; a delayed start notice cannot arrive after its own result.
+
 Azure configuration uses `AZURE_PROD_CLIENT_ID` for every production-history operation.
 Empty PR scope needs no Azure access. The shared identity has contributor access and branch/PR
 federation; the analysis/publication job also receives its GitHub posting scope. There is no
