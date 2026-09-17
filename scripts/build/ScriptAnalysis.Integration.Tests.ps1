@@ -70,7 +70,8 @@ foreach ($target in $Target) { $target }
         { Invoke-WorkspaceScriptAnalysis $root 1.25.0 $diagnostics } | Should -Not -Throw
     }
 
-    It 'applies configured rules to package-owned script <RelativePath>' -ForEach @(
+    It 'applies configured rules to script outside the scripts tree <RelativePath>' -ForEach @(
+        @{ RelativePath = 'infra\azure-bench-history-prod\wrapper-rule-canary.ps1' },
         @{ RelativePath = 'packages\cargo-bench-history\src\azure_bundle\bundled-rule-canary.ps1' },
         @{ RelativePath = 'packages\cargo-bench-history\tests\fixtures\native-rule-canary.ps1' }
     ) {

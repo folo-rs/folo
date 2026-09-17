@@ -19,9 +19,10 @@ function Invoke-WorkspaceScriptAnalysis {
     $null = New-Item -ItemType Directory -Path $directory -Force
     $trace = Join-Path $directory analyzer-verbose.log
     $paths = @((Join-Path $RepositoryRoot scripts))
-    # The binary and source wrapper share the canonical driver. Its native test fixture is
-    # executable PowerShell too; neither loses analysis by living outside scripts/.
+    # The source wrapper, canonical driver and native fixture are executable PowerShell too;
+    # none loses analysis by living outside scripts/.
     foreach ($relativePath in @(
+            'infra\azure-bench-history-prod',
             'packages\cargo-bench-history\src\azure_bundle',
             'packages\cargo-bench-history\tests\fixtures'
         )) {

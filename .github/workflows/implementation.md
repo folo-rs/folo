@@ -64,6 +64,8 @@ The local input and collection artifacts are outside the persisted history cache
 Artifact downloads pass the ambient GitHub token, repository and run ID explicitly with
 Actions-read permission. Fork-origin PR runs have a read-only base-repository token capable
 of artifact reads; the same-repository workflow gate is independent of that capability.
+The temporary machine-key file stays outside the uploaded collection root: its value is
+captured in the receipt, and the artifact contains only that receipt and optional results.
 
 Automation and measured source are separate for PR runs. The workflow's merge checkout
 supplies current helpers, tool builds and configuration. The full real-head checkout under

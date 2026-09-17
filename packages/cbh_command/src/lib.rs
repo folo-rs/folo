@@ -27,10 +27,9 @@
 mod command;
 mod setup_azure;
 
-pub use setup_azure::*;
-
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
+pub use setup_azure::*;

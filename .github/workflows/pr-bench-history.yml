@@ -220,7 +220,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $directory = Join-Path $env:RUNNER_TEMP 'cbh-collection'
-          $key = Join-Path $directory 'machine-key.txt'
+          # The uploaded root accepts only receipt.json and results; the key is an intermediate.
+          $key = Join-Path $env:RUNNER_TEMP 'cbh-machine-key.txt'
           just gh-write-bench-history-machine-key $key
           cargo run -p cargo-bench-history-github --locked -- --instance $env:CBH_INSTANCE collection-receipt --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT --head $env:HEAD_SHA --platform $env:PLATFORM --machine-key-file $key --file (Join-Path $directory 'receipt.json')
       - name: Upload local collection and receipt

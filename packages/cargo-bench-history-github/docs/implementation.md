@@ -12,6 +12,11 @@ reconciles the intended identity and content after an error.
 The binary is a thin Clap and Tokio entry point. `lib.rs` and `main.rs` contain only crate-level
 documentation, attributes, re-exports and entry-point wiring.
 
+The file-backed online command dispatcher accepts the GitHub port and clock independently of
+process setup. Native integration scenarios use the same dispatcher with ordinary report files,
+an in-memory GitHub port and a frozen clock. They observe publication snapshots after each command,
+so argument wiring and terminal transitions are covered without credentials or network writes.
+
 ## Evidence and state transitions
 
 JSON decoding produces a validated analysis report before any publication operation. The

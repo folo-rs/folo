@@ -43,10 +43,12 @@ impl FakeGitHub {
         self.issues.borrow().values().cloned().collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn seed_issue(&self, issue: Issue) {
         self.issues.borrow_mut().insert(issue.number, issue);
     }
 
+    #[cfg(test)]
     pub(crate) fn human_close(&self, number: u64) {
         self.issues.borrow_mut().get_mut(&number).unwrap().open = false;
     }
@@ -64,6 +66,7 @@ impl FakeGitHub {
         self.pull_heads.borrow_mut().insert(pull_request, sha);
     }
 
+    #[cfg(test)]
     pub(crate) fn set_comparison(
         &self,
         base: &CommitSha,
@@ -76,22 +79,27 @@ impl FakeGitHub {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_next_issue_create_after_commit(&self) {
         self.fail_issue_create_after_commit.set(true);
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_next_comment_create_after_commit(&self) {
         self.fail_comment_create_after_commit.set(true);
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_issue_list(&self) {
         self.fail_issue_list.set(true);
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_comment_list(&self) {
         self.fail_comment_list.set(true);
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_pull_head(&self) {
         self.fail_pull_head.set(true);
     }
@@ -146,7 +154,12 @@ impl GitHub for FakeGitHub {
         _repository: &Repository,
         number: u64,
     ) -> impl Future<Output = Result<Issue, AppError>> {
-        ready(Ok(self.issues.borrow().get(&number).unwrap().clone()))
+        ready(Ok(self
+            .issues
+            .borrow()
+            .get(&number)
+            .expect("issue numbers come from this fake's preceding discovery")
+            .clone()))
     }
 
     fn create_issue(
@@ -176,8 +189,8 @@ impl GitHub for FakeGitHub {
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>> {
         if let Some(issue) = self.issues.borrow_mut().get_mut(&number) {
-            issue.title = title.to_owned();
-            issue.body = body.to_owned();
+            title.clone_into(&mut issue.title);
+            body.clone_into(&mut issue.body);
         }
         ready(Ok(()))
     }
@@ -225,7 +238,7 @@ impl GitHub for FakeGitHub {
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>> {
         if let Some((_, comment)) = self.comments.borrow_mut().get_mut(&id) {
-            comment.body = body.to_owned();
+            body.clone_into(&mut comment.body);
         }
         ready(Ok(()))
     }

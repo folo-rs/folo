@@ -226,7 +226,8 @@ other scheduled runs cancel that full-scope backstop. The close companion stays
 pull-request-only. The exception
 is history collection on `main`, whose workflow-level group is keyed on the commit **SHA**:
 each commit is a distinct measurement, so only a redundant re-trigger of the *same* commit
-is deduplicated.
+is deduplicated. The trigger is also part of that group, so a manual dispatch cannot cancel
+the push-triggered run for the same commit.
 
 Push-to-main history collection runs at most one job per platform across workflow runs.
 Linux and Windows have separate queues, so one platform does not wait for the other.

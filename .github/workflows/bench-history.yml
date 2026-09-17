@@ -8,7 +8,7 @@ on:
 # Per-platform collection queues retain pushed tips without occupying runners while waiting.
 # Manual runs have independent collection lanes. Ref: design.md#concurrency.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions: {}
@@ -157,7 +157,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $directory = Join-Path $env:RUNNER_TEMP 'cbh-collection'
-          $key = Join-Path $directory 'machine-key.txt'
+          # Keep intermediate key files outside the collection artifact root.
+          $key = Join-Path $env:RUNNER_TEMP 'cbh-machine-key.txt'
           just gh-write-bench-history-machine-key $key
           cargo run -p cargo-bench-history-github --locked -- --instance $env:CBH_INSTANCE collection-receipt --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT --head $env:HEAD_SHA --platform $env:PLATFORM --machine-key-file $key --file (Join-Path $directory 'receipt.json')
       - name: Upload collection receipt

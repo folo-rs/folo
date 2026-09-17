@@ -5,7 +5,7 @@ use tick::Clock;
 
 use crate::cli::{Cli, Command, NoDataArgs, PendingArgs, ReportArgs, ResultArgs};
 use crate::errors::{MissingRepositoryError, read_body_error};
-use crate::github::RestGitHub;
+use crate::github::{GitHub, RestGitHub};
 use crate::lifecycle::{self, NoData, Report};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::result::{AnalysisReport, Evidence, PlatformCoverage, PublicationState};
@@ -55,42 +55,47 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     };
     let github = RestGitHub::from_env()?;
     let clock = Clock::new_tokio();
+    dispatch(command, &context, &github, &clock).await
+}
+
+// Dispatch loads real report artifacts. Native integration tests inject only GitHub
+// and the clock; they execute these same command branches and filesystem adapters.
+#[cfg_attr(test, mutants::skip)]
+pub(crate) async fn dispatch(
+    command: Command,
+    context: &Context,
+    github: &impl GitHub,
+    clock: &Clock,
+) -> Result<(), AppError> {
     match command {
-        Command::PrepareAnalysis(args) => workflow::prepare_analysis(&github, &context, args).await,
+        Command::PrepareAnalysis(args) => workflow::prepare_analysis(github, context, args).await,
         Command::WorkflowMatrix(_) | Command::InspectReport(_) | Command::CollectionReceipt(_) => {
             unreachable!("offline commands return before GitHub construction")
         }
         Command::PublishIssueFindings(args) => {
             let report = load_report(args).await?;
-            lifecycle::issue_report(
-                &github,
-                &context,
-                &clock,
-                &report,
-                PublicationState::Findings,
-            )
-            .await
+            lifecycle::issue_report(github, context, clock, &report, PublicationState::Findings)
+                .await
         }
         Command::PublishIssueClean(args) => {
             let report = load_report(args).await?;
-            lifecycle::issue_report(&github, &context, &clock, &report, PublicationState::Clean)
-                .await
+            lifecycle::issue_report(github, context, clock, &report, PublicationState::Clean).await
         }
         Command::PublishIssuePreflight(args) => {
-            lifecycle::issue_preflight(&github, &context, &clock, &args).await
+            lifecycle::issue_preflight(github, context, clock, &args).await
         }
         Command::PublishIssueNoData(args) => {
             let data = load_no_data(args).await?;
-            lifecycle::issue_no_data(&github, &context, &clock, &data).await
+            lifecycle::issue_no_data(github, context, clock, &data).await
         }
         Command::PublishIssueFailed(args) => {
-            lifecycle::issue_failed(&github, &context, &clock, &args).await
+            lifecycle::issue_failed(github, context, clock, &args).await
         }
         Command::PublishCommentFindings(args) => {
             let report = load_report(args.report).await?;
             lifecycle::comment_report(
-                &github,
-                &context,
+                github,
+                context,
                 args.pull_request.get(),
                 &args.packages,
                 &report,
@@ -101,8 +106,8 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
         Command::PublishCommentClean(args) => {
             let report = load_report(args.report).await?;
             lifecycle::comment_report(
-                &github,
-                &context,
+                github,
+                context,
                 args.pull_request.get(),
                 &args.packages,
                 &report,
@@ -115,7 +120,7 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
             packages,
             pending,
         } => {
-            lifecycle::comment_preflight(&github, &context, pull_request.get(), &packages, &pending)
+            lifecycle::comment_preflight(github, context, pull_request.get(), &packages, &pending)
                 .await
         }
         Command::PublishCommentNoData {
@@ -125,8 +130,8 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
         } => {
             let data = load_no_data(data).await?;
             lifecycle::comment_no_data(
-                &github,
-                &context,
+                github,
+                context,
                 pull_request.get(),
                 packages.as_deref(),
                 &data,
@@ -136,9 +141,9 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
         Command::PublishCommentFailed {
             pull_request,
             failed,
-        } => lifecycle::comment_failed(&github, &context, pull_request.get(), &failed).await,
+        } => lifecycle::comment_failed(github, context, pull_request.get(), &failed).await,
         Command::Alert { run_id, run_url } => {
-            lifecycle::alert(&github, &context, run_id, &run_url).await
+            lifecycle::alert(github, context, run_id, &run_url).await
         }
     }
 }

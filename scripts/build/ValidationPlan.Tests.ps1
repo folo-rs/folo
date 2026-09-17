@@ -38,7 +38,7 @@ Describe 'Non-Cargo change domains' {
         @{ Path = 'infra/azure-bench-history-prod/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/src/azure_bundle/main.bicep'; Domains = @('bench-history'); Analysis = $false; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/src/azure_bundle/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
-        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/Deployment.psm1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
+        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/ProductionIdentityDeployment.psm1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/tests/fixtures/setup-azure.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = '.github/actions/build-bench-history-companion/action.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/actions/bench-history-setup/action.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
