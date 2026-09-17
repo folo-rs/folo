@@ -125,6 +125,7 @@ Receipt decoding and job reconciliation operate on in-memory values. Filesystem 
 artifact paths outside the receipt model, then materialize only the selected indices after all
 identities and latest-attempt decisions have been validated. Local object merging compares bytes
 before writing anything, preserving ordinary relative store paths without a second storage format.
+Reserved LocalStorage atomic-write temporary files are not objects and are omitted from merging.
 Filesystem operations do not retry writes or clean existing destinations.
 
 One ordered platform/attempt index owns both receipt association and latest-job lookup.

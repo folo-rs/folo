@@ -11,6 +11,8 @@ resource group, location, storage account, GitHub owner/repository and history b
 Optional identity name defaults to `id-<storage-account>-bench-history`. Optional local
 access requires both an object ID and type (`User` or `Group`). The container defaults
 to `bench-history`. Values in this JSON file are literal data, not shell expressions.
+Supply a history branch name such as `main` or `release/next`, not a qualified
+reference such as `refs/heads/main`.
 
 Install Azure CLI, PowerShell 7.6 or later and Bicep separately, then authenticate
 Azure CLI for the explicitly chosen subscription. The driver does not install tools or

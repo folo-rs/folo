@@ -40,6 +40,7 @@ function Invoke-ProductionIdentityDeployment {
     }
     if ($HistoryBranch -match '[:\s~^?*\[\\]' -or $HistoryBranch.Contains('..') -or
         $HistoryBranch.Contains('@{') -or $HistoryBranch.StartsWith('-') -or
+        $HistoryBranch.StartsWith('refs/', [StringComparison]::Ordinal) -or
         $HistoryBranch.StartsWith('/') -or $HistoryBranch.EndsWith('/') -or
         $HistoryBranch.EndsWith('.') -or $HistoryBranch.Contains('//')) {
         throw 'HistoryBranch must be a branch name, not a ref or revision expression.'

@@ -20,6 +20,10 @@ pub(crate) struct Artifacts {
 pub(crate) const RECEIPT_FILE: &str = "receipt.json";
 const RESULTS_DIR: &str = "results";
 
+// Match LocalStorage's reserved atomic-write filename prefix (cbh_storage/src/local.rs).
+// The independent companion copies its on-disk layout without linking the storage backend.
+const TEMP_PREFIX: &str = ".cbh-tmp-";
+
 // These adapters touch the real filesystem. Offline commands have native CLI integration
 // coverage; in-memory reconciliation, object merging and projection remain mutation targets.
 #[cfg_attr(test, mutants::skip)]
@@ -67,6 +71,9 @@ pub(crate) fn read_results(
                 if metadata.is_dir() {
                     pending.push(path);
                 } else if metadata.is_file() {
+                    if is_temporary_file(&path) {
+                        continue;
+                    }
                     let relative = path
                         .strip_prefix(&root)
                         .expect("directory traversal constructs every path below its result root");
@@ -78,6 +85,12 @@ pub(crate) fn read_results(
         }
     }
     Ok(objects)
+}
+
+fn is_temporary_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(TEMP_PREFIX))
 }
 
 pub(crate) fn merge_object(
@@ -329,6 +342,20 @@ impl RefUnwindSafe for ConflictingObject {}
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporary_file_classification_uses_only_the_reserved_basename_prefix() {
+        assert!(is_temporary_file(Path::new(".cbh-tmp-crash")));
+        assert!(is_temporary_file(
+            &Path::new("nested").join(".cbh-tmp-crash")
+        ));
+        assert!(!is_temporary_file(Path::new("object.json")));
+        assert!(!is_temporary_file(Path::new(".CBH-TMP-other")));
+        assert!(!is_temporary_file(
+            &Path::new(".cbh-tmp-directory").join("object.json")
+        ));
+        assert!(!is_temporary_file(Path::new("")));
+    }
 
     #[test]
     fn identical_objects_merge_without_inventing_metadata() {

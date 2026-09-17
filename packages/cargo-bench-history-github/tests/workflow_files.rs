@@ -403,6 +403,40 @@ fn identical_selected_objects_merge_and_key_output_is_sorted() {
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
+fn atomic_write_temporary_files_do_not_enter_the_merged_input() {
+    let fixture = Fixture::new();
+    for (platform, partial) in [("linux", "first partial"), ("windows", "other partial")] {
+        let artifact = fixture.artifact(platform, "0123456789abcdef");
+        let root = artifact.join("results");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(root.join(".cbh-tmp-directory")).unwrap();
+        // Differing temporary bytes at the same relative path must not create an object conflict.
+        fs::write(root.join(".cbh-tmp-crash"), partial).unwrap();
+        fs::write(root.join("nested").join(".cbh-tmp-crash"), partial).unwrap();
+        fs::write(root.join("nested").join("object.json"), "stored bytes").unwrap();
+        fs::write(
+            root.join(".cbh-tmp-directory").join("object.json"),
+            "nested stored bytes",
+        )
+        .unwrap();
+    }
+    fixture.prepare(&successful_jobs(), true).unwrap();
+    let input = fixture.path("local");
+    assert!(!input.join(".cbh-tmp-crash").exists());
+    assert!(!input.join("nested").join(".cbh-tmp-crash").exists());
+    assert_eq!(
+        fs::read(input.join("nested").join("object.json")).unwrap(),
+        b"stored bytes"
+    );
+    assert_eq!(
+        fs::read(input.join(".cbh-tmp-directory").join("object.json")).unwrap(),
+        b"nested stored bytes"
+    );
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
 fn conflicting_selected_objects_fail_before_materializing_outputs() {
     let fixture = Fixture::new();
     for (platform, bytes) in [("linux", "first"), ("windows", "conflicting")] {

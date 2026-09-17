@@ -231,6 +231,15 @@ Describe 'Production identity deployment policy' {
             Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'create' }
         }
 
+        It 'accepts the selected subscription GUID with different letter casing' {
+            $script:Parameters.SubscriptionId = 'ABcdef01-2345-6789-abCD-0123456789Ab'
+            $script:ReturnedSubscription = $script:Parameters.SubscriptionId.ToLowerInvariant()
+            Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
+            Should -Invoke az -Times 1 -Exactly -ParameterFilter {
+                $args[0] -eq 'deployment' -and $args -contains 'create'
+            }
+        }
+
         It 'rejects invalid input before Azure calls' -ForEach @(
             @{ name = 'HistoryContainerName'; value = 'Uppercase' }
             @{ name = 'HistoryContainerName'; value = 'two--hyphens' }
@@ -238,6 +247,8 @@ Describe 'Production identity deployment policy' {
             @{ name = 'LocalPrincipalId'; value = 'unpaired' }
             @{ name = 'LocalPrincipalType'; value = 'User' }
             @{ name = 'HistoryBranch'; value = 'bad:branch' }
+            @{ name = 'HistoryBranch'; value = 'refs/heads/main' }
+            @{ name = 'HistoryBranch'; value = 'refs/tags/release' }
         ) {
             $script:Parameters[$name] = $value
             { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
