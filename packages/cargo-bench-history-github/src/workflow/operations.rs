@@ -166,7 +166,6 @@ mod tests {
     use super::*;
     use crate::github::WorkflowJob;
     use crate::github::fake::FakeGitHub;
-    use crate::migration::MigrationOptions;
     use crate::workflow::receipt::tests::receipt;
 
     #[test]
@@ -176,8 +175,6 @@ mod tests {
             repository: receipt.repository.clone(),
             instance: receipt.instance.clone(),
             verbose: false,
-            comment_marker: None,
-            migration: MigrationOptions::default(),
         };
         let github = FakeGitHub::new();
         github.set_jobs(vec![WorkflowJob {

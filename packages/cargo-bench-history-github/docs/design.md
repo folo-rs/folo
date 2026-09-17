@@ -16,7 +16,7 @@ The companion:
 
 * publishes and updates the rolling regression issue and pull-request comment;
 * marks an existing report stale while a new benchmark run is in flight;
-* replaces a recovered regression issue with an all-clear state and optionally closes it;
+* replaces a recovered regression issue with an all-clear state while leaving it open;
 * reports and resolves workflow failures;
 * retires pull-request placeholders after failure or when nothing benchmarkable changed;
 * binds successful collection to actual workflow job attempts and measured machine keys; and
@@ -25,6 +25,18 @@ The companion:
 
 It embeds the Markdown summary rendered by `cargo-bench-history` verbatim. It never interprets
 findings or re-derives analysis vocabulary.
+
+## Standard reporting
+
+Reports use a shared message catalogue, including advisory wording and the public
+[cargo-bench-history guide](https://folo-rs.github.io/folo/cargo-bench-history/).
+Regression issues use the title `Benchmark regressions detected`; workflow-failure issues use
+`Benchmark-history workflow failed`. The caller supplies report artifacts and evidence, not
+titles, introductions, documentation links or comment identities.
+
+Regression issues remain open after all-clear so their rolling history is retained. Failure
+issues close automatically when a later workflow run succeeds. Empty pull-request scope always
+creates or updates an explanatory note rather than deleting the rolling comment.
 
 ## Publication evidence
 
@@ -42,7 +54,7 @@ Findings and incomplete coverage are independent. A report with findings still p
 findings when a platform is missing, with a prominent warning naming completed and missing
 platforms. Partial series coverage also remains visible. An issue may become all-clear only
 when its history report is `clean`, every in-scope series was judged, and every expected
-platform completed. Unjudged, empty, failed and partial runs cannot clear or close a regression
+platform completed. Unjudged, empty, failed and partial runs cannot clear a regression
 issue.
 
 Delayed history reports do not overwrite or clear an issue describing a newer commit. When
@@ -103,9 +115,8 @@ Preflight carries the frozen `--head` and `--run-id`. A placeholder records that
 so a finalizer from an older workflow cannot retire the new run's placeholder. Terminal failure
 and empty-scope notes become new placeholders when benchmarking is requested again.
 
-Empty-scope cleanup writes the explanatory note even when no comment exists. The explicit
-delete option remains a no-op when nothing exists. Preflight and cleanup require their frozen
-head to match the live head before modifying the comment.
+Empty-scope cleanup writes the explanatory note even when no comment exists. Preflight and
+cleanup require their frozen head to match the live head before modifying the comment.
 
 Publication checks the live head immediately before writing, after finding the existing
 comment. If the PR has advanced, results receive a staleness warning; if fresh results for the
@@ -114,42 +125,18 @@ produces a visible warning rather than unqualified fresh-looking results.
 
 ## Identity
 
-Every rolling artifact carries a hidden marker derived from the action instance and artifact
-kind. Issues distinguish `regression` from `failure-alert`; pull requests carry one
+Every rolling artifact carries a hidden marker derived from the configured project ID and
+artifact kind. Workflows pass that namespace as internal instance data, including in receipts
+and collection-job identities; it is not a consumer override. Issues distinguish `regression`
+from `failure-alert`; pull requests carry one
 `pr-comment` artifact per instance. Displayed titles are not identities and may be edited.
 
 No issue labels are applied. Rolling issues are found by enumerating open issues and matching
 the hidden marker in the body.
 
-`--comment-marker` may select an existing PR comment's exact, single-line HTML marker.
-Run ownership, status and staleness markers remain scoped to `instance`. Issue commands reject
-the PR-only marker override.
-
-## Explicit legacy adoption
-
-Issue commands may opt into `--legacy-issue-title TITLE`. Current instance/kind markers always
-take precedence. Only when no current marker matches may the companion select an open,
-bot-authored issue with that exact title. Multiple eligible issues are an error, as is a
-title-selected issue carrying another companion issue identity. Human-authored issues are not
-eligible. There is no title fallback without this option, and PR/evidence commands reject it.
-
-Preflight may add a staleness warning while preserving the legacy report and its title. It does
-not claim the issue's primary identity before a validated report is available. Publication or
-all-clear then installs the current identity and the validated analysis SHA on that same issue;
-initial adoption does not require interpreting a legacy commit summary. Once adopted, ordinary
-marker lookup and commit-order safeguards govern subsequent writes, including when the option
-remains configured. All-clear still requires clean, complete history evidence.
-
-The failure-alert commands use the same opt-in selection. Alert publication adopts the selected
-issue with its standard failure body. Resolution can directly adopt and close a legacy failure
-issue while retaining its original failure details. The caller supplies the appropriate legacy
-title for each issue kind and serializes issue writers.
-
-PR preflight may take `--legacy-in-progress-marker '<!-- ... -->'`. When the selected rolling
-comment contains this exact HTML comment line, preflight replaces it with the current run's
-owned placeholder instead of treating it as results. The normal live-head check still applies,
-the selected rolling-comment identity is retained, and finalization requires the new run/head
-ownership marker. No human prose or legacy commit-summary formatting is parsed.
+Run ownership, status and staleness markers share the same instance namespace. Artifacts without
+the current instance/kind marker are ignored, even when their titles match. The companion does
+not adopt or clean up issues, comments or placeholders from other output formats.
 
 ## Authentication
 

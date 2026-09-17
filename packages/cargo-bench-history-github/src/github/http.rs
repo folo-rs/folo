@@ -61,7 +61,7 @@ impl Http for ReqwestHttp {
             .map_err(transport_error)?;
         let status = response.status();
         let headers = response.headers().clone();
-        // Reading is part of the exchange even for deletes and unsuccessful statuses.
+        // Reading is part of the exchange even for unsuccessful statuses.
         // A truncated body must never be converted to an apparent successful response.
         let body = response.bytes().await.map_err(transport_error)?.to_vec();
         Ok(HttpResponse {

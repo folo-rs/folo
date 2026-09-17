@@ -221,8 +221,8 @@ would otherwise leave its in-flight Standard validation run to burn to completio
 companion workflow closes that gap: it triggers on the PR-close event and joins the target
 workflow's concurrency group so cancel-in-progress reclaims the stale run. Standard validation
 uses that close companion. PR benchmark history handles `closed` in its own workflow: the
-event enters its group and skips collection and publication. Unsupported fork events use
-separate groups, so a same-named fork branch cannot cancel supported benchmark work.
+event enters its group and skips collection and publication. PR groups use project/PR identity,
+so a same-named fork branch cannot cancel another PR's benchmark work.
 Merge queue validation has its own queue-ref-specific group. Standard validation uses
 run-specific groups when called by scheduled/manual validation, so neither main pushes nor
 other scheduled runs cancel that full-scope backstop. The close companion stays
@@ -249,7 +249,7 @@ nightly and that tip's own collection cancel each other.
 PR benchmark collection additionally runs at most one job per platform across the repository.
 Linux and Windows use separate worker pools, so they do not block each other. Other PRs wait
 in the platform's concurrency queue without cancelling running or pending collection, up to
-GitHub's queue capacity. Ref-keyed workflow supersession and the close event still cancel
+GitHub's queue capacity. PR-keyed workflow supersession and the close event still cancel
 outdated work, including collection waiting for a platform slot. This limit applies only to PR
 collection; delta analysis and comment maintenance do not wait for a collection slot, and main
 history collection and backfill retain their independent concurrency policies.
@@ -544,6 +544,17 @@ Because a GitHub issue body is size-capped and a large
 analysis can exceed it, the issue carries a **condensed summary** (the top findings) and
 links to the **full report bundle**, uploaded for every completed analysis — so the issue
 fits while complete results, including quiet or partial reports, remain accessible.
+
+### Benchmark setup hook
+
+Benchmark preparation uses the fixed repository-local
+`.github/actions/bench-history-setup/action.yml` convention. Folo's hook wraps its ordinary
+setup action with the Valgrind requirement enabled, and collection/backfill jobs share that
+configuration. Analysis and publication retain their own environment responsibilities.
+
+The generic workflows treat an absent hook as no custom setup. There is no arbitrary
+setup path/ref selector or hook-input map. A repository can configure ordinary static action
+references inside its own hook; structural job changes belong to the lower action layer.
 
 ### Nightly history backfill
 

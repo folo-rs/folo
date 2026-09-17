@@ -4,7 +4,7 @@ Pure marker and message composition is synchronous. Lifecycle orchestration is g
 `GitHub` port; unit tests use an in-memory fake and `futures::executor::block_on`, with no runtime,
 network or real-time delay. The production `RestGitHub` adapter is the only HTTP boundary.
 
-The port exposes semantic GitHub operations—list, create, update, close, delete, compare and read
+The port exposes semantic GitHub operations—list, create, update, close, compare and read
 the pull-request head—rather than a raw HTTP passthrough. Idempotent operations retry transient
 failures in the adapter. Creates never retry blindly: orchestration reads by marker after an
 error and treats a matching artifact as the successful result of the ambiguous request.
@@ -37,26 +37,20 @@ An ambiguous create is reconciled against both the artifact identity and the des
 Finding the same marker with different content is not proof that this publication committed;
 the other content is preserved and the original failure remains visible.
 
-## Explicit legacy adoption
+## Report identity and composition
 
-Issue discovery separates marker-owned targets from explicitly eligible legacy targets. Both use
-the complete open-issue list. Marker selection precedes title fallback; fallback requires an
-exact title, the API author classification `user.type == "Bot"`, a unique candidate, and no
-existing companion issue identity. Login spelling or body prose is not author evidence.
+Discovery matches exact instance/kind marker lines in the complete open-issue or comment list.
+Displayed titles and author metadata do not participate in identity selection. Artifacts without
+the current marker are outside the lifecycle; there is no adoption or migration path.
 
-Only the explicitly selected legacy target bypasses the absent-SHA replacement guard. The
-publication/all-clear boundary still validates report evidence first and writes the ordinary
-identity/SHA body. Preflight preserves legacy content without installing the primary issue
-identity, so a later validated adoption remains possible. Failure resolution adds its identity
-before closing a directly adopted legacy issue. Create-error reconciliation remains marker-only
-and still requires the desired body; migration does not authorize blind create retries.
+The lifecycle context carries repository, internal instance namespace and verbosity only.
+Message composition derives all markers from that namespace and owns the standard titles,
+advisory wording and documentation link. Publication passes the optional artifact URL directly
+as report data alongside validated evidence and the tool-rendered summary.
 
-`--legacy-issue-title TITLE` is a common option before `issue-preflight`, `publish-issue`,
-`issue-cleanup`, `alert` or `resolve-alert`. It is rejected for other commands before credential
-construction or output writing. `pr-comment-preflight` instead accepts the subcommand option
-`--legacy-in-progress-marker '<!-- ... -->'`, validated with the same single-line HTML-comment
-parser as `--comment-marker`. Migration configuration is passed through the existing lifecycle
-context, without changing lifecycle function signatures.
+Regression cleanup only updates the all-clear body; closing belongs exclusively to failure-alert
+resolution. Empty-scope comment cleanup shares ordinary update/create reconciliation and always
+writes the explanatory note.
 
 ## HTTP adapter
 
@@ -111,6 +105,8 @@ variables. This keeps real filesystem and process coverage outside the unit/Miri
 ### Command and artifact contract
 
 Common options precede the subcommand: `--repository owner/name`, `--instance ID`, `--verbose`.
+The internal instance input carries the configured project ID supplied by workflow setup, not a
+consumer-selected action override. Omitting it retains the companion's `default` namespace.
 Receipt creation and analysis preparation default the repository from `GITHUB_REPOSITORY`.
 Matrix setup and report inspection need neither a repository nor a GitHub credential.
 
@@ -137,6 +133,23 @@ hexadecimal commit ID. Run IDs and attempts are positive. Machine-key files cont
 16-hex-digit fingerprint, with surrounding command-output whitespace accepted and hexadecimal
 letters normalized to lowercase. Matrix, receipt and preparation platform identifiers use ASCII
 letters, digits, `.`, `_` and `-`, excluding `.` and `..` as entire identifiers.
+
+Lifecycle commands use the same common options and repository fallback:
+
+```text
+issue-preflight --head SHA
+publish-issue --body-file PATH --analyzed-sha SHA
+  --report-file PATH --expected-platforms CSV --completed-platforms CSV [--artifact-url URL]
+issue-cleanup --clean-commit SHA
+  --report-file PATH --expected-platforms CSV --completed-platforms CSV
+alert --run-url URL
+resolve-alert --run-url URL
+pr-comment-preflight --pull-request N --packages CSV --head SHA --run-id N
+publish-pr-comment --pull-request N --analyzed-sha SHA --body-file PATH --packages CSV
+  --report-file PATH --expected-platforms CSV --completed-platforms CSV [--artifact-url URL]
+pr-comment-cleanup --pull-request N --head SHA
+pr-comment-finalize --pull-request N --run-url URL --head SHA --run-id N
+```
 
 Matrix setup appends these outputs, with one sorted platform set shared by JSON and CSV:
 

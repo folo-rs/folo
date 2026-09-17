@@ -108,12 +108,14 @@ pub(crate) fn read_body_error(path: PathBuf, error: io::Error) -> ohno::AppError
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use reqwest::StatusCode;
+
     use super::*;
 
     #[test]
-    fn unexpected_status_exposes_its_status_for_delete_reconciliation() {
-        let not_found = reqwest::StatusCode::NOT_FOUND.as_u16();
-        let error = UnexpectedStatusError::new("deleting", not_found, "missing");
+    fn unexpected_status_exposes_its_status_for_comparison_fallback() {
+        let not_found = StatusCode::NOT_FOUND.as_u16();
+        let error = UnexpectedStatusError::new("comparing commits", not_found, "missing");
         assert_eq!(error.status(), not_found);
     }
 }

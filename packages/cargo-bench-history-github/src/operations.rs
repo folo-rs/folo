@@ -5,12 +5,9 @@ use ohno::{AppError, EnrichableExt as _};
 use crate::cli::{Cli, Command, ResultArgs};
 use crate::errors::{MissingRepositoryError, read_body_error};
 use crate::github::{Comment, Comparison, GitHub, Issue, RestGitHub};
-use crate::marker::{CommentMarker, UnexpectedCommentMarker};
-use crate::message::{self, Envelope};
-use crate::migration::{MigrationOptions, find_issue_target};
 use crate::model::{CommitSha, Instance, IssueKind, Repository};
 use crate::result::{AnalysisMode, AnalysisReport, Evidence, PlatformCoverage};
-use crate::{marker, workflow};
+use crate::{marker, message, workflow};
 
 /// Inputs shared by every lifecycle operation.
 #[derive(Clone, Debug)]
@@ -18,17 +15,6 @@ pub(crate) struct Context {
     pub(crate) repository: Repository,
     pub(crate) instance: Instance,
     pub(crate) verbose: bool,
-    pub(crate) comment_marker: Option<CommentMarker>,
-    pub(crate) migration: MigrationOptions,
-}
-
-impl Context {
-    fn pr_identity(&self) -> String {
-        self.comment_marker.as_ref().map_or_else(
-            || marker::pr_comment(&self.instance),
-            |marker| marker.as_str().to_owned(),
-        )
-    }
 }
 
 /// Executes one lifecycle or workflow evidence command.
@@ -44,19 +30,11 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     let repository = cli.repository();
     let instance = cli.instance();
     let verbose = cli.verbose();
-    let comment_marker = cli.comment_marker();
-    let migration = cli.migration_options()?;
     let command = match cli.into_command() {
         Command::WorkflowMatrix(args) => {
-            if comment_marker.is_some() {
-                return Err(UnexpectedCommentMarker::new().into());
-            }
             return workflow::workflow_matrix(&instance, &args, verbose);
         }
         Command::InspectReport(args) => {
-            if comment_marker.is_some() {
-                return Err(UnexpectedCommentMarker::new().into());
-            }
             return workflow::inspect_report(args).await;
         }
         command => command,
@@ -71,20 +49,7 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
         repository,
         instance,
         verbose,
-        comment_marker,
-        migration,
     };
-    if context.comment_marker.is_some()
-        && !matches!(
-            command,
-            Command::PrCommentPreflight { .. }
-                | Command::PublishPrComment { .. }
-                | Command::PrCommentCleanup { .. }
-                | Command::PrCommentFinalize { .. }
-        )
-    {
-        return Err(UnexpectedCommentMarker::new().into());
-    }
     // Offline evidence commands must not require credentials or construct an HTTP client.
     let command = match command {
         Command::CollectionReceipt(args) => return workflow::collection_receipt(&context, args),
@@ -99,79 +64,31 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
         }
         Command::IssuePreflight { head } => issue_preflight(&github, &context, &head).await,
         Command::PublishIssue {
-            title,
             body_file,
             analyzed_sha,
             evidence,
             artifact_url,
-            intro,
-            docs_url,
         } => {
             let body = tokio::fs::read_to_string(&body_file)
                 .await
                 .map_err(|error| read_body_error(body_file, error))?;
             let evidence = load_evidence(evidence, &analyzed_sha).await?;
-            publish_issue(
-                &github,
-                &context,
-                &title,
-                &body,
-                &evidence,
-                Envelope {
-                    intro: intro.as_deref(),
-                    docs_url: docs_url.as_deref(),
-                    artifact_url: artifact_url.as_deref(),
-                },
-            )
-            .await
+            publish_issue(&github, &context, &body, &evidence, artifact_url.as_deref()).await
         }
         Command::IssueCleanup {
             clean_commit,
             evidence,
-            auto_close,
-            intro,
-            docs_url,
         } => {
             let evidence = load_evidence(evidence, &clean_commit).await?;
-            issue_cleanup(
-                &github,
-                &context,
-                &evidence,
-                auto_close,
-                Envelope {
-                    intro: intro.as_deref(),
-                    docs_url: docs_url.as_deref(),
-                    artifact_url: None,
-                },
-            )
-            .await
+            issue_cleanup(&github, &context, &evidence).await
         }
-        Command::Alert {
-            title,
-            run_url,
-            intro,
-            docs_url,
-        } => {
-            alert(
-                &github,
-                &context,
-                &title,
-                &run_url,
-                Envelope {
-                    intro: intro.as_deref(),
-                    docs_url: docs_url.as_deref(),
-                    artifact_url: None,
-                },
-            )
-            .await
-        }
+        Command::Alert { run_url } => alert(&github, &context, &run_url).await,
         Command::ResolveAlert { run_url } => resolve_alert(&github, &context, &run_url).await,
         Command::PrCommentPreflight {
             pull_request,
             packages,
             head,
             run_id,
-            ..
         } => {
             pr_comment_preflight(
                 &github,
@@ -190,8 +107,6 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
             body_file,
             packages,
             artifact_url,
-            intro,
-            docs_url,
         } => {
             let body = tokio::fs::read_to_string(&body_file)
                 .await
@@ -204,19 +119,13 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
                 &evidence,
                 &packages,
                 &body,
-                Envelope {
-                    intro: intro.as_deref(),
-                    docs_url: docs_url.as_deref(),
-                    artifact_url: artifact_url.as_deref(),
-                },
+                artifact_url.as_deref(),
             )
             .await
         }
-        Command::PrCommentCleanup {
-            pull_request,
-            head,
-            delete,
-        } => pr_comment_cleanup(&github, &context, pull_request.get(), &head, delete).await,
+        Command::PrCommentCleanup { pull_request, head } => {
+            pr_comment_cleanup(&github, &context, pull_request.get(), &head).await
+        }
         Command::PrCommentFinalize {
             pull_request,
             run_url,
@@ -255,14 +164,13 @@ pub(crate) async fn issue_preflight(
     head: &CommitSha,
 ) -> Result<(), AppError> {
     let identity = marker::issue(&context.instance, IssueKind::Regression);
-    let Some(target) = find_issue_target(github, context, &identity).await? else {
+    let Some(issue) = find_issue(github, &context.repository, &identity).await? else {
         note(
             context,
             "no rolling regression issue exists, so preflight is a no-op",
         );
         return Ok(());
     };
-    let issue = target.issue;
     let Some(analyzed) = marker::find_analyzed_sha(&issue.body, &context.instance) else {
         let body = message::insert_stale_banner(
             &issue.body,
@@ -308,19 +216,18 @@ pub(crate) async fn issue_preflight(
 pub(crate) async fn publish_issue(
     github: &impl GitHub,
     context: &Context,
-    title: &str,
     summary: &str,
     evidence: &Evidence,
-    envelope: Envelope<'_>,
+    artifact_url: Option<&str>,
 ) -> Result<(), AppError> {
     evidence.report.require_mode(AnalysisMode::History)?;
     evidence.report.require_findings()?;
     let identity = marker::issue(&context.instance, IssueKind::Regression);
-    let body = message::regression_issue(&context.instance, evidence, summary, envelope);
+    let body = message::regression_issue(&context.instance, evidence, summary, artifact_url);
     upsert_issue(
         github,
         context,
-        title,
+        message::REGRESSION_TITLE,
         &identity,
         &body,
         Some(&evidence.report.commit),
@@ -332,47 +239,43 @@ pub(crate) async fn issue_cleanup(
     github: &impl GitHub,
     context: &Context,
     evidence: &Evidence,
-    auto_close: bool,
-    envelope: Envelope<'_>,
 ) -> Result<(), AppError> {
     evidence.report.require_mode(AnalysisMode::History)?;
     evidence.require_all_clear()?;
     let clean_commit = &evidence.report.commit;
     let identity = marker::issue(&context.instance, IssueKind::Regression);
-    let Some(target) = find_issue_target(github, context, &identity).await? else {
+    let Some(issue) = find_issue(github, &context.repository, &identity).await? else {
         note(
             context,
             "no rolling regression issue exists, so cleanup is a no-op",
         );
         return Ok(());
     };
-    // Initial adoption installs a validated SHA. A marker-owned issue still requires ordering.
-    if !target.legacy && !may_replace_issue(github, context, &target.issue, clean_commit).await {
+    if !may_replace_issue(github, context, &issue, clean_commit).await {
         return Ok(());
     }
-    let issue = target.issue;
-    let body = message::all_clear_issue(&context.instance, clean_commit, envelope);
+    let body = message::all_clear_issue(&context.instance, clean_commit);
     github
         .update_issue(&context.repository, issue.number, None, &body)
-        .await?;
-    if auto_close {
-        github
-            .close_issue(&context.repository, issue.number)
-            .await?;
-    }
-    Ok(())
+        .await
 }
 
 pub(crate) async fn alert(
     github: &impl GitHub,
     context: &Context,
-    title: &str,
     run_url: &str,
-    envelope: Envelope<'_>,
 ) -> Result<(), AppError> {
     let identity = marker::issue(&context.instance, IssueKind::FailureAlert);
-    let body = message::failure_issue(&context.instance, run_url, envelope);
-    upsert_issue(github, context, title, &identity, &body, None).await
+    let body = message::failure_issue(&context.instance, run_url);
+    upsert_issue(
+        github,
+        context,
+        message::FAILURE_TITLE,
+        &identity,
+        &body,
+        None,
+    )
+    .await
 }
 
 pub(crate) async fn resolve_alert(
@@ -381,17 +284,11 @@ pub(crate) async fn resolve_alert(
     run_url: &str,
 ) -> Result<(), AppError> {
     let identity = marker::issue(&context.instance, IssueKind::FailureAlert);
-    let Some(target) = find_issue_target(github, context, &identity).await? else {
+    let Some(issue) = find_issue(github, &context.repository, &identity).await? else {
         note(context, "no failure alert exists, so resolution is a no-op");
         return Ok(());
     };
-    let issue = target.issue;
     let body = message::resolved_failure_issue(&issue.body, run_url);
-    let body = if target.legacy {
-        format!("{identity}\n\n{body}")
-    } else {
-        body
-    };
     github
         .update_issue(&context.repository, issue.number, None, &body)
         .await?;
@@ -406,7 +303,7 @@ pub(crate) async fn pr_comment_preflight(
     head: &CommitSha,
     run_id: u64,
 ) -> Result<(), AppError> {
-    let identity = context.pr_identity();
+    let identity = marker::pr_comment(&context.instance);
     let existing = find_comment(github, &context.repository, pull_request, &identity).await?;
     let live = github
         .pull_request_head(&context.repository, pull_request)
@@ -420,17 +317,14 @@ pub(crate) async fn pr_comment_preflight(
     }
     match existing {
         None => {
-            let body =
-                message::pr_in_progress(&context.instance, &identity, packages, head, run_id);
+            let body = message::pr_in_progress(&context.instance, packages, head, run_id);
             create_comment_reconciled(github, context, pull_request, &identity, &body).await
         }
         Some(comment)
             if message::is_in_progress(&comment.body, &context.instance)
-                || message::is_terminal_note(&comment.body, &context.instance)
-                || context.migration.is_legacy_placeholder(&comment.body) =>
+                || message::is_terminal_note(&comment.body, &context.instance) =>
         {
-            let body =
-                message::pr_in_progress(&context.instance, &identity, packages, head, run_id);
+            let body = message::pr_in_progress(&context.instance, packages, head, run_id);
             github
                 .update_comment(&context.repository, comment.id, &body)
                 .await
@@ -459,20 +353,13 @@ pub(crate) async fn publish_pr_comment(
     evidence: &Evidence,
     packages: &str,
     summary: &str,
-    envelope: Envelope<'_>,
+    artifact_url: Option<&str>,
 ) -> Result<(), AppError> {
     evidence.report.require_mode(AnalysisMode::Branch)?;
     let analyzed_sha = &evidence.report.commit;
-    let identity = context.pr_identity();
+    let identity = marker::pr_comment(&context.instance);
     let existing = find_comment(github, &context.repository, pull_request, &identity).await?;
-    let mut body = message::pr_result(
-        &context.instance,
-        &identity,
-        evidence,
-        packages,
-        summary,
-        envelope,
-    );
+    let mut body = message::pr_result(&context.instance, evidence, packages, summary, artifact_url);
     match github
         .pull_request_head(&context.repository, pull_request)
         .await
@@ -529,9 +416,8 @@ pub(crate) async fn pr_comment_cleanup(
     context: &Context,
     pull_request: u64,
     head: &CommitSha,
-    delete: bool,
 ) -> Result<(), AppError> {
-    let identity = context.pr_identity();
+    let identity = marker::pr_comment(&context.instance);
     let existing = find_comment(github, &context.repository, pull_request, &identity).await?;
     let live = github
         .pull_request_head(&context.repository, pull_request)
@@ -543,18 +429,14 @@ pub(crate) async fn pr_comment_cleanup(
         );
         return Ok(());
     }
-    let body = message::pr_nothing_in_scope(&context.instance, &identity);
-    match (existing, delete) {
-        (Some(comment), true) => github.delete_comment(&context.repository, comment.id).await,
-        (Some(comment), false) => {
+    let body = message::pr_nothing_in_scope(&context.instance);
+    match existing {
+        Some(comment) => {
             github
                 .update_comment(&context.repository, comment.id, &body)
                 .await
         }
-        (None, false) => {
-            create_comment_reconciled(github, context, pull_request, &identity, &body).await
-        }
-        (None, true) => Ok(()),
+        None => create_comment_reconciled(github, context, pull_request, &identity, &body).await,
     }
 }
 
@@ -566,7 +448,7 @@ pub(crate) async fn pr_comment_finalize(
     head: &CommitSha,
     run_id: u64,
 ) -> Result<(), AppError> {
-    let identity = context.pr_identity();
+    let identity = marker::pr_comment(&context.instance);
     let Some(comment) = find_comment(github, &context.repository, pull_request, &identity).await?
     else {
         return Ok(());
@@ -586,7 +468,7 @@ pub(crate) async fn pr_comment_finalize(
         );
         return Ok(());
     }
-    let body = message::pr_failed(&context.instance, &identity, run_url);
+    let body = message::pr_failed(&context.instance, run_url);
     github
         .update_comment(&context.repository, comment.id, &body)
         .await
@@ -600,16 +482,14 @@ async fn upsert_issue(
     body: &str,
     commit: Option<&CommitSha>,
 ) -> Result<(), AppError> {
-    if let Some(target) = find_issue_target(github, context, marker).await? {
-        // Only explicit legacy adoption can bypass the absent companion-SHA guard.
+    if let Some(issue) = find_issue(github, &context.repository, marker).await? {
         if let Some(commit) = commit
-            && !target.legacy
-            && !may_replace_issue(github, context, &target.issue, commit).await
+            && !may_replace_issue(github, context, &issue, commit).await
         {
             return Ok(());
         }
         return github
-            .update_issue(&context.repository, target.issue.number, Some(title), body)
+            .update_issue(&context.repository, issue.number, Some(title), body)
             .await;
     }
     match github.create_issue(&context.repository, title, body).await {
@@ -724,6 +604,8 @@ fn note(context: &Context, message: &str) {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::slice;
+
     use futures::executor::block_on;
 
     use super::*;
@@ -737,8 +619,6 @@ mod tests {
             repository: "folo-rs/folo".parse().unwrap(),
             instance: "default".parse().unwrap(),
             verbose: false,
-            comment_marker: None,
-            migration: MigrationOptions::default(),
         }
     }
 
@@ -771,10 +651,9 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context(),
-            "Regressions",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         assert_eq!(github.issues().len(), 1);
@@ -788,40 +667,47 @@ mod tests {
         let error = block_on(publish_issue(
             &github,
             &context(),
-            "Regressions",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-            Envelope::default(),
+            None,
         ))
         .unwrap_err();
         assert!(error.find_source::<AmbiguousCreateError>().is_some());
     }
 
     #[test]
-    fn publishing_again_updates_the_displayed_issue_title() {
+    fn publication_restores_the_standard_title_without_using_it_for_identity() {
         let github = FakeGitHub::new();
         let context = context();
         github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(1) });
         block_on(publish_issue(
             &github,
             &context,
-            "Old title",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-            Envelope::default(),
+            None,
+        ))
+        .unwrap();
+        let issue = only_issue(&github);
+        assert_eq!(issue.title, "Benchmark regressions detected");
+        block_on(github.update_issue(
+            &context.repository,
+            issue.number,
+            Some("Edited title"),
+            &issue.body,
         ))
         .unwrap();
         block_on(publish_issue(
             &github,
             &context,
-            "New title",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'b'),
-            Envelope::default(),
+            None,
         ))
         .unwrap();
 
-        assert_eq!(only_issue(&github).title, "New title");
+        assert_eq!(only_issue(&github).number, issue.number);
+        assert_eq!(only_issue(&github).title, "Benchmark regressions detected");
     }
 
     #[test]
@@ -831,10 +717,9 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context,
-            "Regressions",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(2) });
@@ -852,10 +737,9 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context,
-            "Regressions",
             "Newer findings",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'b'),
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         let before = only_issue(&github);
@@ -873,10 +757,9 @@ mod tests {
             block_on(publish_issue(
                 &github,
                 &context,
-                "Regressions",
                 "Unordered findings",
                 &evidence_at(AnalysisMode::History, Outcome::Findings, 'b'),
-                Envelope::default(),
+                None,
             ))
             .unwrap();
             let before = only_issue(&github);
@@ -896,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_cleanup_updates_before_optional_close() {
+    fn issue_cleanup_updates_all_clear_and_leaves_the_issue_open() {
         let github = FakeGitHub::new();
         let context = context();
         github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(1) });
@@ -904,18 +787,15 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context,
-            "Regressions",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         block_on(issue_cleanup(
             &github,
             &context,
             &evidence_at(AnalysisMode::History, Outcome::Clean, 'b'),
-            false,
-            Envelope::default(),
         ))
         .unwrap();
         assert!(
@@ -928,11 +808,15 @@ mod tests {
             &github,
             &context,
             &evidence_at(AnalysisMode::History, Outcome::Clean, 'c'),
-            true,
-            Envelope::default(),
         ))
         .unwrap();
-        assert!(github.issues().is_empty());
+        let issue = only_issue(&github);
+        assert_eq!(
+            marker::find_analyzed_sha(&issue.body, &context.instance),
+            Some(sha('c'))
+        );
+        assert!(issue.body.contains("No notable benchmark changes"));
+        assert!(github.closed_issues().is_empty());
     }
 
     #[test]
@@ -942,21 +826,23 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context,
-            "Regressions",
             "summary",
             &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-            Envelope::default(),
+            None,
         ))
         .unwrap();
-        block_on(alert(
-            &github,
-            &context,
-            "Failure",
-            "https://example.test/run",
-            Envelope::default(),
-        ))
-        .unwrap();
+        block_on(alert(&github, &context, "https://example.test/run")).unwrap();
         assert_eq!(github.issues().len(), 2);
+        let failure = github
+            .issues()
+            .into_iter()
+            .find(|issue| {
+                issue
+                    .body
+                    .contains(&marker::issue(&context.instance, IssueKind::FailureAlert))
+            })
+            .unwrap();
+        assert_eq!(failure.title, "Benchmark-history workflow failed");
         block_on(resolve_alert(
             &github,
             &context,
@@ -964,6 +850,115 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(github.issues().len(), 1);
+        let closed = github.closed_issues();
+        assert_eq!(closed.len(), 1);
+        let closed = closed.first().unwrap();
+        assert_eq!(closed.number, failure.number);
+        assert_eq!(
+            closed.body,
+            message::resolved_failure_issue(&failure.body, "https://example.test/success")
+        );
+        assert!(
+            only_issue(&github)
+                .body
+                .contains(&marker::issue(&context.instance, IssueKind::Regression))
+        );
+    }
+
+    #[test]
+    fn unowned_issue_titles_never_authorize_updates_or_cleanup() {
+        let github = FakeGitHub::new();
+        let context = context();
+        let regression = block_on(github.create_issue(
+            &context.repository,
+            message::REGRESSION_TITLE,
+            "Unowned findings",
+        ))
+        .unwrap();
+        let failure = block_on(github.create_issue(
+            &context.repository,
+            message::FAILURE_TITLE,
+            "Unowned failure",
+        ))
+        .unwrap();
+        block_on(issue_preflight(&github, &context, &sha('a'))).unwrap();
+        block_on(issue_cleanup(
+            &github,
+            &context,
+            &evidence_at(AnalysisMode::History, Outcome::Clean, 'a'),
+        ))
+        .unwrap();
+        block_on(resolve_alert(
+            &github,
+            &context,
+            "https://example.test/success",
+        ))
+        .unwrap();
+        assert_eq!(github.issues(), [regression.clone(), failure.clone()]);
+        assert!(github.closed_issues().is_empty());
+
+        block_on(publish_issue(
+            &github,
+            &context,
+            "Current findings",
+            &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
+            None,
+        ))
+        .unwrap();
+        block_on(alert(&github, &context, "https://example.test/run")).unwrap();
+        let issues = github.issues();
+        assert_eq!(issues.len(), 4);
+        assert!(issues.contains(&regression));
+        assert!(issues.contains(&failure));
+    }
+
+    #[test]
+    fn another_instance_is_not_selected_for_issue_cleanup() {
+        let github = FakeGitHub::new();
+        let context = context();
+        let mut other = context.clone();
+        other.instance = "other".parse().unwrap();
+        block_on(publish_issue(
+            &github,
+            &other,
+            "Other instance",
+            &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
+            None,
+        ))
+        .unwrap();
+        let before = only_issue(&github);
+        block_on(issue_cleanup(
+            &github,
+            &context,
+            &evidence_at(AnalysisMode::History, Outcome::Clean, 'a'),
+        ))
+        .unwrap();
+        assert_eq!(only_issue(&github), before);
+    }
+
+    #[test]
+    fn an_owned_issue_without_a_validated_sha_is_not_replaced() {
+        let github = FakeGitHub::new();
+        let context = context();
+        let body = marker::issue(&context.instance, IssueKind::Regression);
+        let before =
+            block_on(github.create_issue(&context.repository, message::REGRESSION_TITLE, &body))
+                .unwrap();
+        block_on(publish_issue(
+            &github,
+            &context,
+            "New findings",
+            &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
+            None,
+        ))
+        .unwrap();
+        block_on(issue_cleanup(
+            &github,
+            &context,
+            &evidence_at(AnalysisMode::History, Outcome::Clean, 'a'),
+        ))
+        .unwrap();
+        assert_eq!(only_issue(&github), before);
     }
 
     #[test]
@@ -995,7 +990,7 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo,bar",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         assert!(only_comment(&github, pull_request).body.contains("summary"));
@@ -1005,7 +1000,6 @@ mod tests {
             &context,
             pull_request,
             &sha('a'),
-            false,
         ))
         .unwrap();
         assert!(
@@ -1029,7 +1023,7 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         block_on(pr_comment_preflight(
@@ -1139,7 +1133,7 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
 
@@ -1162,7 +1156,7 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
 
@@ -1185,7 +1179,7 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         assert_eq!(github.comments_for(pull_request).len(), 1);
@@ -1206,7 +1200,7 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap_err();
         assert!(error.find_source::<AmbiguousCreateError>().is_some());
@@ -1244,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_can_delete_instead_of_leaving_a_note() {
+    fn empty_scope_replaces_the_owned_placeholder_with_a_note() {
         let github = FakeGitHub::new();
         let context = context();
         let pull_request = 12;
@@ -1258,22 +1252,24 @@ mod tests {
             1,
         ))
         .unwrap();
+        let before = only_comment(&github, pull_request);
         block_on(pr_comment_cleanup(
             &github,
             &context,
             pull_request,
             &sha('a'),
-            true,
         ))
         .unwrap();
-        assert!(github.comments_for(pull_request).is_empty());
+        let after = only_comment(&github, pull_request);
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.body, message::pr_nothing_in_scope(&context.instance));
     }
 
     #[test]
     fn reconciliation_does_not_confuse_another_publication_with_this_request() {
         let github = FakeGitHub::new();
         let context = context();
-        let identity = context.pr_identity();
+        let identity = marker::pr_comment(&context.instance);
         let other_body = format!("{identity}\nAnother run's report");
         let other = block_on(github.create_comment(&context.repository, 1, &other_body)).unwrap();
         github.fail_next_comment_create_after_commit();
@@ -1305,22 +1301,14 @@ mod tests {
             block_on(publish_issue(
                 &github,
                 &context,
-                "Regression",
                 "existing finding",
                 &evidence_at(AnalysisMode::History, Outcome::Findings, 'a'),
-                Envelope::default(),
+                None,
             ))
             .unwrap();
             let before = only_issue(&github);
             let incomplete = evidence(AnalysisMode::History, outcome, complete);
-            let error = block_on(issue_cleanup(
-                &github,
-                &context,
-                &incomplete,
-                true,
-                Envelope::default(),
-            ))
-            .unwrap_err();
+            let error = block_on(issue_cleanup(&github, &context, &incomplete)).unwrap_err();
             assert!(error.find_source::<UnsafeAllClear>().is_some());
             assert_eq!(only_issue(&github), before);
         }
@@ -1360,10 +1348,9 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context,
-            "Regressions",
             "tool finding",
             &history,
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         let branch = evidence(AnalysisMode::Branch, Outcome::Findings, false);
@@ -1374,7 +1361,7 @@ mod tests {
             &branch,
             "package",
             "tool finding",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         for body in [only_issue(&github).body, only_comment(&github, 1).body] {
@@ -1391,10 +1378,10 @@ mod tests {
         let github = FakeGitHub::new();
         let context = context();
         github.set_pull_head(1, sha('a'));
-        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'), false)).unwrap();
+        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'))).unwrap();
         let first = only_comment(&github, 1);
         assert!(first.body.contains("No benchmarkable package"));
-        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'), false)).unwrap();
+        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'))).unwrap();
         assert_eq!(only_comment(&github, 1), first);
     }
 
@@ -1424,7 +1411,7 @@ mod tests {
                 ))
                 .unwrap();
             } else {
-                block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'), false)).unwrap();
+                block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'))).unwrap();
             }
             block_on(pr_comment_preflight(
                 &github,
@@ -1479,8 +1466,7 @@ mod tests {
         .unwrap();
         assert_eq!(only_comment(&github, 1), before);
         github.set_pull_head(1, sha('b'));
-        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'), false)).unwrap();
-        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'), true)).unwrap();
+        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'))).unwrap();
         assert_eq!(only_comment(&github, 1), before);
     }
 
@@ -1497,7 +1483,7 @@ mod tests {
             &current,
             "foo",
             "current summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         let before = only_comment(&github, 1);
@@ -1509,7 +1495,7 @@ mod tests {
             &old,
             "foo",
             "obsolete summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         assert_eq!(only_comment(&github, 1), before);
@@ -1520,33 +1506,11 @@ mod tests {
         let github = FakeGitHub::new();
         let context = context();
         let clean = evidence_at(AnalysisMode::History, Outcome::Clean, 'a');
-        block_on(publish_issue(
-            &github,
-            &context,
-            "Regression",
-            "summary",
-            &clean,
-            Envelope::default(),
-        ))
-        .unwrap_err();
+        block_on(publish_issue(&github, &context, "summary", &clean, None)).unwrap_err();
         let branch = evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a');
-        block_on(publish_issue(
-            &github,
-            &context,
-            "Regression",
-            "summary",
-            &branch,
-            Envelope::default(),
-        ))
-        .unwrap_err();
+        block_on(publish_issue(&github, &context, "summary", &branch, None)).unwrap_err();
         block_on(publish_pr_comment(
-            &github,
-            &context,
-            1,
-            &clean,
-            "foo",
-            "summary",
-            Envelope::default(),
+            &github, &context, 1, &clean, "foo", "summary", None,
         ))
         .unwrap_err();
         assert!(github.issues().is_empty());
@@ -1554,10 +1518,10 @@ mod tests {
     }
 
     #[test]
-    fn custom_comment_identity_is_used_across_the_lifecycle() {
+    fn instance_identity_is_used_across_the_comment_lifecycle() {
         let github = FakeGitHub::new();
         let mut context = context();
-        context.comment_marker = Some("<!-- custom-performance -->".parse().unwrap());
+        context.instance = "folo".parse().unwrap();
         github.set_pull_head(1, sha('a'));
         block_on(pr_comment_preflight(
             &github,
@@ -1576,14 +1540,77 @@ mod tests {
             &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
             "foo",
             "summary",
-            Envelope::default(),
+            None,
         ))
         .unwrap();
-        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'), false)).unwrap();
+        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'))).unwrap();
         let comment = only_comment(&github, 1);
         assert_eq!(comment.id, id);
-        assert!(comment.body.starts_with("<!-- custom-performance -->"));
-        assert!(!comment.body.contains(":pr-comment"));
+        assert!(
+            comment
+                .body
+                .starts_with("<!-- cargo-bench-history:folo:pr-comment -->")
+        );
+        assert!(!comment.body.contains("cargo-bench-history:default:"));
+    }
+
+    #[test]
+    fn unselected_comments_are_not_adopted_or_retired() {
+        let github = FakeGitHub::new();
+        let context = context();
+        github.set_pull_head(1, sha('a'));
+        let unrelated = block_on(github.create_comment(
+            &context.repository,
+            1,
+            "<!-- folo-bench-history -->\n<!-- folo-bench-history-in-progress -->\nOld report",
+        ))
+        .unwrap();
+        block_on(pr_comment_finalize(
+            &github,
+            &context,
+            1,
+            "https://example.test/run",
+            &sha('a'),
+            1,
+        ))
+        .unwrap();
+        assert_eq!(
+            github.comments_for(1).as_slice(),
+            slice::from_ref(&unrelated)
+        );
+        block_on(pr_comment_cleanup(&github, &context, 1, &sha('a'))).unwrap();
+        block_on(pr_comment_preflight(
+            &github,
+            &context,
+            1,
+            "foo",
+            &sha('a'),
+            2,
+        ))
+        .unwrap();
+        block_on(publish_pr_comment(
+            &github,
+            &context,
+            1,
+            &evidence_at(AnalysisMode::Branch, Outcome::Findings, 'a'),
+            "foo",
+            "Current findings",
+            None,
+        ))
+        .unwrap();
+        let comments = github.comments_for(1);
+        assert_eq!(comments.len(), 2);
+        assert!(comments.contains(&unrelated));
+        let current = comments
+            .iter()
+            .find(|comment| comment.id != unrelated.id)
+            .unwrap();
+        assert!(
+            current
+                .body
+                .starts_with(&marker::pr_comment(&context.instance))
+        );
+        assert!(current.body.contains("Current findings"));
     }
 
     #[test]
@@ -1594,31 +1621,22 @@ mod tests {
         block_on(publish_issue(
             &github,
             &context,
-            "Regression",
             "latest findings",
             &latest,
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         let before = only_issue(&github);
         let older = evidence_at(AnalysisMode::History, Outcome::Clean, 'a');
-        block_on(issue_cleanup(
-            &github,
-            &context,
-            &older,
-            true,
-            Envelope::default(),
-        ))
-        .unwrap();
+        block_on(issue_cleanup(&github, &context, &older)).unwrap();
         assert_eq!(only_issue(&github), before);
         let older = evidence_at(AnalysisMode::History, Outcome::Findings, 'a');
         block_on(publish_issue(
             &github,
             &context,
-            "Old title",
             "old findings",
             &older,
-            Envelope::default(),
+            None,
         ))
         .unwrap();
         assert_eq!(only_issue(&github), before);
@@ -1632,7 +1650,6 @@ mod tests {
             number: 1,
             title: "Regression".to_owned(),
             body: marker::analyzed_sha(&context.instance, &sha('a')),
-            bot_authored: true,
         };
         github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(0) });
         assert!(!block_on(may_replace_issue(

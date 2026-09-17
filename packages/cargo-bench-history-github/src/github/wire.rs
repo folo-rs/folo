@@ -14,7 +14,6 @@ pub(crate) struct IssueResponse {
     pub(crate) title: String,
     pub(crate) body: Option<String>,
     pub(crate) pull_request: Option<Value>,
-    user: Option<IssueAuthor>,
 }
 
 impl From<IssueResponse> for Issue {
@@ -23,16 +22,8 @@ impl From<IssueResponse> for Issue {
             number: value.number.get(),
             title: value.title,
             body: value.body.unwrap_or_default(),
-            bot_authored: value.user.is_some_and(|user| user.kind == "Bot"),
         }
     }
-}
-
-/// The API's author classification is the evidence needed for opt-in legacy title adoption.
-#[derive(Deserialize)]
-struct IssueAuthor {
-    #[serde(rename = "type")]
-    kind: String,
 }
 
 /// An issue comment returned by GitHub's pull-request conversation endpoints.

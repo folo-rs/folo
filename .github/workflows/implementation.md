@@ -37,6 +37,10 @@ target are exactly `required-checks`.
 
 ## Benchmark workflow artifacts
 
+Collection and backfill use the fixed `bench-history-setup` local action. Folo's wrapper
+selects the existing setup environment with Valgrind enabled; it owns no new setup logic.
+This keeps repository-specific preparation separate from tool installation and GitHub posting.
+
 Benchmark automation separates preparation, collection, analysis and GitHub publication.
 Preparation builds the Linux companion with the repository's pinned Rust toolchain and
 archives its executable permissions. Posting jobs download that run-scoped archive rather
@@ -67,15 +71,15 @@ requiring every open PR head to contain new automation files.
 The analysis bundle always contains the tool's full Markdown, JSON and summary. The
 companion projects validated JSON into outcome and all-clear outputs; publication receives
 the same report and completed-platform set. Main issue writers share an instance concurrency
-group, and PR comment writers share an instance/PR group. Explicit legacy-title and
-placeholder-marker inputs adopt existing Folo sinks without adding label support.
+group, and PR comment writers share a project/PR group. Standard project-derived markers
+identify reports; old output formats are not adopted. Titles, advisory wording and book links
+come from the companion's message catalogue rather than workflow parameters.
 
 Reader configuration is checked before collection, except empty PR scope, which needs no
 Azure access. It is intentionally not initialized with the writer client ID. Deployment adds
 the reader first; workflow activation requires its returned client ID in `constants.env`.
-Legacy posting runs should finish or be deliberately cancelled before cutover so they cannot
-replace new marker-based reports. Retire the writer's PR federation only after legacy
-PR-writing runs have drained. These are maintainer deployment actions, not workflow approval
+Retire the writer's PR federation only after legacy PR-writing runs have drained. This
+infrastructure safety procedure is independent of report-format adoption. These are maintainer deployment actions, not workflow approval
 prompts or automatic changes to live infrastructure.
 
 ## Standard validation structure

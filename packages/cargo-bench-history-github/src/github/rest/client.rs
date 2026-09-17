@@ -126,10 +126,7 @@ impl<H: Http> RestGitHub<H> {
     async fn send(&self, operation: &str, request: Request) -> Result<HttpResponse, AppError> {
         // Only these semantic operations are safe to repeat. In particular, a POST may
         // already have created its artifact even when the response was lost.
-        let retry_safe = matches!(
-            *request.method(),
-            Method::GET | Method::PATCH | Method::DELETE
-        );
+        let retry_safe = matches!(*request.method(), Method::GET | Method::PATCH);
         let mut delays = RETRY_DELAYS.into_iter();
         loop {
             let attempt = request
@@ -334,18 +331,6 @@ impl<H: Http> GitHub for RestGitHub<H> {
             .await
     }
 
-    async fn delete_comment(&self, repository: &Repository, id: u64) -> Result<(), AppError> {
-        let id = artifact_id(id)?;
-        let request = self.request(Method::DELETE, repository, &format!("issues/comments/{id}"))?;
-        match self
-            .send_empty("deleting a pull-request comment", request)
-            .await
-        {
-            Err(error) if is_not_found(&error) => Ok(()),
-            result => result,
-        }
-    }
-
     async fn pull_request_head(
         &self,
         repository: &Repository,
@@ -458,8 +443,7 @@ mod tests {
     use super::*;
     use crate::errors::InvalidCommitShaError;
     use crate::github::http::TransportError;
-    use crate::message::Envelope;
-    use crate::migration::MigrationOptions;
+    use crate::message;
     use crate::operations::{Context, alert, pr_comment_preflight};
 
     assert_impl_all!(PaginationError: Send, Sync, UnwindSafe, RefUnwindSafe);
@@ -583,8 +567,6 @@ mod tests {
             repository: repository(),
             instance: "default".parse().unwrap(),
             verbose: false,
-            comment_marker: None,
-            migration: MigrationOptions::default(),
         }
     }
 
@@ -667,30 +649,6 @@ mod tests {
 
     fn query(request: &Request) -> BTreeMap<String, String> {
         request.url().query_pairs().into_owned().collect()
-    }
-
-    #[test]
-    fn issue_author_type_is_preserved_without_guessing_from_login_names() {
-        let bot = issue(1, "bot report");
-        let mut human = issue(2, "human report");
-        human.as_object_mut().unwrap().insert(
-            "user".to_owned(),
-            json!({"login": "name-that-looks-like-a-bot[bot]", "type": "User"}),
-        );
-        let mut unknown = issue(3, "deleted author");
-        unknown
-            .as_object_mut()
-            .unwrap()
-            .insert("user".to_owned(), Value::Null);
-        let github = github([response(StatusCode::OK, json!([bot, human, unknown]))]);
-        let issues = block_on(github.open_issues(&repository())).unwrap();
-        assert_eq!(
-            issues
-                .iter()
-                .map(|issue| issue.bot_authored)
-                .collect::<Vec<_>>(),
-            [true, false, false]
-        );
     }
 
     fn assert_request(request: &Request, method: &Method, path: &str, body: Option<Value>) {
@@ -995,7 +953,6 @@ mod tests {
         let github = github([
             response(StatusCode::CREATED, comment(31, json!(body))),
             response(StatusCode::OK, comment(31, json!("updated"))),
-            raw_response(StatusCode::NO_CONTENT, b""),
         ]);
         block_on(async {
             let repo = repository();
@@ -1008,7 +965,6 @@ mod tests {
                 }
             );
             github.update_comment(&repo, 31, "updated").await.unwrap();
-            github.delete_comment(&repo, 31).await.unwrap();
         });
         let requests = github.http.requests.borrow();
         let expected = [
@@ -1022,7 +978,6 @@ mod tests {
                 "issues/comments/31",
                 Some(json!({"body": "updated"})),
             ),
-            (Method::DELETE, "issues/comments/31", None),
         ];
         assert_eq!(requests.len(), expected.len());
         for (request, (method, path, body)) in requests.iter().zip(expected) {
@@ -1030,34 +985,6 @@ mod tests {
             assert!(query(request).is_empty());
         }
         assert!(github.http.delays.borrow().is_empty());
-    }
-
-    #[test]
-    fn missing_delete_is_idempotent_but_other_client_errors_are_not() {
-        for status in [
-            StatusCode::NOT_FOUND,
-            StatusCode::UNAUTHORIZED,
-            StatusCode::FORBIDDEN,
-            StatusCode::GONE,
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ] {
-            let github = github([response(status, json!({"message": "Unavailable"}))]);
-            let result = block_on(github.delete_comment(&repository(), 31));
-            if status == StatusCode::NOT_FOUND {
-                result.unwrap();
-            } else {
-                assert_eq!(
-                    result
-                        .unwrap_err()
-                        .find_source::<UnexpectedStatusError>()
-                        .unwrap()
-                        .status(),
-                    status.as_u16()
-                );
-            }
-            assert_eq!(github.http.requests.borrow().len(), 1);
-            assert!(github.http.delays.borrow().is_empty());
-        }
     }
 
     #[test]
@@ -1286,7 +1213,6 @@ mod tests {
                 github.comments(&repo, 0).await.unwrap_err(),
                 github.create_comment(&repo, 0, "").await.unwrap_err(),
                 github.update_comment(&repo, 0, "").await.unwrap_err(),
-                github.delete_comment(&repo, 0).await.unwrap_err(),
                 github.pull_request_head(&repo, 0).await.unwrap_err(),
             ];
             for error in errors {
@@ -1527,7 +1453,7 @@ mod tests {
                         IoError::from(ErrorKind::UnexpectedEof),
                     )));
             }
-            let error = block_on(github.delete_comment(&repository(), 31)).unwrap_err();
+            let error = block_on(github.update_comment(&repository(), 31, "report")).unwrap_err();
             assert_eq!(
                 error.find_source::<IoError>().unwrap().kind(),
                 ErrorKind::UnexpectedEof
@@ -1601,9 +1527,7 @@ mod tests {
             let result = block_on(alert(
                 &github,
                 &context(),
-                "Benchmark failure",
                 "https://github.com/folo-rs/folo/actions/runs/23",
-                Envelope::default(),
             ));
             match status {
                 None => result.unwrap(),
@@ -1620,7 +1544,7 @@ mod tests {
             assert!(github.http.expected_requests.borrow().is_empty());
             let artifact = github.http.artifact.borrow();
             let artifact = artifact.as_ref().unwrap();
-            assert_eq!(artifact.get("title").unwrap(), "Benchmark failure");
+            assert_eq!(artifact.get("title").unwrap(), message::FAILURE_TITLE);
             assert!(!artifact.get("body").unwrap().as_str().unwrap().is_empty());
             assert!(github.http.delays.borrow().is_empty());
         }

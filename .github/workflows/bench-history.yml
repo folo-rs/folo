@@ -24,9 +24,6 @@ env:
   # Ref: design.md#benchmark-history.
   CBH_INSTANCE: folo
   CBH_PLATFORMS: ubuntu-latest,windows-latest
-  REGRESSION_ISSUE_TITLE: Benchmark regressions detected
-  FAILURE_ISSUE_TITLE: Benchmark-history workflow failed
-  CBH_DOCS_URL: https://folo-rs.github.io/folo/cargo-bench-history/
 
 jobs:
   prepare:
@@ -109,7 +106,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
           tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --legacy-issue-title $env:REGRESSION_ISSUE_TITLE issue-preflight --head $env:HEAD_SHA
+          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose issue-preflight --head $env:HEAD_SHA
 
   collect:
     needs: prepare
@@ -134,10 +131,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: ${{ inputs.recollect_commit_id && '0' || '1' }}
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-        with:
-          install-valgrind: "true"
+      - name: Prepare benchmark environment
+        uses: ./.github/actions/bench-history-setup
       - name: Configure Azure writer
         shell: pwsh
         run: |
@@ -327,7 +322,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $report = Join-Path $env:RUNNER_TEMP 'cbh-report'
-          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --legacy-issue-title $env:REGRESSION_ISSUE_TITLE publish-issue --title $env:REGRESSION_ISSUE_TITLE --body-file (Join-Path $report 'summary.md') --report-file (Join-Path $report 'report.json') --analyzed-sha $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --artifact-url $env:REPORT_URL --docs-url $env:CBH_DOCS_URL
+          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose publish-issue --body-file (Join-Path $report 'summary.md') --report-file (Join-Path $report 'report.json') --analyzed-sha $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --artifact-url $env:REPORT_URL
       - name: Record all-clear without closing the issue
         if: needs.analyze.outputs.can-clear == 'true'
         shell: pwsh
@@ -335,7 +330,7 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --legacy-issue-title $env:REGRESSION_ISSUE_TITLE issue-cleanup --clean-commit $env:HEAD_SHA --report-file (Join-Path $env:RUNNER_TEMP 'cbh-report/report.json') --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --docs-url $env:CBH_DOCS_URL
+          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose issue-cleanup --clean-commit $env:HEAD_SHA --report-file (Join-Path $env:RUNNER_TEMP 'cbh-report/report.json') --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS
 
   notify:
     needs: [prepare, preflight, collect, analyze, publish]
@@ -382,7 +377,7 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --legacy-issue-title $env:FAILURE_ISSUE_TITLE alert --title $env:FAILURE_ISSUE_TITLE --run-url $env:RUN_URL --docs-url $env:CBH_DOCS_URL
+          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose alert --run-url $env:RUN_URL
       - name: Resolve prior automation failure
         if: >-
           needs.prepare.result == 'success' && needs.preflight.result == 'success'
@@ -393,4 +388,4 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --legacy-issue-title $env:FAILURE_ISSUE_TITLE resolve-alert --run-url $env:RUN_URL
+          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose resolve-alert --run-url $env:RUN_URL

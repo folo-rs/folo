@@ -2,10 +2,7 @@ use std::num::NonZero;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use ohno::AppError;
 
-use crate::marker::CommentMarker;
-use crate::migration::{MigrationOptions, UnexpectedLegacyIssueTitle, validate_legacy_title};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 
@@ -33,37 +30,6 @@ impl Cli {
         self.common.verbose
     }
 
-    pub(crate) fn comment_marker(&self) -> Option<CommentMarker> {
-        self.common.comment_marker.clone()
-    }
-
-    pub(crate) fn migration_options(&self) -> Result<MigrationOptions, AppError> {
-        if let Some(title) = &self.common.legacy_issue_title {
-            if !matches!(
-                self.command,
-                Command::IssuePreflight { .. }
-                    | Command::PublishIssue { .. }
-                    | Command::IssueCleanup { .. }
-                    | Command::Alert { .. }
-                    | Command::ResolveAlert { .. }
-            ) {
-                return Err(UnexpectedLegacyIssueTitle::new().into());
-            }
-            validate_legacy_title(title)?;
-        }
-        let in_progress_marker = match &self.command {
-            Command::PrCommentPreflight {
-                legacy_in_progress_marker,
-                ..
-            } => legacy_in_progress_marker.clone(),
-            _ => None,
-        };
-        Ok(MigrationOptions {
-            issue_title: self.common.legacy_issue_title.clone(),
-            in_progress_marker,
-        })
-    }
-
     pub(crate) fn into_command(self) -> Command {
         self.command
     }
@@ -76,17 +42,9 @@ struct CommonArgs {
     #[arg(long)]
     repository: Option<Repository>,
 
-    /// Namespace separating independent action instances.
+    /// Internal namespace derived from the configured project ID.
     #[arg(long, default_value = "default")]
     instance: Instance,
-
-    /// Exact HTML marker for an existing rolling PR comment; defaults to the instance marker.
-    #[arg(long)]
-    comment_marker: Option<CommentMarker>,
-
-    /// Adopt one unowned bot-authored open issue with this exact title; issue commands only.
-    #[arg(long)]
-    legacy_issue_title: Option<String>,
 
     /// Emit explanatory diagnostics to standard error.
     #[arg(long)]
@@ -112,9 +70,6 @@ pub(crate) enum Command {
     },
     /// Create or update the rolling regression issue.
     PublishIssue {
-        /// Displayed issue title.
-        #[arg(long)]
-        title: String,
         /// Markdown summary rendered by cargo-bench-history.
         #[arg(long)]
         body_file: PathBuf,
@@ -126,12 +81,6 @@ pub(crate) enum Command {
         /// URL of the complete report artifact.
         #[arg(long)]
         artifact_url: Option<String>,
-        /// Repository-specific introductory sentence.
-        #[arg(long)]
-        intro: Option<String>,
-        /// Repository-specific report-reading documentation.
-        #[arg(long)]
-        docs_url: Option<String>,
     },
     /// Replace a recovered regression issue with an all-clear state.
     IssueCleanup {
@@ -140,30 +89,12 @@ pub(crate) enum Command {
         clean_commit: CommitSha,
         #[command(flatten)]
         evidence: ResultArgs,
-        /// Close the issue after writing the all-clear state.
-        #[arg(long)]
-        auto_close: bool,
-        /// Repository-specific introductory sentence.
-        #[arg(long)]
-        intro: Option<String>,
-        /// Repository-specific report-reading documentation.
-        #[arg(long)]
-        docs_url: Option<String>,
     },
     /// Create or update the rolling automation-failure issue.
     Alert {
-        /// Displayed issue title.
-        #[arg(long)]
-        title: String,
         /// URL of the failed workflow run.
         #[arg(long)]
         run_url: String,
-        /// Repository-specific introductory sentence.
-        #[arg(long)]
-        intro: Option<String>,
-        /// Repository-specific runbook.
-        #[arg(long)]
-        docs_url: Option<String>,
     },
     /// Close the rolling automation-failure issue.
     ResolveAlert {
@@ -185,9 +116,6 @@ pub(crate) enum Command {
         /// Workflow run that owns the in-progress placeholder.
         #[arg(long)]
         run_id: NonZero<u64>,
-        /// Exact HTML marker identifying an existing legacy in-progress placeholder.
-        #[arg(long)]
-        legacy_in_progress_marker: Option<CommentMarker>,
     },
     /// Create or update the rolling pull-request results comment.
     PublishPrComment {
@@ -208,14 +136,8 @@ pub(crate) enum Command {
         /// URL of the complete report artifact.
         #[arg(long)]
         artifact_url: Option<String>,
-        /// Repository-specific introductory sentence.
-        #[arg(long)]
-        intro: Option<String>,
-        /// Repository-specific report-reading documentation.
-        #[arg(long)]
-        docs_url: Option<String>,
     },
-    /// Replace or remove a rolling comment when nothing benchmarkable changed.
+    /// Write an explanatory note when nothing benchmarkable changed.
     PrCommentCleanup {
         /// Pull-request number.
         #[arg(long)]
@@ -223,9 +145,6 @@ pub(crate) enum Command {
         /// Frozen PR head whose package selection was empty.
         #[arg(long)]
         head: CommitSha,
-        /// Delete instead of leaving the standard explanatory note.
-        #[arg(long)]
-        delete: bool,
     },
     /// Retire an in-progress placeholder after a genuine workflow failure.
     PrCommentFinalize {
@@ -263,7 +182,6 @@ pub(crate) struct ResultArgs {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use clap::CommandFactory as _;
     use clap::error::ErrorKind;
     use static_assertions::assert_impl_all;
 
@@ -276,28 +194,6 @@ mod tests {
             std::iter::once("cargo-bench-history-github").chain(args.iter().copied()),
         )
         .unwrap()
-    }
-
-    #[test]
-    fn every_subcommand_is_present_in_help() {
-        let help = Cli::command().render_long_help().to_string();
-        for name in [
-            "issue-preflight",
-            "publish-issue",
-            "issue-cleanup",
-            "alert",
-            "resolve-alert",
-            "pr-comment-preflight",
-            "publish-pr-comment",
-            "pr-comment-cleanup",
-            "pr-comment-finalize",
-            "collection-receipt",
-            "prepare-analysis",
-            "inspect-report",
-            "workflow-matrix",
-        ] {
-            assert!(help.contains(name), "{help}");
-        }
     }
 
     #[test]
@@ -332,72 +228,99 @@ mod tests {
         assert!(!cli.verbose());
     }
 
+    fn assert_removed_option(command: &str, option: &str) {
+        let error =
+            Cli::try_parse_from(["cargo-bench-history-github", command, option]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+    }
+
     #[test]
-    fn legacy_issue_title_is_an_explicit_issue_lifecycle_option() {
+    fn publication_rejects_custom_intro() {
+        assert_removed_option("publish-pr-comment", "--intro");
+    }
+
+    #[test]
+    fn publication_rejects_custom_documentation() {
+        assert_removed_option("publish-pr-comment", "--docs-url");
+    }
+
+    #[test]
+    fn issue_publication_uses_the_standard_catalogue() {
         let cli = parse(&[
-            "--legacy-issue-title",
-            "Legacy automation title",
-            "resolve-alert",
-            "--run-url",
-            "https://example.test/run",
+            "publish-issue",
+            "--body-file",
+            "summary.md",
+            "--analyzed-sha",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--report-file",
+            "report.json",
+            "--expected-platforms",
+            "linux",
+            "--completed-platforms",
+            "linux",
         ]);
-        let options = cli.migration_options().unwrap();
-        assert_eq!(
-            options.issue_title.as_deref(),
-            Some("Legacy automation title")
-        );
-        assert!(options.in_progress_marker.is_none());
+        assert!(matches!(cli.into_command(), Command::PublishIssue { .. }));
     }
 
     #[test]
-    fn legacy_pr_state_marker_is_validated_and_cannot_enable_issue_title_adoption() {
-        let mut cli = parse(&[
-            "--comment-marker",
-            "<!-- legacy-rolling -->",
-            "pr-comment-preflight",
-            "--pull-request",
-            "1",
-            "--packages",
-            "package",
-            "--head",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--run-id",
-            "42",
-            "--legacy-in-progress-marker",
-            "<!-- legacy-collecting -->",
-        ]);
-        let options = cli.migration_options().unwrap();
-        assert!(options.issue_title.is_none());
-        assert_eq!(
-            options
-                .in_progress_marker
-                .as_ref()
-                .map(CommentMarker::as_str),
-            Some("<!-- legacy-collecting -->")
-        );
-        cli.common.legacy_issue_title = Some("Legacy issue".to_owned());
-        let error = cli.migration_options().unwrap_err();
-        assert!(error.find_source::<UnexpectedLegacyIssueTitle>().is_some());
+    fn issue_publication_rejects_custom_title() {
+        assert_removed_option("publish-issue", "--title");
     }
 
     #[test]
-    fn legacy_in_progress_marker_uses_the_existing_html_marker_validator() {
-        let error = Cli::try_parse_from([
-            "cargo-bench-history-github",
-            "pr-comment-preflight",
-            "--pull-request",
-            "1",
-            "--packages",
-            "package",
-            "--head",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "--run-id",
-            "42",
-            "--legacy-in-progress-marker",
-            "<!-- bad\nmarker -->",
-        ])
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    fn issue_publication_rejects_custom_intro() {
+        assert_removed_option("publish-issue", "--intro");
+    }
+
+    #[test]
+    fn issue_publication_rejects_custom_documentation() {
+        assert_removed_option("publish-issue", "--docs-url");
+    }
+
+    #[test]
+    fn alert_uses_the_standard_catalogue() {
+        let cli = parse(&["alert", "--run-url", "https://example.test/run"]);
+        assert!(matches!(cli.into_command(), Command::Alert { .. }));
+    }
+
+    #[test]
+    fn alert_rejects_custom_title() {
+        assert_removed_option("alert", "--title");
+    }
+
+    #[test]
+    fn alert_rejects_custom_intro() {
+        assert_removed_option("alert", "--intro");
+    }
+
+    #[test]
+    fn alert_rejects_custom_documentation() {
+        assert_removed_option("alert", "--docs-url");
+    }
+
+    #[test]
+    fn issue_cleanup_rejects_automatic_close() {
+        assert_removed_option("issue-cleanup", "--auto-close");
+    }
+
+    #[test]
+    fn issue_cleanup_rejects_custom_intro() {
+        assert_removed_option("issue-cleanup", "--intro");
+    }
+
+    #[test]
+    fn issue_cleanup_rejects_custom_documentation() {
+        assert_removed_option("issue-cleanup", "--docs-url");
+    }
+
+    #[test]
+    fn empty_scope_rejects_comment_deletion() {
+        assert_removed_option("pr-comment-cleanup", "--delete");
+    }
+
+    #[test]
+    fn preflight_rejects_placeholder_adoption() {
+        assert_removed_option("pr-comment-preflight", "--legacy-in-progress-marker");
     }
 
     #[test]
@@ -534,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_requires_report_evidence_and_defaults_to_leaving_the_issue_open() {
+    fn cleanup_carries_report_evidence() {
         let cli = parse(&[
             "issue-cleanup",
             "--clean-commit",
@@ -546,15 +469,9 @@ mod tests {
             "--completed-platforms",
             "linux",
         ]);
-        let Command::IssueCleanup {
-            auto_close,
-            evidence,
-            ..
-        } = cli.into_command()
-        else {
+        let Command::IssueCleanup { evidence, .. } = cli.into_command() else {
             panic!("expected issue-cleanup");
         };
-        assert!(!auto_close);
         assert_eq!(evidence.completed_platforms, "linux");
     }
 
@@ -572,9 +489,7 @@ mod tests {
 
     #[test]
     fn preflight_carries_the_run_that_owns_the_placeholder() {
-        let cli = parse(&[
-            "--comment-marker",
-            "<!-- team-performance -->",
+        let args = [
             "pr-comment-preflight",
             "--pull-request",
             "1",
@@ -584,11 +499,8 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "--run-id",
             "123",
-        ]);
-        assert_eq!(
-            cli.comment_marker().as_ref().map(CommentMarker::as_str),
-            Some("<!-- team-performance -->")
-        );
+        ];
+        let cli = parse(&args);
         let Command::PrCommentPreflight { head, run_id, .. } = cli.into_command() else {
             panic!("expected preflight");
         };

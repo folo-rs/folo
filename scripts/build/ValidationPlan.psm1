@@ -63,7 +63,8 @@ function Get-ValidationPlan {
         }
         if ($path -cmatch '^infra/azure-bench-history-prod/' -or
             $path -cmatch '^\.github/actions/build-bench-history-companion/' -or
-            $path -cin @('.github/workflows/bench-history.yml', '.github/workflows/pr-bench-history.yml')) {
+            $path -cmatch '^\.github/actions/bench-history-setup/' -or
+            $path -cin @('.github/workflows/bench-history.yml', '.github/workflows/pr-bench-history.yml', '.github/workflows/bench-history-backfill.yml')) {
             $null = $domains.Add('bench-history')
             if ($path -cmatch '\.ps(m1|d1|1)$') { $analysis = $true }
             Write-Verbose "'$path' owns benchmark deployment or invocation wiring; selecting benchmark helper tests."

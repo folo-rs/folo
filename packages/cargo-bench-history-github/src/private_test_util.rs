@@ -5,7 +5,6 @@ use ohno::AppError;
 use crate::cli::{Cli, Command};
 use crate::errors::{InvalidResponseError, MissingRepositoryError};
 use crate::github::WorkflowJob;
-use crate::marker::UnexpectedCommentMarker;
 use crate::operations::Context;
 use crate::workflow::prepare_from_jobs;
 
@@ -26,12 +25,7 @@ pub fn prepare_analysis(cli: Cli, jobs_json: &str) -> Result<(), AppError> {
         repository: cli.repository().ok_or_else(MissingRepositoryError::new)?,
         instance: cli.instance(),
         verbose: cli.verbose(),
-        comment_marker: cli.comment_marker(),
-        migration: cli.migration_options()?,
     };
-    if context.comment_marker.is_some() {
-        return Err(UnexpectedCommentMarker::new().into());
-    }
     let Command::PrepareAnalysis(args) = cli.into_command() else {
         return Err(NotPreparationCommand::new().into());
     };

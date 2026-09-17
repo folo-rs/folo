@@ -5,65 +5,57 @@ use crate::result::{Coverage, Evidence, Outcome};
 const REGRESSION_HEADING: &str = "# Benchmark history";
 const PR_HEADING: &str = "## Benchmark history";
 const WARNING_HEADING: &str = "> [!WARNING]";
-
-/// Optional repository-specific prose around a standard report.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Envelope<'a> {
-    pub(crate) intro: Option<&'a str>,
-    pub(crate) docs_url: Option<&'a str>,
-    pub(crate) artifact_url: Option<&'a str>,
-}
+// Reporting uses one message catalogue; callers supply evidence, not presentation policy.
+pub(crate) const REGRESSION_TITLE: &str = "Benchmark regressions detected";
+pub(crate) const FAILURE_TITLE: &str = "Benchmark-history workflow failed";
+const DOCUMENTATION_URL: &str = "https://folo-rs.github.io/folo/cargo-bench-history/";
+const ADVISORY: &str = "Benchmark results are advisory and do not block merging.";
 
 pub(crate) fn regression_issue(
     instance: &Instance,
     evidence: &Evidence,
     summary: &str,
-    envelope: Envelope<'_>,
+    artifact_url: Option<&str>,
 ) -> String {
     let mut sections = vec![
         marker::issue(instance, IssueKind::Regression),
         marker::analyzed_sha(instance, &evidence.report.commit),
         REGRESSION_HEADING.to_owned(),
+        ADVISORY.to_owned(),
     ];
-    push_optional(&mut sections, envelope.intro);
     push_result_status(&mut sections, evidence);
     sections.push(format!(
         "Analyzed commit: {}",
         evidence.report.commit.as_str()
     ));
     sections.push(summary.trim().to_owned());
-    push_links(&mut sections, envelope);
+    push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
 
-pub(crate) fn all_clear_issue(
-    instance: &Instance,
-    clean_sha: &CommitSha,
-    envelope: Envelope<'_>,
-) -> String {
+pub(crate) fn all_clear_issue(instance: &Instance, clean_sha: &CommitSha) -> String {
     let mut sections = vec![
         marker::issue(instance, IssueKind::Regression),
         marker::analyzed_sha(instance, clean_sha),
         REGRESSION_HEADING.to_owned(),
+        ADVISORY.to_owned(),
         format!(
             "No notable benchmark changes were detected at {}.",
             clean_sha.as_str()
         ),
     ];
-    push_optional(&mut sections, envelope.intro);
-    push_links(&mut sections, envelope);
+    push_links(&mut sections, None);
     join_sections(sections)
 }
 
-pub(crate) fn failure_issue(instance: &Instance, run_url: &str, envelope: Envelope<'_>) -> String {
+pub(crate) fn failure_issue(instance: &Instance, run_url: &str) -> String {
     let mut sections = vec![
         marker::issue(instance, IssueKind::FailureAlert),
         "# Benchmark-history automation failed".to_owned(),
         "The benchmark history may be incomplete until a later run succeeds.".to_owned(),
         format!("Failed run: {run_url}"),
     ];
-    push_optional(&mut sections, envelope.intro);
-    push_links(&mut sections, envelope);
+    push_links(&mut sections, None);
     join_sections(sections)
 }
 
@@ -73,18 +65,17 @@ pub(crate) fn resolved_failure_issue(existing: &str, run_url: &str) -> String {
 
 pub(crate) fn pr_result(
     instance: &Instance,
-    identity: &str,
     evidence: &Evidence,
     packages: &str,
     summary: &str,
-    envelope: Envelope<'_>,
+    artifact_url: Option<&str>,
 ) -> String {
     let mut sections = vec![
-        identity.to_owned(),
+        marker::pr_comment(instance),
         marker::analyzed_sha(instance, &evidence.report.commit),
         PR_HEADING.to_owned(),
+        ADVISORY.to_owned(),
     ];
-    push_optional(&mut sections, envelope.intro);
     push_result_status(&mut sections, evidence);
     sections.push(format_scope(packages));
     sections.push(format!(
@@ -92,19 +83,18 @@ pub(crate) fn pr_result(
         evidence.report.commit.as_str()
     ));
     sections.push(summary.trim().to_owned());
-    push_links(&mut sections, envelope);
+    push_links(&mut sections, artifact_url);
     join_sections(sections)
 }
 
 pub(crate) fn pr_in_progress(
     instance: &Instance,
-    identity: &str,
     packages: &str,
     head: &CommitSha,
     run_id: u64,
 ) -> String {
     join_sections(vec![
-        identity.to_owned(),
+        marker::pr_comment(instance),
         marker::in_progress(instance),
         marker::run_owner(instance, run_id, head),
         PR_HEADING.to_owned(),
@@ -113,18 +103,18 @@ pub(crate) fn pr_in_progress(
     ])
 }
 
-pub(crate) fn pr_nothing_in_scope(instance: &Instance, identity: &str) -> String {
+pub(crate) fn pr_nothing_in_scope(instance: &Instance) -> String {
     join_sections(vec![
-        identity.to_owned(),
+        marker::pr_comment(instance),
         marker::empty_scope(instance),
         PR_HEADING.to_owned(),
         "No benchmarkable package is affected by this pull request.".to_owned(),
     ])
 }
 
-pub(crate) fn pr_failed(instance: &Instance, identity: &str, run_url: &str) -> String {
+pub(crate) fn pr_failed(instance: &Instance, run_url: &str) -> String {
     join_sections(vec![
-        identity.to_owned(),
+        marker::pr_comment(instance),
         marker::failed(instance),
         PR_HEADING.to_owned(),
         "Benchmarking did not complete successfully.".to_owned(),
@@ -238,19 +228,11 @@ fn format_scope(packages: &str) -> String {
     format!("Packages benchmarked: {packages}")
 }
 
-fn push_optional(sections: &mut Vec<String>, value: Option<&str>) {
-    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-        sections.push(value.trim().to_owned());
-    }
-}
-
-fn push_links(sections: &mut Vec<String>, envelope: Envelope<'_>) {
-    if let Some(url) = envelope.artifact_url {
+fn push_links(sections: &mut Vec<String>, artifact_url: Option<&str>) {
+    if let Some(url) = artifact_url {
         sections.push(format!("[Download the full report bundle]({url})"));
     }
-    if let Some(url) = envelope.docs_url {
-        sections.push(format!("[How to read this report]({url})"));
-    }
+    sections.push(format!("[How to read this report]({DOCUMENTATION_URL})"));
 }
 
 fn join_sections(sections: Vec<String>) -> String {
@@ -282,18 +264,48 @@ mod tests {
             &instance(),
             &evidence(AnalysisMode::History, Outcome::Findings, true),
             "DOMAIN SUMMARY",
-            Envelope {
-                intro: Some("Advisory."),
-                docs_url: Some("https://example.test/docs"),
-                artifact_url: Some("https://example.test/artifact"),
-            },
+            Some("https://example.test/artifact"),
         );
 
         assert!(body.starts_with("<!-- cargo-bench-history:default:issue:regression -->"));
         assert!(body.contains("DOMAIN SUMMARY"));
-        assert!(body.contains("Advisory."));
-        assert!(body.contains("[Download the full report bundle]"));
-        assert!(body.contains("[How to read this report]"));
+        assert!(body.contains("Benchmark results are advisory and do not block merging."));
+        assert!(body.contains("[Download the full report bundle](https://example.test/artifact)"));
+        assert!(body.contains(
+            "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/)"
+        ));
+    }
+
+    #[test]
+    fn standard_messages_link_documentation_without_fabricating_an_artifact() {
+        let result = evidence(AnalysisMode::Branch, Outcome::Findings, true);
+        for body in [
+            all_clear_issue(&instance(), &sha()),
+            failure_issue(&instance(), "https://example.test/run"),
+            pr_result(&instance(), &result, "foo", "Tool summary", None),
+        ] {
+            assert!(body.contains(
+                "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/)"
+            ));
+            assert!(!body.contains("[Download the full report bundle]"));
+        }
+    }
+
+    #[test]
+    fn pr_result_embeds_summary_and_report_artifact_with_standard_advice() {
+        let body = pr_result(
+            &instance(),
+            &evidence(AnalysisMode::Branch, Outcome::Findings, true),
+            "foo",
+            "Tool summary\n\n| Metric | Value |\n| --- | --- |\n| Time | +10% |",
+            Some("https://example.test/artifact"),
+        );
+        assert!(body.starts_with(&marker::pr_comment(&instance())));
+        assert!(body.contains("Benchmark results are advisory and do not block merging."));
+        assert!(
+            body.contains("Tool summary\n\n| Metric | Value |\n| --- | --- |\n| Time | +10% |")
+        );
+        assert!(body.contains("[Download the full report bundle](https://example.test/artifact)"));
     }
 
     #[test]
@@ -301,11 +313,10 @@ mod tests {
         let instance = instance();
         let body = pr_result(
             &instance,
-            &marker::pr_comment(&instance),
             &evidence(AnalysisMode::Branch, Outcome::Findings, true),
             "foo, bar",
             "summary",
-            Envelope::default(),
+            None,
         );
         let stale = insert_stale_banner(&body, &instance, "old warning");
         let refreshed = insert_stale_banner(&stale, &instance, "new warning");
@@ -347,17 +358,11 @@ mod tests {
 
     #[test]
     fn scope_is_trimmed_and_rendered_consistently() {
-        let body = pr_in_progress(
-            &instance(),
-            &marker::pr_comment(&instance()),
-            "foo, bar",
-            &sha(),
-            1,
-        );
+        let body = pr_in_progress(&instance(), "foo, bar", &sha(), 1);
         assert!(body.contains("Packages benchmarked: `foo`, `bar`"));
         assert!(is_in_progress(&body, &instance()));
         assert!(!is_in_progress(
-            &pr_nothing_in_scope(&instance(), &marker::pr_comment(&instance())),
+            &pr_nothing_in_scope(&instance()),
             &instance()
         ));
     }
@@ -375,14 +380,7 @@ mod tests {
     fn partial_series_do_not_hide_findings_or_missing_platforms() {
         let mut result = evidence(AnalysisMode::Branch, Outcome::Findings, false);
         result.report.coverage = Coverage::Partial;
-        let body = pr_result(
-            &instance(),
-            &marker::pr_comment(&instance()),
-            &result,
-            "foo",
-            "exact tool summary",
-            Envelope::default(),
-        );
+        let body = pr_result(&instance(), &result, "foo", "exact tool summary", None);
         assert!(body.contains("Notable benchmark changes detected."));
         assert!(body.contains("Some in-scope metric series could not be judged."));
         assert!(body.contains("Missing: windows."));
@@ -405,26 +403,12 @@ mod tests {
         ];
         for (outcome, expected) in cases {
             let result = evidence(AnalysisMode::Branch, outcome, true);
-            let body = pr_result(
-                &instance(),
-                &marker::pr_comment(&instance()),
-                &result,
-                "foo",
-                "tool summary",
-                Envelope::default(),
-            );
+            let body = pr_result(&instance(), &result, "foo", "tool summary", None);
             assert!(body.contains(expected), "{body}");
             assert!(!body.contains("Missing:"));
         }
         let result = evidence(AnalysisMode::Branch, Outcome::Clean, false);
-        let body = pr_result(
-            &instance(),
-            &marker::pr_comment(&instance()),
-            &result,
-            "foo",
-            "tool summary",
-            Envelope::default(),
-        );
+        let body = pr_result(&instance(), &result, "foo", "tool summary", None);
         assert!(body.contains("completed platforms only"));
         assert!(!body.contains("across the completed collection"));
     }

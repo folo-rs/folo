@@ -5,14 +5,10 @@ on:
     types: [opened, synchronize, reopened, closed]
     branches: [main]
 
-# Retain the supported PR group's existing name so a new push/close also cancels legacy
-# runs during cutover. Forks receive isolated groups and cannot cancel a same-named branch.
+# Project/PR identity keeps unrelated PRs separate, including forks with the same branch name.
 # Closing enters the group but skips all work. Ref: design.md#concurrency.
 concurrency:
-  group: >-
-    ${{ github.event.pull_request.head.repo.full_name == github.repository
-        && format('{0}-{1}', github.workflow, github.head_ref || github.ref)
-        || format('{0}-unsupported-{1}', github.workflow, github.event.pull_request.number) }}
+  group: pr-bench-history-folo-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions: {}
@@ -22,9 +18,6 @@ env:
   # Ref: design.md#benchmark-history.
   CBH_INSTANCE: folo
   CBH_PLATFORMS: ubuntu-latest,windows-latest
-  PR_COMMENT_MARKER: "<!-- folo-bench-history-pr -->"
-  LEGACY_IN_PROGRESS_MARKER: "<!-- folo-bench-history-in-progress -->"
-  CBH_DOCS_URL: https://folo-rs.github.io/folo/cargo-bench-history/
 
 jobs:
   unsupported:
@@ -170,7 +163,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
           tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --comment-marker $env:PR_COMMENT_MARKER pr-comment-preflight --pull-request $env:PR_NUMBER --packages $env:PACKAGES --head $env:HEAD_SHA --run-id $env:GITHUB_RUN_ID --legacy-in-progress-marker $env:LEGACY_IN_PROGRESS_MARKER
+          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose pr-comment-preflight --pull-request $env:PR_NUMBER --packages $env:PACKAGES --head $env:HEAD_SHA --run-id $env:GITHUB_RUN_ID
 
   collect:
     needs: [prepare, delta]
@@ -193,10 +186,8 @@ jobs:
     steps:
       - name: Checkout automation
         uses: actions/checkout@v7
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-        with:
-          install-valgrind: "true"
+      - name: Prepare benchmark environment
+        uses: ./.github/actions/bench-history-setup
       - name: Checkout measured PR head
         uses: actions/checkout@v7
         with:
@@ -381,7 +372,7 @@ jobs:
           $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
           $report = Join-Path $env:RUNNER_TEMP 'cbh-report'
           tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --comment-marker $env:PR_COMMENT_MARKER publish-pr-comment --pull-request $env:PR_NUMBER --analyzed-sha $env:HEAD_SHA --packages $env:PACKAGES --report-file (Join-Path $report 'report.json') --body-file (Join-Path $report 'summary.md') --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --artifact-url $env:REPORT_URL --docs-url $env:CBH_DOCS_URL
+          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose publish-pr-comment --pull-request $env:PR_NUMBER --analyzed-sha $env:HEAD_SHA --packages $env:PACKAGES --report-file (Join-Path $report 'report.json') --body-file (Join-Path $report 'summary.md') --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --artifact-url $env:REPORT_URL
 
   cleanup:
     needs: [prepare, delta]
@@ -416,7 +407,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
           tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --comment-marker $env:PR_COMMENT_MARKER pr-comment-cleanup --pull-request $env:PR_NUMBER --head $env:HEAD_SHA
+          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose pr-comment-cleanup --pull-request $env:PR_NUMBER --head $env:HEAD_SHA
 
   finalize:
     needs: [prepare, delta, preflight, collect, analyze, publish]
@@ -459,4 +450,4 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
           tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose --comment-marker $env:PR_COMMENT_MARKER pr-comment-finalize --pull-request $env:PR_NUMBER --head $env:HEAD_SHA --run-id $env:GITHUB_RUN_ID --run-url $env:RUN_URL
+          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose pr-comment-finalize --pull-request $env:PR_NUMBER --head $env:HEAD_SHA --run-id $env:GITHUB_RUN_ID --run-url $env:RUN_URL

@@ -12,7 +12,6 @@ pub(crate) struct Issue {
     pub(crate) number: u64,
     pub(crate) title: String,
     pub(crate) body: String,
-    pub(crate) bot_authored: bool,
 }
 
 /// A GitHub pull-request comment.
@@ -80,12 +79,6 @@ pub(crate) trait GitHub {
         repository: &Repository,
         id: u64,
         body: &str,
-    ) -> impl Future<Output = Result<(), AppError>>;
-
-    fn delete_comment(
-        &self,
-        repository: &Repository,
-        id: u64,
     ) -> impl Future<Output = Result<(), AppError>>;
 
     fn pull_request_head(

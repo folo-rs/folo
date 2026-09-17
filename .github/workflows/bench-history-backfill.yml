@@ -88,11 +88,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup environment
-        # Backfill runs the Callgrind measurement engine, which drives Valgrind.
-        uses: ./.github/actions/setup-environment
-        with:
-          install-valgrind: "true"
+      - name: Prepare benchmark environment
+        uses: ./.github/actions/bench-history-setup
 
       # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's client id
       # and tenant - plus the ACTIONS_ID_TOKEN_* values GitHub injects because of id-token: write -
@@ -124,4 +121,8 @@ jobs:
         shell: pwsh
         env:
           BACKFILL_TO_COMMIT: ${{ inputs.to_commit }}
-        run: just gh-backfill-bench-history
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just gh-backfill-bench-history

@@ -85,11 +85,10 @@ They are stated here because they cut across every later section:
   that *can* live in a Rust binary should (§5.1), leaving the action's YAML as thin,
   near-logicless wiring. This is a testability goal first and a correctness goal second: a
   formatter that lives beside the data model it renders cannot drift from it.
-* **Standard reports by default.** Consumers should not each invent their own comment and
+* **Standard reports.** Consumers should not each invent their own comment and
   issue wording. The action posts **one standard, tested set of messages** (§5.2) so every
-  consuming repo produces recognisably the same report, with narrow, declarative override
-  slots for the few things that genuinely differ per repo, and a machine-readable escape
-  hatch for anyone who wants to compose their own.
+  consuming repo produces recognisably the same report. Reporting policy is fixed rather
+  than expanded with cosmetic overrides.
 
 Non-goals (explicitly out of scope here):
 
@@ -173,27 +172,25 @@ downloaded. Each command installs only the binaries it actually uses.
 | --- | --- | --- |
 | `binstall` | Install `cargo-binstall`, then `cargo binstall <package> --version <v> --locked` for each required binary | **Default.** Downloads the prebuilt archive from each package's GitHub Release (seconds), automatically falling back to a source build if no asset matches the runner target. Best for `cargo-bench-history`, whose Azure SDK + `mimalloc` dependencies are slow to compile. |
 | `install` | `cargo install <package> --version <v> --locked` for each required binary | Pure source build, no extra tooling. Always works once published; pays the full cold-cache compile. The escape hatch when a prebuilt asset is unavailable or unwanted. |
-| `path` | `cargo install --path <workspace>/packages/<package> --locked` for each required binary | Dogfooding (§10): build from a checkout of *this* workspace so Folo's own collection exercises `main`'s HEAD, not a release. |
-| `none` | (nothing) | The caller has already put the required binaries on `PATH` — a prior step, a devcontainer, a warmed tool cache — and the action just runs them. `tool-version` is ignored; the caller owns which builds are used. |
+| `path` | `cargo install --path <source-path>/packages/<package> --locked` for each required binary | Dogfooding (§10): one Folo source checkout supplies every required binary. |
+| `none` | (nothing) | A prior step, devcontainer or warmed tool cache supplies the required binaries on `PATH`. The action performs no installation; the caller supplies the builds corresponding to the action's tested combination. |
 
-**Which version, and why a tool release never forces an action release.** For `binstall` and
-`install`, the tool version comes from the **`tool-version`** input (§7), which defaults to a
-known-good release the action pins at release time (§8), so `@v1` is reproducible out of the
-box. A caller can pin or bump `tool-version` at any time **without waiting for a new action
-release**, and `tool-version: latest` opts into the newest published release for callers who
-prefer currency over a pin. A new tool release therefore never *requires* a new action release —
-the baked-in default advances only when we deliberately cut an action release to move the tested
-action⇄tool pairing forward. `path` builds the selected checkout rather than a released
-version, and `none` uses the binaries the caller has supplied.
+**The action version selects the binary versions.** For `binstall` and `install`, every
+binary version comes from the action release's manifest. There is no caller version
+override or independently moving latest-tool selection. Updating the tested combination is
+an action release, which may change only that manifest. Tool and action version numbers
+remain independent, and an action need not adopt every tool release.
+
+A pinned action release or commit selects an exact tested combination. The floating `v1`
+tag advances only among action releases with their own tested manifests. `path` deliberately
+builds unreleased code from the supplied Folo checkout; `none` uses caller-provisioned binaries.
 
 **`binstall` — the fast default.** `cargo-binstall` resolves the package's GitHub Release,
 verifies the `.sha256`, and unpacks the binary; if the runner's target has no published
 asset it transparently source-builds, so the mode is always correct, only sometimes slow.
 The action caches the resolved binaries with `actions/cache` keyed by `(runner.os,
-runner.arch, resolved versions)` so even a source-fallback compile is paid at most once per
-version per platform. The key uses the **resolved concrete versions**, never the literal
-input: caching under `latest` would pin the first version ever resolved and quietly serve it
-forever. `--locked` pins the published `Cargo.lock` for reproducibility.
+runner.arch, manifest versions)` so even a source-fallback compile is paid at most once per
+version per platform. `--locked` pins the published `Cargo.lock` for reproducibility.
 
 **Two runtime binaries, resolved from one manifest.** A sink-using flow needs the tool *and*
 the companion (§5.1). Each action release therefore carries a **release manifest** naming the
@@ -201,12 +198,9 @@ exact versions it was tested against — the tool, the companion, and (for the a
 only) the faker. These are separate version selections, not a promise that the binaries have
 the same package version:
 
-* The **tool** is the public dependency. The manifest supplies its default, and
-  a consumer may override it via `tool-version` or track `latest`, as above.
+* The **tool** is the public dependency, pinned to its tested version.
 * The **companion** is an action-internal implementation detail with no stable CLI, so it is
-  **pinned by the action release** and is *not* caller-overridable. Letting `tool-version`
-  drag the companion along would let a consumer pair an action with a helper that speaks a
-  different internal protocol.
+  **pinned by the action release** to the version tested with that tool.
 * The **faker** is independently pinned for the action's tests. Its version is not inferred
   from the tool or companion version.
 
@@ -224,8 +218,8 @@ the first-publication process in [`RELEASING.md`](../../../RELEASING.md).
 
 Each command installs only what it uses: `collect`, `backfill`, and `analyze-*` need the tool;
 publication and lifecycle commands need the companion. `install-method: none` therefore
-requires whichever of the two that command uses to be on `PATH` already, and `path` accepts a
-location for each.
+requires whichever of the two that command uses to be on `PATH` already. `path` accepts
+one `source-path`, the root of the Folo source checkout.
 
 **The failure-reporting path must not itself be fragile.** `alert` (§4.4) runs *because*
 something already went wrong, so it is the one command that cannot afford a flaky install: if
@@ -289,7 +283,7 @@ sink**. Publication is a separate invocation after the workflow uploads the repo
 the capability separation in §6; the analysis commands themselves never post.
 
 Inputs that do not apply to the selected command are **rejected, not ignored**: the action
-validates the combination up front (e.g. `command: collect` with `issue-title` set, or
+validates the combination up front (e.g. `command: collect` with an analysis-only `since`, or
 `command: publish-pr-comment` without a PR number) and fails with a clear error. Silently
 ignoring a misplaced input is how a caller ends up believing a sink is configured when nothing
 will post.
@@ -326,12 +320,12 @@ action*: cannot express matrix-collect + single-analyze + separate lifecycle job
      a hard-coded flag (§4.5).
    * **`--config`** is passed **only when the `config` input is set**; otherwise the tool
      discovers the repo's committed `.cargo/bench_history.toml` (§5).
-   * **`--verbose` is on by default.** The tool's verbose channel is *explanatory* — it states
+   * **`--verbose` is always enabled.** The tool's verbose channel is *explanatory* — it states
      the inputs and reasoning behind each decision rather than announcing conclusions — and a
      CI reader cannot re-run the job locally to find out why it did what it did. Paying for
      that reasoning in the job log on every run is therefore worth it: the log is the only
      forensic record a consumer has when a run measures nothing, skips a package, or picks an
-     unexpected partition. It stays an input so a consumer can turn it down.
+     unexpected partition. The predefined workflows do not expose a verbosity toggle.
 3. **Emit this leg's machine key.** After a *successful* collect, the action resolves this
    runner's real hardware fingerprint (`cargo-bench-history machine-key`) and exposes it as a
    `machine-key` **output**, so the caller can hand the exact keys measured this run to the
@@ -444,13 +438,12 @@ PR, whose points are transient.
    workflow facts, because both can coexist with any analysis verdict.
 6. **Hand reports to publication.** The workflow uploads the full Markdown + JSON reports,
    the summary, and the outcome and collection-coverage metadata as an **artifact**. A separate
-   `publish-issue` job invokes the companion when `issue-on-regression: true` and the outcome
+   `publish-issue` job invokes the companion when publication is enabled and the outcome
    is **findings**, including when platform coverage is partial. It finds the open rolling
    issue by its hidden instance/kind marker, never its title, then creates or updates the body
    with the tool-composed summary, any missing-platform qualification, and the artifact link.
    Only the publication job needs `issues: write`; analysis holds no posting rights.
-   A later fully covered clean run routes to `issue-cleanup`, which leaves the issue open
-   unless `auto-close` is enabled (§4.4).
+   A later fully covered clean run routes to `issue-cleanup`, which leaves the issue open (§4.4).
 
 **Empty-run degeneracy.** When every collect leg failed there are no successful machine-key
 artifacts to thread. The workflow skips analysis and records execution failure, not a
@@ -564,16 +557,15 @@ commands** so the caller schedules them in their own jobs at the right point:
   here: an absent comment is
   indistinguishable from a workflow that is broken, skipped, or still running, and a reader
   who expected benchmark feedback has no way to tell which. Stating the reason costs one line
-  and removes the ambiguity. (Deleting instead remains available for repos that prefer a clean
-  PR, but it is not the default.)
-* **`pr-comment-finalize`** runs *last*, gated on failure, and closes the one hole the two
+  and removes the ambiguity. Cleanup always leaves this explanatory note.
+* **`pr-comment-finalize`** runs *last* after failure or cancellation and closes the one hole the two
   above leave open. A placeholder promises results are coming; if collection, analysis or
   publication then fails, no results replace it (§4.3), so without a terminal step the
   placeholder would sit on the PR claiming work is in progress forever — the run that would
   have replaced it is gone, and only a *further push* would ever revisit it. Finalize replaces
   the placeholder with a short terminal notice pointing at the failed run. It fires only for
-  genuine failure, not cancellation: a superseded run is *expected* to leave the placeholder
-  standing, because the run that cancelled it is about to refresh it.
+  a placeholder still owned by that run and head. A superseding run's placeholder and any
+  completed report are left untouched.
 
 **Regression-issue sink (history flow).** The rolling regression issue needs the same upkeep
 as the PR comment, and for the same reason: it is a long-lived artefact that keeps asserting
@@ -593,18 +585,17 @@ and it never acknowledges being fixed, so a maintainer cannot tell "still broken
   platforms completed successfully, and an issue filed by an earlier run is still open.
   It rewrites the body to an **all-clear** state
   naming the commit that came back clean, so the issue stops asserting a regression that no
-  longer reproduces. By default it **leaves the issue open**: the tool detects that the numbers
+  longer reproduces. It **leaves the issue open**: the tool detects that the numbers
   recovered, which is not the same as the underlying problem being understood — a regression
   may have been masked, worked around, or accepted, and closing it would discard a thread a
-  human may still want. An **`auto-close`** input (default `false`) closes it for maintainers
-  who prefer the issue to track the *measurement* rather than the *investigation*.
+  human may still want. Closing a regression investigation is a maintainer decision.
   Missing platforms, unjudged series, `nothing_in_scope`, and execution failure never trigger
-  all-clear or auto-close; absence of findings alone does not establish recovery.
+  all-clear; absence of findings alone does not establish recovery.
 
 This is deliberately asymmetric with the failure alert below, and the distinction is the point:
 a **failure** is a machine condition that is definitively over when the next run goes green, so
 it auto-closes; a **regression finding** is a statement about the code that a green run does
-not by itself resolve. Same mechanism, opposite defaults, because they answer to different
+not by itself resolve. The different lifecycles answer different questions for their
 readers.
 
 **Failure-alert sink (history flow).** Separately, the *failure* of a run — distinct from a
@@ -824,31 +815,47 @@ Four platform constraints shape this split, and none is worked around:
   inside), not by expecting the consumer to run a login step first: a caller job that
   delegates to a reusable workflow cannot contain steps at all.
 
-**The consequence worth stating plainly: the reusable workflows serve repos that need no
-custom preparation to build their benchmarks.** Because a calling job cannot carry steps, a
-repo that must install system packages, start a service, run a code generator, or invoke its
-own setup action before `cargo bench` will work cannot express that through the `uses:` layer.
-Two mechanisms cover that, and which one is right depends on how far the repo deviates:
+**Custom benchmark setup uses one fixed local convention.** A calling job cannot add steps
+around a reusable-workflow call, so a repository can supply:
 
-* A **`setup-action` input** naming a repository-local action (path or `owner/repo@ref`) that
-  each job runs immediately after checkout, before touching the tool. It is one hook, run at
-  one point, which keeps the graph fixed while letting the environment vary — enough for the
-  common "we have a `setup-environment` action" case, and it is what Folo's own migration
-  (§10) needs, since its jobs depend on exactly such an action.
-* **Dropping to the composite layer** for anything more structural. A repo needing steps at
-  several points in the graph is telling us its graph differs, which is what the escape hatch
-  is for.
+```text
+.github/actions/bench-history-setup/action.yml
+```
 
-Claiming otherwise would overstate the reach of the default path: the collapse to a handful of
-lines is real for repos whose benchmarks build from a plain checkout plus a toolchain, and the
-`setup-action` hook stretches that to most of the rest, but not to every repository.
+Collection jobs invoke this action after checkout/bootstrap and before benchmarking; backfill
+uses the same hook before its collection work. If the file is absent, no custom setup runs.
+The hook belongs to the repository/configuration checkout. It is not invoked by GitHub
+publication jobs, and the shared workflow's own tool installation remains its responsibility.
+
+There is no setup path/ref input, no hook-input map and no additional hook positions. The
+repository owns any parameters within its local action. Folo reuses its normal setup through
+a small wrapper:
+
+```yaml
+name: Benchmark setup
+description: Prepare Folo benchmark prerequisites
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-environment
+      with:
+        install-valgrind: "true"
+```
+
+Other repositories can put native dependency installation or code-generation steps in the
+same conventional file. Static external `uses:` references inside it are ordinary GitHub
+Actions composition; the benchmark action does not implement a dynamic action-reference
+loader. Setup should prepare the environment without changing measured source identity.
+
+The convention costs a small wrapper when an existing setup action lives elsewhere, in
+exchange for one predictable location and execution point. Repositories needing a different
+job graph or setup at several stages use the lower composite-action layer.
 
 **`pr.yml` handles the PR's whole life, including its close.** A benchmark run takes hours, so
 a PR closed or merged mid-run leaves one in flight producing a result nobody will read — a real
 cost when each leg occupies a runner. GitHub cancels a superseded run when a *new* run joins the
 same concurrency group, so reclaiming that time needs some workflow to start on the close event.
-The obvious shape is a second, tiny workflow that does nothing but join the group; the monorepo
-has exactly that today.
+One possible shape is a second, tiny workflow that does nothing but join the group.
 
 The action does not export that second file. `pr.yml` accepts the `closed` event itself and
 skips every job when it fires: the workflow still starts, still joins the concurrency group, and
@@ -896,6 +903,12 @@ This section settles two related questions: what a consumer must *supply* to the
 where the action's behaviour actually *lives*. Configuration comes first, because it is the
 smaller half — the interesting decision is the second one.
 
+**Every public input needs a concrete purpose.** Inputs express repository configuration,
+measurement choices or required workflow data. A core CLI option does not automatically
+become an action or reusable-workflow option. Derive values from configuration and events
+where possible, use fixed reporting policy, and use the lower action layer for genuinely
+different job graphs rather than growing speculative controls in the standard workflows.
+
 **Configuration is a committed file, not a scatter of inputs.** The tool already reads a
 committed `.cargo/bench_history.toml` that describes *where*
 history lives: `[project] id` (the partition key) and the `[storage.*]` backend. A generic
@@ -920,7 +933,7 @@ query filter, not a writing-side override.
 The division is clean: the **config file says where history lives; the action inputs say what
 this run does**.
 
-**One repository may run several instances, so every derived identity is namespaced.** A
+**One repository may maintain several projects, so every derived identity is namespaced.** A
 monorepo can reasonably keep more than one independent history — separate components, teams,
 or hardware targets, each with its own `[project] id`. Nothing in the analysis prevents that,
 but the *action* would collide with itself, because several of the identities it derives
@@ -934,16 +947,15 @@ default to a single constant:
 | Binary/history cache key | One instance's cache is served to the other. |
 | Concurrency group | One instance cancels the other's in-flight run. |
 
-The fix is a naming rule, not new machinery: a single **`instance`** input, defaulting to the
-`[project] id` the config already carries, from which *all* of the above are derived. A repo
-running one instance never sets it and sees no difference; a repo running two gets two
-independent sets of comments, issues, artifacts, caches, and concurrency groups for free, and
-the reusable workflows (§4.7) accept it so two `uses:` blocks can coexist.
+All identities derive from the configured **project ID**, using the tool's project-ID
+resolution. There is no separate instance or marker override. Distinct configured projects
+therefore have distinct comments, issues, artifacts, caches and concurrency groups. The
+resolved namespace may be passed internally between workflow stages; it is data, not an
+additional consumer setting.
 
-This is worth settling now rather than later: the comment marker and the issue identity *are*
-the dedup keys. Introducing a namespace after consumers are live would change those keys under
-them, silently abandoning the rolling comment and rolling issue each repo already has and
-starting fresh ones beside the originals.
+Namespacing is part of the identity contract: the comment marker and issue identity are the
+deduplication keys. Keeping them tied to the project avoids cross-project interference
+without requiring a second identity setting.
 
 ### 5.1 Where the logic lives — Rust binaries, not shell
 
@@ -1047,7 +1059,7 @@ design previously relied on:
   first to confirm whether the marked resource exists rather than posting a duplicate.
   This is why identity is a
   hidden marker rather than a displayed title: a rolling issue found by title alone would be
-  abandoned the moment a consumer edited `issue-title`, and could hijack an unrelated issue
+  abandoned the moment someone edited its displayed title, and could hijack an unrelated issue
   that happened to match.
 
   The ambiguous-create case is not hypothetical, and the storage backend already solves its
@@ -1087,7 +1099,7 @@ The issue marker carries both the `instance` and an **issue kind** (`regression`
 distinguish it. The same marker is the identity a create reconciles against when its outcome is
 uncertain (above), so one mechanism serves lookup, deduplication and retry safety.
 
-### 5.2 Standard reports, with narrow overrides
+### 5.2 Standard reports
 
 Once the message catalogue lives in one binary (§5.1), standardisation is nearly free: there
 is exactly
@@ -1107,33 +1119,17 @@ selected by the named `outcome` (§4.2) and separately qualified by platform cov
 an unjudged-series shortfall nor a missing platform becomes an unqualified all-clear.
 Findings remain findings even when either coverage dimension is incomplete.
 
-Standardisation is the goal, so the override surface is deliberately **narrow and
-declarative** rather than a general templating system. Only the things that genuinely differ
-per repo are adjustable, and each is a value, not a format:
+Titles, advisory wording, documentation links and identity markers are part of the standard
+catalogue. The action has no cosmetic overrides, custom templates or legacy-output adoption.
+The documentation link points to the tool's public book; the report's artifact link is
+run-specific evidence, not a branding option.
 
-| Slot | Why it varies |
-| --- | --- |
-| Issue title | Appears in the issue list, so it should read the way the repo's other issues do. |
-| A short intro line | Room to say "this is advisory" or point at team-specific context. |
-| A docs link | Consumers want to send readers to *their* runbook, not ours. |
-| Comment marker | Lets a repo run two independent instances without them fighting. |
-
-Beyond that, a consumer turns the built-in sink off (`sink: none`) and builds their own report
-from the structured outputs (§7). This is a **deliberate cliff rather than a gradient**: either
-the standard report with a few values filled in, or full ownership. What it is *not* is a
-free lunch — the consumer is then coupled to the selected tool version's JSON report, and a
-custom sink inherits only the results message, leaving the lifecycle states (§4.4) to be
-reproduced or forgone.
-
-**Full templating is a deferred stretch goal, not a first release.** A user-supplied template
-file (rendered by an engine such as `minijinja`) sits in the gap the cliff deliberately leaves
-open, and it is the more dangerous position of the two. Opting out via `sink: none` couples a
-consumer to the selected tool version's report they chose to build on, and their reporting breaks in their
-own job. A template instead binds arbitrary internal fields into **our** sink, so a field
-rename breaks posting at run time, in CI, on someone else's repo — and every field a template
-may reference becomes de facto public, which is precisely the freedom §5.1 relies on to keep
-prose and data model moving together. The narrow slots plus the opt-out cover the demonstrated
-needs; templating is revisited only if a concrete case appears that neither serves.
+Reusable workflows have one **`publish`** Boolean, defaulting to `true`. Setting it to `false`
+suppresses all GitHub publication and lifecycle writes while still collecting, analyzing and
+producing artifacts. This supports caller canaries without live writes; it is not a separate
+custom-rendering system and does not promise reduced workflow permission declarations.
+There is no independent regression-issue switch. Hand-assembled workflows can omit the
+publication and lifecycle commands directly.
 
 ## 6. Storage backend & auth
 
@@ -1184,7 +1180,7 @@ README links to. A consumer points the action at whatever account/identity they 
 
 **Caller permissions** (documented in the README): `contents: read` (checkout);
 `actions: read` (cross-attempt artifact download, §4.6); `id-token: write` (Entra OIDC
-self-minting); `issues: write` (history flow, when `issue-on-regression: true`, and the
+self-minting); `issues: write` (history publication and the
 `alert`/`resolve-alert` failure lifecycle); `pull-requests: write` (branch flow's comment and
 its lifecycle). These are listed **per command**, not as one union: a job should hold only
 what the command it runs actually needs.
@@ -1218,14 +1214,10 @@ sees only the inputs their flow actually varies.
 `pr-comment-finalize` | `alert` | `resolve-alert`, required);
 `install-method` (`binstall` | `install` | `path` | `none`, default `binstall`; applies to
 every binary the command needs, §3);
-`tool-version` (package version to install; defaults to the version named in the action
-release's manifest; `latest` opts into the newest published release; ignored for
-`install-method: none`; the companion is pinned by the release and is not overridable, §3);
-`tool-path` / `companion-path` (for `install-method: path`); `config` (path to a
+`source-path` (the Folo workspace root for `install-method: path`); `config` (path to a
 `bench_history.toml`; default: the tool's own `.cargo/bench_history.toml` discovery);
-`instance` (namespace for every derived identity — comment marker, failure-issue identity,
-artifact names, cache keys, concurrency group; default: the config's `[project] id`, §5);
-`local-path` (→ `--local=<path>`); `verbose` (default `true`, §4.1).
+`local-path` (→ `--local=<path>`). The project namespace is resolved from configuration,
+binary versions come from the release manifest, and verbose diagnostics are always enabled.
 
 **Cargo build inputs (`collect` / `backfill`):** `all-features` (default `true`, matching the
 flows' need to reach benchmark targets gated behind `required-features`),
@@ -1253,36 +1245,32 @@ pass the PR's actual base explicitly when it differs from that default);
 unconditionally in branch mode, so there is no direction input.
 
 **Publication inputs:** the rendered summary, analyzed commit, artifact URL, named outcome,
-and intended/contributing platforms. `publish-issue` takes `issue-title`; the history workflow
-gates it with `issue-on-regression` (default `false`). `publish-pr-comment` additionally takes
-`pr-number`, `packages`, and the comment identity. These commands hold no storage inputs.
+and intended/contributing platforms. `publish-pr-comment` additionally takes `pr-number`
+and `packages`. Titles and markers are standardized; these commands hold no storage inputs.
 The companion's `--body-file` supplies the rendered summary and `--report-file` the same
 analysis pass's JSON metadata. `--analyzed-sha` must match the report's clean commit.
 `--expected-platforms` and `--completed-platforms` carry nonempty CSV matrix identifiers;
-the latter lists only successful legs. `--comment-marker` optionally selects an existing
-PR comment identity. The predefined workflows assemble these inputs from the artifact handoff.
+the latter lists only successful legs. The predefined workflows assemble these inputs from
+the artifact handoff and the project identity.
 
 **Lifecycle-command inputs:** `pr-comment-preflight` / `pr-comment-cleanup` /
-`pr-comment-finalize` take `pr-number` and `comment-marker`, plus (preflight) the `packages`
+`pr-comment-finalize` take `pr-number`, plus (preflight) the `packages`
 scope to disclose and (finalize) the failed run's URL. PR commands use the frozen `head`;
 preflight and finalize also share `run-id` to bind placeholder ownership. `issue-preflight`
-identifies the regression issue from `instance`; `issue-cleanup` consumes the same JSON and
-platform evidence, checked against `clean-commit`, and additionally takes **`auto-close`**
-(default `false`, §4.4); `alert` takes the failure issue's displayed title; and
-`resolve-alert` identifies that issue from `instance`.
+identifies the regression issue from the resolved project namespace; `issue-cleanup`
+consumes the same JSON and platform evidence, checked against `clean-commit`, and leaves
+the issue open. `alert` and `resolve-alert` use the project's standard failure-issue identity.
+Empty-scope PR cleanup always leaves its explanatory note.
 
 **`backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
 `best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
 or `overwrite`; `error` is invalid here, §4.5). The reusable workflow resolves its rolling
 window to those refs.
 
-**Report-wording inputs (all commands with a sink):** the narrow override slots of §5.2 —
-`issue-title`, an intro line, a docs link, and `comment-marker`. There is
-deliberately no template input and no label input (§5.1). A `sink` input (`standard` (default)
-| `none`) turns the
-built-in posting off at the reusable-workflow layer for a consumer who wants to publish their
-own report from the outputs below. The composite analyze commands always compute and emit
-without posting; a hand-assembled caller simply omits publication and lifecycle commands.
+**Reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
+GitHub writes as one policy (§5.2). It is not an input to the individual composite commands:
+analysis commands never post, while publication/lifecycle commands perform their named role.
+There are no report-wording, marker, template or label inputs.
 
 **Outputs (from `analyze-history` / `analyze-pr`):** `outcome` (`findings` | `clean` |
 `insufficient_baseline` | `nothing_in_scope` | `partial` — the successful analysis verdict,
@@ -1293,27 +1281,21 @@ as `outcome == findings`);
 `regressions` (count); `report-markdown` (full report path); `report-json`; `report-summary`
 (condensed top-findings Markdown). Paths are local to the analysis job. Reusable workflows
 re-export verdict/count/coverage values and the report artifact identity/link, not paths
-that a downstream job cannot access. Together with `sink: none` these are the escape hatch
-§5.2 points at.
+that a downstream job cannot access.
 
-Two honest caveats attach to that hatch. The current JSON report has **no schema-version
-field**, and the binaries expose no report-protocol negotiation. A consumer building on it
-must test against the selected tool version and accept that findings vocabulary evolves;
-the action must not invent a `report-schema` output. And a custom sink owns *only* the results
-report: the lifecycle
-messages (§4.4) have no analysis behind them, so a consumer choosing `sink: none` either
-forgoes the placeholder/staleness/failure states or reproduces them.
+The tool's JSON report has **no schema-version field**, and the binaries expose no
+report-protocol negotiation. Consumers independently processing those artifacts must pin and
+test their tool/action selection; the action does not add a `report-schema` or templating API.
 
 ## 8. Versioning & Marketplace
 
 * **Semver tags** `vX.Y.Z` on the action repo, plus a **floating major** `v1` ref
   that is force-moved to each new `v1.*` release (the standard `actions/*` major-tag dance,
   re-pointed by the action repo's `release.yml`).
-* **Action version is independent of tool version.** `tool-version` defaults to a
-  known-good crates.io release baked into each action release, so `@v1` installs a
-  pinned, tested tool by default, while a caller can override it (or set `latest`) without
-  waiting for a new action release. A new *tool* release therefore never forces a new *action*
-  release; the baked-in default advances only when we deliberately cut one (§8.1).
+* **An action release selects an exact tested binary combination.** Tool and action version
+  numbers are independent, but consumers do not override the manifest's binary versions.
+  Adopting another tool version is an action release; not every tool release needs to be
+  adopted (§8.1).
 * **README is a quick start; the book is the reference.** Two documents describing the same
   action drift, and the one that drifts is always the one a maintainer forgets — so they get
   clearly different jobs rather than overlapping scopes. The **README** answers "what is this
@@ -1333,7 +1315,7 @@ forgoes the placeholder/staleness/failure states or reproduces them.
     artifact), then an `analyze-history` job (`needs: collect`, `fetch-depth: 0`, downloading
     the key artifacts into the `machine-keys` dir **with an explicit `github-token`** so
     partial re-runs resolve, §4.6, an `actions/cache` step feeding `cache`), then the workflow's
-    report upload and a separate `publish-issue` job gated by `issue-on-regression: true`,
+    report upload and a separate `publish-issue` job when publication is enabled,
     plus the `issue-preflight` / `issue-cleanup` upkeep and the
     `alert` / `resolve-alert` failure lifecycle.
   * A **per-PR branch** workflow — a delta preflight computing the touched benchmarkable
@@ -1385,7 +1367,7 @@ does the parts that must happen server-side:
 
 **The maintainer's responsibility** is therefore deliberately small:
 
-* decide the semver bump and confirm `tool-version` points at a known-good package release;
+* decide the semver bump and confirm the manifest names a tested, installable binary combination;
 * run `just release X.Y.Z`;
 * **first release only:** complete the one-time Marketplace listing form in the GitHub UI
   (accept the agreement, choose a category, confirm the root `action.yml` carries
@@ -1394,7 +1376,7 @@ does the parts that must happen server-side:
 There is no crates.io or binary publishing in this flow — the *tool* is released from the
 monorepo's automated pipeline
 ([`../../../docs/release-automation.md`](../../../docs/release-automation.md)); this action
-merely pins a `tool-version` to install at runtime.
+pins the exact binary versions in its release manifest.
 
 ## 9. Testing the action
 
@@ -1454,19 +1436,17 @@ so both the install branching and the actual installs are exercised, not just mo
    each other so a new composite input cannot silently go unexposed by the workflows.
 
 The caller canaries run without publishing to GitHub
-(`sink: none` for reusable-workflow calls); composed-body checks use the fake transport.
+(`publish: false` for reusable-workflow calls); composed-body checks use the fake transport.
 Live posting and Azure authorization are covered by their dedicated validation layers.
 
 **Layer 3 — trend-dependent, real-GitHub-write validation.** The remaining gap is the behaviour
 that needs (a) a benchmark history long enough to make analysis "notable" and (b) the action
 actually writing to GitHub. The tool already ships the two enablers this needs — the hidden
 `cargo-bench-history import` command and the published `cargo-bench-history-faker` engine
-(§11) — so none of the options below requires new tooling, and none requires a credential we
-would have to create or maintain. Three options, roughly increasing in
-fidelity and cost. The design adopts **A + B**; C is a cheaper fallback if the real-repository
-runs prove impractical.
+(§11). The same synthetic history supports real-repository checks and fast fake-transport
+checks without a separate checked-in store or a maintained test credential.
 
-* **Option A — synthetic history driven against a real repository (highest fidelity).**
+* **Synthetic history against a real repository.**
   `cargo-bench-history-faker`
   writes curated per-engine output into a `target/`-shaped tree (inventing nothing — every value
   comes from its flags), and `cargo bench-history import --target-dir <tree>` stores that output
@@ -1490,21 +1470,15 @@ runs prove impractical.
   refuse to introduce. Testing in-place removes the requirement rather than managing it.
   Because these runs mutate real issues and PRs (in a repo whose purpose is to host them), they
   are scheduled and pre-release rather than on every push, and their artefacts are namespaced
-  by `instance` (§5) so they cannot collide with anything real.
-* **Option B — compose-only assertions against a faked transport (fast, no writes).** Reuse the
-  Option A
-  faker→`import` history into local storage, run `analyze-history` / `analyze-pr`, and assert the
+  by their configured test project ID (§5) so they cannot collide with anything real.
+* **Compose-only assertions against a faked transport.** Reuse the same
+  faker→`import` history in local storage, run `analyze-history` / `analyze-pr`, and assert the
   *exact* issue/comment body the action *would* post against a **faked GitHub transport** — no
   live posting.
   This catches body/marker/banner regressions with a realistic multi-commit trend without
   touching a real issue or PR, so it can run on every push. (It is
   Layer 1's body assertions, but fed
   a real long history instead of a one-off fixture.)
-* **Option C — checked-in storage fixtures (cheapest, least fresh).** Commit a small
-  pre-built store (a handful of result sets across synthetic commits) and replay it through
-  `analyze-history` / `analyze-pr`, asserting `notable` and the reports. It skips faker/`import`
-  entirely, but the fixtures are opaque and must be regenerated by hand when the storage format
-  changes — so it is only a stopgap where the faker→`import` path is unavailable.
 
 **Dogfooding is the fourth layer, and in practice the most valuable one.** Folo runs these
 flows on every push and every PR against a real repository with a real multi-year history
@@ -1513,7 +1487,7 @@ paths continuously, on data no fixture can imitate, and it does so with no extra
 because it is the repository's own `GITHUB_TOKEN` doing the writing. Its limitation is that it
 only ever tests **one** configuration — the one Folo happens to use — so it can confirm the
 common path works while saying nothing about the rest of the input surface. That is exactly
-the gap Options A and B fill: they cover the configurations nobody's production repo happens
+the gap the synthetic-history checks fill: they cover the configurations no production repo happens
 to have, and dogfooding covers the realism no test fixture can.
 
 The Azure auth branches stay covered by the monorepo's Azure-backend test jobs (`DESIGN.md` §6),
@@ -1542,9 +1516,9 @@ job, so the workspace it builds from is the caller's own checkout — nothing ne
 between the two repositories, and the action being hosted elsewhere costs nothing here. Two
 real constraints do apply, and both are properties of the input rather than obstacles:
 
-* **The path names the package directory**, because no layout is universal. Folo keeps packages
-  under `packages/<name>`, which is a convention, not a rule, so the input must not assume it.
-* **All binaries come from the same checkout, or none do.** A HEAD-built tool paired with a
+* **One `source-path` names the Folo workspace checkout.** The action knows the package
+  layout of the source it owns; it does not ask callers for separate binary package paths.
+* **All binaries come from that checkout.** A HEAD-built tool paired with a
   released companion is a version mix nobody tested; since `path` exists precisely to exercise
   unreleased code, it applies to every binary the command needs (§3).
 
@@ -1574,8 +1548,7 @@ The tool, companion and workflow layer have separate responsibilities:
   become fresh placeholders when work resumes. Publication checks live-head freshness after
   comment lookup and preserves a newer current-head report. History publication and cleanup
   likewise preserve newer issue content when commit ordering cannot be established.
-  `--comment-marker` supports an existing PR comment's identity without changing the
-  instance-scoped lifecycle markers.
+  Markers are derived from the project namespace, with no custom-marker or legacy-adoption path.
 * **The companion is published and versioned independently.** New crates follow the
   first-publication process in [`RELEASING.md`](../../../RELEASING.md), with Trusted Publishing
   for subsequent releases. Version groups come from exact dependency edges, not an explicit metadata group:
@@ -1673,8 +1646,9 @@ synthetic report. Only selected successful platform data enters the local analys
 The companion projects validated reports into workflow outputs for publication and cleanup.
 History all-clear is permitted only by the complete clean-evidence projection. Publication
 always receives the JSON, summary and exact platform set from that analysis, and reports
-remain downloadable even when they contain no findings. Migration from legacy sinks uses
-explicit issue-title and placeholder-marker adoption; normal identity uses instance markers.
+remain downloadable even when they contain no findings. The companion selects only its
+standard project-derived markers. Outputs using older identity formats are not adopted,
+rewritten or removed.
 
 Azure activation is staged: provision the reader first, record its non-secret client ID,
 then activate the reader-only analysis jobs and local PR collection. Retire the writer's PR

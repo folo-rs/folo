@@ -138,7 +138,6 @@ impl GitHub for FakeGitHub {
             number: self.next_id(),
             title: _title.to_owned(),
             body: body.to_owned(),
-            bot_authored: true,
         };
         self.issues.borrow_mut().insert(issue.number, issue.clone());
         if self.fail_issue_create_after_commit.replace(false) {
@@ -219,15 +218,6 @@ impl GitHub for FakeGitHub {
         if let Some((_, comment)) = self.comments.borrow_mut().get_mut(&id) {
             comment.body = body.to_owned();
         }
-        ready(Ok(()))
-    }
-
-    fn delete_comment(
-        &self,
-        _repository: &Repository,
-        id: u64,
-    ) -> impl Future<Output = Result<(), AppError>> {
-        self.comments.borrow_mut().remove(&id);
         ready(Ok(()))
     }
 

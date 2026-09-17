@@ -13,7 +13,6 @@ mod errors;
 mod github;
 mod marker;
 mod message;
-mod migration;
 mod model;
 mod operations;
 mod result;
