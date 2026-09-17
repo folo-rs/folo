@@ -84,6 +84,27 @@ manifest on a sensitive filesystem. Git lookups continue to use recorded spellin
 
 ### Test boundaries
 
+Captured-input decisions use acquired metadata and a read-only per-directory case
+probe. Unit tests supply regular-file, missing-file and error observations, mixed
+directory case rules, and exact candidate/replacement bytes. They verify the
+persisted fingerprint framing, Unix execute-bit interpretation, alias collapse
+without new input admission, and retained verification ordering independently of
+the host filesystem. Windows path-prefix conversion and Unix mode interpretation
+are compiled for all test hosts because those transformations are pure.
+
+Offline resolver invocation and changed-artifact selection have in-process cores
+that preserve arguments, working directories, bytes and errors. Preparation and
+preview retain integration-owned Git/Cargo workspace orchestration and completion
+output; their decision helpers, changed-write selection and convergence loop remain
+mutation targets. Read-only verification separately tests live-input validation
+before retained-candidate validation. Only the corresponding real acquisition and
+process adapters are excluded from mutation discovery.
+
+Writable fixtures derive their paths and recursive cleanup roots from their own
+temporary-directory owners. Production canonicalization and emitted artifact
+paths are observations to assert, never authority for fixture writes or cleanup.
+This remains true when an assertion unwinds or a path helper is mutated.
+
 Pure decision and validation tests own the combinations of versions, dependency
 forms, captured-state differences, and artifact selections. They use small inputs
 without acquiring repository state or resolving a Cargo workspace. Orchestration

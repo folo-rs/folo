@@ -1,8 +1,13 @@
 // Captured repository inputs and the exact resolved manifest/lockfile writes.
 
+#![allow(
+    clippy::self_named_module_files,
+    reason = "The subject module owns captured state; child modules own path logic and test matrices."
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
@@ -11,13 +16,23 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 use toml_edit::{Item, TableLike};
 
+use self::paths::PathIdentity;
 use crate::command::{hash_bytes, run_capture};
-use crate::git::os_path;
 use crate::manifest::{PathCase, for_each_dependency_table, parse_document};
 use crate::metadata::load_tracked_work_tree;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
 use crate::verbose::Verbose;
 use crate::{ParsePlanError, ReadFileError, UnsupportedPlanSchemaError, WriteFileError};
+
+mod paths;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod fingerprint_tests;
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod candidate_tests;
 
 /// Repository facts frozen before any resolver-driven release decisions.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -96,23 +111,52 @@ impl Inputs {
     }
 
     /// Verifies the same captured input set in a relocated final workspace.
+    // Connects captured-input acquisition to the unit-tested verification protocol.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn verify_candidate(
         &self,
         manifest: &Path,
         final_digest: &str,
     ) -> Result<(), AppError> {
-        let current = Self::capture(manifest, Some(&self.base)).map_err(StaleInputs::caused_by)?;
-        self.compare_candidate(&current, final_digest)
+        self.verify_candidate_with(manifest, final_digest, Self::capture, |current, digest| {
+            self.compare_candidate(current, digest)
+        })
+    }
+
+    fn verify_candidate_with(
+        &self,
+        manifest: &Path,
+        final_digest: &str,
+        capture: impl FnOnce(&Path, Option<&str>) -> Result<Self, AppError>,
+        compare: impl FnOnce(&Self, &str) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
+        let current = capture(manifest, Some(&self.base)).map_err(StaleInputs::caused_by)?;
+        compare(&current, final_digest)
     }
 
     fn compare_candidate(&self, current: &Self, final_digest: &str) -> Result<(), AppError> {
+        self.compare_candidate_with(
+            current,
+            final_digest,
+            &PathIdentity::new(&current.root, &PathCase::probe),
+            || fingerprint(&current.root, &self.paths, &BTreeMap::new()),
+        )
+    }
+
+    fn compare_candidate_with(
+        &self,
+        current: &Self,
+        final_digest: &str,
+        identity: &PathIdentity<'_>,
+        fingerprint: impl FnOnce() -> Result<String, AppError>,
+    ) -> Result<(), AppError> {
         if current.head != self.head || current.base != self.base || current.index != self.index {
             return Err(StaleInputs::new().into());
         }
         if current.manifest != self.manifest || current.paths != self.paths {
-            if !same_input_path(&current.root, &self.manifest, &current.manifest)
-                || !same_captured_paths(&current.root, &self.paths, &current.paths)
-                || fingerprint(&current.root, &self.paths, &BTreeMap::new())? != final_digest
+            if !identity.same(&self.manifest, &current.manifest)
+                || !identity.same_set(&self.paths, &current.paths)
+                || fingerprint()? != final_digest
             {
                 return Err(StaleInputs::new().into());
             }
@@ -153,11 +197,12 @@ impl Inputs {
     }
 
     pub(crate) fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
+        let identity = PathIdentity::new(&self.root, &PathCase::probe);
         let mut seen = BTreeSet::new();
         for file in files {
-            if !artifact_path_is_supported(&self.root, &file.path)
-                || !contains_input_path(&self.root, &self.paths, &file.path)
-                || contains_input_path(&self.root, &seen, &file.path)
+            if !identity.supports_artifact(&file.path)
+                || !identity.contains(&self.paths, &file.path)
+                || identity.contains(&seen, &file.path)
             {
                 return Err(ResolutionRequired::new().into());
             }
@@ -265,10 +310,9 @@ impl ResolvedState {
         if *versions != self.versions {
             return Err(ResolutionRequired::new().into());
         }
+        let identity = PathIdentity::new(self.inputs.root(), &PathCase::probe);
         for file in &self.files {
-            if !artifact_path_is_supported(self.inputs.root(), &file.path)
-                || !contains_input_path(self.inputs.root(), allowed, &file.path)
-            {
+            if !identity.supports_artifact(&file.path) || !identity.contains(allowed, &file.path) {
                 return Err(ResolutionRequired::new().into());
             }
         }
@@ -294,20 +338,38 @@ struct ArtifactSchema {
     schema_version: u32,
 }
 
+// Filesystem acquisition and verification adapters are covered by the retained-workspace
+// integration tests; the command's ordering, errors and output are tested in process below.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_verify_preview(
     plan_path: &Path,
     manifest: &Path,
     verbose: Verbose,
 ) -> Result<String, AppError> {
     let plan: PlanFile = read_json(plan_path)?;
-    let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
-    _ = apply_resolved(
+    verify_preview(
         &plan,
-        &state.inputs.root.join(&state.inputs.manifest),
-        true,
-        verbose,
-    )?;
-    state.verify_candidate(manifest)?;
+        |state| {
+            apply_resolved(
+                &plan,
+                &state.inputs.root.join(&state.inputs.manifest),
+                true,
+                verbose,
+            )
+            .map(|_| ())
+        },
+        |state| state.verify_candidate(manifest),
+    )
+}
+
+fn verify_preview(
+    plan: &PlanFile,
+    validate_live: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
+    verify_candidate: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
+) -> Result<String, AppError> {
+    let state = plan.resolved.as_ref().ok_or_else(ResolutionRequired::new)?;
+    validate_live(state)?;
+    verify_candidate(state)?;
     Ok("Compatibility workspace matches the captured source, versions, and lockfile.".to_owned())
 }
 
@@ -409,7 +471,9 @@ pub(crate) fn canonical(path: &Path) -> Result<PathBuf, AppError> {
     Ok(canonical)
 }
 
-#[cfg(windows)]
+// String conversion is platform-independent; compiling it on every test host avoids
+// uncompiled Windows-only mutants without making a filesystem case-sensitivity assumption.
+#[cfg(any(windows, test))]
 fn ordinary_windows_path(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\UNC\") {
@@ -442,36 +506,82 @@ fn collect_sources(
     Ok(())
 }
 
+// Real metadata, byte reads and Git hashing are integration boundaries. The encoder below
+// owns missing/error discrimination, file admission, replacement precedence and byte framing.
+#[cfg_attr(test, mutants::skip)]
 fn fingerprint(
     root: &Path,
     paths: &BTreeSet<PathBuf>,
     replacements: &BTreeMap<PathBuf, Vec<u8>>,
 ) -> Result<String, AppError> {
+    let identity = PathIdentity::new(root, &PathCase::probe);
+    let bytes = fingerprint_bytes(
+        root,
+        paths,
+        replacements,
+        &identity,
+        |path| {
+            fs::symlink_metadata(path).map(|metadata| InputMetadata {
+                regular: metadata.is_file(),
+                symlink: metadata.file_type().is_symlink(),
+                #[cfg(unix)]
+                executable: executable_mode(metadata.permissions().mode()),
+            })
+        },
+        |path| fs::read(path),
+    )?;
+    hash_bytes(&bytes, root)
+}
+
+/// Filesystem observations needed to admit and encode one captured input.
+struct InputMetadata {
+    regular: bool,
+    symlink: bool,
+    #[cfg(unix)]
+    executable: bool,
+}
+
+// The bit interpretation is portable even though only Unix metadata supplies it.
+#[cfg(any(unix, test))]
+fn executable_mode(mode: u32) -> bool {
+    // Git records whether any execute bit is set, not the other permission bits.
+    mode & 0o111 != 0
+}
+
+fn fingerprint_bytes(
+    root: &Path,
+    paths: &BTreeSet<PathBuf>,
+    replacements: &BTreeMap<PathBuf, Vec<u8>>,
+    identity: &PathIdentity<'_>,
+    mut metadata: impl FnMut(&Path) -> io::Result<InputMetadata>,
+    mut read: impl FnMut(&Path) -> io::Result<Vec<u8>>,
+) -> Result<Vec<u8>, AppError> {
     let mut bytes = Vec::new();
     for relative in paths {
         let path = root.join(relative);
         let name = relative.to_string_lossy();
         append_field(&mut bytes, name.as_bytes());
-        let metadata = match fs::symlink_metadata(&path) {
+        let metadata = match metadata(&path) {
             Ok(metadata) => Some(metadata),
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(error) => return Err(ReadFileError::caused_by(&path, error).into()),
         };
         if metadata
             .as_ref()
-            .is_some_and(|metadata| !metadata.is_file() || metadata.file_type().is_symlink())
+            .is_some_and(|metadata| !metadata.regular || metadata.symlink)
         {
             return Err(UnsupportedInput::new(&path).into());
         }
         #[cfg(unix)]
-        bytes.push(u8::from(metadata.as_ref().is_some_and(|metadata| {
-            // Git's executable-file mode records whether any execute bit is present.
-            metadata.permissions().mode() & 0o111 != 0
-        })));
-        let contents = if let Some(replacement) = replacement_for(root, relative, replacements) {
+        bytes.push(u8::from(
+            metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.executable),
+        ));
+        let contents = if let Some(replacement) = identity.replacement(relative, replacements) {
             Some(replacement.to_owned())
         } else if metadata.is_some() {
-            Some(fs::read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?)
+            Some(read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?)
         } else {
             None
         };
@@ -480,101 +590,7 @@ fn fingerprint(
             append_field(&mut bytes, &contents);
         }
     }
-    hash_bytes(&bytes, root)
-}
-
-fn artifact_path_is_supported(root: &Path, path: &Path) -> bool {
-    if path
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return false;
-    }
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    if matches!(name, "Cargo.toml" | "Cargo.lock") {
-        return true;
-    }
-    if !PathCase::Insensitive.same_path(name, "Cargo.toml")
-        && !PathCase::Insensitive.same_path(name, "Cargo.lock")
-    {
-        return false;
-    }
-    let path = root.join(path);
-    let parent = path
-        .parent()
-        .expect("an artifact filename has a parent under its root");
-    let case = PathCase::probe(parent);
-    case.same_path(name, "Cargo.toml") || case.same_path(name, "Cargo.lock")
-}
-
-fn contains_input_path(root: &Path, paths: &BTreeSet<PathBuf>, requested: &Path) -> bool {
-    paths.contains(requested)
-        || paths
-            .iter()
-            .any(|path| same_input_path(root, path, requested))
-}
-
-/// Each differing component must alias under its actual parent's case rules.
-///
-/// Canonical path strings need not recover recorded case on an insensitive filesystem.
-/// Per-directory probes preserve distinct inputs even when sensitivity varies inside a tree.
-fn same_input_path(root: &Path, left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
-    if !PathCase::Insensitive.same_path(&os_path(left), &os_path(right)) {
-        return false;
-    }
-    let mut parent = root.to_path_buf();
-    for (left, right) in left.components().zip(right.components()) {
-        if left != right {
-            let (Some(left), Some(right)) = (left.as_os_str().to_str(), right.as_os_str().to_str())
-            else {
-                return false;
-            };
-            if !PathCase::probe(&parent).same_path(left, right) {
-                return false;
-            }
-        }
-        parent.push(left);
-    }
-    true
-}
-
-/// Copying a workspace can materialize a case alias using another captured spelling.
-///
-/// Compare both sets by filesystem identity before fingerprinting the candidate with
-/// the original names, retaining the fingerprint encoding and rejecting new inputs.
-fn same_captured_paths(
-    root: &Path,
-    expected: &BTreeSet<PathBuf>,
-    current: &BTreeSet<PathBuf>,
-) -> bool {
-    [(expected, current), (current, expected)]
-        .into_iter()
-        .all(|(paths, candidates)| {
-            paths
-                .iter()
-                .all(|path| contains_input_path(root, candidates, path))
-        })
-}
-
-fn replacement_for<'a>(
-    root: &Path,
-    path: &Path,
-    replacements: &'a BTreeMap<PathBuf, Vec<u8>>,
-) -> Option<&'a [u8]> {
-    if let Some(contents) = replacements.get(path) {
-        return Some(contents);
-    }
-    for (candidate, contents) in replacements {
-        if same_input_path(root, path, candidate) {
-            return Some(contents);
-        }
-    }
-    None
+    Ok(bytes)
 }
 
 fn append_field(bytes: &mut Vec<u8>, field: &[u8]) {
@@ -620,7 +636,6 @@ mod tests {
 
     use super::*;
     use crate::classify::{PackageStatus, classify};
-    use crate::prospective::Prospective;
 
     // A real empty file supports Git for Windows on ARM64, unlike the NUL device.
     // Keep it outside fixtures so it cannot enter their captured or committed inputs.
@@ -734,19 +749,6 @@ mod tests {
         assert!(inputs.paths.contains(Path::new(".cargo/config.toml")));
         assert!(inputs.paths.contains(Path::new("rust/.cargo/config.toml")));
         assert!(inputs.paths.contains(Path::new("rust/Cargo.lock")));
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "reserves an owned prospective directory")]
-    fn occupied_prospective_directory_is_preserved_before_reading_the_source_repository() {
-        let directory = tempdir().unwrap();
-        let occupied = directory.path().join(".prospective");
-        fs::create_dir_all(&occupied).unwrap();
-        let marker = occupied.join("keep");
-        fs::write(&marker, "another owner").unwrap();
-        let error = Prospective::new(directory.path(), &inputs()).err().unwrap();
-        assert!(error.find_source::<WriteFileError>().is_some());
-        assert_eq!(fs::read_to_string(marker).unwrap(), "another owner");
     }
 
     fn inputs() -> Inputs {
@@ -990,7 +992,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)]
     fn canonical_windows_paths_match_git_and_cargo_spellings() {
         for (canonical, ordinary) in [
             (
@@ -1354,9 +1355,9 @@ mod tests {
     #[cfg_attr(miri, ignore = "reads local dependency manifests")]
     fn capture_includes_workspace_and_replacement_sources() {
         let directory = tempdir().unwrap();
-        // The traversal consumes the canonical root captured by Inputs.
-        let root = canonical(directory.path()).unwrap();
-        let root = root.as_path();
+        // Fixture writes belong to the TempDir, never to a production path helper's result.
+        // Canonicalization is observed only after setup, so a failing mutant cannot redirect it.
+        let root = directory.path();
         fs::create_dir_all(root.join("replacement/src/nested")).unwrap();
         fs::write(
             root.join("Cargo.toml"),
@@ -1370,6 +1371,8 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("replacement/src/nested/lib.rs"), "").unwrap();
+        let root = canonical(root).unwrap();
+        let root = root.as_path();
         let mut paths = BTreeSet::new();
         capture_path_dependencies(root, [&root.join("Cargo.toml")], &mut paths).unwrap();
         assert_eq!(
