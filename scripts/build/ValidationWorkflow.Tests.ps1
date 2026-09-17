@@ -148,7 +148,7 @@ Describe 'Merge queue validation relationships' {
 
     It 'keeps the standard compile-platform coverage' {
         $pattern = '(?m)^        platform: \[([^\]]+)\]'
-        $standardPlatforms = [regex]::Match((Get-WorkflowJob $standard 'clippy-dev'), $pattern).Groups[1].Value
+        $standardPlatforms = [regex]::Match((Get-WorkflowJob $standard 'clippy-dev-docs'), $pattern).Groups[1].Value
         $queuePlatforms = [regex]::Match((Get-WorkflowJob $queue 'clippy-dev'), $pattern).Groups[1].Value
         $queuePlatforms | Should -Not -BeNullOrEmpty
         $queuePlatforms | Should -Be $standardPlatforms

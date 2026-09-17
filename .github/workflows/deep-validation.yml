@@ -105,7 +105,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        id: setup
+      # Keep independent findings visible without running checks after failed setup or cancellation.
+      # Ref: .github/workflows/design.md#job-granularity-and-gating.
       - name: Run clippy release on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -114,6 +118,7 @@ jobs:
           just clippy release
 
       - name: Run build release on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -224,10 +229,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        id: setup
         # Linux benchmark smoke tests execute Gungraun harnesses under Valgrind.
         with:
           install-valgrind: "true"
       - name: Run tests on ${{ matrix.platform }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -243,6 +250,9 @@ jobs:
           flags: ${{ matrix.platform }}
           report_type: test_results
       - name: Run benchmark targets on ${{ matrix.platform }}
+        # A test or upload failure must not hide benchmark failures.
+        # Ref: .github/workflows/design.md#job-granularity-and-gating.
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
