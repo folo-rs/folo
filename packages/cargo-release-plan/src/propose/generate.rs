@@ -129,14 +129,14 @@ impl<'a> Proposal<'a> {
     ) -> Result<PlanFile, AppError> {
         let decisions = decisions.validate()?;
         // Validate user decisions even if group movement would otherwise hide an invalid entry.
-        _ = self.decision_increments(&decisions, Verbose::new(false))?;
+        _ = self.decision_increments(&decisions, &Verbose::new(false))?;
         let mut levels = BTreeMap::new();
         let mut alignment = BTreeMap::new();
         let mut visited = BTreeSet::new();
         loop {
             record_state(&mut visited, &(&levels, &alignment))?;
             let fresh_levels = self.public_levels(&decisions, &alignment, verbose)?;
-            let increments = self.decision_increments(&fresh_levels, Verbose::new(false))?;
+            let increments = self.decision_increments(&fresh_levels, &Verbose::new(false))?;
             let fresh_alignment = self.align_groups(&increments, verbose)?;
             if levels == fresh_levels && alignment == fresh_alignment {
                 break;
@@ -144,7 +144,7 @@ impl<'a> Proposal<'a> {
             levels = fresh_levels;
             alignment = fresh_alignment;
         }
-        let increments = self.decision_increments(&levels, verbose)?;
+        let increments = self.decision_increments(&levels, &verbose)?;
         let increments = self.combine(increments, &alignment);
         let plan = PlanFile::new(PlanStage::Proposed, increments);
         let resolved = self.resolve(&plan)?;
@@ -198,7 +198,7 @@ impl<'a> Proposal<'a> {
         levels: &BTreeMap<String, ChangeLevel>,
         alignment: &BTreeMap<String, PlanIncrement>,
     ) -> Result<BTreeMap<String, Version>, AppError> {
-        let increments = self.decision_increments(levels, Verbose::new(false))?;
+        let increments = self.decision_increments(levels, &Verbose::new(false))?;
         let plan = PlanFile::new(PlanStage::Proposed, self.combine(increments, alignment));
         let mut versions = self.resolve(&plan)?.packages;
         for (name, declared) in &self.versions {
@@ -453,7 +453,7 @@ mod tests {
 
     use super::*;
     use crate::propose::tests::{
-        assert_versions, depends, entries, generate, needs, package, report,
+        assert_versions, depends, entries, generate, helper, needs, package, report,
     };
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
             .public_levels(&BTreeMap::new(), &alignment, Verbose::new(false))
             .unwrap();
         let increments = proposal
-            .decision_increments(&levels, Verbose::new(false))
+            .decision_increments(&levels, &Verbose::new(false))
             .unwrap();
         let plan = PlanFile::new(
             PlanStage::Proposed,
@@ -652,6 +652,50 @@ mod tests {
                 .find_source::<UnpropagatedPublicDependency>()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn final_group_validation_requires_plain_equal_targets_for_all_members() {
+        let report = report(
+            vec![package("library", "1.0.0", Some("1.0.0"))],
+            vec![helper("library_impl", "1.0.0")],
+            &[&["library", "library_impl"]],
+        );
+        report.validate().unwrap();
+        let proposal = Proposal::new(&report);
+        // Exercise the final invariant directly, independently of the earlier normalizer.
+        // Both resolved targets and retained declarations participate in this boundary.
+        for (first, second) in [
+            ("1.1.0-alpha", "1.1.0-alpha"),
+            ("1.1.0+build", "1.1.0+build"),
+            ("1.1.0-alpha+build", "1.1.0-alpha+build"),
+            ("1.1.0", "1.0.0"),
+        ] {
+            let resolved = ResolvedVersions {
+                packages: BTreeMap::from([
+                    ("library".to_owned(), first.parse().unwrap()),
+                    ("library_impl".to_owned(), second.parse().unwrap()),
+                ]),
+            };
+            let error = proposal
+                .validate_result(&resolved, &BTreeMap::new())
+                .unwrap_err();
+            assert_eq!(
+                error.find_source::<UnsettledGroup>().unwrap().group,
+                "library"
+            );
+        }
+        for packages in [
+            BTreeMap::new(),
+            BTreeMap::from([
+                ("library".to_owned(), Version::new(1, 1, 0)),
+                ("library_impl".to_owned(), Version::new(1, 1, 0)),
+            ]),
+        ] {
+            proposal
+                .validate_result(&ResolvedVersions { packages }, &BTreeMap::new())
+                .unwrap();
+        }
     }
 
     #[test]

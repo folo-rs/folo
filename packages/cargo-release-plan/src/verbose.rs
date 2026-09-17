@@ -3,6 +3,8 @@
 // Standalone binaries must explain the inputs and rules behind each decision,
 // not merely announce the conclusion. Ref: docs/standalone-binaries.md.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::io;
 use std::io::Write as _;
 
@@ -50,10 +52,18 @@ impl NoteSink for Verbose {
 
 /// Receives lazily formatted diagnostic notes independently of their destination.
 ///
-/// Classification uses this boundary to test emission conditions and explanatory
+/// Classification and proposal decisions use this boundary to test explanatory
 /// values without acquiring repository state or capturing process-global stderr.
 pub(crate) trait NoteSink {
     fn note(&self, message: impl FnOnce() -> String);
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl NoteSink for RefCell<Vec<String>> {
+    fn note(&self, message: impl FnOnce() -> String) {
+        self.borrow_mut().push(message());
+    }
 }
 
 #[cfg(test)]

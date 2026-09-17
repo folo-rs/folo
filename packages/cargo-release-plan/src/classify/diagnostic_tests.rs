@@ -4,12 +4,6 @@ use std::cell::RefCell;
 
 use super::*;
 
-impl NoteSink for RefCell<Vec<String>> {
-    fn note(&self, message: impl FnOnce() -> String) {
-        self.borrow_mut().push(message());
-    }
-}
-
 #[test]
 fn untracked_notes_are_emitted_only_for_present_paths() {
     let notes = RefCell::new(Vec::new());
