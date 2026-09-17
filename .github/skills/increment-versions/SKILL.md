@@ -26,6 +26,13 @@ Decide and apply the plan without a separate human approval request, for every c
 Human review of the pull request as a whole is the approval step, including its version/release
 plan. This skill does not approve or merge the pull request or publish packages.
 
+Release-branch movement is an expected exception to the stop-on-error instructions below.
+Follow [automatic recovery](../../../docs/release-versioning.md#release-branch-movement-during-planning)
+without requesting confirmation: undo only the superseded run's generated edits, if any,
+merge the latest release branch, and rerun this workflow with fresh evidence directories.
+Preserve unrelated work and stop only for genuine execution failures or conflicts that cannot
+be resolved safely.
+
 This skill applies to a feature branch. Confirm the branch before Stage 1:
 
 > git symbolic-ref --quiet --short HEAD
@@ -102,7 +109,9 @@ the report, per-package diffs, and SemVer evidence:
 >
 > $env:RELEASE_PLAN_BASE = Get-Content -LiteralPath "{{WORK_DIR}}/base.txt"; just release-prepare "{{WORK_DIR}}"
 
-Stop and report if any command exits non-zero. `just release-prepare` accepts the documented
+If the current release baseline makes this checkout's declared versions older than their
+released anchors, perform automatic recovery rather than asking for confirmation. Otherwise,
+stop and report if any command exits non-zero. `just release-prepare` accepts the documented
 cargo-semver-checks finding exit and fails on every other non-zero exit, so a non-zero exit
 here means the evidence is incomplete.
 
@@ -374,8 +383,8 @@ release-branch tip:
 > git rev-parse FETCH_HEAD
 
 Stop and report if either command exits non-zero. Compare the returned commit with
-`{{WORK_DIR}}/base.txt`. If it differs, return to Stage 2 rather than applying against a stale
-release baseline. Changed source or group membership also requires Stage 2; changed decisions
+`{{WORK_DIR}}/base.txt`. If it differs, perform automatic recovery rather than applying against
+a stale release baseline. Changed source or group membership also requires Stage 2; changed decisions
 alone require Stages 4 and 5. Regenerate the plan and its PR section before continuing.
 
 `cargo-release-plan apply` raises existing versions and cannot create a crate on crates.io, so
@@ -388,9 +397,13 @@ registry query:
 Stop and report without applying anything if the command exits non-zero, following the
 first-publication handoff above rather than publishing anything from this run.
 
-Apply the complete resolved plan used to prepare the PR section, without a separate approval gate:
+Preserve the pre-apply file state, then apply the complete resolved plan used to prepare the PR
+section without a separate approval gate:
 
 > just apply-release-plan "{{WORK_DIR}}/preview/plan.json"
+
+Retain the resulting versioning-only diff so automatic recovery can reverse only this run's
+changes, even when the affected files also contain independently authored edits.
 
 A stale-input rejection requires fresh preparation and a regenerated plan. Do not bypass
 it or refresh the lockfile manually to force the stale artifact to apply. An I/O failure can
@@ -419,7 +432,8 @@ Stop and report if `just release-report` exits non-zero as well. As in Stage 2 t
 evidence is incomplete, and incomplete evidence cannot show that a decision was wrong. Only a
 report that completed establishes the state the remaining checks are read against.
 
-Stop and report a non-zero `just validate-versions` result. With unchanged inputs, preview has
+Recover automatically if release-branch movement invalidates the plan; otherwise stop and
+report a non-zero `just validate-versions` result. With unchanged inputs, preview has
 already accounted for version, requirement, group, and binary lockfile effects, so verification
 must not become a routine second versioning/application cycle. Distinguish a release-readiness
 failure from an execution failure and preserve both prepared and verification evidence.
