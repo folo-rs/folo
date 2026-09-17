@@ -90,6 +90,22 @@ fn only_comment(github: &FakeGitHub) -> Comment {
     comments.into_iter().next().unwrap()
 }
 
+fn assert_comment_metadata_rejected(body: &str) {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('a'));
+    let before = block_on(github.create_comment(&context.repository, 7, body)).unwrap();
+    block_on(comment_preflight(
+        &github,
+        &context,
+        7,
+        "foo",
+        &owner(2, 1, 'a'),
+    ))
+    .unwrap_err();
+    assert_eq!(only_comment(&github), before);
+}
+
 fn publish(github: &FakeGitHub, report: &Report, day: u64) {
     block_on(issue_report(
         github,
@@ -1186,6 +1202,62 @@ fn run_head_only_placeholders_are_not_adopted() {
     ))
     .unwrap_err();
     assert_eq!(only_comment(&github), existing);
+}
+
+#[test]
+fn comment_metadata_requires_a_recognized_state_and_matching_report_commit() {
+    let instance = &context().instance;
+    let prefix = format!(
+        "{}\n{}",
+        marker::pr_comment(instance),
+        marker::run_owner(instance, &owner(1, 1, 'a'))
+    );
+    for metadata in [
+        String::new(),
+        marker::analyzed_sha(instance, &sha('a')),
+        marker::state(instance, "unknown"),
+        format!(
+            "{}\n{}",
+            marker::state(instance, "unknown"),
+            marker::analyzed_sha(instance, &sha('a'))
+        ),
+        marker::state(instance, "findings"),
+        format!(
+            "{}\n{}\n{}",
+            marker::state(instance, "clean"),
+            marker::state(instance, "clean"),
+            marker::analyzed_sha(instance, &sha('a'))
+        ),
+        format!(
+            "{}\n{}",
+            marker::state(instance, "findings"),
+            marker::analyzed_sha(instance, &sha('b'))
+        ),
+    ] {
+        assert_comment_metadata_rejected(&format!("{prefix}\n{metadata}"));
+    }
+}
+
+#[test]
+fn comment_metadata_rejects_duplicated_or_mixed_note_and_report_states() {
+    let instance = &context().instance;
+    let pending = message::pr_in_progress(instance, "foo", &owner(1, 1, 'a'));
+    for extra in [
+        marker::pr_comment(instance),
+        marker::in_progress(instance),
+        marker::empty_scope(instance),
+        marker::failed(instance),
+        marker::state(instance, "clean"),
+        format!(
+            "{}\n{}",
+            marker::state(instance, "clean"),
+            marker::state(instance, "clean")
+        ),
+        marker::analyzed_sha(instance, &sha('a')),
+        "<!-- cargo-bench-history:project:analyzed-sha:invalid -->".to_owned(),
+    ] {
+        assert_comment_metadata_rejected(&format!("{pending}\n{extra}"));
+    }
 }
 
 #[test]

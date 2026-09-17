@@ -6,7 +6,7 @@ use crate::github::{Comment, Comparison, GitHub, Issue};
 use crate::identity::IssueIdentity;
 use crate::lifecycle::{IssueBody, UninterpretableIssue};
 use crate::marker;
-use crate::model::{CommitSha, IssueKind};
+use crate::model::{CommitSha, Instance, IssueKind};
 use crate::operations::Context;
 
 pub(crate) async fn find_issue(
@@ -68,14 +68,43 @@ pub(crate) async fn find_comment(
     if comments.next().is_some() {
         return Err(AmbiguousIdentity::new().into());
     }
-    if let Some(comment) = &first
-        && marker::find_owner(&comment.body, &context.instance).is_none()
-    {
-        // Every current comment state records an attempt. An identity match alone
-        // does not authorize adopting an older or malformed output format.
-        return Err(UninterpretableComment::new().into());
+    if let Some(comment) = &first {
+        require_comment_metadata(&comment.body, &context.instance)?;
     }
     Ok(first)
+}
+
+fn require_comment_metadata(body: &str, instance: &Instance) -> Result<(), AppError> {
+    let owner = marker::find_owner(body, instance).ok_or_else(UninterpretableComment::new)?;
+    let identity = marker::pr_comment(instance);
+    let notes = [
+        marker::in_progress(instance),
+        marker::empty_scope(instance),
+        marker::failed(instance),
+    ];
+    let note_count = body
+        .lines()
+        .filter(|line| notes.iter().any(|note| *line == note))
+        .count();
+    // Ownership alone cannot distinguish a supported note/report from copied or
+    // contradictory metadata. Validate before any lifecycle operation can overwrite it.
+    let valid_state = match note_count {
+        0 => {
+            matches!(
+                marker::find_state(body, instance),
+                Some("findings" | "clean" | "no-data")
+            ) && marker::find_analyzed_sha(body, instance).as_ref() == Some(&owner.head)
+        }
+        1 => {
+            !marker::has_value(body, instance, "state")
+                && !marker::has_value(body, instance, "analyzed-sha")
+        }
+        _ => false,
+    };
+    if !valid_state || body.lines().filter(|line| *line == identity).count() != 1 {
+        return Err(UninterpretableComment::new().into());
+    }
+    Ok(())
 }
 
 pub(crate) async fn create_issue(
@@ -162,9 +191,9 @@ struct AmbiguousIdentity;
 #[display("Issue identity or state changed during discovery")]
 struct ChangedIssueIdentity;
 
-/// Owned comments require interpretable run-attempt ownership before any transition.
+/// Matching comments require coherent ownership and supported lifecycle metadata.
 #[ohno::error]
-#[display("Matching pull-request comment has no interpretable run-attempt ownership")]
+#[display("Matching pull-request comment has uninterpretable lifecycle metadata")]
 struct UninterpretableComment;
 
 // These immutable errors expose no mutation across unwinding.

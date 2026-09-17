@@ -174,6 +174,10 @@ report commit and status markers, but these are not the repository-wide search k
 adopts older output formats. A matching issue whose body cannot be interpreted is an explicit
 error, not permission to overwrite it or create another.
 
+Matching comments also require a recognized lifecycle state and coherent ownership/report
+metadata. Missing, duplicated or contradictory state markers are errors that preserve the
+existing comment, not permission to seed a new placeholder over it.
+
 Multiple exact matches, incomplete searches and search failures are errors. Search indexing can
 lag writes: issue creation is not an atomic upsert or an exactly-once guarantee. Ambiguous creates
 receive bounded reconciliation reads; inability to establish success remains a failure without

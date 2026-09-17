@@ -65,6 +65,11 @@ pub(crate) fn find_state<'a>(body: &'a str, instance: &Instance) -> Option<&'a s
     unique_value(body, instance, "state")
 }
 
+pub(crate) fn has_value(body: &str, instance: &Instance, key: &str) -> bool {
+    let prefix = value_prefix(instance, key);
+    body.lines().any(|line| line.starts_with(&prefix))
+}
+
 pub(crate) fn annotation_start(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:annotation:start -->",
@@ -116,10 +121,14 @@ pub(crate) fn find_analyzed_sha(body: &str, instance: &Instance) -> Option<Commi
 }
 
 fn unique_value<'a>(body: &'a str, instance: &Instance, key: &str) -> Option<&'a str> {
-    let prefix = format!("<!-- cargo-bench-history:{}:{key}:", instance.as_str());
+    let prefix = value_prefix(instance, key);
     let mut values = body.lines().filter_map(|line| line.strip_prefix(&prefix));
     let value = values.next()?.strip_suffix(" -->")?;
     values.next().is_none().then_some(value)
+}
+
+fn value_prefix(instance: &Instance, key: &str) -> String {
+    format!("<!-- cargo-bench-history:{}:{key}:", instance.as_str())
 }
 
 #[cfg(test)]

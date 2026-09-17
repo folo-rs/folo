@@ -317,12 +317,11 @@ struct TimelineArgs {
 /// The text report prints to standard output by default; `--no-text` suppresses
 /// it, while `--markdown` and `--json` each write that format to a file. A single
 /// analysis pass backs every requested format. At least one output must remain
-/// selected, so `--no-text` requires at least one of `--markdown`/`--json`.
+/// selected; individual commands can provide additional file outputs.
 #[derive(Args, Debug)]
 #[command(next_help_heading = HEADING_OUTPUT)]
 struct OutputArgs {
-    /// Suppress the text report on standard output. Pair with `--markdown` and/or
-    /// `--json` to direct the report to files instead.
+    /// Suppress the text report on standard output. Select a file output instead.
     #[arg(long)]
     no_text: bool,
 
@@ -570,8 +569,10 @@ struct AnalyzeCommand {
     #[arg(long, value_name = "PATH", help_heading = HEADING_OUTPUT)]
     markdown_summary: Option<PathBuf>,
 
-    /// Also write the stable analysis outcome wire name to this path (a relative
-    /// path resolves against the working directory).
+    /// Write the stable analysis outcome wire name to a file.
+    ///
+    /// Relative paths resolve against the working directory. May be the sole output
+    /// with `--no-text`.
     #[arg(long, value_name = "PATH", help_heading = HEADING_OUTPUT)]
     outcome: Option<PathBuf>,
 }
