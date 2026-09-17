@@ -91,6 +91,15 @@ tests inject acquisition at its existing boundary so they exercise production
 ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
+Anchored classification converts acquired evidence into a verdict through an
+in-process boundary that owns version-regression rejection and evidence retention.
+Proposal tests observe exact alignment outcomes for moving members and members
+retaining published versions. Final group validation is exercised independently
+of normalization, including non-publishable targets, so its plain/equal-version
+invariant remains observable even when normal generation already ensures it.
+Semantic decision notes use the shared diagnostic sink to expose their decision
+level and version inputs without capturing process-global stderr.
+
 Report and check share synthetic classification snapshots with inert repository
 handles; their in-process tests never acquire Git, Cargo or filesystem state.
 The check core owns classification failure propagation, diagnostic-derived
