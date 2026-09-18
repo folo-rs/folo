@@ -36,12 +36,16 @@ pub(crate) struct SetupProcessError {
     stderr: String,
 }
 
-/// Cleanup failed; an earlier deployment failure remains attached as its source.
+/// Cleanup failed, retaining successful deployment output or an earlier failure.
 #[ohno::error]
-#[display("could not remove owned Azure deployment directory {}: {cleanup}", path.display())]
+#[display(
+    "could not remove owned Azure deployment directory {}: {cleanup}\n{deployment_output}",
+    path.display()
+)]
 pub(crate) struct SetupCleanupError {
     path: PathBuf,
     cleanup: io::Error,
+    deployment_output: String,
 }
 
 /// Serializing literal parameters into the embedded template failed.

@@ -4,10 +4,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use tempfile::TempDir;
+use tempfile::{Builder, TempDir};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::task::spawn_blocking;
 
 use crate::commands::setup_azure::bundle::BundleFile;
 
@@ -58,8 +59,8 @@ impl BundleFiles for TokioBundleFiles {
     // The OS temporary-directory adapter is covered through the native binary.
     #[cfg_attr(test, mutants::skip)]
     async fn temporary(&self) -> io::Result<TempDir> {
-        tokio::task::spawn_blocking(|| {
-            tempfile::Builder::new()
+        spawn_blocking(|| {
+            Builder::new()
                 .prefix("cargo-bench-history-azure-")
                 .tempdir()
         })
@@ -86,7 +87,7 @@ impl BundleFiles for TokioBundleFiles {
     // Native binary tests verify removal leaves caller-owned siblings intact.
     #[cfg_attr(test, mutants::skip)]
     async fn cleanup(&self, directory: TempDir) -> io::Result<()> {
-        tokio::task::spawn_blocking(move || directory.close()).await?
+        spawn_blocking(move || directory.close()).await?
     }
 }
 
@@ -103,6 +104,8 @@ impl SetupProcess for TokioSetupProcess {
             .args(arguments)
             .current_dir(&self.working_directory)
             .stdin(Stdio::null())
+            // Request termination of the owned PowerShell child when its operation is dropped;
+            // its bundle shares that ownership. This does not cancel descendants or Azure work.
             .kill_on_drop(true)
             .output()
             .await?;

@@ -1,6 +1,6 @@
 ---
 name: increment-versions
-description: Propose and apply crate version increments for a pull request that changed released content. Use when the validate-versions check fails, when a pull request is ready to merge, or when the user asks to increment crate versions.
+description: Propose and apply crate version increments for a pull request that changed released content, including paired benchmark-action PR coordination when its pinned tools change. Use when the validate-versions check fails, when a pull request is ready to merge, or when the user asks to increment crate versions.
 ---
 
 # Scope
@@ -26,6 +26,12 @@ Decide and apply the plan without a separate human approval request, for every c
 Human review of the pull request as a whole is the approval step, including its version/release
 plan. This skill does not approve or merge the pull request or publish packages.
 
+When the release affects tools pinned by `folo-rs/cargo-bench-history-action`, this skill also
+coordinates a linked PR in that repository: inspecting its release manifest, updating pins and
+the action version, and cross-linking the PRs. This requires access to the action repository
+and its contribution/release instructions. Stage 8 retains any outstanding pairing or
+publication follow-up in the local handoff; unavailable access does not waive the obligation.
+
 Release-branch movement is an expected exception to the stop-on-error instructions below.
 Follow [automatic recovery](../../../docs/release-versioning.md#release-branch-movement-during-planning)
 without requesting confirmation: undo only the superseded run's generated edits, if any,
@@ -49,9 +55,10 @@ two different places.
 
 # Working files
 
-Every stage reads and writes files under `{{WORK_DIR}}`, one untracked directory chosen for the
-run. Write each command's output to its file as the command runs rather than reconstructing it
-afterwards, and read a later stage's inputs from these files rather than from memory.
+Keep the run's evidence and handoff files under `{{WORK_DIR}}`, one untracked directory chosen
+for the run; source edits remain in their owning checkouts. Write each command's output to its
+file as the command runs rather than reconstructing it afterwards, and read a later stage's
+inputs from these files rather than from memory.
 
 | File | Written in | Contents |
 |------|------------|----------|
@@ -67,6 +74,7 @@ afterwards, and read a later stage's inputs from these files rather than from me
 | `preview/report.json`, `preview/diffs/` | Stage 5 | The prospective release evidence for the resolved proposal. |
 | `preview/semver-checks.log` | Stage 5 | Compatibility evidence built from the final prospective source, versions, and lockfile. |
 | `preview/workspace/` | Stage 5 | The retained prospective workspace used only for compatibility evidence. |
+| `action-pairing.md` | Stage 8 | The affected pins and verified PR links, or the remaining pairing/access/publication obligation and next action. No duplicate version inventory is maintained here. |
 
 Commit none of them.
 
@@ -461,8 +469,21 @@ the final approval; completing this skill authorizes neither.
 
 # Stage 8: Coordinate a paired action release
 
-Read the action repository's current release manifest and apply the
+Discover the action repository and existing open PRs before creating a pairing:
+
+> gh repo view folo-rs/cargo-bench-history-action --json nameWithOwner,url,defaultBranchRef
+>
+> gh pr list --repo folo-rs/cargo-bench-history-action --state open --limit 100 --json number,url,title,body,headRefName
+
+Stop and record an access error in `{{WORK_DIR}}/action-pairing.md` if either command fails.
+Inspect the returned PR descriptions and branches for work linked to this monorepo release;
+reuse the matching PR rather than creating another. If the result reaches the requested limit,
+narrow the search or continue discovery before treating a pairing as absent.
+Read the action repository's own instructions to locate its current release manifest and apply the
 [paired-release policy](../../../docs/release-versioning.md#paired-benchmark-action-releases).
+Do not assume a manifest filename. If the repository needs its initial manifest and runtime,
+record that bootstrap pairing as outstanding; an absent manifest does not establish no affected
+pins. Resume the pin comparison when the initial paired PR defines the manifest.
 Compare its pinned monorepo packages with the complete verified release set, including retained
 pending increments and first-publication packages. A dependency/group or version-only movement
 counts just as a direct source change does; do not restrict this step to entries newly applied
@@ -470,17 +491,56 @@ by Stage 6.
 
 When a pinned tool moves, create or update the corresponding
 `folo-rs/cargo-bench-history-action` PR with the final tool pins and action-version increment.
-Follow [paired PR presentation](../../../docs/git-workflow.md#paired-action-pull-requests),
-reuse an existing pairing when appropriate, and cross-link both PRs. If the monorepo PR has not
-yet been created, record the pairing obligation in the local release handoff and fulfill it
-when creating that PR. Report missing repository access as a blocker rather than silently
-omitting the action change. Do not create an unrelated PR when no manifest pin is affected.
+Use that repository's normal branch and change-validation procedure. Prepare the PR descriptions
+under `{{WORK_DIR}}`, following
+[paired PR presentation](../../../docs/git-workflow.md#paired-action-pull-requests).
+If the monorepo PR does not exist yet, record the remaining cross-link obligation and defer
+commands requiring `MONOREPO_PR` until its creation.
+After publishing the action branch, use the applicable create or update command:
+
+> gh pr create --repo folo-rs/cargo-bench-history-action --head "{{ACTION_BRANCH}}" --title "{{ACTION_TITLE}}" --body-file "{{ACTION_BODY}}"
+>
+> gh pr edit "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --body-file "{{ACTION_BODY}}"
+
+Capture the created PR URL, then cross-link both descriptions, preserving their existing content
+and Version/release plan sections. Update the monorepo description and read both PRs back:
+
+> gh pr edit "{{MONOREPO_PR}}" --repo folo-rs/folo --body-file "{{MONOREPO_BODY}}"
+>
+> gh pr view "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --json url,body,headRefName
+>
+> gh pr view "{{MONOREPO_PR}}" --repo folo-rs/folo --json url,body,headRefName
+
+| Placeholder | Description |
+|-------------|-------------|
+| `ACTION_BRANCH` | The published action branch containing this verified release's pins and action version. |
+| `ACTION_TITLE` | The action PR title describing the release change. |
+| `ACTION_BODY`, `MONOREPO_BODY` | Absolute paths to the complete prepared PR descriptions under `WORK_DIR`. |
+| `ACTION_PR`, `MONOREPO_PR` | The discovered or created PR numbers or URLs in their respective repositories. |
+| `ACTION_RUN` | The action workflow run ID whose required installation check must be rerun after publication. |
+
+On a failed write, preserve the returned diagnostic and the last verified pairing state in
+`{{WORK_DIR}}/action-pairing.md`; do not report successful coordination or create another PR
+blindly. Verify that both returned descriptions contain the correct reciprocal links. If the
+readback fails, the pairing remains unverified. Fulfill any deferred cross-link obligation when
+the monorepo PR is created. Do not create an unrelated action PR when no manifest pin is affected.
 
 Keep the pair current after any reassessment. The action PR remains blocked on its required
 installation check until the monorepo publishes the exact packages and promised archives.
-Its author follows publication and explicitly reruns that check; an expected early failure
-is not a reason to weaken it or substitute source dogfooding.
+Its author follows publication and explicitly reruns that check:
 
-Include the pairing disposition in the skill handoff: the affected pins and linked PR, a
-pending-PR-creation obligation, an access/publication blocker, or no affected pins. Completing
-this stage does not authorize merging either PR or publishing anything.
+> gh run rerun "{{ACTION_RUN}}" --repo folo-rs/cargo-bench-history-action --failed
+>
+> gh pr checks "{{ACTION_PR}}" --repo folo-rs/cargo-bench-history-action --required
+
+Record the check's actual result, including pending or failed publication dependencies; a rerun
+request is not a passing check. A failed rerun request is a handoff blocker. Expected early
+installation failure is not a reason to weaken the gate or substitute source dogfooding.
+Successful installation gates the action PR's merge, not the monorepo merge that starts its
+dependency publication. Creating the required paired PR is a separate readiness obligation.
+
+Keep `{{WORK_DIR}}/action-pairing.md` current and include its disposition in the skill handoff:
+the affected pins and verified links, why an existing PR was reused or a new one was needed,
+the next publication/check follow-up, any access or PR-creation blocker, or no affected pins.
+Reference the verified release plan rather than maintaining another package/version inventory.
+Completing this stage does not authorize merging either PR or publishing anything.

@@ -7,12 +7,12 @@ use std::process::Command as ProcessCommand;
 
 use cargo_bench_history::{Command, Overrides, SetupAzureOptions, run_with_overrides};
 use ohno::AppError;
-use serde_json::Value;
-use tempfile::TempDir;
+use serde_json::{Value, from_slice};
+use tempfile::{Builder, TempDir};
 use tokio::fs;
 
 fn workspace() -> TempDir {
-    tempfile::Builder::new()
+    Builder::new()
         .prefix(".setup-azure-test-")
         .tempdir_in(env!("CARGO_MANIFEST_DIR"))
         .unwrap()
@@ -41,7 +41,7 @@ async fn exports_without_a_repository_and_refuses_overwriting() {
     export(workspace.path(), options.clone()).await.unwrap();
     let bundle = workspace.path().join("bundle");
     let parameters: Value =
-        serde_json::from_slice(&fs::read(bundle.join("parameters.json")).await.unwrap()).unwrap();
+        from_slice(&fs::read(bundle.join("parameters.json")).await.unwrap()).unwrap();
     assert!(parameters.get("SubscriptionId").unwrap().is_null());
     fs::write(bundle.join("deploy.ps1"), "user-owned canary")
         .await
@@ -73,6 +73,7 @@ async fn accepts_an_empty_directory_and_rejects_other_nonempty_destinations() {
     fs::create_dir(workspace.path().join("nonempty"))
         .await
         .unwrap();
+    // A dot-prefixed entry covers a directory whose only content is hidden on Unix.
     fs::write(workspace.path().join("nonempty").join(".hidden"), "keep")
         .await
         .unwrap();
@@ -133,6 +134,7 @@ async fn extracted_driver_requires_missing_parameters_without_azure() {
 #[cfg_attr(miri, ignore = "filesystem and PowerShell process integration")]
 async fn extracted_bundle_deploys_with_literal_parameters_and_mocked_azure() {
     let workspace = workspace();
+    // Whitespace, quotes and expression syntax exercise literal path and parameter handoff.
     export(
         workspace.path(),
         SetupAzureOptions {
@@ -196,23 +198,11 @@ fn binary_export_succeeds_without_any_tools_on_path() {
 #[cfg_attr(miri, ignore = "filesystem and PowerShell process integration")]
 fn binary_cleans_only_its_owned_bundle_after_driver_failure() {
     let workspace = workspace();
-    // Discover only the PowerShell executable, then expose its directory alone.
-    // Azure CLI is inaccessible even if this machine has live login credentials.
-    let shell = ProcessCommand::new("pwsh")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-Process -Id $PID).Path",
-        ])
-        .output()
-        .unwrap();
-    assert!(shell.status.success());
-    let shell = String::from_utf8(shell.stdout).unwrap();
-    let shell_directory = Path::new(shell.trim()).parent().unwrap();
     let temporary_root = workspace.path().join("owned-temporary-parent");
     sync_fs::create_dir_all(&temporary_root).unwrap();
     sync_fs::write(temporary_root.join("keep"), "caller-owned").unwrap();
+    // A reserved branch name reaches the driver, which rejects it before Azure CLI probes.
+    // This exercises cleanup without depending on which Azure tools are installed.
     let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
         .args([
             "setup-azure",
@@ -229,9 +219,8 @@ fn binary_cleans_only_its_owned_bundle_after_driver_failure() {
             "--github-repository",
             "repository",
             "--history-branch",
-            "main",
+            "HEAD",
         ])
-        .env("PATH", shell_directory)
         .env("TMP", &temporary_root)
         .env("TEMP", &temporary_root)
         .env("TMPDIR", &temporary_root)
@@ -240,7 +229,7 @@ fn binary_cleans_only_its_owned_bundle_after_driver_failure() {
         .unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("az version"));
+    assert!(error.contains("HistoryBranch"));
     assert!(error.contains("Azure setup deployment"));
     let entries = sync_fs::read_dir(&temporary_root)
         .unwrap()

@@ -36,7 +36,7 @@ pub(crate) async fn comment_preflight(
         {
             note(
                 context,
-                "a later run attempt owns the comment; preserving it",
+                "a later attempt of this run owns the comment; preserving it",
             );
             return Ok(());
         }
@@ -83,7 +83,7 @@ pub(crate) async fn comment_report(
     {
         note(
             context,
-            "the comment belongs to a later workflow run attempt; preserving it",
+            "the comment belongs to a later attempt of this run; preserving it",
         );
         return Ok(());
     }
@@ -174,7 +174,7 @@ pub(crate) async fn comment_no_data(
             {
                 note(
                     context,
-                    "a later run attempt owns the comment; preserving it",
+                    "a later attempt of this run owns the comment; preserving it",
                 );
                 return Ok(());
             }

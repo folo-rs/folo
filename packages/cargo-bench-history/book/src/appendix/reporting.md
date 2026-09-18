@@ -36,17 +36,34 @@ Where a series has more commits than the chart has columns, commits are grouped 
 plotting. Grouping first is deliberate — the alternative attenuates an isolated observation
 surrounded by gaps into nothing.
 
+## Analysis outcomes
+
+The **analysis outcome** is the result of a successful analysis, combining findings with the
+[series coverage state](coverage.md#reading-a-silent-report). Findings take precedence: an
+analysis with any findings has outcome `findings`, even when some series could not be judged.
+
+Without findings, a fully judged in-scope suite is `clean`. An in-scope suite with no judged
+series is `insufficient_baseline`; a suite with some judged and some unjudged series is
+`partial`. When no series entered analysis, or every accounted series was absent at the
+analyzed context commit, the outcome is `nothing_in_scope`.
+
+These outcomes describe the series available to analysis, not an inventory of collection jobs.
+**Platform coverage** is separate: matrix automation must verify which expected platforms
+completed collection before presenting a complete all-clear. A missing collection leg can
+coexist with a `clean` analysis of the available series. Analysis failure is an execution
+error, not an outcome.
+
 ## The formats
 
-The tool emits its findings in five forms, each requested independently:
+The tool emits reports and their derived outputs in these forms, each requested independently:
 
 - **Text** — the default terminal report.
 - **Markdown** (`--markdown <path>`) — the same content, for a pull request or an issue.
 - **JSON** (`--json <path>`) — the complete machine-readable result.
 - **Condensed summary** (`--markdown-summary <path>`, `analyze` only) — a short, capped Markdown
   digest for a size-limited destination such as a pull request comment.
-- **Outcome** (`--outcome <path>`, `analyze` only) — one stable wire name for selecting an
-  automation message without parsing the full JSON report.
+- **Outcome** (`--outcome <path>`, `analyze` only) — the stable [analysis outcome](#analysis-outcomes)
+  for selecting a message without parsing the full JSON report.
 
 Text and Markdown carry every finding but omit the per-reason census when findings exist. **JSON
 always carries the complete census**, which makes it the machine-readable signal: each finding
@@ -73,12 +90,11 @@ successfully; a report that could not reach its storage backend does not.
 *Why:* a benchmark tool that breaks builds on a measurement gets disabled, and a disabled tool
 detects nothing. Findings are advisory by design.
 
-*What this means for automation:* write the JSON report to a file with `--json`. The top-level
-`outcome` field combines findings with coverage into `findings`, `clean`,
-`insufficient_baseline`, `nothing_in_scope` or `partial`; the `notable` boolean remains `true`
-exactly for `findings`. Use `--outcome <path>` when this one verdict is all the caller needs.
-The full JSON remains necessary for counts, reasons and findings. See [Multiplicity and
-coverage](coverage.md#reading-a-silent-report).
+*What this means for automation:* write the JSON report to a file with `--json`. Its top-level
+`outcome` field carries the [analysis outcome](#analysis-outcomes); the `notable` boolean is
+`true` exactly for `findings`. Use `--outcome <path>` when this value is all the caller needs,
+and retain separate collection evidence for matrix-wide claims. The full JSON remains
+necessary for counts, reasons and findings.
 
 ## The coverage line is not decoration
 

@@ -38,7 +38,7 @@ target are exactly `required-checks`.
 ## Benchmark workflow artifacts
 
 Collection and backfill use the fixed `bench-history-setup` local action. Folo's wrapper
-selects the existing setup environment with Valgrind enabled; it owns no new setup logic.
+selects the shared setup environment with Valgrind enabled; it contains only that configuration.
 This keeps repository-specific preparation separate from tool installation and GitHub posting.
 
 Benchmark automation has preparation, collection, combined analysis/publication and
@@ -46,8 +46,9 @@ independently scheduled lifecycle work.
 Preparation builds the Linux companion with the repository's pinned Rust toolchain and
 archives its executable permissions. The combined job and lifecycle jobs reuse that run-scoped
 archive rather than independently rebuilding the companion.
-A failed companion build or unavailable executable remains a failed workflow check; no
-notification is reported as successful when its executable could not run.
+Notification depends on this executable and has no independent publisher. A failure to
+prepare or obtain the companion keeps the workflow visibly failed rather than claiming
+notification success; issue alerting is not guaranteed while the executable is unavailable.
 
 The companion turns the configured platform CSV into the matrix and collection job prefix.
 Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
@@ -73,14 +74,20 @@ supplies current helpers, tool builds and configuration. The full real-head chec
 passes its repository and the automation configuration explicitly; analysis passes that
 repository and the frozen event head/base. This preserves real commit attribution without
 requiring every open PR head to contain new automation files.
+The source-built collector inherits the automation-selected toolchain while benchmarking the
+frozen head; measurement provenance records that compiler.
 
 The analysis bundle always contains the tool's full Markdown, JSON and summary. The companion
-projects validated JSON into outcome, all-clear and publication-state outputs. The same job
-uploads the reports, then publishes using those local files and the artifact link.
+projects validated JSON into `outcome`, `notable`, `can-clear` and `publication-state` outputs.
+The history-only `can-clear` output describes eligibility for the all-clear presentation;
+`clean` is a publication-state value. The
+[companion command contract](../../packages/cargo-bench-history-github/docs/implementation.md#command-and-artifact-contract)
+owns these outputs. The same job uploads the reports, then publishes using those local files
+and the artifact link.
 Main issue writers share an instance concurrency group, and PR comment writers share a project/PR
 group. Issue lookup uses project-qualified title search followed by a current read by number;
-PR comment lookup remains marker-based. Body markers carry commit and state, and old output
-formats are not adopted. Titles, advisory wording and book links
+PR comment lookup remains marker-based. Body markers carry commit and state; outputs outside
+the companion's defined formats are not adopted. Titles, advisory wording and book links
 come from the companion's message catalogue rather than workflow parameters.
 
 Both sinks use `publish-<sink>-<state>` commands. A successful report selects findings, clean
@@ -105,9 +112,8 @@ also receives its GitHub posting scope. PR analysis restores but never saves the
 history cache. The tool re-lists configured storage and reads newly stored objects on a
 cache miss; topology selection excludes unrelated branch commits from trunk analysis.
 
-Ordinary collection, analysis and backfill retain their contracts. There is no recollection
-dispatch input, single-commit repair worktree or companion recipe; manual pruning and normal
-backfill cover the supported data-maintenance path. Benchmark triggers exclude `merge_group`
+Manual pruning and ordinary backfill cover the supported data-maintenance path. Benchmark
+workflows expose no targeted historical recollection. Their triggers exclude `merge_group`
 and enqueue/dequeue activity because the workflows are advisory.
 
 ## Standard validation structure

@@ -29,9 +29,9 @@ The cloud backend is configured in `.cargo/bench_history.toml` — run
 [`install`](commands/install.md) to generate a fully commented starter file. Authentication
 is via Microsoft Entra ID (OAuth); there are no static credentials in the config.
 
-Use [`setup-azure`](commands/setup-azure.md) to provision storage and a shared GitHub
-identity, or export its self-contained deployment bundle for review. It requires no
-benchmark checkout. Follow the generated starter configuration for the storage fields.
+Use [`setup-azure`](commands/setup-azure.md) to provision storage and a shared Azure managed
+identity with GitHub federation, or export its self-contained deployment bundle for review.
+It requires no benchmark checkout. Follow the generated starter configuration for the storage fields.
 
 ## Read-through cache (cloud backend, CI)
 

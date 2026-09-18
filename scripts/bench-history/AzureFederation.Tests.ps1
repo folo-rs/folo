@@ -110,11 +110,13 @@ Describe 'Set-AzureFederationEnv' {
     }
 
     It 'leaves the environment unchanged when the tenant is missing' {
+        Set-Content -LiteralPath $script:EnvFilePath -Encoding utf8 -Value 'PREEXISTING=kept'
+        $before = Get-Content -LiteralPath $script:EnvFilePath -Raw
         Set-Content -LiteralPath $script:ConstantsPath -Encoding utf8 -Value @(
             'AZURE_PROD_CLIENT_ID=client-456'
         )
         { Set-AzureFederationEnv -ConstantsPath $script:ConstantsPath -EnvFilePath $script:EnvFilePath } |
-            Should -Throw
-        Get-Content -LiteralPath $script:EnvFilePath | Should -BeNullOrEmpty
+            Should -Throw '*AZURE_TENANT_ID*'
+        Get-Content -LiteralPath $script:EnvFilePath -Raw | Should -BeExactly $before
     }
 }

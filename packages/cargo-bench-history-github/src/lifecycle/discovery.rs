@@ -156,7 +156,8 @@ pub(crate) async fn write_comment(
         .create_comment(&context.repository, pull_request, body)
         .await
     {
-        Ok(_) => Ok(()),
+        Ok(comment) if comment.body == body => Ok(()),
+        Ok(_) => Err(UnexpectedCreatedComment::new().into()),
         Err(error) => match find_comment(github, context, pull_request).await {
             Ok(Some(comment)) if comment.body == body => Ok(()),
             Ok(Some(_)) => Err(error.enrich("comment reconciliation found different content")),
@@ -196,6 +197,11 @@ struct ChangedIssueIdentity;
 #[display("Matching pull-request comment has uninterpretable lifecycle metadata")]
 struct UninterpretableComment;
 
+/// A successful create response must describe the intended publication.
+#[ohno::error]
+#[display("Created comment does not contain the requested body")]
+struct UnexpectedCreatedComment;
+
 // These immutable errors expose no mutation across unwinding.
 impl UnwindSafe for AmbiguousIdentity {}
 impl RefUnwindSafe for AmbiguousIdentity {}
@@ -203,3 +209,5 @@ impl UnwindSafe for ChangedIssueIdentity {}
 impl RefUnwindSafe for ChangedIssueIdentity {}
 impl UnwindSafe for UninterpretableComment {}
 impl RefUnwindSafe for UninterpretableComment {}
+impl UnwindSafe for UnexpectedCreatedComment {}
+impl RefUnwindSafe for UnexpectedCreatedComment {}

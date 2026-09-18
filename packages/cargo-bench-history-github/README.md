@@ -5,6 +5,11 @@ Unsupported GitHub automation companion for
 The reusable action pins a tested companion release; neither this binary nor its
 library has a stable API.
 
+## Installation
+
+`cargo binstall cargo-bench-history-github` installs a prebuilt binary on supported
+targets, with a transparent source-build fallback otherwise.
+
 ## Publication
 
 The companion embeds the tool-rendered summary and validates the accompanying JSON

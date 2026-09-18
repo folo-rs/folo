@@ -16,7 +16,6 @@ $VerbosePreference = 'Continue'
 # child process, so one explicitly global state object keeps the az fake shared.
 $global:AzureSetupFixture = @{
     DeploymentCount = 0
-    Calls = [System.Collections.Generic.List[string]]::new()
     Expected = (Get-Content -LiteralPath (Join-Path $BundleDirectory 'parameters.json') -Raw | ConvertFrom-Json)
     BundleDirectory = $BundleDirectory
 }
@@ -27,7 +26,6 @@ function global:az {
     if ($operation -in @('storage account', 'storage container-rm', 'deployment group')) {
         $operation = $args[0..2] -join ' '
     }
-    $global:AzureSetupFixture.Calls.Add($operation)
     if ($args[0] -notin @('version', 'bicep')) {
         if ($args[[array]::IndexOf($args, '--subscription') + 1] -ne $global:AzureSetupFixture.Expected.SubscriptionId) {
             throw 'Selected subscription was not forwarded.'
@@ -54,6 +52,9 @@ function global:az {
             return ConvertTo-Json -InputObject @(@{ name = $global:AzureSetupFixture.Expected.HistoryContainerName })
         }
         'deployment group create' {
+            if ($args[[array]::IndexOf($args, '--resource-group') + 1] -cne $global:AzureSetupFixture.Expected.ResourceGroup) {
+                throw 'Literal deployment resource group was altered.'
+            }
             $parameters = @{}
             $start = [array]::IndexOf($args, '--parameters') + 1
             $end = [array]::IndexOf($args, '--query')
@@ -69,6 +70,15 @@ function global:az {
             if ($parameters.managedIdentityName -ne "id-$($global:AzureSetupFixture.Expected.StorageAccountName)-bench-history" -or
                 $parameters.historyBranch -cne $global:AzureSetupFixture.Expected.HistoryBranch) {
                 throw 'Identity or branch handoff was incorrect.'
+            }
+            foreach ($name in @('location', 'storageAccountName', 'historyContainerName', 'githubOrg', 'githubRepo')) {
+                if ($parameters[$name] -cne $global:AzureSetupFixture.Expected.$name) {
+                    throw "Deployment parameter '$name' was not forwarded."
+                }
+            }
+            # No local principal was requested; the required Bicep type remains a placeholder.
+            if ($parameters.localPrincipalId -cne '' -or $parameters.localPrincipalType -cne 'User') {
+                throw 'Absent local access was not forwarded.'
             }
             $template = $args[[array]::IndexOf($args, '--template-file') + 1]
             if ((Split-Path $template -Parent) -cne $global:AzureSetupFixture.BundleDirectory) {

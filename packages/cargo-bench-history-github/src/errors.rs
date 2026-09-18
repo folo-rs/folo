@@ -8,6 +8,9 @@ pub(crate) struct InvalidRepositoryError {
     value: String,
 }
 
+// Ohno's dynamic source core prevents automatic unwind-safety inference. These immutable
+// leaves expose no mutation; this rationale covers every manual marker impl in this module
+// and must be re-evaluated if mutation becomes observable.
 impl UnwindSafe for InvalidRepositoryError {}
 impl RefUnwindSafe for InvalidRepositoryError {}
 
@@ -28,7 +31,7 @@ impl UnwindSafe for InvalidCommitShaError {}
 impl RefUnwindSafe for InvalidCommitShaError {}
 
 #[ohno::error]
-#[display("Neither `--repo` nor GITHUB_REPOSITORY identifies the repository")]
+#[display("Neither `--repository` nor GITHUB_REPOSITORY identifies the repository")]
 pub(crate) struct MissingRepositoryError;
 
 impl UnwindSafe for MissingRepositoryError {}
@@ -42,7 +45,7 @@ impl UnwindSafe for MissingTokenError {}
 impl RefUnwindSafe for MissingTokenError {}
 
 #[ohno::error]
-#[display("Failed to read report body from '{}'", path.display())]
+#[display("Failed to read report input from '{}'", path.display())]
 pub(crate) struct ReadBodyError {
     path: PathBuf,
 }
@@ -77,7 +80,7 @@ impl UnexpectedStatusError {
 }
 
 #[ohno::error]
-#[display("GitHub returned invalid JSON while {operation}")]
+#[display("GitHub returned an invalid response while {operation}")]
 pub(crate) struct InvalidResponseError {
     operation: String,
 }

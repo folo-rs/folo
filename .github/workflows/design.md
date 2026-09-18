@@ -541,9 +541,10 @@ Benchmark preparation uses the fixed repository-local
 setup action with the Valgrind requirement enabled, and collection/backfill jobs share that
 configuration. The combined analysis/publication job prepares its own environment.
 
-The generic workflows treat an absent hook as no custom setup. There is no arbitrary
-setup path/ref selector or hook-input map. A repository can configure ordinary static action
-references inside its own hook; structural job changes belong to the lower action layer.
+Requirements for reusable workflows and their composite-action building blocks in the external
+`cargo-bench-history-action` repository, including optional setup-hook behavior, belong to the
+[reusable-action design](../../packages/cargo-bench-history/docs/reusable-action.md#47-two-consumption-layers--reusable-workflows-over-composite-actions).
+They are separate from Folo's repository-local hook.
 
 ### Nightly history backfill
 
@@ -657,8 +658,10 @@ Azure trust, result storage or publication flow is needed.
 
 GitHub requires merge-group results for required checks. The repository's ordinary
 `required-checks` validation covers that role; benchmark jobs must not be added to required
-checks without a queue-compatible implementation. The action repository's release-availability
-check is separately required and therefore also runs for its own merge candidates.
+checks without a queue-compatible implementation. The external action repository separately
+requires an installation/release-availability gate on its own merge candidates, as specified
+by its [configuration contract](../../packages/cargo-bench-history/docs/reusable-action.md#122-configuring-the-action-repository).
+Folo's `required-checks` result does not satisfy that separate gate.
 
 ## Failure alerting
 
@@ -669,6 +672,10 @@ another failed run receives another issue. A later successful run neither closes
 earlier alerts. These are records requiring investigation, not a rolling workflow-health
 indicator. They are separate from the rolling regression issue and its status annotations.
 The nightly backfill files no alert (see Nightly history backfill).
+
+Benchmark-history issue alerts require the prepared companion executable. If companion
+preparation or artifact transfer fails, the workflow remains visibly failed, but an issue
+alert is not guaranteed; there is no independent publisher.
 
 A release failure also opens a per-run issue that stays open for human investigation.
 A push-to-`main` Standard validation failure follows the same per-run shape as the
@@ -779,9 +786,8 @@ the checksum, so a truncated payload re-downloads rather than being trusted). Th
 benchmark companion owns the equivalent typed HTTP policy for its GitHub operations.
 
 Non-idempotent creates never retry blindly: the companion reconciles a failed response
-against the intended marker and body. Reads, complete-body updates, closes, and deletion of a
-known comment are idempotent and retry transient failures within a bounded policy. A repeated
-delete returning not-found has reached its desired state. The adapter honors acceptable
+against the intended marker and body. Reads and complete-body updates are idempotent and
+retry transient failures within a bounded policy. The adapter honors acceptable
 retry delays and surfaces permanent failures; redirects and transport-level automatic retries
 cannot bypass the operation-specific policy.
 

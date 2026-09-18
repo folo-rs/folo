@@ -40,7 +40,8 @@ pub(crate) fn failure_issue(instance: &Instance, run_id: u64, run_url: &str) -> 
         marker::issue(instance, IssueKind::FailureAlert),
         marker::alert_run(instance, run_id),
         "# Benchmark-history automation failed".to_owned(),
-        "The benchmark history may be incomplete until a later run succeeds.".to_owned(),
+        "Benchmark history may be incomplete. Inspect the failed run to determine whether repair is needed."
+            .to_owned(),
         format!("Failed run: {run_url}"),
     ];
     push_links(&mut sections, None);
@@ -155,6 +156,8 @@ pub(crate) fn insert_stale_banner(body: &str, instance: &Instance, warning: &str
     let mut without_old = Vec::new();
     let mut lines = body.lines();
 
+    // Only a complete owned block may be removed. An unmatched start does not authorize
+    // deleting the remaining report, whose ownership cannot be inferred from that delimiter.
     while let Some(line) = lines.next() {
         if line != start {
             without_old.push(line);
@@ -192,13 +195,15 @@ pub(crate) fn insert_stale_banner(body: &str, instance: &Instance, warning: &str
 }
 
 pub(crate) fn is_in_progress(body: &str, instance: &Instance) -> bool {
-    body.lines()
-        .any(|line| line == marker::in_progress(instance))
+    let in_progress = marker::in_progress(instance);
+    body.lines().any(|line| line == in_progress)
 }
 
 pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
+    let empty_scope = marker::empty_scope(instance);
+    let failed = marker::failed(instance);
     body.lines()
-        .any(|line| line == marker::empty_scope(instance) || line == marker::failed(instance))
+        .any(|line| line == empty_scope || line == failed)
 }
 
 fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {

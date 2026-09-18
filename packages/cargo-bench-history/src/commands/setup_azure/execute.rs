@@ -88,18 +88,16 @@ pub(crate) async fn execute_with(
         }
         let output = run_process(process, &arguments, "deployment").await?;
         // Successful tools may emit useful native diagnostics to stderr too.
-        Ok(RunOutcome::Completed {
-            message: format!("{}{}", output.stdout, output.stderr),
-        })
+        Ok(format!("{}{}", output.stdout, output.stderr))
     }
     .await;
     if let Err(cleanup) = files.cleanup(directory).await {
         return Err(match result {
-            Ok(_) => SetupCleanupError::new(path, cleanup).into(),
-            Err(error) => SetupCleanupError::caused_by(path, cleanup, error).into(),
+            Ok(output) => SetupCleanupError::new(path, cleanup, output).into(),
+            Err(error) => SetupCleanupError::caused_by(path, cleanup, String::new(), error).into(),
         });
     }
-    result
+    result.map(|message| RunOutcome::Completed { message })
 }
 
 async fn run_process(

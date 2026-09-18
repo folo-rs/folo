@@ -188,10 +188,15 @@ impl GitHub for FakeGitHub {
         title: &str,
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>> {
-        if let Some(issue) = self.issues.borrow_mut().get_mut(&number) {
-            title.clone_into(&mut issue.title);
-            body.clone_into(&mut issue.body);
-        }
+        let mut issues = self.issues.borrow_mut();
+        let Some(issue) = issues.get_mut(&number) else {
+            return ready(Err(RequestFailedError::new(
+                "updating a missing fake issue",
+            )
+            .into()));
+        };
+        title.clone_into(&mut issue.title);
+        body.clone_into(&mut issue.body);
         ready(Ok(()))
     }
 
@@ -237,9 +242,14 @@ impl GitHub for FakeGitHub {
         id: u64,
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>> {
-        if let Some((_, comment)) = self.comments.borrow_mut().get_mut(&id) {
-            body.clone_into(&mut comment.body);
-        }
+        let mut comments = self.comments.borrow_mut();
+        let Some((_, comment)) = comments.get_mut(&id) else {
+            return ready(Err(RequestFailedError::new(
+                "updating a missing fake comment",
+            )
+            .into()));
+        };
+        body.clone_into(&mut comment.body);
         ready(Ok(()))
     }
 
@@ -274,5 +284,23 @@ impl GitHub for FakeGitHub {
             .get(&(base.as_str().to_owned(), head.as_str().to_owned()))
             .copied()
             .unwrap_or(Comparison { ahead_by: None })))
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use futures::executor::block_on;
+
+    use super::*;
+
+    #[test]
+    fn missing_update_targets_are_errors_without_creating_items() {
+        let github = FakeGitHub::new();
+        let repository = "folo-rs/folo".parse().unwrap();
+        block_on(github.update_issue(&repository, 1, "title", "body")).unwrap_err();
+        block_on(github.update_comment(&repository, 1, "body")).unwrap_err();
+        assert!(github.issues().is_empty());
+        assert!(github.comments_for(1).is_empty());
     }
 }

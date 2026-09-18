@@ -5,6 +5,7 @@ use std::time::Duration;
 use ohno::AppError;
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use reqwest::{Client, Request, StatusCode, redirect, retry};
+use serde_json::Value;
 
 use crate::errors::RequestFailedError;
 
@@ -105,34 +106,173 @@ impl TransportError {
 pub(crate) const RETRY_DELAYS: [Duration; 2] =
     [Duration::from_millis(200), Duration::from_millis(800)];
 
-// GitHub recommends a minute before retrying a secondary limit without Retry-After.
-// Larger waits are left to workflow retry rather than tying up the runner.
+// Use GitHub's minimum secondary-limit wait when no Retry-After is supplied. It is also
+// the runner's maximum retry wait; longer or increasing waits beyond it fail explicitly.
+// Ref: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
-pub(crate) fn retry_delay(response: &HttpResponse, fallback: Duration) -> Option<Duration> {
+pub(crate) fn retry_delay(
+    response: &HttpResponse,
+    fallback: Duration,
+    previous_delay: Option<Duration>,
+) -> Option<Duration> {
+    // GitHub requires waiting until the absolute primary-quota reset. Without a clock-backed
+    // reset calculation, preserve the response error instead of guessing an earlier retry.
+    if response
+        .headers
+        .get("x-ratelimit-remaining")
+        .is_some_and(|value| value == "0")
+    {
+        return None;
+    }
     let rate_limited = response.status == StatusCode::TOO_MANY_REQUESTS
         || (response.status == StatusCode::FORBIDDEN
             && (response.headers.contains_key(RETRY_AFTER)
-                || response
-                    .headers
-                    .get("x-ratelimit-remaining")
-                    .is_some_and(|value| value == "0")));
+                || secondary_rate_limit(&response.body)));
     let transient = rate_limited
         || response.status == StatusCode::REQUEST_TIMEOUT
         || response.status.is_server_error();
     if !transient {
         return None;
     }
-    if let Some(value) = response.headers.get(RETRY_AFTER) {
+    let delay = if let Some(value) = response.headers.get(RETRY_AFTER) {
         // Accept bounded delta-seconds. Unsupported dates or excessive waits fail without
         // retrying early; interpreting a date would require a separate wall-clock policy.
         let seconds = value.to_str().ok()?.parse::<u64>().ok()?;
-        let delay = Duration::from_secs(seconds);
-        return (delay <= MAX_RETRY_AFTER).then_some(delay);
-    }
-    Some(if rate_limited {
+        Duration::from_secs(seconds)
+    } else if rate_limited {
         MAX_RETRY_AFTER
     } else {
         fallback
-    })
+    };
+    let delay = if let Some(previous) = previous_delay.filter(|_| rate_limited) {
+        // Continued secondary throttling requires exponential backoff, not repeated fixed
+        // waits. A required increase beyond our wait budget terminates retries.
+        const BACKOFF_MULTIPLIER: u32 = 2;
+        delay.max(previous.checked_mul(BACKOFF_MULTIPLIER)?)
+    } else {
+        delay
+    };
+    (delay <= MAX_RETRY_AFTER).then_some(delay)
+}
+
+fn secondary_rate_limit(body: &[u8]) -> bool {
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    body.get("message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.contains("secondary rate limit"))
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    use super::*;
+
+    fn response(status: StatusCode) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: HeaderMap::new(),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn secondary_limit_classification_requires_the_error_message() {
+        assert!(secondary_rate_limit(
+            br#"{"message":"You have exceeded a secondary rate limit."}"#
+        ));
+        for body in [
+            b"not JSON".as_slice(),
+            b"{}",
+            br#"{"message":null}"#,
+            br#"{"message":"Resource not accessible by integration"}"#,
+            br#"{"other":"secondary rate limit"}"#,
+        ] {
+            assert!(!secondary_rate_limit(body));
+        }
+    }
+
+    #[test]
+    fn exhausted_primary_quota_cannot_use_a_relative_retry_after() {
+        let mut response = response(StatusCode::TOO_MANY_REQUESTS);
+        response.headers.insert(
+            HeaderName::from_static("x-ratelimit-remaining"),
+            HeaderValue::from_static("0"),
+        );
+        response
+            .headers
+            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+        assert_eq!(
+            retry_delay(&response, Duration::from_millis(200), None),
+            None
+        );
+    }
+
+    #[test]
+    fn rate_limit_backoff_honors_both_server_wait_and_previous_delay() {
+        let mut response = response(StatusCode::TOO_MANY_REQUESTS);
+        response
+            .headers
+            .insert(RETRY_AFTER, HeaderValue::from_static("5"));
+        assert_eq!(
+            retry_delay(
+                &response,
+                Duration::from_millis(200),
+                Some(Duration::from_secs(7))
+            ),
+            Some(Duration::from_secs(14))
+        );
+        response
+            .headers
+            .insert(RETRY_AFTER, HeaderValue::from_static("30"));
+        assert_eq!(
+            retry_delay(
+                &response,
+                Duration::from_millis(200),
+                Some(Duration::from_secs(7))
+            ),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            retry_delay(
+                &response,
+                Duration::from_millis(200),
+                Some(Duration::from_secs(31))
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn maximum_retry_after_is_allowed_but_larger_values_are_not() {
+        let mut response = response(StatusCode::SERVICE_UNAVAILABLE);
+        response
+            .headers
+            .insert(RETRY_AFTER, HeaderValue::from_static("60"));
+        assert_eq!(
+            retry_delay(&response, Duration::from_millis(200), None),
+            Some(Duration::from_secs(60))
+        );
+        response
+            .headers
+            .insert(RETRY_AFTER, HeaderValue::from_static("61"));
+        assert_eq!(
+            retry_delay(&response, Duration::from_millis(200), None),
+            None
+        );
+    }
+
+    #[test]
+    fn ordinary_transient_responses_keep_their_non_rate_limit_backoff() {
+        let response = response(StatusCode::BAD_GATEWAY);
+        let fallback = Duration::from_millis(800);
+        assert_eq!(
+            retry_delay(&response, fallback, Some(Duration::from_secs(30))),
+            Some(fallback)
+        );
+    }
 }

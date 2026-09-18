@@ -12,6 +12,11 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
+Analysis carries the renderer-owned outcome with the rendered report bundle so the shell can
+expose it in process or write the requested outcome file. It uses the
+[shared projection](../../cbh_render/docs/implementation.md), not an orchestration-specific
+mapping from findings and series coverage.
+
 The public command entry points own production wiring: they resolve and construct the configured
 storage, repository, diagnostics, environment, time, and task-execution capabilities before
 delegating. Their inner `*_with` orchestrators receive generic ports and explicit runtime values,

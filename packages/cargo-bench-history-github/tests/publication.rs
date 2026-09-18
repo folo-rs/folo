@@ -301,6 +301,21 @@ fn report_file_failures_and_evidence_mismatches_propagate_from_dispatch() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Native report-file loading and command dispatch.")]
+fn blank_summary_files_are_rejected_for_each_report_publication_form() {
+    let fixture = Fixture::new();
+    for sink in ["issue", "comment"] {
+        for state in ["findings", "clean", "no-data"] {
+            for summary in ["", " \r\n\t "] {
+                let command = fixture.report(sink, state);
+                fs::write(fixture.0.join(format!("{sink}-{state}.md")), summary).unwrap();
+                Fixture::run(vec![command], "[]").unwrap_err();
+            }
+        }
+    }
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "Native preparation dispatch creates real machine-key outputs."

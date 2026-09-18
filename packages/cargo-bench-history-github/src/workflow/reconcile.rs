@@ -38,6 +38,8 @@ pub(crate) fn reconcile(
         if job.run_id != run_id || !ids.insert(job.id) {
             return Err(InvalidCollectionJobs::new("mismatched run or duplicate job ID").into());
         }
+        // Reusable workflow callers prefix job names; the collection identity is the final
+        // component. Ref: docs/design.md, Workflow evidence.
         let marker = job.name.rsplit(" / ").next().unwrap_or(&job.name);
         let Some(platform) = marker.strip_prefix(&prefix) else {
             continue;
@@ -130,7 +132,7 @@ pub(crate) struct MismatchedReceipt {
 
 /// Multiple artifacts cannot claim the same platform attempt.
 #[ohno::error]
-#[display("Duplicate collection receipts for platform '{platform}' and attempt")]
+#[display("Duplicate collection receipts for platform '{platform}' in the same run attempt")]
 pub(crate) struct DuplicateReceipt {
     platform: String,
 }

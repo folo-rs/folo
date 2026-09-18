@@ -1,3 +1,5 @@
+use cargo_bench_history::AnalysisOutcome;
+
 use crate::harness::*;
 
 /// An empty history analyzes cleanly and states that it tested nothing.

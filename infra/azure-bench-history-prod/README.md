@@ -12,9 +12,9 @@ of the commands below are automatic rollout steps.
   `Storage Blob Data Contributor` on the storage account. Collection, backfill and
   analysis share it; there is no separate reader role or client ID.
 - An optional local user or group receives account-scoped
-  `Storage Blob Data Contributor`, independently of the CI identity.
+  `Storage Blob Data Contributor`, independently of the production identity.
 
-The CI identity uses the issuer `https://token.actions.githubusercontent.com`
+The production identity uses the issuer `https://token.actions.githubusercontent.com`
 and audience `api://AzureADTokenExchange`, with these GitHub subjects:
 
 ```text
@@ -45,12 +45,13 @@ avoid retaining disposable branch data in production; they do not require a read
 - Confirm the target subscription, resource group, account and container.
   [`.cargo/bench_history.toml`](../../.cargo/bench_history.toml) configures
   account `folohistory`, container **`bench-history`**. The wrapper defaults match.
-- Serialize deployments for this stack. Do not run them
-  concurrently: the state-preserving decisions use a pre-deployment snapshot.
+- Serialize deployments targeting the same storage account or managed identity
+  in the selected subscription and resource group: the state-preserving decisions
+  use a pre-deployment snapshot.
 
 ## Deploy the production stack
 
-Run from the repository root:
+Run from the repository root, replacing the quoted subscription placeholder:
 
 ```powershell
 Set-StrictMode -Version Latest
@@ -59,7 +60,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 az login
 .\infra\azure-bench-history-prod\deploy.ps1 `
-    -SubscriptionId <subscription-guid> `
+    -SubscriptionId '<subscription-guid>' `
     -ResourceGroup folohistory `
     -StorageAccountName folohistory `
     -HistoryContainerName bench-history
@@ -101,7 +102,7 @@ Provisioning alone does not activate any workflow.
 ## Deployment behavior
 
 `deploy.ps1` supplies Folo defaults to the [canonical deployment bundle](../../packages/cargo-bench-history/src/azure_bundle/).
-That bundle is embedded by `cargo-bench-history setup-azure` and exports without a
+That bundle is embedded by `cargo-bench-history setup-azure` and can be exported without a
 checkout. Its driver calls the Pester-tested `ProductionIdentityDeployment.psm1` module.
 This is a thin Azure CLI provisioning boundary usable without a Rust toolchain;
 Bicep remains the resource definition authority.
@@ -113,16 +114,16 @@ Bicep remains the resource definition authority.
 - **Fresh storage:** bootstrap modules create an Entra-only `StorageV2`
   `Standard_LRS` account (HTTPS, TLS 1.2, no public blobs or shared-key access),
   initially disable container/blob soft delete, and create the private history container.
-- **Identity:** fresh and repeated deployment ensure the same production identity,
-  contributor role and configured branch/PR federated subjects.
+- **Identity:** fresh and repeated deployments ensure the same production identity,
+  `Storage Blob Data Contributor` role and configured branch/PR federated subjects.
 - **Incremental mode:** unmentioned resources and optional local grants remain.
   Omission is not a general-purpose resource deletion mechanism.
 
 Always use the wrapper for routine deployments. Direct Bicep/ARM callers bypass
-its state discovery. They must explicitly select the bootstrap flags.
+its state discovery. They must explicitly select `createStorageAccount` and
+`createHistoryContainer`, setting each to true only when its corresponding resource is absent.
 The bundle's `parameters.json` is standalone driver input, with explicit required
 placement and repository values rather than Folo defaults.
-Direct Bicep bootstrap flags must be true only for missing resources.
 
 ## Local collection and destructive teardown
 
@@ -137,8 +138,9 @@ az login
 cargo run -p cargo-bench-history --bin cargo-bench-history -- collect --workspace --exclude benchmarks
 ```
 
-This writes the configured production account and requires local contributor
-access. Use `--local=<path>` for a throwaway run that never accesses Azure.
+This writes to the configured production storage account and requires local
+`Storage Blob Data Contributor` access. Use `--local=<path>` for a throwaway run
+that never accesses Azure.
 
 `teardown.ps1` deletes the entire production resource group and **permanently
 deletes collected history**, the identity and its access configuration.

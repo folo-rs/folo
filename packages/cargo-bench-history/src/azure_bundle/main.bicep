@@ -19,10 +19,10 @@ param managedIdentityName string = 'id-${storageAccountName}-bench-history'
 @maxLength(63)
 param historyContainerName string = 'bench-history'
 
-@description('Create the storage account and initial blob-service settings only when the account is missing.')
+@description('Set true only for an absent storage account; the PowerShell driver determines this value.')
 param createStorageAccount bool = false
 
-@description('Create the history container only when missing.')
+@description('Set true only for an absent history container; the PowerShell driver determines this value.')
 param createHistoryContainer bool = false
 
 @description('GitHub organisation (or user) that owns the repository.')
@@ -60,9 +60,9 @@ var federationAudience = 'api://AzureADTokenExchange'
 // subject alone does not distinguish a fork head from a same-repository head.
 var credentials = [
   {
-    // Git branch syntax is broader than federated-credential resource names.
-    // A stable name also updates the configured branch subject on redeployment.
-    name: 'github-history-branch'
+    // This stable resource key is independent of the configured history branch.
+    // Branch selection changes only the credential subject.
+    name: 'github-branch-main'
     subject: 'repo:${githubOrg}/${githubRepo}:ref:refs/heads/${historyBranch}'
   }
   {

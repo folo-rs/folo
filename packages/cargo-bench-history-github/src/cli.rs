@@ -109,7 +109,7 @@ pub(crate) enum Command {
 }
 
 /// A workflow run attempt identifies the writer independently of measured commit.
-#[derive(Args, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Args, Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) run_id: NonZero<u64>,
@@ -238,11 +238,12 @@ mod tests {
 
     use clap::error::ErrorKind;
     use clap::{Command as ClapCommand, CommandFactory};
-    use static_assertions::assert_impl_all;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
     assert_impl_all!(Cli: Send, Sync, Unpin, UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(RunArgs: Ord, PartialOrd);
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -262,6 +263,8 @@ mod tests {
             "linux,windows",
             "--completed-platforms",
             "linux",
+            "--artifact-url",
+            "https://example.test/report-bundle",
         ]
     }
 

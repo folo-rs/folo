@@ -39,8 +39,9 @@ The teaching points that every chapter should reinforce, not just the concept ch
    and prune are explicit maintenance actions. This keeps caches valid and history trustworthy.
 5. **Storage is chosen at run time.** A shared config may describe Azure, while a local path comes
    only from a flag or environment variable and never enters the committed file.
-6. **Findings are advisory; JSON is the signal.** The exit code reflects whether analysis *ran*,
-   not what it found. Automation reads the machine-readable report.
+6. **Findings are advisory; the outcome is the analysis signal.** The exit code reflects whether
+   analysis *ran*, not what it found. Automation reads the successful-analysis outcome from
+   JSON or the outcome file; JSON also carries the detailed evidence.
 7. **Prefer auto-detection.** Analysis mode is derived from git topology. Collection derives the
    machine key from hardware.
 8. **Git topology orders time.** Series are ordered by first-parent committer-date topology read
@@ -136,7 +137,7 @@ the commands that exercise them and down into the appendix for mechanism.
   history false-discovery family being every judged history series; the two
   auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
   via blessings; the three report formats sharing one pass and the
-  advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.
+  advisory-finding / machine-readable-outcome split (tenet 6); no severity classification.
 - **Boundary**: this page owns the *mental model* and stops there. Mechanism with numbers — which
   gate computes what, against which threshold, in what order — belongs to the appendix. Where the
   two would overlap, this page states the rule in a sentence and links down.
@@ -184,7 +185,7 @@ against and what a user reads when a finding does not make sense.
 | 5. Detection | What a signal is, which detector establishes it, how a history change point is tested fairly after searching across possible splits, and what each mode does and does not do. |
 | 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |
 | 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; that a judged short series can still fail to report a lone finding as the family grows. |
-| 8. Reporting | Ranking, the three formats plus the lossy summary, charts, comparison-base lag, and why findings never fail a build. |
+| 8. Reporting | Ranking, report formats and derived outputs, charts, comparison-base lag, and the [analysis outcome](../book/src/appendix/reporting.md#analysis-outcomes) as the successful-analysis signal, distinct from external platform coverage. |
 | 9. Insights | Triage playbooks: what to do with each kind of finding, and what to do when an expected finding never arrives. |
 | 10. Limits | What the pipeline deliberately does not do, and what to do instead. |
 | Glossary | Every term the part defines, in plain language, with the technical name alongside. |

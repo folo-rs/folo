@@ -22,6 +22,9 @@ impl Report {
         mode: AnalysisMode,
         state: PublicationState,
     ) -> Result<(), AppError> {
+        if self.summary.trim().is_empty() {
+            return Err(EmptySummary::new().into());
+        }
         self.evidence.report.require_mode(mode)?;
         self.evidence.require_state(state)?;
         if self.owner.head != self.evidence.report.commit {
@@ -31,7 +34,7 @@ impl Report {
     }
 }
 
-/// No complete verdict is distinct from missing evidence or failed execution.
+/// Successful no-verdict publication, backed by a report or explicitly empty scope.
 #[derive(Debug)]
 pub(crate) enum NoData {
     Empty(PendingArgs),
@@ -174,7 +177,10 @@ pub(crate) fn annotate(
 }
 
 pub(crate) fn superseded(existing: &PendingArgs, incoming: &PendingArgs) -> bool {
-    existing.run > incoming.run
+    // Run IDs identify writers, not chronology. Distinct runs rely on freshness guards
+    // and serialized arrival order at the same commit. Ref: docs/design.md, Run ownership.
+    existing.run.run_id == incoming.run.run_id
+        && existing.run.run_attempt > incoming.run.run_attempt
 }
 
 /// Contradictory publication inputs cannot authorize a GitHub mutation.
@@ -187,8 +193,15 @@ pub(crate) struct InvalidPublication;
 #[display("Matching issue has an uninterpretable body; preserving it")]
 pub(crate) struct UninterpretableIssue;
 
+/// Report-backed publication needs the analyzer's rendered details.
+#[ohno::error]
+#[display("Report summary must contain non-whitespace content")]
+struct EmptySummary;
+
 // These diagnostics expose no mutation of their source chains.
 impl UnwindSafe for InvalidPublication {}
 impl RefUnwindSafe for InvalidPublication {}
 impl UnwindSafe for UninterpretableIssue {}
 impl RefUnwindSafe for UninterpretableIssue {}
+impl UnwindSafe for EmptySummary {}
+impl RefUnwindSafe for EmptySummary {}

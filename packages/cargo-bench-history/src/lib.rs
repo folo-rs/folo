@@ -203,6 +203,19 @@
 //! factor-set version tag) are written to standard error, so a change in the key can be
 //! traced to the specific factor that moved.
 //!
+//! ## `setup-azure`
+//!
+//! Provisions an Azure history store and one managed identity for history-branch and
+//! pull-request workflows. The identity has account-scoped Storage Blob Data Contributor
+//! access; optional local access grants the same role. Run
+//! `cargo bench-history setup-azure --help` for the explicit deployment inputs.
+//! Execution requires Azure CLI, PowerShell 7.6 or later, installed Bicep and an
+//! authenticated subscription. Repeated deployments preserve existing storage
+//! properties and data.
+//!
+//! `cargo bench-history setup-azure --out-dir ./azure-history` instead exports a
+//! self-contained deployment bundle without invoking tools or checking credentials.
+//!
 //! # Selecting data: options shared by the query commands
 //!
 //! `analyze`, `list`, `prune`, and `examine` share one selection model, organized
@@ -274,15 +287,8 @@
 //! (the default `https://<account>.blob.core.windows.net`). The account may — and
 //! should — have shared-key access disabled entirely.
 //!
-//! To stand up an Entra-ID-backed store:
-//!
-//! Run `cargo bench-history setup-azure --help` for explicit provisioning inputs,
-//! or `cargo bench-history setup-azure --out-dir ./azure-history` to export a
-//! self-contained deployment bundle without invoking tools or checking credentials.
-//! The deployment supplies one identity with account contributor access, history
-//! branch and PR federation, and optional local access. Repeated deployments
-//! preserve existing storage properties and data. Execution requires Azure CLI,
-//! PowerShell 7.6 or later, installed Bicep and an authenticated subscription.
+//! Use [`setup-azure`](#setup-azure) to provision an Entra-ID-backed store or export
+//! its standalone deployment bundle.
 //!
 //! For a manually managed alternative:
 //!

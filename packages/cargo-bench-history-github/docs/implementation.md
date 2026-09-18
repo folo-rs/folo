@@ -20,9 +20,10 @@ so argument wiring and terminal transitions are covered without credentials or n
 ## Evidence and state transitions
 
 JSON decoding produces a validated analysis report before any publication operation. The
-publication boundary validates the report's mode, frozen commit, outcome and census consistency
-and separately carries collection-platform coverage. Message selection uses that typed evidence;
-it does not scrape Markdown or map the tool's individual unjudged-reason vocabulary.
+publication boundary validates the report's mode, frozen commit, outcome and census consistency,
+rejects blank summaries and separately carries collection-platform coverage. Message selection
+uses that typed evidence; it does not scrape Markdown or map the tool's individual
+unjudged-reason vocabulary.
 
 All-clear validation happens before issue lookup or mutation. This makes a contradictory report
 or a missing platform an error even when the rolling issue happens not to exist. The CLI
@@ -35,6 +36,10 @@ Pending ownership combines workflow run ID, attempt and frozen head. Failed-stat
 acts only on its own in-progress placeholder or issue annotation. Freshness and distance queries
 are distinct: inability to compute a distance produces an explicit qualification, while a known
 newer result is preserved.
+Attempt supersession compares attempt numbers only when run IDs match; the ownership record
+has no total ordering. Distinct runs use the existing freshness guards, and serialized
+publication order decides which same-commit report remains. No run-number or timestamp lookup
+is needed, and exact failed-state ownership remains independent of that ordering policy.
 History issue replacement also checks commit ordering: the same commit or a verified forward
 comparison may replace existing findings, while an absent, backward or unknown ordering leaves
 them intact. Both publication and all-clear share this guard.
@@ -47,6 +52,9 @@ the previous report. They retain its analyzed-commit identity and freshness qual
 Preflight records ownership so delayed terminal work cannot retire a newer pending annotation.
 No-data at the pending head can retire that annotation despite an unknown distance to the
 retained report, including when a successful preflight is reused by a later run attempt.
+When no-data is the first successful publication for a newer head, it qualifies the retained
+report as stale rather than depending on preflight to have done so. An existing annotation at
+that head preserves the retained report and its staleness unchanged.
 Absence of an issue is diagnosed after input validation; only findings can create one.
 
 An ambiguous create is reconciled against both the artifact identity and the desired body.
@@ -109,6 +117,12 @@ reported rather than retried prematurely. Pagination must make progress, and a l
 failure remains an error rather than a successful partial list. Comparison distances are
 numeric only for a verified linear forward relationship or identical commits.
 
+Secondary throttling is recognized from GitHub's error message as well as its status and headers.
+Without a supplied delay, retries use GitHub's documented minimum wait; continued throttling
+requires an increasing wait within the same budget. Exhausted primary quota requires an absolute
+reset-time calculation. The adapter has no clock-backed reset policy, so it surfaces that
+response instead of guessing a retry time.
+
 The reqwest boundary disables automatic redirects and retries so they cannot bypass the
 adapter's operation-specific policy. Creates have no blind retry; lifecycle reconciliation
 uses the same REST decoding as ordinary lookup. Credentials are redacted from diagnostic
@@ -155,8 +169,9 @@ variables. This keeps real filesystem and process coverage outside the unit/Miri
 ### Command and artifact contract
 
 Common options precede the subcommand: `--repository owner/name`, `--instance ID`, `--verbose`.
-The internal instance input carries the configured project ID supplied by workflow setup, not a
-consumer-selected action override. Omitting it retains the companion's `default` namespace.
+The internal instance input carries the resolved project namespace supplied by workflow setup,
+not a raw arbitrary project ID or consumer-selected action override. Omitting it retains the
+companion's `default` namespace.
 Receipt creation and analysis preparation default the repository from `GITHUB_REPOSITORY`.
 Matrix setup and report inspection need neither a repository nor a GitHub credential.
 
@@ -177,7 +192,7 @@ cargo-bench-history-github inspect-report
   --completed-platforms CSV --github-output PATH
 ```
 
-These examples wrap arguments for readability, not shell execution. SHA is a full, clean
+These examples wrap arguments for readability, not shell execution. SHA is a full
 hexadecimal commit ID. Run IDs and attempts are positive. Machine-key files contain the actual
 16-hex-digit fingerprint, with surrounding command-output whitespace accepted and hexadecimal
 letters normalized to lowercase. Matrix, receipt and preparation platform identifiers use ASCII

@@ -47,6 +47,11 @@ These boundaries are directional: component crates do not depend on the shell, a
 policy remains with the application even when a component implements it. More detailed analysis
 data flow is documented in the [analysis implementation guide](analyze.md).
 
+The renderer owns the shared analysis-outcome projection. Query orchestration carries the
+outcome with its rendered reports, and the shell exposes the typed value or writes the
+requested outcome file without introducing another decision rule. Projection ownership is
+described in the [renderer guide](../../cbh_render/docs/implementation.md).
+
 ## Implementation tenets
 
 Pure transformation and decision logic remains synchronous in component crates. External work is
@@ -104,6 +109,9 @@ invocation and output/error handling, not a second implementation of those Azure
 The standalone driver verifies Azure CLI, installed Bicep and an authenticated enabled
 subscription (including token acquisition) before any resource mutation. JSON parameter
 values remain literal data; script flags may explicitly override them for standalone use.
+Callers serialize invocations sharing a storage account or managed identity because discovery
+and subsequent writes address those shared resources, including the identity's
+federated-credential collection. Unique Azure deployment names do not coordinate these writes.
 The PowerShell boundary is deliberate: an exported bundle remains independently editable and
 executable with Azure tooling, without a Rust toolchain or this application. Porting the driver
 to Rust solely to remove `pwsh` would require a replacement standalone deployment path; that
@@ -116,7 +124,12 @@ let in-process tests prove dispatch, argv, prerequisite ordering and error propa
 starting tools. Native integration tests cover temporary-directory ownership, export destinations
 and execution of an extracted bundle; deployment policy retains its mocked-Azure coverage.
 
-Packaging coverage builds the published archive and exports its bundle without a Folo checkout.
-Offline Bicep compilation and standalone-script checks establish that exported imports resolve.
+The workspace tests exercise export and standalone-driver behavior through the workspace-built
+binary and mocked Azure. They do not establish a packaged-source build or Bicep compilation.
 Fresh and repeated deployments share the same policy tests through both entry points.
-These checks do not deploy live resources; real provisioning remains an explicit maintainer action.
+
+Maintainers separately invoke packaged-source build/export checks and offline Bicep compilation
+to verify distribution and bundle imports. Registry-source installation checks run after their
+required dependencies are published. These explicit checks are separate from the workspace suite,
+not an implicit CI gate. They do not deploy live resources; provisioning remains an explicit
+maintainer action.

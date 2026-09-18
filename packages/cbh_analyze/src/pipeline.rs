@@ -396,7 +396,6 @@ where
         tip_commit: &dataset.tip_commit,
         tip_dirty: dataset.tip_dirty,
         mode: dataset.mode,
-        notable,
         runs: dataset.run_index.total(),
         series: series.len(),
         commit_span: dataset.run_index.commit_span(),
@@ -408,8 +407,7 @@ where
         ghosts_excluded,
         census,
     };
-    let outcome =
-        AnalysisOutcome::from_analysis(input.notable, &Coverage::from_census(&input.census));
+    let outcome = AnalysisOutcome::from_analysis(notable, &Coverage::from_census(&input.census));
     let render_started = Instant::now();
     let rendered = request.render_analyze(
         outcome,

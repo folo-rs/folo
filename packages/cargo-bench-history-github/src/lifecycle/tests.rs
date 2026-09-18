@@ -117,6 +117,28 @@ fn publish(github: &FakeGitHub, report: &Report, day: u64) {
     .unwrap();
 }
 
+fn seed_retained_findings(github: &FakeGitHub, owner: &PendingArgs) {
+    let context = context();
+    // Annotation tests need coherent retained metadata, not another full publication lifecycle.
+    // Keep interpreter setup small; report composition has its own coverage.
+    let body = [
+        marker::issue(&context.instance, IssueKind::Regression),
+        marker::run_owner(&context.instance, owner),
+        marker::analyzed_sha(&context.instance, &owner.head),
+        marker::state(&context.instance, "findings"),
+        "Retained findings".to_owned(),
+    ]
+    .join("\n");
+    github.seed_issue(Issue {
+        number: 1,
+        title: IssueIdentity::Rolling(context.instance)
+            .title(&clock(1))
+            .unwrap(),
+        body,
+        open: true,
+    });
+}
+
 #[test]
 fn only_findings_create_issues_and_explicit_states_cannot_misrepresent_evidence() {
     let github = FakeGitHub::new();
@@ -268,7 +290,7 @@ fn preflight_marks_clean_results_stale_without_changing_the_retained_verdict() {
 #[test]
 fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
     let github = FakeGitHub::new();
-    publish(&github, &findings('a'), 1);
+    seed_retained_findings(&github, &owner(1, 1, 'a'));
     github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(2) });
     let pending = owner(2, 1, 'b');
     block_on(issue_preflight(&github, &context(), &clock(2), &pending)).unwrap();
@@ -277,6 +299,8 @@ fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
         .unwrap()
         .report
         .to_owned();
+    // A later unavailable comparison must not degrade this pending head's retained warning.
+    github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: None });
     let partial = report(AnalysisMode::History, Outcome::Clean, false, pending);
     block_on(issue_no_data(
         &github,
@@ -300,6 +324,73 @@ fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
         1
     );
     assert_ne!(after.title, pending_body.title);
+}
+
+#[test]
+fn no_data_without_preflight_qualifies_the_retained_report() {
+    let github = FakeGitHub::new();
+    publish(&github, &findings('a'), 1);
+    github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(2) });
+    let incoming = report(
+        AnalysisMode::History,
+        Outcome::InsufficientBaseline,
+        true,
+        owner(2, 1, 'b'),
+    );
+    block_on(issue_no_data(
+        &github,
+        &context(),
+        &clock(2),
+        &NoData::Report(incoming),
+    ))
+    .unwrap();
+    let issue = only_issue(&github);
+    let parsed = IssueBody::parse(&issue.body, &context().instance).unwrap();
+    assert_eq!(parsed.commit, sha('a'));
+    assert!(parsed.report.contains("2 commits behind HEAD"));
+    assert!(parsed.report.contains(&findings('a').summary));
+    let annotation = parsed.annotation.unwrap();
+    assert_eq!(annotation.owner, owner(2, 1, 'b'));
+    assert!(matches!(annotation.state, AnnotationState::NoData));
+}
+
+#[test]
+fn empty_summary_cannot_publish_issue_findings() {
+    let github = FakeGitHub::new();
+    let mut report = findings('a');
+    report.summary.clear();
+    block_on(issue_report(
+        &github,
+        &context(),
+        &clock(1),
+        &report,
+        PublicationState::Findings,
+    ))
+    .unwrap_err();
+    assert!(github.issues().is_empty());
+}
+
+#[test]
+fn whitespace_summary_cannot_publish_comment_findings() {
+    let github = FakeGitHub::new();
+    github.set_pull_head(7, sha('a'));
+    let mut report = report(
+        AnalysisMode::Branch,
+        Outcome::Findings,
+        true,
+        owner(1, 1, 'a'),
+    );
+    report.summary = " \r\n\t ".to_owned();
+    block_on(comment_report(
+        &github,
+        &context(),
+        7,
+        "foo",
+        &report,
+        PublicationState::Findings,
+    ))
+    .unwrap_err();
+    assert!(github.comments_for(7).is_empty());
 }
 
 fn pending_issue() -> (FakeGitHub, PendingArgs, Issue) {
@@ -1083,8 +1174,158 @@ fn ownership_order_is_strict_and_attempts_are_ordered_within_the_run() {
     assert!(!superseded(&incoming, &incoming));
     assert!(!superseded(&owner(42, 1, 'a'), &incoming));
     assert!(superseded(&owner(42, 3, 'a'), &incoming));
-    assert!(superseded(&owner(43, 1, 'a'), &incoming));
+    assert!(!superseded(&owner(43, 1, 'a'), &incoming));
+    assert!(!superseded(&owner(43, 3, 'a'), &incoming));
     assert!(!superseded(&owner(41, 3, 'a'), &incoming));
+}
+
+#[test]
+fn distinct_run_issue_reports_at_the_same_commit_follow_publication_order() {
+    let github = FakeGitHub::new();
+    seed_retained_findings(&github, &owner(43, 3, 'a'));
+    let incoming = report(
+        AnalysisMode::History,
+        Outcome::Clean,
+        true,
+        owner(42, 1, 'a'),
+    );
+    publish(&github, &incoming, 2);
+    let issue = only_issue(&github);
+    let parsed = IssueBody::parse(&issue.body, &context().instance).unwrap();
+    assert_eq!(parsed.owner, incoming.owner);
+    assert_eq!(parsed.commit, sha('a'));
+    assert_eq!(
+        marker::find_state(parsed.report, &context().instance),
+        Some("clean")
+    );
+}
+
+#[test]
+fn distinct_run_issue_reports_advance_by_commit_not_identifier() {
+    let github = FakeGitHub::new();
+    seed_retained_findings(&github, &owner(43, 3, 'a'));
+    let incoming = report(
+        AnalysisMode::History,
+        Outcome::Findings,
+        true,
+        owner(42, 1, 'b'),
+    );
+    github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(1) });
+    publish(&github, &incoming, 2);
+    let issue = only_issue(&github);
+    let parsed = IssueBody::parse(&issue.body, &context().instance).unwrap();
+    assert_eq!(parsed.owner, incoming.owner);
+    assert_eq!(parsed.commit, sha('b'));
+}
+
+#[test]
+fn distinct_run_comment_reports_at_the_same_live_head_follow_publication_order() {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('a'));
+    let previous = report(
+        AnalysisMode::Branch,
+        Outcome::Clean,
+        true,
+        owner(43, 3, 'a'),
+    );
+    let body = message::pr_result(
+        &context.instance,
+        &previous.owner,
+        &previous.evidence,
+        "foo",
+        &previous.summary,
+        None,
+    );
+    block_on(github.create_comment(&context.repository, 7, &body)).unwrap();
+    let incoming = report(
+        AnalysisMode::Branch,
+        Outcome::Findings,
+        true,
+        owner(42, 1, 'a'),
+    );
+    block_on(comment_report(
+        &github,
+        &context,
+        7,
+        "foo",
+        &incoming,
+        PublicationState::Findings,
+    ))
+    .unwrap();
+    assert_eq!(
+        marker::find_owner(&only_comment(&github).body, &context.instance),
+        Some(incoming.owner)
+    );
+}
+
+#[test]
+fn distinct_run_stale_comment_preserves_the_live_head_report() {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('b'));
+    let current = report(
+        AnalysisMode::Branch,
+        Outcome::Clean,
+        true,
+        owner(42, 1, 'b'),
+    );
+    let body = message::pr_result(
+        &context.instance,
+        &current.owner,
+        &current.evidence,
+        "foo",
+        &current.summary,
+        None,
+    );
+    let before = block_on(github.create_comment(&context.repository, 7, &body)).unwrap();
+    let incoming = report(
+        AnalysisMode::Branch,
+        Outcome::Findings,
+        true,
+        owner(43, 3, 'a'),
+    );
+    block_on(comment_report(
+        &github,
+        &context,
+        7,
+        "foo",
+        &incoming,
+        PublicationState::Findings,
+    ))
+    .unwrap();
+    assert_eq!(only_comment(&github), before);
+}
+
+#[test]
+fn distinct_run_comment_preflight_accepts_a_lower_run_identifier() {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('a'));
+    let body = message::pr_in_progress(&context.instance, "foo", &owner(43, 3, 'a'));
+    block_on(github.create_comment(&context.repository, 7, &body)).unwrap();
+    let incoming = owner(42, 1, 'a');
+    block_on(comment_preflight(&github, &context, 7, "foo", &incoming)).unwrap();
+    assert_eq!(
+        marker::find_owner(&only_comment(&github).body, &context.instance),
+        Some(incoming)
+    );
+}
+
+#[test]
+fn distinct_run_failure_cannot_retire_a_same_commit_placeholder() {
+    let github = FakeGitHub::new();
+    let context = context();
+    let body = message::pr_in_progress(&context.instance, "foo", &owner(42, 1, 'a'));
+    let before = block_on(github.create_comment(&context.repository, 7, &body)).unwrap();
+    block_on(comment_failed(
+        &github,
+        &context,
+        7,
+        &failure(owner(43, 3, 'a'), Conclusion::Failure),
+    ))
+    .unwrap();
+    assert_eq!(only_comment(&github), before);
 }
 
 #[test]
@@ -1298,7 +1539,7 @@ fn comment_metadata_rejects_duplicated_or_mixed_note_and_report_states() {
 #[test]
 fn no_data_retires_the_pending_head_when_the_retained_report_distance_is_unknown() {
     let github = FakeGitHub::new();
-    publish(&github, &findings('a'), 1);
+    seed_retained_findings(&github, &owner(1, 1, 'a'));
     block_on(issue_preflight(
         &github,
         &context(),

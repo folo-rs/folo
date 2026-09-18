@@ -4,7 +4,7 @@
 # (.github/workflows/bench-history.yml).
 #
 # Collection, backfill and analysis share one production identity. Its non-secret client ID
-# and tenant live in constants.env. This module keeps the
+# and tenant ID live in constants.env. This module keeps the
 # required-value validation and standard AZURE_* export consistent across workflow jobs.
 #
 # constants.env is read directly (not via `just`'s dotenv) because these steps re-export under
@@ -13,7 +13,6 @@
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $true
 
 function Read-DotEnvFile {
     # Parses a KEY=value dotenv file (constants.env) into an ordered hashtable. Blank lines and
@@ -58,7 +57,7 @@ function Get-RequiredConstant {
 }
 
 function Set-AzureFederationEnv {
-    # Exports the shared production identity. A source-built
+    # Exports the client and tenant IDs used for the shared production identity. A source-built
     # preparation job may also call this to validate identifiers without holding id-token permission.
     # Ref: .github/workflows/design.md#federated-identity.
     [CmdletBinding(SupportsShouldProcess)]
@@ -78,7 +77,7 @@ function Set-AzureFederationEnv {
     if ($PSCmdlet.ShouldProcess($EnvFilePath, 'Append AZURE_CLIENT_ID and AZURE_TENANT_ID')) {
         $lines | Add-Content -Path $EnvFilePath -Encoding utf8
     }
-    Write-Verbose "Using the shared production identity from AZURE_PROD_CLIENT_ID in '$ConstantsPath'; exported its client ID and the tenant to '$EnvFilePath'."
+    Write-Verbose "Using the shared production identity from AZURE_PROD_CLIENT_ID in '$ConstantsPath'; exported its client ID and tenant ID to '$EnvFilePath'."
     return $exported
 }
 

@@ -1,16 +1,17 @@
-//! The one output-facing projection of what an analysis actually judged.
+//! Shared coverage and analysis-outcome projections for report output.
 //!
 //! [`SeriesCensus`] is the detector's raw account. Every surface a reader or an
 //! automation meets — the text report, the Markdown report, the JSON document and
 //! the pull-request comment composed from it — needs the same three things out of
-//! that account: a verdict that does not overstate what was ruled out, the complete
-//! per-reason breakdown, and how much of the suite the verdict covers. Deriving
-//! those independently per surface is how they drift apart, so they are derived
-//! once here and every surface reads them from [`Coverage`].
+//! that account: the complete per-reason breakdown, how much of the suite was judged,
+//! and a headline that qualifies reports without findings. [`Coverage`] supplies those
+//! facts. [`AnalysisOutcome`] combines that coverage with finding presence into the
+//! machine-readable analysis outcome. Neither projection describes which external
+//! collection platforms completed; workflow orchestration supplies that separate evidence.
 
 use cbh_detect::{SeriesCensus, UnjudgedReason};
 
-/// The primary verdict of a successful analysis.
+/// The machine-readable outcome of a successful analysis.
 ///
 /// This is deliberately separate from execution success and platform coverage:
 /// a command that fails does not produce an analysis verdict, and findings can
@@ -250,7 +251,7 @@ impl Coverage {
         self.unjudged.iter().copied()
     }
 
-    /// The primary verdict for a report that produced no findings.
+    /// The human-readable headline for a report that produced no findings.
     ///
     /// An all-clear is a claim about the series that were judged, so a run that judged
     /// nothing does not open with one, and a run that judged only part of its suite

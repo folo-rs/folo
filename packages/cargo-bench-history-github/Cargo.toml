@@ -44,7 +44,7 @@ clap = { workspace = true, features = ["derive"] }
 jiff = { workspace = true }
 mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
-reqwest = { workspace = true, features = ["json", "rustls"] }
+reqwest = { workspace = true, features = ["rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }

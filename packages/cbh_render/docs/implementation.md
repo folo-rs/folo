@@ -10,3 +10,9 @@ The crate owns presentation of model facts and detected findings as text, Markdo
 including report formatting and charts. It does not select stored data, detect findings, choose
 output destinations, or write process streams. Presentation dependencies therefore remain
 separate from the I/O-free detector and the application shell.
+
+The renderer owns the shared coverage and analysis-outcome projections. Coverage derives
+the judged-series account and no-findings headline from the detector census; finding presence
+and that coverage select the analysis outcome. Text, Markdown, JSON and the shell's typed
+or file outcome use these projections rather than maintaining independent verdict rules.
+Collection-platform completeness belongs to workflow evidence, outside analyzer-series coverage.

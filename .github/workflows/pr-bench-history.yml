@@ -51,8 +51,8 @@ jobs:
       expected-platforms: ${{ steps.matrix.outputs.expected-platforms }}
       collection-job-prefix: ${{ steps.matrix.outputs.collection-job-prefix }}
     steps:
-      # Automation comes from the event's merge checkout so old PR heads need not contain
-      # newly introduced helpers. No benchmark is recorded against this synthetic commit.
+      # The event's merge checkout supplies automation independently of which helper files the
+      # measured PR head contains. No benchmark is recorded against the synthetic merge commit.
       # Ref: implementation.md#benchmark-workflow-artifacts.
       - name: Checkout automation
         uses: actions/checkout@v7
@@ -102,8 +102,8 @@ jobs:
           fetch-depth: 0
           path: benchmark-source
       # Scope is computed from the measured head versus its merge base, not from unrelated
-      # commits that reached main after this branch diverged. Existing dependent expansion
-      # and collection exclusions remain shared with the normal repository helpers.
+      # commits that reached main after this branch diverged. Dependent expansion and collection
+      # exclusions use the shared repository helpers.
       - name: Compute collection scope and validate production configuration
         id: scope
         shell: pwsh

@@ -21,7 +21,9 @@ to `main`. Version increments land in the pull request that causes them; see
 ## The flow
 
 A pull request that changes released content increments the affected packages.
-Merge to `main` is the release. Everything after that is automatic.
+Merge to `main` starts automatic registry and binary-archive publication.
+[Paired action releases](release-versioning.md#paired-benchmark-action-releases) also require
+the author's cross-repository follow-up after those dependencies are published.
 
 ```mermaid
 flowchart TD

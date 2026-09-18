@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Builds the source companion used by benchmark workflow preparation. The archive carries
 # executable permissions to the Ubuntu posting jobs, which need no Rust or Azure setup.

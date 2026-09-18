@@ -432,12 +432,6 @@ fn search_rate_limits_retry_but_permissions_and_query_errors_do_not() {
     for (status, header, value, delay) in [
         (StatusCode::TOO_MANY_REQUESTS, RETRY_AFTER, "7", 7),
         (StatusCode::FORBIDDEN, RETRY_AFTER, "0", 0),
-        (
-            StatusCode::FORBIDDEN,
-            HeaderName::from_static("x-ratelimit-remaining"),
-            "0",
-            60,
-        ),
     ] {
         let mut limited = response(status, json!({}));
         limited
@@ -463,6 +457,56 @@ fn search_rate_limits_retry_but_permissions_and_query_errors_do_not() {
         assert_eq!(github.http.requests.borrow().len(), 1);
         assert!(github.http.delays.borrow().is_empty());
     }
+}
+
+#[test]
+fn secondary_limit_messages_retry_without_retry_after_or_exhausted_primary_quota() {
+    let mut limited = response(
+        StatusCode::FORBIDDEN,
+        json!({"message":"You have exceeded a secondary rate limit."}),
+    );
+    limited.headers.insert(
+        HeaderName::from_static("x-ratelimit-remaining"),
+        HeaderValue::from_static("1"),
+    );
+    let github = github([limited, response(StatusCode::OK, search(&[], 0))]);
+    block_on(github.search_issues(&repository(), "project", false)).unwrap();
+    assert_eq!(*github.http.delays.borrow(), [Duration::from_secs(60)]);
+    assert_eq!(github.http.requests.borrow().len(), 2);
+}
+
+#[test]
+fn continued_secondary_limits_exceed_the_bounded_wait_budget() {
+    let github = github([(); 2].map(|()| {
+        response(
+            StatusCode::FORBIDDEN,
+            json!({"message":"You have exceeded a secondary rate limit."}),
+        )
+    }));
+    block_on(github.search_issues(&repository(), "project", false)).unwrap_err();
+    assert_eq!(*github.http.delays.borrow(), [Duration::from_secs(60)]);
+    assert_eq!(github.http.requests.borrow().len(), 2);
+}
+
+#[test]
+fn exhausted_primary_quota_does_not_retry_before_its_absolute_reset() {
+    let mut limited = response(
+        StatusCode::FORBIDDEN,
+        json!({"message":"API rate limit exceeded"}),
+    );
+    limited.headers.insert(
+        HeaderName::from_static("x-ratelimit-remaining"),
+        HeaderValue::from_static("0"),
+    );
+    // An absolute reset requires a clock-backed calculation; this adapter does not guess.
+    limited.headers.insert(
+        HeaderName::from_static("x-ratelimit-reset"),
+        HeaderValue::from_static("2000000000"),
+    );
+    let github = github([limited]);
+    block_on(github.search_issues(&repository(), "project", false)).unwrap_err();
+    assert!(github.http.delays.borrow().is_empty());
+    assert_eq!(github.http.requests.borrow().len(), 1);
 }
 
 #[test]
@@ -539,6 +583,17 @@ fn creates_do_not_retry_transport_status_or_redirect_failures() {
         ErrorKind::ConnectionReset
     );
     assert!(github.http.delays.borrow().is_empty());
+}
+
+#[test]
+fn secondary_limit_messages_never_authorize_another_comment_post() {
+    let github = github([response(
+        StatusCode::FORBIDDEN,
+        json!({"message":"You have exceeded a secondary rate limit."}),
+    )]);
+    block_on(github.create_comment(&repository(), 7, "body")).unwrap_err();
+    assert!(github.http.delays.borrow().is_empty());
+    assert_eq!(github.http.requests.borrow().len(), 1);
 }
 
 #[test]
@@ -849,6 +904,32 @@ fn successful_create_responses_must_confirm_both_intended_title_and_content() {
         block_on(alert(&github, &context, owner().run.run_id, run_url)).unwrap_err();
         assert_eq!(github.http.requests.borrow().len(), 2);
     }
+}
+
+#[test]
+fn successful_comment_create_must_confirm_the_requested_body_without_another_post() {
+    let context = context();
+    let github = github([
+        response(StatusCode::OK, json!([])),
+        response(
+            StatusCode::OK,
+            json!({"head":{"sha":owner().head.as_str()}}),
+        ),
+        response(
+            StatusCode::CREATED,
+            json!({"id":9,"body":"Different content"}),
+        ),
+    ]);
+    block_on(comment_preflight(&github, &context, 7, "foo", &owner())).unwrap_err();
+    let requests = github.http.requests.borrow();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method() == Method::POST)
+            .count(),
+        1
+    );
 }
 
 #[test]

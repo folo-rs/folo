@@ -102,6 +102,10 @@ flowchart LR
   projects never meet; it is not a member of the discriminant set.
 * **Machine key** — a stable hardware fingerprint that partitions every engine's data by
   the host it ran on.
+* **Analysis outcome** — the successful-analysis result used by automation. It combines
+  whether findings exist with how much of the in-scope series was judged. It is distinct
+  from execution success and from the completeness of an external collection matrix
+  ([Accounting for what was judged](#89-accounting-for-what-was-judged)).
 
 ## 3. Comparability and storage partitioning
 
@@ -560,22 +564,25 @@ are selected), the ghost filter is analyze-only and outside the shared selection
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file output flags that compose so a single pass can also write Markdown and JSON to
-their requested paths; requesting no output at all is an error. Beyond those three canonical
-renderings, `analyze` offers two **derived** outputs. A condensed Markdown *summary* serves a
+their requested paths; requesting no output at all is an error. Beyond those canonical
+renderings, `analyze` offers **derived** outputs. A condensed Markdown *summary* serves a
 downstream consumer whose body has a hard size limit (the workflow posts it as a rolling
 GitHub issue, capped at 65,536 characters). The summary keeps only the most significant
 findings and drops the per-discriminant grouping, so it is intentionally lossy;
-`--outcome <path>` writes the one stable analysis verdict (`findings`, `clean`,
+`--outcome <path>` writes the stable analysis outcome (`findings`, `clean`,
 `insufficient_baseline`, `nothing_in_scope` or `partial`) so automation can select a message
-without parsing JSON merely to recover one field. Both are analyze-only, and neither
+without parsing JSON merely to recover one field. Its conditions are defined under
+[Accounting for what was judged](#89-accounting-for-what-was-judged).
+These outputs are analyze-only, and neither
 displaces the full reports, which the workflow attaches alongside the summary.
 
 **Findings never affect the exit code**: the process exits non-zero only when the analysis
 fails to *run*. A finding is advisory. The JSON report carries both `outcome` and the
 backward-compatible `notable` flag (`true` exactly for `findings`), while `--outcome` exposes
-the former directly to lightweight automation. Execution failure and partial coverage of an
-external collection matrix are separate workflow facts that can coexist with any successful
-analysis verdict.
+the former directly to lightweight automation. A failed analysis produces no outcome.
+Platform coverage — whether every expected collection platform completed — is separate
+workflow evidence: missing platforms or failures elsewhere in the workflow can coexist with
+any successful analysis outcome.
 
 Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine`) prints a
 one-line **effective-selection** summary to stderr — the engine, target-triple, and
@@ -842,9 +849,9 @@ The command has separate execution and export modes:
 Execution requires an explicit subscription ID, resource group, location, storage account,
 GitHub `owner/repository`, and history branch. It does not infer a target subscription from
 the active Azure CLI default or inherit Folo's deployment names. The container defaults to
-`bench-history`; the identity name derives from the selected account, with an optional explicit
-name for existing deployments. Optional local access takes a principal ID and its
-`User` or `Group` type together. These inputs describe actual resource placement and access;
+`bench-history`; the managed identity name derives from the selected storage account, with an
+optional explicit name for existing deployments. Optional local access takes a principal ID
+and its `User` or `Group` type together. These inputs describe actual resource placement and access;
 resource tuning beyond the standard setup belongs in an exported bundle, not additional knobs.
 
 The explicit command inputs are `--subscription-id`, `--resource-group`, `--location`,
@@ -860,20 +867,22 @@ resource-provisioning, role-assignment and federated-credential-management privi
 Azure authorization remains authoritative for each operation; a successful prerequisite check
 does not promise that every requested mutation will be authorized.
 
-The deployment supplies a private, Entra-only history container and one managed identity with
-account-scoped Blob Data Contributor access. It federates the selected history branch and the
-repository's PR subject, supporting collection, backfill and analysis.
-Optional local contributor access is independent. The PR federated subject does not
+Newly created history storage is private and Entra-only. The deployment supplies one managed
+identity with an account-scoped Storage Blob Data Contributor role assignment and federated
+identity credentials for the selected history branch and the repository's PR subject,
+supporting collection, backfill and analysis.
+Optional local access to the same role is independent. The PR federated subject does not
 distinguish same-repository and fork heads; workflow policy supplies that gate. Provisioning
 OIDC trust requires no GitHub API access or stored credential.
 
 Repeated deployments preserve existing storage properties, history and optional local grants
 while ensuring the configured identity and federated subjects exist. Deployment is incremental,
-not a cleanup of unrelated resources. Deployments for the same stack must be serialized.
+not a cleanup of unrelated resources. Serialize invocations targeting the same storage account
+or managed identity in the selected subscription and resource group.
 
-Successful execution reports the account, container, endpoint, tenant and subscription IDs, and
-the identity's client and principal IDs. It explains which non-secret values configure storage
-and the workflows. It does not edit the caller's repository, GitHub settings
+Successful execution reports the storage account, container, endpoint, tenant and subscription
+IDs, and the managed identity's client and principal IDs. It explains which non-secret values
+configure storage and the workflows. It does not edit the caller's repository, GitHub settings
 or credentials. Export includes parameter guidance and a deployment example; neither mode exports
 or invokes destructive teardown.
 
@@ -1393,18 +1402,20 @@ finding is **self-describing** (it inlines its discriminant set and benchmark se
 findings are never duplicated under the per-set breakdown, which carries only identity and
 tallies. JSON keeps full precision and omits the per-commit series (a charting concern the
 human reports draw from internally, not data a consumer reconstructs); the text and
-Markdown values round to four significant figures. A consumer keys off a top-level
-"notable" flag (post or stay silent) and reads each finding's direction, magnitude, and
-associated commit. A change-point finding's commit is an estimate of where the new level
+Markdown values round to four significant figures. Automation selects its successful-analysis
+message from the top-level `outcome` and reads each finding's direction, magnitude, and
+associated commit. The `notable` flag remains a convenience for consumers that only need to
+know whether findings exist; it does not distinguish the silent outcomes.
+A change-point finding's commit is an estimate of where the new level
 begins, not a claim that that commit introduced it.
 
 Every format also states what the analysis **judged** (§8.9): a coverage tally in the header of
-all three, prose qualifying a silent verdict where there are no findings, and, in JSON, a
-structured census with the per-reason breakdown so automation can gate on coverage rather than
-on the absence of findings.
+each format, prose qualifying a silent result where there are no findings, and, in JSON, a
+structured census with the per-reason breakdown. This evidence supports detailed coverage
+policy without replacing the successful-analysis outcome.
 
-Separate from those three canonical formats, `analyze` can also render a condensed Markdown
-**summary** — a single derived view for a size-limited consumer. It reuses the Markdown
+Separate from those canonical formats, `analyze` can also render a condensed Markdown
+**summary** — a derived view for a size-limited consumer. It reuses the Markdown
 finding blocks but keeps only the top findings by magnitude and drops the per-discriminant grouping,
 so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
 total it shows and leaves the full reports to be consulted separately. Because it drops the
@@ -1496,14 +1507,31 @@ skip, which costs precisely the disclosure this accounting exists to buy. The ex
 only that ratio: the total and the per-reason breakdown keep the whole account, so a consumer
 that needs the ghosts has them, and each surface discloses as much of them as its readers need.
 
-The reach of a verdict is published as a single **coverage state**, the field automation gates
-on:
+The census publishes a **series coverage state** describing how much of the in-scope suite
+was judged:
 
 * `no_series` — nothing was accounted for at all.
 * `nothing_in_scope` — everything accounted for was a ghost.
 * `nothing_judged` — an in-scope suite existed and none of it could be judged.
 * `partial` — some, but not all, of the in-scope suite was judged.
 * `full` — the whole in-scope suite was judged.
+
+The **analysis outcome** combines findings with that state. Findings take precedence over
+coverage limitations:
+
+| Analysis outcome | Condition |
+| --- | --- |
+| `findings` | At least one finding survived detection, regardless of series coverage. |
+| `clean` | No findings, and series coverage is `full`. |
+| `insufficient_baseline` | No findings, and series coverage is `nothing_judged`. |
+| `nothing_in_scope` | No findings, and series coverage is `no_series` or `nothing_in_scope`. |
+| `partial` | No findings, and series coverage is `partial`. |
+
+JSON and the outcome file expose the same analysis outcome; `notable` is true exactly for
+`findings`. The census remains the detailed evidence behind this projection.
+Neither series coverage nor the analysis outcome inventories external collection jobs.
+Matrix automation supplies **platform coverage** separately, from its expected and completed
+platforms, before presenting a complete all-clear.
 
 Only `full` removes the coverage qualification from a silent report: the whole in-scope suite
 was judged. The verdict remains "no notable changes detected" for those judged series: no
@@ -1529,9 +1557,9 @@ How it surfaces (§8.7) follows what a reader needs where:
   in that prose and the verdict above it answer to the same denominator, so a reader who trusts
   the headline and a reader who trusts the ratio cannot reach opposite conclusions.
 * JSON carries the full census — the accounted-for and in-scope totals, the judged count, the
-  coverage state and a per-reason breakdown — as structured data, so automation can gate on
-  coverage instead of on the absence of findings without re-deriving the ghost arithmetic and
-  disagreeing with the report it accompanies.
+  series coverage state and a per-reason breakdown — as supporting evidence for detailed
+  coverage policy. Consumers need not re-derive the ghost arithmetic or the analysis outcome
+  when selecting a message.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
 * An analysis with **nothing in scope** states no coverage ratio — there is nothing to take a

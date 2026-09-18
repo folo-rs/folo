@@ -4,7 +4,9 @@ use std::path::PathBuf;
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SetupAzureOptions {
-    /// Export without executing tools; paths are relative to the invocation directory.
+    /// Export without executing tools.
+    ///
+    /// Relative paths resolve against the invocation directory.
     pub out_dir: Option<PathBuf>,
     /// Explicit target subscription, never inferred from the active CLI subscription.
     pub subscription_id: Option<String>,
@@ -24,7 +26,7 @@ pub struct SetupAzureOptions {
     pub container: Option<String>,
     /// Identity override; omission derives a name from the selected account.
     pub managed_identity: Option<String>,
-    /// Optional local principal receiving contributor access.
+    /// Optional local principal receiving Storage Blob Data Contributor access.
     pub local_principal_id: Option<String>,
     /// Type of the optional local principal, supplied together with its ID.
     pub local_principal_type: Option<LocalPrincipalType>,

@@ -16,7 +16,7 @@ such as `main` or `release/next`, not a qualified reference such as `refs/heads/
 
 Install Azure CLI, PowerShell 7.6 or later and Bicep separately, then authenticate
 Azure CLI for the explicitly chosen subscription. The driver does not install tools or
-initiate login. The account needs resource provisioning, role assignment and federated
+initiate login. The authenticated principal needs resource provisioning, role assignment and federated
 credential management privileges.
 
 ```powershell
@@ -31,15 +31,17 @@ edit repositories, GitHub settings or credentials.
 ## Deployment behavior
 
 One managed identity has account-scoped Storage Blob Data Contributor and GitHub
-history-branch plus pull-request federation. Optional local contributor access is
-independent. GitHub PR subjects cannot distinguish fork heads: workflows must gate
+history-branch plus pull-request federation. Optional local access grants the same role
+independently. GitHub PR subjects cannot distinguish fork heads: workflows must gate
 identity use to same-repository PRs.
 
-Successful management-plane listings select bootstrap only for missing storage.
+Successful management-plane listings select creation only for missing storage.
 Existing account, blob-service and container settings and data remain untouched.
 New storage is private and Entra-only. Deployment is incremental; unmentioned
-resources and local grants remain. Serialize deployments for a stack.
+resources and local grants remain. Serialize invocations targeting the same storage account
+or managed identity in the selected subscription and resource group.
 
 Failures remain failures, with child diagnostics. Already completed Azure changes
-are not rolled back. Direct Bicep users must select bootstrap flags only for absent
-resources; routine deployments use the driver to perform this discovery safely.
+are not rolled back. Direct Bicep users must set `createStorageAccount` and
+`createHistoryContainer` to true only when the corresponding resource is absent; routine
+deployments use the driver to perform this discovery safely.

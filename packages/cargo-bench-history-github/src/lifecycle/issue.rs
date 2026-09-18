@@ -67,10 +67,13 @@ pub(crate) async fn issue_preflight(
     if superseded(parsed.latest_owner(), owner) {
         note(
             context,
-            "a later run attempt owns the issue annotation; preserving it",
+            "a later attempt of this run owns the issue annotation; preserving it",
         );
         return Ok(());
     }
+    // A retained report and a later annotation can protect different heads. Preflight
+    // preserves either one proven newer; unknown order can only qualify retained content.
+    // Ref: docs/implementation.md, Evidence and state transitions.
     if parsed.annotation.is_some()
         && parsed.latest_owner().head != owner.head
         && compare_or_unknown(github, context, &owner.head, &parsed.latest_owner().head)
@@ -134,7 +137,7 @@ pub(crate) async fn issue_no_data(
     if superseded(parsed.latest_owner(), data.owner()) {
         note(
             context,
-            "a later run attempt owns the issue annotation; preserving it",
+            "a later attempt of this run owns the issue annotation; preserving it",
         );
         return Ok(());
     }
@@ -147,8 +150,20 @@ pub(crate) async fn issue_no_data(
     if !pending_head && !may_replace(github, context, &parsed, data.owner()).await {
         return Ok(());
     }
+    let mut report = parsed.report.to_owned();
+    if !pending_head && parsed.commit != data.owner().head {
+        // Preflight may have failed. Qualify the retained report here unless this head
+        // already has an annotation whose existing staleness must be preserved.
+        let comparison =
+            compare_or_unknown(github, context, &parsed.commit, &data.owner().head).await;
+        report = message::insert_stale_banner(
+            &report,
+            &context.instance,
+            &message::stale_warning(comparison.ahead_by),
+        );
+    }
     let body = annotate(
-        parsed.report,
+        &report,
         &context.instance,
         data.owner(),
         "no-data",
@@ -242,10 +257,13 @@ async fn may_replace(
     if superseded(existing.latest_owner(), incoming) {
         note(
             context,
-            "a later workflow run attempt owns this issue; preserving its report and annotation",
+            "a later attempt of this run owns the issue; preserving its report and annotation",
         );
         return false;
     }
+    // Replacement must advance both protected heads, not merely the retained report.
+    // A forward comparison proves ancestry; unknown or reverse order cannot authorize it.
+    // Ref: docs/implementation.md, Evidence and state transitions.
     for head in [&existing.commit, &existing.latest_owner().head] {
         if *head != incoming.head
             && !compare_or_unknown(github, context, head, &incoming.head)

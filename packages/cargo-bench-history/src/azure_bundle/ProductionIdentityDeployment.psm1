@@ -93,7 +93,7 @@ function Invoke-ProductionIdentityDeployment {
     }
 
     Write-Verbose "Account '$StorageAccountName' needs bootstrap: $createStorageAccount; container '$HistoryContainerName' needs bootstrap: $createHistoryContainer. Existing storage is reference-only to preserve properties and history."
-    Write-Verbose "Identity '$ManagedIdentityName' receives account contributor access and repository '$GithubOrg/$GithubRepo' branch '$HistoryBranch' plus PR federation. Optional local access is independent."
+    Write-Verbose "Identity '$ManagedIdentityName' receives account-scoped Storage Blob Data Contributor and repository '$GithubOrg/$GithubRepo' branch '$HistoryBranch' plus PR federation. Optional local access uses the same role independently."
     $outputs = Invoke-ProductionIdentityAz -Arguments @(
         'deployment', 'group', 'create', '--subscription', $SubscriptionId,
         '--resource-group', $ResourceGroup,
@@ -110,6 +110,7 @@ function Invoke-ProductionIdentityDeployment {
         "githubRepo=$GithubRepo",
         "historyBranch=$HistoryBranch",
         "localPrincipalId=$LocalPrincipalId",
+        # An empty ID suppresses the local role; the placeholder type only satisfies Bicep's allowed values.
         "localPrincipalType=$(if ($LocalPrincipalType) { $LocalPrincipalType } else { 'User' })",
         '--query', 'properties.outputs', '--output', 'json'
     ) | ConvertFrom-Json

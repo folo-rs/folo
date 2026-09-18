@@ -128,6 +128,7 @@ impl<H: Http> RestGitHub<H> {
         // A POST may already have created its artifact even when the response was lost.
         let retry_safe = matches!(*request.method(), Method::GET | Method::PATCH);
         let mut delays = RETRY_DELAYS.into_iter();
+        let mut previous_delay = None;
         loop {
             let attempt = request
                 .try_clone()
@@ -137,8 +138,11 @@ impl<H: Http> RestGitHub<H> {
             match response {
                 Ok(response) if response.status.is_success() => return Ok(response),
                 Ok(response) => {
-                    if let Some(delay) = fallback.and_then(|delay| retry_delay(&response, delay)) {
+                    if let Some(delay) =
+                        fallback.and_then(|delay| retry_delay(&response, delay, previous_delay))
+                    {
                         self.http.sleep(delay).await;
+                        previous_delay = Some(delay);
                         continue;
                     }
                     // Servers can echo input; credentials must not become diagnostics.
@@ -154,6 +158,7 @@ impl<H: Http> RestGitHub<H> {
                 Err(error) => {
                     if let Some(delay) = fallback.filter(|_| error.retryable()) {
                         self.http.sleep(delay).await;
+                        previous_delay = Some(delay);
                         continue;
                     }
                     return Err(RequestFailedError::caused_by(operation, error).into());

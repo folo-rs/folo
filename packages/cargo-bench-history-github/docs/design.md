@@ -70,10 +70,10 @@ accurate, not create issues merely to announce workflow status.
 
 ## Publication evidence
 
-Result publication consumes the JSON report and Markdown summary from the same successful
+Result publication consumes the JSON report and nonblank Markdown summary from the same successful
 analysis pass. The JSON supplies the named outcome, analysis mode, commit and coverage census.
-The requested commit must match a clean report; unknown or inconsistent verdict/coverage
-metadata is an error rather than a default clean state.
+The requested commit must match the report, which must describe an unmodified working tree;
+unknown or inconsistent verdict/coverage metadata is an error rather than a default clean state.
 
 The caller also supplies comma-separated identifiers for the expected collection platforms and
 the platforms that completed successfully. Both lists must be nonempty. Completed platforms
@@ -100,7 +100,24 @@ report-bearing inputs.
 The report's existing JSON metadata is the integration boundary, not a new versioned report
 schema or a dependency on the tool's private implementation packages.
 
+## Run ownership
+
+Run IDs identify workflow runs but do not order them. Attempt numbers establish precedence only
+within the same run: a later attempt supersedes an earlier one.
+
+Across distinct runs, the existing commit and live-head checks govern freshness. Publications
+for the same commit follow serialized publication order, so an earlier-started run that finishes
+later may replace another run's report for that commit. Starting a run does not reserve priority
+over other runs.
+
+Failed-state publication still requires the exact run ID, attempt and frozen head of the
+unfinished placeholder or pending annotation. It cannot retire another run's work even when
+both runs analyze the same commit.
+
 ## Workflow evidence
+
+The instance is the resolved project namespace supplied internally by workflow setup, not a
+raw arbitrary project ID or a separate consumer override.
 
 `workflow-matrix` validates the requested platform CSV and emits the collection strategy
 matrix, normalized expected-platform CSV, instance, and instance-qualified collection-job prefix.
@@ -160,8 +177,9 @@ produces a visible warning rather than unqualified fresh-looking results.
 
 ## Identity
 
-Identities derive from the configured project ID. Workflows pass that namespace as internal
-instance data, including in receipts and collection-job identities; it is not a consumer override.
+Workflow setup resolves the project namespace from the configured project ID. Workflows pass that
+resolved namespace as internal instance data, including in receipts and collection-job identities;
+it is not a consumer override.
 
 Rolling issues use server-side `in:title` phrase search restricted to open issues in the
 repository, excluding the date suffix from the query. Candidates must match the exact

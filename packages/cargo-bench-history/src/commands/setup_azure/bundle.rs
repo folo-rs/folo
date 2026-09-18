@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 
 use cbh_command::{LocalPrincipalType, SetupAzureOptions};
 use ohno::AppError;
-use serde_json::Value;
+use serde_json::{Value, from_str, to_string_pretty};
 
 use crate::commands::setup_azure::errors::{SetupParameterError, SetupParametersEncodingError};
 
@@ -90,8 +90,8 @@ pub(crate) fn prepare(options: &SetupAzureOptions) -> Result<Vec<BundleFile>, Ap
         )
         .into());
     }
-    let mut parameters: Value = serde_json::from_str(PARAMETER_TEMPLATE)
-        .map_err(SetupParametersEncodingError::caused_by)?;
+    let mut parameters: Value =
+        from_str(PARAMETER_TEMPLATE).map_err(SetupParametersEncodingError::caused_by)?;
     for (name, value) in values.into_iter().chain([
         ("HistoryContainerName", options.container.as_deref()),
         ("ManagedIdentityName", options.managed_identity.as_deref()),
@@ -119,8 +119,7 @@ pub(crate) fn prepare(options: &SetupAzureOptions) -> Result<Vec<BundleFile>, Ap
         .collect::<Vec<_>>();
     files.push(BundleFile {
         name: "parameters.json",
-        contents: serde_json::to_string_pretty(&parameters)
-            .map_err(SetupParametersEncodingError::caused_by)?,
+        contents: to_string_pretty(&parameters).map_err(SetupParametersEncodingError::caused_by)?,
     });
     Ok(files)
 }

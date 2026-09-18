@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use cbh_command::{LocalPrincipalType, SetupAzureOptions};
 use cbh_diag::RecordingReporter;
 use futures::executor::block_on;
-use serde_json::Value;
+use serde_json::{Value, from_str};
+use static_assertions::assert_impl_all;
 
 use crate::commands::setup_azure::bundle::{BundleFile, prepare};
 use crate::commands::setup_azure::errors::{
@@ -23,8 +24,8 @@ use crate::commands::setup_azure::errors::{
 use crate::commands::setup_azure::execute::execute_with;
 use crate::commands::setup_azure::ports::{BundleFiles, ProcessOutput, SetupProcess};
 
-static_assertions::assert_impl_all!(SetupAzureOptions: UnwindSafe, RefUnwindSafe);
-static_assertions::assert_impl_all!(LocalPrincipalType: UnwindSafe, RefUnwindSafe);
+assert_impl_all!(SetupAzureOptions: UnwindSafe, RefUnwindSafe);
+assert_impl_all!(LocalPrincipalType: UnwindSafe, RefUnwindSafe);
 
 /// In-memory bundle ownership with ordered events shared by the process fake.
 #[derive(Default)]
@@ -146,7 +147,7 @@ fn export_bypasses_every_process_and_temporary_operation() {
     ))
     .unwrap();
     assert_eq!(*files.events.borrow(), ["export"]);
-    let parameters: Value = serde_json::from_str(&files.files.borrow()["parameters.json"]).unwrap();
+    let parameters: Value = from_str(&files.files.borrow()["parameters.json"]).unwrap();
     assert!(parameters["SubscriptionId"].is_null());
     assert!(parameters["ManagedIdentityName"].is_null());
     assert_eq!(parameters["HistoryContainerName"], "bench-history");
@@ -161,7 +162,7 @@ fn supplied_parameters_are_literal_json_data() {
     options.managed_identity = Some("custom-identity".into());
     options.container = Some("custom-history".into());
     let files = prepare(&options).unwrap();
-    let parameters: Value = serde_json::from_str(
+    let parameters: Value = from_str(
         &files
             .iter()
             .find(|file| file.name == "parameters.json")
@@ -279,6 +280,33 @@ fn write_failure_also_cleans_and_never_deploys() {
         *files.events.borrow(),
         ["process", "temporary", "populate", "cleanup"]
     );
+}
+
+#[test]
+fn cleanup_failure_retains_successful_deployment_output() {
+    let files = FakeFiles {
+        fail_cleanup: true,
+        ..FakeFiles::default()
+    };
+    let process = process(
+        &files,
+        vec![
+            output(true, "", ""),
+            output(true, "identifiers canary", "diagnostics canary"),
+        ],
+    );
+    let error = block_on(execute_with(
+        &options(),
+        Path::new("invocation"),
+        &files,
+        &process,
+        &RecordingReporter::new(),
+    ))
+    .unwrap_err();
+    assert!(error.find_source::<SetupCleanupError>().is_some());
+    assert!(error.find_source::<SetupProcessError>().is_none());
+    assert!(error.to_string().contains("identifiers canary"));
+    assert!(error.to_string().contains("diagnostics canary"));
 }
 
 #[test]
