@@ -135,13 +135,13 @@ pub(crate) fn no_data_details(
     join_sections(sections)
 }
 
-pub(crate) fn stale_warning(distance: Option<u64>, subject: &str) -> String {
+pub(crate) fn stale_warning(distance: Option<u64>) -> String {
     match distance {
         Some(commits) => {
             let noun = if commits == 1 { "commit" } else { "commits" };
-            format!("{subject} {commits} {noun} behind HEAD.")
+            format!("Benchmark results are {commits} {noun} behind HEAD.")
         }
-        None => format!("{subject} out of date; the commit distance is unavailable."),
+        None => "Benchmark results are out of date; the commit distance is unavailable.".to_owned(),
     }
 }
 

@@ -102,7 +102,7 @@ pub(crate) async fn issue_preflight(
         report = message::insert_stale_banner(
             &report,
             &context.instance,
-            &message::stale_warning(comparison.ahead_by, "Findings are"),
+            &message::stale_warning(comparison.ahead_by),
         );
     }
     let body = annotate(

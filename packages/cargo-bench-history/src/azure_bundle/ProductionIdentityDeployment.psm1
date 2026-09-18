@@ -38,7 +38,12 @@ function Invoke-ProductionIdentityDeployment {
     if ([string]::IsNullOrEmpty($LocalPrincipalId) -ne [string]::IsNullOrEmpty($LocalPrincipalType)) {
         throw 'LocalPrincipalId and LocalPrincipalType must be supplied together.'
     }
-    if ($HistoryBranch -match '[:\s~^?*\[\\]' -or $HistoryBranch.Contains('..') -or
+    # Apply Git's literal branch-name rules without requiring Git in the exported bundle.
+    # Component suffixes and HEAD are case-sensitive; @ is valid within refs/heads/@.
+    # Ref: https://git-scm.com/docs/git-check-ref-format.
+    if ($HistoryBranch -match '[\x00-\x20\x7f:~^?*\[\\]' -or
+        $HistoryBranch -cmatch '(^|/)\.|\.lock(/|$)' -or $HistoryBranch -ceq 'HEAD' -or
+        $HistoryBranch.Contains('..') -or
         $HistoryBranch.Contains('@{') -or $HistoryBranch.StartsWith('-') -or
         $HistoryBranch.StartsWith('refs/', [StringComparison]::Ordinal) -or
         $HistoryBranch.StartsWith('/') -or $HistoryBranch.EndsWith('/') -or

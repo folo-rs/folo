@@ -231,6 +231,41 @@ fn clean_replaces_report_leaves_issue_open_and_date_follows_body_updates_only() 
 }
 
 #[test]
+fn preflight_marks_clean_results_stale_without_changing_the_retained_verdict() {
+    let github = FakeGitHub::new();
+    let context = context();
+    publish(&github, &findings('a'), 1);
+    let clean = report(
+        AnalysisMode::History,
+        Outcome::Clean,
+        true,
+        owner(2, 1, 'a'),
+    );
+    publish(&github, &clean, 2);
+    github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(1) });
+    let pending = owner(3, 1, 'b');
+    block_on(issue_preflight(&github, &context, &clock(3), &pending)).unwrap();
+    let issue = only_issue(&github);
+    let parsed = IssueBody::parse(&issue.body, &context.instance).unwrap();
+    assert_eq!(parsed.commit, sha('a'));
+    assert_eq!(
+        marker::find_state(parsed.report, &context.instance),
+        Some("clean")
+    );
+    assert!(
+        parsed
+            .report
+            .contains("Benchmark results are 1 commit behind HEAD.")
+    );
+    assert!(parsed.report.contains("No notable changes detected"));
+    assert!(parsed.report.contains(&clean.summary));
+    let annotation = parsed.annotation.unwrap();
+    assert!(matches!(annotation.state, AnnotationState::Preflight));
+    assert_eq!(annotation.owner, pending);
+    assert!(issue.open);
+}
+
+#[test]
 fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
     let github = FakeGitHub::new();
     publish(&github, &findings('a'), 1);

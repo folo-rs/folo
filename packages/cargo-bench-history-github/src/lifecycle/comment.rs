@@ -58,7 +58,7 @@ pub(crate) async fn comment_preflight(
             body = message::insert_stale_banner(
                 &comment.body,
                 &context.instance,
-                &message::stale_warning(distance, "Benchmark results are"),
+                &message::stale_warning(distance),
             );
         }
     }
@@ -115,7 +115,7 @@ pub(crate) async fn comment_report(
             body = message::insert_stale_banner(
                 &body,
                 &context.instance,
-                &message::stale_warning(distance, "Benchmark results are"),
+                &message::stale_warning(distance),
             );
         }
         Ok(_) => {}

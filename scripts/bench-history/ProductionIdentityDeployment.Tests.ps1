@@ -246,13 +246,62 @@ Describe 'Production identity deployment policy' {
             @{ name = 'StorageAccountName'; value = 'Uppercase' }
             @{ name = 'LocalPrincipalId'; value = 'unpaired' }
             @{ name = 'LocalPrincipalType'; value = 'User' }
-            @{ name = 'HistoryBranch'; value = 'bad:branch' }
-            @{ name = 'HistoryBranch'; value = 'refs/heads/main' }
-            @{ name = 'HistoryBranch'; value = 'refs/tags/release' }
         ) {
             $script:Parameters[$name] = $value
             { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
             Should -Invoke az -Times 0 -Exactly
+        }
+
+        It 'rejects an invalid literal branch before Azure calls: <_>' -ForEach @(
+            'refs/heads/main'
+            'refs/tags/release'
+            'HEAD'
+            '-topic'
+            '.hidden'
+            'release/.hidden'
+            'main.lock'
+            'release/topic.lock/next'
+            'release/topic.lock'
+            'topic..next'
+            'topic@{1}'
+            '/topic'
+            'topic/'
+            'release//topic'
+            'topic.'
+            'topic:next'
+            'topic~1'
+            'topic^1'
+            'topic?'
+            'topic*'
+            'topic[1]'
+            'topic\next'
+        ) {
+            $script:Parameters.HistoryBranch = $_
+            { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly
+        }
+
+        It 'rejects ASCII controls, space and DEL before Azure calls' {
+            foreach ($code in @(0..32) + 127) {
+                $script:Parameters.HistoryBranch = "topic$([char]$code)next"
+                { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
+                Should -Invoke az -Times 0 -Exactly
+            }
+        }
+
+        It 'preserves valid literal branches: <_>' -ForEach @(
+            '@'
+            'head'
+            'release/HEAD'
+            'release/-topic'
+            'release./next'
+            'release/topic.LOCK/next'
+            'topic.locked'
+            "topic`u{00a0}next"
+        ) {
+            $script:Parameters.HistoryBranch = $_
+            Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
+            $script:DeploymentParameters.historyBranch | Should -BeExactly $_
         }
 
         It 'fails closed on <operation>' -ForEach @(
