@@ -171,9 +171,10 @@ Preflight and empty-scope publication require their frozen head to match the liv
 modifying the comment.
 
 Publication checks the live head immediately before writing, after finding the existing
-comment. If the PR has advanced, results receive a staleness warning; if fresh results for the
-live head already exist, the older publication leaves them untouched. A failed freshness query
-produces a visible warning rather than unqualified fresh-looking results.
+comment. If the PR has advanced, results receive a staleness warning. An existing comment
+owned by the live head is preserved, whether it contains results, pending work or a terminal
+note. A failed freshness query produces a visible warning rather than unqualified fresh-looking
+results.
 
 ## Identity
 

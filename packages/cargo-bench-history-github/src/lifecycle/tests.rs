@@ -1297,6 +1297,94 @@ fn distinct_run_stale_comment_preserves_the_live_head_report() {
     assert_eq!(only_comment(&github), before);
 }
 
+fn assert_stale_report_preserves_live_head_note(body: &str) {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('b'));
+    let before = block_on(github.create_comment(&context.repository, 7, body)).unwrap();
+    // Run identifiers deliberately disagree with head freshness.
+    let incoming = report(
+        AnalysisMode::Branch,
+        Outcome::Findings,
+        true,
+        owner(43, 3, 'a'),
+    );
+    block_on(comment_report(
+        &github,
+        &context,
+        7,
+        "foo",
+        &incoming,
+        PublicationState::Findings,
+    ))
+    .unwrap();
+    assert_eq!(only_comment(&github), before);
+}
+
+#[test]
+fn stale_report_preserves_live_head_pending_note() {
+    let body = message::pr_in_progress(&context().instance, "foo", &owner(42, 1, 'b'));
+    assert_stale_report_preserves_live_head_note(&body);
+}
+
+#[test]
+fn stale_report_preserves_live_head_failed_note() {
+    let args = failure(owner(42, 1, 'b'), Conclusion::Failure);
+    let body = message::pr_failed(
+        &context().instance,
+        &args.pending,
+        &args.run_url,
+        args.conclusion,
+    );
+    assert_stale_report_preserves_live_head_note(&body);
+}
+
+#[test]
+fn stale_report_preserves_live_head_empty_scope_note() {
+    let body = message::pr_nothing_in_scope(&context().instance, &owner(42, 1, 'b'));
+    assert_stale_report_preserves_live_head_note(&body);
+}
+
+#[test]
+fn same_head_report_replaces_a_live_head_note() {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('b'));
+    let args = failure(owner(43, 3, 'b'), Conclusion::Failure);
+    let body = message::pr_failed(
+        &context.instance,
+        &args.pending,
+        &args.run_url,
+        args.conclusion,
+    );
+    let before = block_on(github.create_comment(&context.repository, 7, &body)).unwrap();
+    let incoming = report(
+        AnalysisMode::Branch,
+        Outcome::Findings,
+        true,
+        owner(42, 1, 'b'),
+    );
+    block_on(comment_report(
+        &github,
+        &context,
+        7,
+        "foo",
+        &incoming,
+        PublicationState::Findings,
+    ))
+    .unwrap();
+    let after = only_comment(&github);
+    assert_eq!(after.id, before.id);
+    assert_eq!(
+        marker::find_owner(&after.body, &context.instance),
+        Some(incoming.owner)
+    );
+    assert_eq!(
+        marker::find_state(&after.body, &context.instance),
+        Some("findings")
+    );
+}
+
 #[test]
 fn distinct_run_comment_preflight_accepts_a_lower_run_identifier() {
     let github = FakeGitHub::new();

@@ -101,11 +101,12 @@ pub(crate) async fn comment_report(
     {
         Ok(live) if live != report.owner.head => {
             if existing.as_ref().is_some_and(|comment| {
-                marker::find_analyzed_sha(&comment.body, &context.instance).as_ref() == Some(&live)
+                marker::find_owner(&comment.body, &context.instance)
+                    .is_some_and(|owner| owner.head == live)
             }) {
                 note(
                     context,
-                    "the existing report describes the live head; preserving newer results",
+                    "the existing comment belongs to the live head; preserving its state",
                 );
                 return Ok(());
             }

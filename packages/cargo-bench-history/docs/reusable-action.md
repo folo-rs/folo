@@ -606,7 +606,8 @@ state agrees with the evidence; the workflow does not infer this from Markdown.
 
 Preflight and empty-scope publication require the frozen head to match the live PR head.
 Report publication carries the analyzed commit and checks freshness immediately before the
-write, preserving a newer current-head report. Attempt numbers order attempts only within
+write, preserving any comment owned by the current head, including pending and terminal notes.
+Attempt numbers order attempts only within
 the same workflow run ID; a delayed earlier attempt cannot retire its rerun's placeholder.
 Across distinct runs, commit-order and live-head guards apply. Distinct runs at the same
 commit follow serialized publication order, not a comparison of their attempt numbers.
@@ -1719,7 +1720,8 @@ The tool, companion and workflow layer have separate responsibilities:
   Empty-scope publication creates the
   explanatory empty-scope note even when there is no previous comment, and terminal notes
   become fresh placeholders when work resumes. Publication checks live-head freshness after
-  comment lookup and preserves a newer current-head report. History publication and all-clear
+  comment lookup and preserves reports, placeholders and terminal notes owned by the current
+  head. History publication and all-clear
   likewise preserve newer issue content when commit ordering cannot be established.
   Markers are derived from the project namespace, with no custom-marker or legacy-adoption path.
 * **The companion is published and versioned independently.** New crates follow the
