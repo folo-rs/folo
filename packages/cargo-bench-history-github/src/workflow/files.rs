@@ -181,17 +181,40 @@ pub(crate) fn append_outputs(path: &Path, value: &str) -> Result<(), AppError> {
 }
 
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn fresh_directory(path: &Path) -> Result<PathBuf, AppError> {
+pub(crate) fn directory_destination(path: &Path) -> Result<PathBuf, AppError> {
     if let Some(metadata) = checked_metadata(path)? {
         if !metadata.is_dir() || !entries(path)?.is_empty() {
             return Err(OccupiedDestination::new(path).into());
         }
-    } else {
-        fs::create_dir_all(path)
-            .map_err(|error| ArtifactIo::caused_by("creating directory", path, error))?;
+        return canonical_directory(path);
     }
-    fs::canonicalize(path)
-        .map_err(|error| ArtifactIo::caused_by("resolving directory", path, error).into())
+    // Resolve through an existing ancestor without creating a rejected destination.
+    // Full path validation above rejects traversal even beyond a missing component.
+    let mut ancestor = path;
+    let mut suffix = Vec::new();
+    while checked_metadata(ancestor)?.is_none() {
+        let name = ancestor
+            .file_name()
+            .ok_or_else(|| InvalidArtifactPath::new(path))?;
+        suffix.push(name);
+        ancestor = ancestor
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+    }
+    let mut destination = canonical_directory(ancestor)?;
+    for name in suffix.into_iter().rev() {
+        destination.push(name);
+    }
+    Ok(destination)
+}
+
+#[cfg_attr(test, mutants::skip)]
+pub(crate) fn fresh_directory(path: &Path) -> Result<PathBuf, AppError> {
+    let destination = directory_destination(path)?;
+    fs::create_dir_all(&destination)
+        .map_err(|error| ArtifactIo::caused_by("creating directory", &destination, error))?;
+    canonical_directory(&destination)
 }
 
 pub(crate) fn disjoint(left: &Path, right: &Path) -> Result<(), AppError> {

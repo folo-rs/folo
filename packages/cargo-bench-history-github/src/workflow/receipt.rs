@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::num::NonZero;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
@@ -6,7 +5,7 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{CommitSha, Instance, Repository};
-use crate::result::platform_list;
+use crate::result::is_platform_identifier;
 
 /// Validated run identity and measured hardware, independent of artifact paths.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,23 +79,10 @@ pub(crate) fn machine_key(value: &str) -> Result<String, AppError> {
 }
 
 pub(crate) fn validate_platform(value: &str) -> Result<(), AppError> {
-    if value.is_empty()
-        || matches!(value, "." | "..")
-        || !value
-            .bytes()
-            .all(|one| one.is_ascii_alphanumeric() || matches!(one, b'.' | b'_' | b'-'))
-    {
+    if !is_platform_identifier(value) {
         return Err(InvalidCollectionPlatform::new().into());
     }
     Ok(())
-}
-
-pub(crate) fn expected_platforms(value: &str) -> Result<BTreeSet<String>, AppError> {
-    let platforms = platform_list(value)?;
-    for platform in &platforms {
-        validate_platform(platform)?;
-    }
-    Ok(platforms)
 }
 
 /// A receipt cannot establish collection identity until its entire record is valid.
@@ -124,9 +110,12 @@ impl RefUnwindSafe for InvalidCollectionPlatform {}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod tests {
+    use std::collections::BTreeSet;
+
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::result::platform_list;
 
     pub(crate) fn receipt(platform: &str, attempt: u64) -> Receipt {
         Receipt {
@@ -189,7 +178,7 @@ pub(crate) mod tests {
             assert!(error.find_source::<InvalidCollectionPlatform>().is_some());
         }
         assert_eq!(
-            expected_platforms("windows, linux,linux").unwrap(),
+            platform_list("windows, linux,linux").unwrap(),
             BTreeSet::from(["linux".to_owned(), "windows".to_owned()])
         );
     }

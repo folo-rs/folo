@@ -120,6 +120,7 @@ the request and response policy is not excluded with them.
 Offline matrix setup and job reconciliation share platform validation and the instance-qualified
 collection-job namespace. Setup emits both the strategy matrix and expected-platform CSV from
 the same validated, sorted set, keeping workflow orchestration free of duplicate parsing rules.
+Report coverage uses the same identifier rule, including rejection of dot-only path components.
 
 Receipt decoding and job reconciliation operate on in-memory values. Filesystem adapters retain
 artifact paths outside the receipt model, then materialize only the selected indices after all
@@ -127,6 +128,11 @@ identities and latest-attempt decisions have been validated. Local object mergin
 before writing anything, preserving ordinary relative store paths without a second storage format.
 Reserved LocalStorage atomic-write temporary files are not objects and are omitted from merging.
 Filesystem operations do not retry writes or clean existing destinations.
+
+Destination planning resolves missing paths through their existing canonical ancestors without
+creating directories. Input/output separation and destination suitability are checked before
+materialization. Canonical paths are rechecked after creation to retain filesystem-alias
+protection rather than assuming that distinct spellings imply distinct locations.
 
 One ordered platform/attempt index owns both receipt association and latest-job lookup.
 Duplicate attempts are rejected before selection, so there is no equal-attempt tie-breaker.

@@ -108,6 +108,22 @@ impl Fixture {
 
     #[cfg(feature = "private-test-util")]
     fn prepare(&self, jobs: &Value, local: bool) -> Result<(), AppError> {
+        self.prepare_to(
+            jobs,
+            &self.path("keys"),
+            local.then(|| self.path("local")).as_deref(),
+            &self.path("github-output"),
+        )
+    }
+
+    #[cfg(feature = "private-test-util")]
+    fn prepare_to(
+        &self,
+        jobs: &Value,
+        keys: &Path,
+        results: Option<&Path>,
+        output: &Path,
+    ) -> Result<(), AppError> {
         let mut command = self.command();
         command
             .args([
@@ -126,11 +142,11 @@ impl Fixture {
             ])
             .arg(self.path("receipts"))
             .arg("--machine-key-dir")
-            .arg(self.path("keys"))
+            .arg(keys)
             .arg("--github-output")
-            .arg(self.path("github-output"));
-        if local {
-            command.arg("--local-results-dir").arg(self.path("local"));
+            .arg(output);
+        if let Some(results) = results {
+            command.arg("--local-results-dir").arg(results);
         }
         let cli =
             Cli::try_parse_from(std::iter::once(command.get_program()).chain(command.get_args()))
@@ -504,7 +520,60 @@ fn preparation_does_not_clean_or_adopt_occupied_destinations() {
         fixture.prepare(&successful_jobs(), true).unwrap_err();
         assert_eq!(fs::read(sentinel).unwrap(), b"keep");
         assert!(!fixture.path("github-output").exists());
+        if destination == "local" {
+            assert!(!fixture.path("keys").exists());
+        }
     }
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native destination planning and filesystem state.")]
+fn rejected_destination_relationships_do_not_create_directories() {
+    for (keys, results, output) in [
+        ("receipts/new-keys", "local", "github-output"),
+        ("keys", "receipts/linux/new-results", "github-output"),
+        ("keys", "keys/new-results", "github-output"),
+        ("local/new-keys", "local", "github-output"),
+        ("keys", "keys", "github-output"),
+        ("keys", "local", "keys"),
+        ("keys", "local", "local/output"),
+        ("keys", "local", "receipts/output"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.artifact("linux", "0123456789abcdef");
+        fixture.artifact("windows", "0123456789abcdef");
+        let keys = fixture.path(keys);
+        let results = fixture.path(results);
+        let output = fixture.path(output);
+        let before = fs::read_dir(&fixture.0).unwrap().count();
+        fixture
+            .prepare_to(&successful_jobs(), &keys, Some(&results), &output)
+            .unwrap_err();
+        assert!(!keys.exists());
+        assert!(!results.exists());
+        assert!(!output.exists());
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), before);
+        assert_eq!(fs::read_dir(fixture.path("receipts")).unwrap().count(), 2);
+    }
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native destination planning and materialization.")]
+fn disjoint_missing_destination_ancestors_are_materialized_after_validation() {
+    let fixture = Fixture::new();
+    fixture.artifact("linux", "0123456789abcdef");
+    fixture.artifact("windows", "0123456789abcdef");
+    let keys = fixture.path("new-parent").join("keys");
+    let results = fixture.path("other-parent").join("deep").join("results");
+    let output = fixture.path("github-output");
+    fixture
+        .prepare_to(&successful_jobs(), &keys, Some(&results), &output)
+        .unwrap();
+    assert!(keys.join("linux").join("machine-key.txt").is_file());
+    assert!(results.is_dir());
+    assert!(output.is_file());
 }
 
 #[cfg(feature = "private-test-util")]

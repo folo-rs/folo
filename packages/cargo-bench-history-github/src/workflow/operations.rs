@@ -1,21 +1,21 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use ohno::AppError;
 
 use crate::github::{GitHub, WorkflowJob};
 use crate::model::Instance;
 use crate::operations::{Context, load_evidence};
+use crate::result::platform_list;
 use crate::workflow::args::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 use crate::workflow::files::{
-    append_outputs, canonical_directory, canonical_file, disjoint, fresh_directory, output_file,
-    read_artifacts, read_file, read_results, write_new,
+    append_outputs, canonical_directory, canonical_file, directory_destination, disjoint,
+    fresh_directory, output_file, read_artifacts, read_file, read_results, write_new,
 };
 use crate::workflow::projection::{
     machine_key_files, matrix_outputs, preparation_diagnostics, preparation_outputs, report_outputs,
 };
-use crate::workflow::receipt::{
-    InvalidMachineKey, Receipt, expected_platforms, machine_key, validate_platform,
-};
+use crate::workflow::receipt::{InvalidMachineKey, Receipt, machine_key, validate_platform};
 use crate::workflow::reconcile::{Selection, reconcile};
 
 // File-backed command adapters are covered natively; their transformations are pure unit targets.
@@ -102,21 +102,20 @@ pub(crate) fn prepare_from_jobs(
         BTreeMap::new()
     };
     let source = canonical_directory(&args.receipts_dir)?;
-    let keys = fresh_directory(&args.machine_key_dir)?;
-    disjoint(&source, &keys)?;
+    let keys = directory_destination(&args.machine_key_dir)?;
     let results = args
         .local_results_dir
         .as_deref()
-        .map(fresh_directory)
+        .map(directory_destination)
         .transpose()?;
     let output = output_file(&args.github_output)?;
-    disjoint(&source, &output)?;
-    disjoint(&keys, &output)?;
-    if let Some(results) = &results {
-        disjoint(&source, results)?;
-        disjoint(&keys, results)?;
-        disjoint(results, &output)?;
-    }
+    require_separate(&source, &keys, results.as_deref(), &output)?;
+    let keys = fresh_directory(&keys)?;
+    let results = results.as_deref().map(fresh_directory).transpose()?;
+    let output = output_file(&output)?;
+    // Retain actual filesystem identity checks as materialized paths may alias
+    // spellings that looked distinct when their final components did not exist.
+    require_separate(&source, &keys, results.as_deref(), &output)?;
     for (path, key) in machine_key_files(&selection, &artifacts.receipts) {
         write_new(&keys.join(path), key.as_bytes())?;
     }
@@ -131,13 +130,30 @@ pub(crate) fn prepare_from_jobs(
     )
 }
 
+fn require_separate(
+    source: &Path,
+    keys: &Path,
+    results: Option<&Path>,
+    output: &Path,
+) -> Result<(), AppError> {
+    disjoint(source, keys)?;
+    disjoint(source, output)?;
+    disjoint(keys, output)?;
+    if let Some(results) = results {
+        disjoint(source, results)?;
+        disjoint(keys, results)?;
+        disjoint(results, output)?;
+    }
+    Ok(())
+}
+
 fn select_receipts(
     context: &Context,
     args: &PrepareArgs,
     receipts: &[Receipt],
     jobs: &[WorkflowJob],
 ) -> Result<Selection, AppError> {
-    let expected = expected_platforms(&args.expected_platforms)?;
+    let expected = platform_list(&args.expected_platforms)?;
     let selection = reconcile(
         &context.repository,
         &context.instance,
@@ -167,6 +183,50 @@ mod tests {
     use crate::github::WorkflowJob;
     use crate::github::fake::FakeGitHub;
     use crate::workflow::receipt::tests::receipt;
+
+    #[test]
+    fn destination_locations_are_pairwise_disjoint() {
+        let source = Path::new("source");
+        let keys = Path::new("keys");
+        let results = Path::new("results");
+        let output = Path::new("output");
+        require_separate(source, keys, None, output).unwrap();
+        require_separate(source, keys, Some(results), output).unwrap();
+        for (keys, results, output) in [
+            (
+                source.join("keys"),
+                results.to_path_buf(),
+                output.to_path_buf(),
+            ),
+            (
+                keys.to_path_buf(),
+                source.join("results"),
+                output.to_path_buf(),
+            ),
+            (
+                keys.to_path_buf(),
+                results.to_path_buf(),
+                source.join("output"),
+            ),
+            (
+                keys.to_path_buf(),
+                keys.join("results"),
+                output.to_path_buf(),
+            ),
+            (
+                keys.to_path_buf(),
+                results.to_path_buf(),
+                keys.join("output"),
+            ),
+            (
+                keys.to_path_buf(),
+                results.to_path_buf(),
+                results.join("output"),
+            ),
+        ] {
+            require_separate(source, &keys, Some(&results), &output).unwrap_err();
+        }
+    }
 
     #[test]
     fn orchestration_reads_job_evidence_through_the_semantic_port() {

@@ -5,12 +5,12 @@ use ohno::AppError;
 use serde_json::json;
 
 use crate::model::Instance;
-use crate::result::{AnalysisMode, Evidence, Outcome};
-use crate::workflow::receipt::{Receipt, expected_platforms};
+use crate::result::{AnalysisMode, Evidence, Outcome, platform_list};
+use crate::workflow::receipt::Receipt;
 use crate::workflow::reconcile::{Selection, collection_job_prefix};
 
 pub(crate) fn matrix_outputs(platforms: &str, instance: &Instance) -> Result<String, AppError> {
-    let platforms = expected_platforms(platforms)?;
+    let platforms = platform_list(platforms)?;
     let expected = platforms
         .iter()
         .map(String::as_str)
@@ -118,7 +118,6 @@ mod tests {
     use crate::github::WorkflowJob;
     use crate::result::InvalidPlatformList;
     use crate::result::tests::evidence;
-    use crate::workflow::receipt::InvalidCollectionPlatform;
     use crate::workflow::receipt::tests::receipt;
     use crate::workflow::reconcile::reconcile;
 
@@ -142,7 +141,7 @@ mod tests {
         let error = matrix_outputs("linux,", &instance).unwrap_err();
         assert!(error.find_source::<InvalidPlatformList>().is_some());
         let error = matrix_outputs("..", &instance).unwrap_err();
-        assert!(error.find_source::<InvalidCollectionPlatform>().is_some());
+        assert!(error.find_source::<InvalidPlatformList>().is_some());
     }
 
     #[test]
@@ -167,7 +166,7 @@ mod tests {
             &receipt.instance,
             receipt.run_id,
             &receipt.head,
-            &expected_platforms("linux").unwrap(),
+            &platform_list("linux").unwrap(),
             &[job],
             slice::from_ref(&receipt),
         )

@@ -201,16 +201,20 @@ pub(crate) fn platform_list(input: &str) -> Result<BTreeSet<String>, AppError> {
         .map(|value| {
             // These are workflow matrix identifiers, not runs-on label arrays or
             // free-form prose. A nonempty identifier is safe to render as inline code.
-            if value.is_empty()
-                || !value
-                    .bytes()
-                    .all(|one| one.is_ascii_alphanumeric() || matches!(one, b'.' | b'_' | b'-'))
-            {
+            if !is_platform_identifier(value) {
                 return Err(InvalidPlatformList::new().into());
             }
             Ok(value.to_owned())
         })
         .collect()
+}
+
+pub(crate) fn is_platform_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && !matches!(value, "." | "..")
+        && value
+            .bytes()
+            .all(|one| one.is_ascii_alphanumeric() || matches!(one, b'.' | b'_' | b'-'))
 }
 
 /// JSON decoding is separated from the validated publication contract.
@@ -393,6 +397,12 @@ pub(crate) mod tests {
             ("linux", "windows"),
             ("linux", "linux,"),
             ("linux", "linux\ninjected"),
+            (".", "."),
+            ("..", ".."),
+            ("linux, .", "linux"),
+            ("linux, ..", "linux"),
+            ("linux", "."),
+            ("linux", ".."),
         ] {
             PlatformCoverage::parse(expected, completed).unwrap_err();
         }
