@@ -5,6 +5,7 @@
 - [Installation](installation.md)
 - [Getting started](getting-started.md)
 - [Storage backends](storage.md)
+- [GitHub automation](github-automation.md)
 
 # Commands
 

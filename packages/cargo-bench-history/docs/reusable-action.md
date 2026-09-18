@@ -227,8 +227,10 @@ selections, not a promise that the binaries have the same package version:
 Workspace release groups are derived from exact first-party dependency requirements
 ([release versioning](../../../docs/release-versioning.md#version-groups)). The tool and its
 `cbh_*` implementation packages form such a group; the companion and faker are independent
-packages. The companion has no first-party dependency and needs none merely to align version
-numbers. The action manifest records a tested combination across those independent releases.
+packages. The companion reuses core configuration and canonical project-key resolution through
+compatible dependencies, without exact requirements that would join the core's version group.
+No dependency exists merely to align version numbers. The action manifest records a tested
+combination across those independent releases.
 
 **Released installation uses published binaries.** The required installation gate checks
 the pinned tool and companion versions through their supported installation methods before
@@ -236,9 +238,10 @@ an action release. Source dogfooding with `path` does not prove the released ins
 the required gate (§8.1) exercises that path independently. New crates use the first-publication
 process in [`RELEASING.md`](../../../RELEASING.md).
 
-Each command installs only what it uses: `collect`, `backfill`, and `analyze-*` need the tool;
-publication and lifecycle commands need the companion. `path` accepts one `source-path`,
-the root of the Folo source checkout.
+Every composite command uses the companion's action execution boundary for validated inputs,
+project identity and workflow outputs. `collect`, `backfill`, and `analyze-*` additionally
+use the main tool. Publication and lifecycle commands do not install the main executable.
+`path` accepts one `source-path`, the root of the Folo source checkout.
 
 **Failure reporting depends on installation too.** `alert` (§4.4) runs because something
 already went wrong. The ordinary binary cache and bounded installation retries reduce its
@@ -1054,6 +1057,12 @@ envelope in the companion avoids that duplication.
 orchestration and input/file wiring, not report interpretation or workflow-evidence policy.
 Integration and deployment responsibilities are described in §12.
 
+The companion's action execution boundary validates the composite's command-specific input
+groups and invokes the main tool with argument vectors. It uses the core's configuration and
+project-key helpers rather than another implementation of project normalization. Collection
+and analysis remain in the main tool; the action boundary only coordinates those existing
+operations and their validated outputs.
+
 The split is drawn by **vocabulary ownership**, not by the more obvious-looking
 "composition versus transport" line. These questions separate cleanly:
 
@@ -1316,10 +1325,14 @@ sees only the inputs their flow actually varies.
 the `publish-comment-*` / `publish-issue-*` states listed in §4, or `alert`);
 `install-method` (`binstall` | `install` | `path`, default `binstall`; applies to
 every binary the command needs, §3);
-`source-path` (the Folo workspace root for `install-method: path`); `config` (path to a
+`source-path` (the Folo workspace root for `install-method: path`);
+`working-directory` (the measured/configuration checkout, defaulting to the caller's working
+directory); `config` (path to a
 `bench_history.toml`; default: the tool's own `.cargo/bench_history.toml` discovery);
 `local-path` (→ `--local=<path>`). The project namespace is resolved from configuration,
 binary versions come from the release manifest, and verbose diagnostics are always enabled.
+The working directory is independent of the installation source so Folo's separate checkouts
+and isolated caller fixtures do not require copying tools into measured source.
 
 **Cargo build inputs (`collect` / `backfill`):** `all-features` (default `true`, matching the
 flows' need to reach benchmark targets gated behind `required-features`),
@@ -1344,6 +1357,11 @@ trunk is not `main` works without a branch-name assumption; a hand-assembled cal
 pass the PR's actual base explicitly when it differs from that default);
 `context` (→ `--context`; default `HEAD`); `machine-keys`; `cache`. Improvements are reported
 unconditionally in branch mode, so there is no direction input.
+
+Both analysis commands also receive nonempty `expected-platforms` and `completed-platforms`
+CSV values. Their coverage output uses this explicit evidence; a machine-key directory alone
+cannot establish which collection jobs succeeded. The reusable workflow passes its validated
+collection projection rather than asking the composite to rediscover the job matrix.
 
 **Report-publication inputs:** `publish-<sink>-findings`, `publish-<sink>-clean` and the
 report-bearing form of `publish-<sink>-no-data` receive the rendered summary, JSON report,

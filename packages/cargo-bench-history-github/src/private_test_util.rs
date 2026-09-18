@@ -71,7 +71,10 @@ pub async fn run_commands(
         let command = cli.into_command();
         if matches!(
             command,
-            Command::WorkflowMatrix(_) | Command::CollectionReceipt(_) | Command::InspectReport(_)
+            Command::Action(_)
+                | Command::WorkflowMatrix(_)
+                | Command::CollectionReceipt(_)
+                | Command::InspectReport(_)
         ) {
             return Err(NotOnlineCommand::new().into());
         }

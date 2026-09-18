@@ -523,8 +523,10 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-github"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
+ "cbh_config",
+ "cbh_model",
  "clap",
  "futures",
  "jiff",
@@ -535,6 +537,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+ "tempfile",
  "tick",
  "tokio",
 ]

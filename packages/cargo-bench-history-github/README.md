@@ -10,6 +10,15 @@ library has a stable API.
 `cargo binstall cargo-bench-history-github` installs a prebuilt binary on supported
 targets, with a transparent source-build fallback otherwise.
 
+## Root action execution
+
+The unsupported `action --inputs-file PATH --github-output PATH --temp-dir PATH [--tool PATH]`
+entry point executes the root action after its bootstrap installs the required binaries.
+It validates command-specific inputs, resolves the configured project namespace, drives
+collection or analysis, and delegates publication to the same lifecycle commands below.
+The measured working directory is independent of the installation source checkout.
+See the [bootstrap-facing contract](docs/action.md) for inputs, paths and outputs.
+
 ## Publication
 
 The companion embeds the tool-rendered summary and validates the accompanying JSON

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::action::ActionArgs;
 use crate::model::{CommitSha, Instance, Repository};
 use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 
@@ -51,6 +52,8 @@ struct CommonArgs {
 /// State-specific entry points prevent callers from choosing unsupported verdicts.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Execute a root-action invocation after binary installation.
+    Action(ActionArgs),
     /// Prepare matrix and collection-job identities without GitHub access.
     WorkflowMatrix(MatrixArgs),
     /// Record successful collection and its actual machine key.

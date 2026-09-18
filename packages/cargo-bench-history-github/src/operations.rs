@@ -9,7 +9,7 @@ use crate::github::{GitHub, RestGitHub};
 use crate::lifecycle::{self, NoData, Report};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::result::{AnalysisReport, Evidence, PlatformCoverage, PublicationState};
-use crate::workflow;
+use crate::{action, workflow};
 
 /// Namespace and diagnostics shared by lifecycle and workflow operations.
 #[derive(Clone, Debug)]
@@ -32,6 +32,7 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     let instance = cli.instance();
     let verbose = cli.verbose();
     let command = match cli.into_command() {
+        Command::Action(args) => return action::run(args).await,
         Command::WorkflowMatrix(args) => {
             return workflow::workflow_matrix(&instance, &args, verbose);
         }
@@ -69,7 +70,10 @@ pub(crate) async fn dispatch(
 ) -> Result<(), AppError> {
     match command {
         Command::PrepareAnalysis(args) => workflow::prepare_analysis(github, context, args).await,
-        Command::WorkflowMatrix(_) | Command::InspectReport(_) | Command::CollectionReceipt(_) => {
+        Command::Action(_)
+        | Command::WorkflowMatrix(_)
+        | Command::InspectReport(_)
+        | Command::CollectionReceipt(_) => {
             unreachable!("offline commands return before GitHub construction")
         }
         Command::PublishIssueFindings(args) => {
@@ -177,34 +181,36 @@ async fn load_report(args: ReportArgs) -> Result<Report, AppError> {
     })
 }
 
-// Clap guarantees the selected group's required fields; filesystem integration tests
+// CLI and action validation guarantee the selected group's required fields; integration tests
 // exercise this adapter without teaching the unit harness to perform real I/O.
 #[cfg_attr(test, mutants::skip)]
 async fn load_no_data(args: NoDataArgs) -> Result<NoData, AppError> {
     if args.empty_scope {
         return Ok(NoData::Empty(PendingArgs {
             run: args.run,
-            head: args.head.expect("Clap requires head with empty-scope"),
+            head: args
+                .head
+                .expect("validated empty-scope inputs require head"),
         }));
     }
     let report = load_report(ReportArgs {
         run: args.run,
         body_file: args
             .body_file
-            .expect("Clap requires body-file without empty-scope"),
+            .expect("validated report inputs require body-file"),
         analyzed_sha: args
             .analyzed_sha
-            .expect("Clap requires analyzed-sha without empty-scope"),
+            .expect("validated report inputs require analyzed-sha"),
         evidence: ResultArgs {
             report_file: args
                 .report_file
-                .expect("Clap requires report-file without empty-scope"),
+                .expect("validated report inputs require report-file"),
             expected_platforms: args
                 .expected_platforms
-                .expect("Clap requires expected-platforms without empty-scope"),
+                .expect("validated report inputs require expected-platforms"),
             completed_platforms: args
                 .completed_platforms
-                .expect("Clap requires completed-platforms without empty-scope"),
+                .expect("validated report inputs require completed-platforms"),
         },
         artifact_url: args.artifact_url,
     })

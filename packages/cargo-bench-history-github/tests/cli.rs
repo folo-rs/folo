@@ -18,6 +18,7 @@ fn every_subcommand_is_present_in_help() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
     for name in [
+        "action",
         "publish-issue-findings",
         "publish-issue-clean",
         "publish-issue-no-data",

@@ -8,6 +8,7 @@
 //! binary. Its library API and command line may change without a semver major
 //! release.
 
+mod action;
 mod cli;
 mod errors;
 mod github;

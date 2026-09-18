@@ -1,7 +1,7 @@
 mod args;
-mod files;
+pub(crate) mod files;
 mod operations;
-mod projection;
+pub(crate) mod projection;
 pub(crate) mod receipt;
 pub(crate) mod reconcile;
 

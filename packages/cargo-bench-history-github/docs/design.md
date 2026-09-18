@@ -10,6 +10,33 @@ This package implements its GitHub lifecycle and workflow-evidence responsibilit
 It deliberately has no stable API
 or command-line contract; the separately versioned action pins a tested companion version.
 
+## Post-install action execution
+
+The companion is the root action's execution boundary after installation. It validates
+command-specific string inputs before benchmark, storage or publication work. Installation
+method and source checkout belong to the bootstrap, not this boundary. The measured working
+directory independently selects the checkout and configuration; the project namespace uses
+the core tool's canonical storage identity.
+
+Collection and backfill preserve the core tool's scope, feature, repetition and write-mode
+choices. Analysis validates full Git history, resolves the context commit and uses only the
+actual supplied machine keys. History analysis selects that commit as both context and base;
+PR analysis accepts the caller's base or the core default and requires a branch-mode report.
+Platform coverage is explicit workflow evidence, never inferred from deduplicated fingerprints.
+
+Report artifacts occupy an invocation-owned temporary directory outside the checkout and
+remain available for the job's artifact upload. Long-running tool output streams to the job
+log. Only dedicated machine-key and Git responses are captured. Successful outputs are
+appended only after the selected work and its evidence checks succeed.
+
+Fork-origin PR events, including `pull_request_target`, skip benchmark and publication work
+with a diagnostic and explicit skip outputs. The companion does not initialize GitHub authentication
+for offline collection, backfill or analysis. Child processes inherit the caller's environment for
+builds and benchmarks. Publication reuses the existing report evidence and lifecycle policy;
+missing execution identity is an error, not permission to invent a workflow run or verdict.
+
+The unsupported bootstrap-facing contract is documented in [action execution](action.md).
+
 ## Responsibilities
 
 The companion:
@@ -97,8 +124,9 @@ Report-bearing publication uses `--report-file`, the rendered `--body-file`, `--
 and `--expected-platforms` / `--completed-platforms`, identically for findings, clean and
 no-data. The no-report no-data form requires an explicit empty-scope result and rejects
 report-bearing inputs.
-The report's existing JSON metadata is the integration boundary, not a new versioned report
-schema or a dependency on the tool's private implementation packages.
+Report interpretation uses the existing JSON metadata rather than depending on the tool's
+report types or adding a versioned report schema. Namespace resolution separately reuses
+the core configuration and storage identity helpers.
 
 ## Run ownership
 

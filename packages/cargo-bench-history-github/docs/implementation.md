@@ -17,6 +17,33 @@ process setup. Native integration scenarios use the same dispatcher with ordinar
 an in-memory GitHub port and a frozen clock. They observe publication snapshots after each command,
 so argument wiring and terminal transitions are covered without credentials or network writes.
 
+## Root action boundary
+
+The `action` entry point separates strict string-object parsing and command planning from
+filesystem, process, environment and GitHub adapters. An in-memory host records process
+arguments and supplies files and dedicated command responses; publication has a separate
+port so offline commands cannot construct the credentialed adapter. Native integration tests
+exercise real Git, configuration loading, persistent temporary reports and an executable
+fixture without running benchmark engines or network operations.
+
+Namespace resolution calls `cbh_config`'s configuration-path, configuration-loading and project-ID
+helpers, then `cbh_model`'s storage-segment normalization. Compatible version-plus-path
+dependencies reuse that behavior without declaring a lockstep release group with the core.
+No core types enter this package's public API.
+
+The action planner translates publication input names into the existing typed CLI argument
+groups and uses the same lifecycle dispatcher. Analysis output projection uses the existing
+validated report and platform evidence, not Markdown interpretation. The report's regression
+tally is passed through as data; findings and unjudged-reason vocabulary remain core-owned.
+
+Native process invocation uses argument vectors, an explicit working directory and inherited
+streams for the main work. Child processes inherit the caller's environment unchanged, including
+variables used by private dependency helpers or benchmarks. Only dedicated Git and machine-key
+commands capture stdout; stderr remains visible. Report directory creation is unique and atomic,
+outside the canonical Git checkout, and ownership persists beyond the command for artifact upload.
+
+See [action execution](action.md) for the bootstrap invocation and input/output contract.
+
 ## Evidence and state transitions
 
 JSON decoding produces a validated analysis report before any publication operation. The

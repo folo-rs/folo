@@ -2,7 +2,7 @@
 name = "cargo-bench-history-github"
 description = "Unsupported GitHub automation companion for cargo-bench-history; no stable API or CLI"
 publish = true
-version = "0.2.6"
+version = "0.2.7"
 
 authors.workspace = true
 edition.workspace = true
@@ -40,6 +40,10 @@ path = "src/main.rs"
 private-test-util = []
 
 [dependencies]
+# Canonical configuration and storage identity are shared behavior, not a shared release group.
+# Compatible requirements keep this companion independently versioned from the core tool.
+cbh_config = { version = "0.2.14", path = "../cbh_config", default-features = false }
+cbh_model = { version = "0.2.14", path = "../cbh_model", default-features = false }
 clap = { workspace = true, features = ["derive"] }
 jiff = { workspace = true }
 mimalloc = { workspace = true }
@@ -47,8 +51,9 @@ ohno = { workspace = true, features = ["app-err"] }
 reqwest = { workspace = true, features = ["rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
-tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "process", "rt", "time"] }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }
