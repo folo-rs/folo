@@ -13,6 +13,8 @@ use std::fs;
 use std::os::unix::ffi::OsStringExt as _;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStringExt as _;
+#[cfg(windows)]
+use std::path::{Component, Prefix};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -135,6 +137,27 @@ impl Fixture {
     fn outputs(&self) -> String {
         fs::read_to_string(self.path("outputs")).unwrap()
     }
+
+    fn report_path(&self, outputs: &str, key: &str) -> PathBuf {
+        let path = outputs
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap();
+        let path = Path::new(path);
+        assert!(path.is_absolute());
+        #[cfg(windows)]
+        assert!(matches!(
+            path.components().next(),
+            Some(Component::Prefix(prefix))
+                if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(_, _))
+        ));
+        assert!(path.is_file());
+        let canonical = fs::canonicalize(path).unwrap();
+        assert_eq!(fs::read(path).unwrap(), fs::read(&canonical).unwrap());
+        assert!(!canonical.starts_with(fs::canonicalize(&self.checkout).unwrap()));
+        canonical
+    }
 }
 
 fn success(output: &Output) {
@@ -218,16 +241,9 @@ fn native_core_commands_preserve_environment_checkout_streams_and_reports() {
         assert!(outputs.contains("partial-platform-coverage=true\n"));
         assert!(outputs.contains("regressions=2\n"));
         for key in ["report-json=", "report-markdown=", "report-summary="] {
-            let path = outputs
-                .lines()
-                .rev()
-                .find_map(|line| line.strip_prefix(key))
-                .unwrap();
-            let path = fs::canonicalize(path).unwrap();
-            assert!(path.is_file());
-            assert!(!path.starts_with(fs::canonicalize(&fixture.checkout).unwrap()));
+            let canonical = fixture.report_path(&outputs, key);
             if key == "report-json=" {
-                reports.push(path);
+                reports.push(canonical);
             }
         }
     }

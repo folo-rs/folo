@@ -1,4 +1,5 @@
 mod args;
+mod artifact_path;
 mod environment;
 mod errors;
 mod execute;

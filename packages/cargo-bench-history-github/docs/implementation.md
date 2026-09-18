@@ -42,6 +42,12 @@ variables used by private dependency helpers or benchmarks. Only dedicated Git a
 commands capture stdout; stderr remains visible. Report directory creation is unique and atomic,
 outside the canonical Git checkout, and ownership persists beyond the command for artifact upload.
 
+Workflow output paths are a separate representation from native canonical paths. The output
+projection uses `dunce` to simplify Windows drive paths only when their ordinary spelling
+preserves their meaning. It rejects remaining verbatim paths rather than giving the artifact
+uploader a root containing glob syntax. Native I/O, existing-ancestor resolution and checkout
+containment continue using the original canonical paths; no filesystem case-folding is added.
+
 See [action execution](action.md) for the bootstrap invocation and input/output contract.
 
 ## Evidence and state transitions

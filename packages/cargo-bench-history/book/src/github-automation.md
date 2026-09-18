@@ -24,7 +24,10 @@ tenant IDs in the job environment. Do not add stored tokens or credentials to ac
 
 ## Install the tested tools
 
-Pin an action release or commit; `@v1` follows the tested releases of the first major version.
+Choose a version from the action repository's
+[Releases page](https://github.com/folo-rs/cargo-bench-history-action/releases), then pin its
+release tag or commit. `@v1` follows the tested releases of the first major version.
+Publishing the monorepo binaries does not itself publish an action tag.
 The action's release manifest selects its exact tool versions, without a caller version
 override.
 

@@ -528,6 +528,7 @@ dependencies = [
  "cbh_config",
  "cbh_model",
  "clap",
+ "dunce",
  "futures",
  "jiff",
  "mimalloc",

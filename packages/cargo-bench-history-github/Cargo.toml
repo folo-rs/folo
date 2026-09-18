@@ -45,6 +45,7 @@ private-test-util = []
 cbh_config = { version = "0.2.14", path = "../cbh_config", default-features = false }
 cbh_model = { version = "0.2.14", path = "../cbh_model", default-features = false }
 clap = { workspace = true, features = ["derive"] }
+dunce = { workspace = true }
 jiff = { workspace = true }
 mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }

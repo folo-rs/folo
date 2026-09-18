@@ -8,6 +8,7 @@ use ohno::AppError;
 use serde::Deserialize;
 
 use crate::action::args::ActionArgs;
+use crate::action::artifact_path::for_output;
 use crate::action::environment::Environment;
 use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::inputs::{ActionCommand, Inputs};
@@ -207,10 +208,7 @@ fn analysis_outputs(
         ("report-json", &reports.json),
         ("report-summary", &reports.summary),
     ] {
-        let value = path
-            .to_str()
-            .filter(|value| !value.contains(['\r', '\n']))
-            .ok_or_else(|| InvalidOutput::new("report paths must be single-line Unicode"))?;
+        let value = for_output(path)?;
         writeln!(outputs, "{key}={value}").expect("formatting into a String cannot fail");
     }
     Ok(outputs)

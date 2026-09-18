@@ -122,6 +122,9 @@ Analysis appends the shared evidence projection `outcome`, `notable`, `can-clear
 and local to this job. The outcome file must agree with the validated JSON, and rendered
 reports must be nonblank. No success outputs are appended on work or evidence failure.
 
+Windows report outputs use ordinary paths for artifact-upload compatibility. Temporary locations
+that cannot be represented in this supported form are rejected.
+
 `--github-output` preserves earlier records, including a preceding record without its
 final newline. The caller supplies a regular output file, or an absent file with an
 existing parent directory.
