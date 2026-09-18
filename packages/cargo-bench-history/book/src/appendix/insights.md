@@ -74,7 +74,9 @@ current-regime range.
 Your branch's intermediate commits are ignored — only the context state is evaluated.
 
 1. **Re-run the benchmark on the context commit.** Branch findings rest on a small sample, often
-   a single run. A second run costs little and settles most questions.
+   a single run. Inspect the new engine output directly: ordinary CI collection uses
+   `--skip-existing`, which preserves existing stored measurements. Replacing stored results
+   requires an explicit `collect --overwrite`.
 2. **Look for a comparison-base lag warning.** On a rotating CI pool, your runner's machine key
    may only have base data from several commits back. The comparison is still valid, but it is
    against an older base state than you might assume.

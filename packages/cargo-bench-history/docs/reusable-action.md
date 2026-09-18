@@ -315,9 +315,9 @@ action*: cannot express matrix-collect + single-analyze + separate lifecycle job
      those packages** (`--package` per name), as the PR flow runs it — the reusable workflow
      computes the affected, benchmarkable set (§4.7), or a composite caller supplies its own.
      `packages` and `exclude` conflict at this layer, matching the CLI; workflow preflight
-     applies exclusions before passing an explicit package list. A non-empty scope is safe
-     because branch-mode analysis only ever flags a series with a data point at the
-     branch-unique head commit, i.e. exactly the packages collected (§4.5).
+     applies exclusions before passing an explicit package list. Analysis uses the
+     context-presence filter rather than inferring benchmark identities from package names
+     (§4.3).
    * **Noise reduction.** `best-of <N>` (default 1; the workflows pass 3) runs the suite N
      times per commit and keeps each metric's minimum sample — runner interference is
      one-sided, so the minimum is the reading least perturbed by transient load.
@@ -339,9 +339,9 @@ action*: cannot express matrix-collect + single-analyze + separate lifecycle job
 
 **The collect matrix does not fail fast, and the reason is structural.** Each platform writes
 into **its own machine-key partition**, and analysis never compares across partitions (§4.6).
-A leg that dies therefore does not corrupt or bias what the other legs produced — it simply
-means that one platform has no point at this commit. Partial data is *sound*, not a
-compromise, which is what makes tolerating it defensible rather than merely convenient.
+A failed leg withholds its receipt and is disclosed as incomplete coverage. Previously stored
+or partially written objects do not turn that failure into confirmed collection success.
+Successful legs remain usable for qualified findings.
 
 The objection is worth taking seriously: if a benchmark is broken, surely every leg fails, so
 letting them all run just burns runner minutes. That is true of *systematic* failures — and
@@ -495,10 +495,10 @@ its reports and invokes comment publication:
 * **Scoping falls out of collection, never a name filter.** Analysis is deliberately *not*
   package-scoped: benchmark identities are engine-dependent, so an id-prefix filter would
   silently drop some engines' series. Instead the tool's **always-on ghost exclusion** analyzes
-  only benchmarks present at the context commit (the PR head), and since only the touched
-  packages were collected there, every untouched package drops out as a ghost automatically —
-  for every engine. This needs nothing from the action: ghost exclusion is inherent to analysis
-  and has no opt-out flag, so the scoping is correct by construction.
+  only benchmarks present at the context commit (the PR head) in the selected machine
+  partitions. Collection determines that presence, including any existing measurements at
+  the same commit and machine key. Ghost exclusion is a presence filter, not a provenance
+  filter, and works for every engine without additional action parameters.
 * **Cache is restore-only.** PR runs read the shared history cache but never save, keeping the
   baseline warm without accumulating per-PR cache entries (safe against the append-only store
   even when slightly stale).
@@ -650,18 +650,13 @@ is resolved
 **per command** rather than as one action-wide constant, so an omitted input means "this
 command's sensible default", and an explicitly set one always wins.
 
-**PR measurements are expected to be orphaned, and that is fine.** Points are keyed by commit,
-so a repository that **squash- or rebase-merges** — the default on many projects — discards
-the very SHAs the PR flow measured: the branch commits never land on the trunk, and the
-squashed commit is one nobody has benchmarked. PR-collected data therefore has a *shorter*
-useful life than history-flow data: it exists to answer "does this change move anything?"
-while the PR is open, and afterwards it is dead weight that no trunk analysis will ever
-select. This is a deliberate acceptance, not an oversight. Two consequences follow: the trunk
-series is fed by the **history flow and
-the densification pass**, never by PR runs, so nothing downstream depends on PR points
-surviving; and because those points are disposable, a PR run has no need to *write* to the
-shared store at all. The storage composition in §6 supplies baseline plus disposable input.
-This is a data-lifetime choice, not a requirement for a separate read-only Azure identity.
+**PR and trunk measurements share a store, not an analysis timeline.** Points are keyed by
+commit, and Git topology determines which commits contribute to a query. PR commits absent
+from the trunk's first-parent history do not enter trunk analysis, including commits
+replaced by a squash or rebase merge. History collection and densification measure the actual
+trunk commits. Both flows use ordinary immutable objects and the configured write-collision
+policy; predefined CI workflows select `skip` so reruns retain existing measurements.
+Stored PR points follow ordinary storage maintenance, without automatic PR pruning.
 
 **Analysis mode is inferred by the tool, not selected by the action.** There is no `--mode`
 flag: `analyze` auto-detects **history** vs **branch** from git topology and the recorded
@@ -1235,18 +1230,16 @@ this replaces is a workflow that silently does nothing, leaving a contributor to
 benchmarking is broken, queued, or deliberately off. Nothing else about the design is
 fork-aware, and no input configures this.
 
-**PR analysis reads the same production store as the trunk.** Branch mode compares the PR head
-against the trunk's recorded baseline, so the PR flow must read the very store that holds it —
-a separate PR store is rejected because it would have no baseline to compare against.
-The PR path combines the Azure baseline with run-local PR measurements:
-`collect --local=<run-results>` records the measurements, and
-`analyze --local-input <run-results>` reads them alongside the configured Azure baseline.
-An optional `--cache=<directory>` mirrors only the baseline. `--local` by itself still
-selects filesystem storage instead of Azure, and a restored cache does not add locally
-collected objects to cloud listings. The workflow assembles the matrix's result artifacts
-into the input directory. Queries do not mutate the baseline, but use the same Azure identity
-as collection and backfill; local PR storage is not a privilege boundary. The reusable
-workflows own this handoff; integration requirements are in §12.
+**PR collection and analysis use the same store as the trunk.** Branch mode compares the PR
+head against the trunk's recorded baseline, so both belong in the selected backend. PR
+collection uses ordinary `collect --skip-existing`, and analysis reads the head and baseline
+from that store. The matrix uploads collection receipts, not measurement objects. Analysis
+selects the successful legs' machine keys from those receipts (§4.6).
+An optional `--cache=<directory>` mirrors Azure reads; PR workflows restore but do not save
+the Actions cache. Listings still come from Azure, so newly stored measurements remain
+visible after restoring an older cache. `--local` selects filesystem storage instead of
+Azure for both collection and queries; it remains an alternative backend. Integration
+requirements are in §12.
 
 **Provisioning is an explicit tool command, not an action side effect.**
 [`cargo-bench-history setup-azure`](DESIGN.md#710-setup-azure) supplies the standard storage
@@ -1274,8 +1267,7 @@ Azure and GitHub still authenticate to different services: the Azure identity is
 through OIDC, and GitHub operations use the job's built-in `GITHUB_TOKEN`. Neither credential
 replaces the other, and neither requires a stored user token. Combining these capabilities
 is intentional for the repository-owned workflows; same-repository code and actions running
-with them are trusted with the granted access. There is no separate Azure Reader role,
-reader client ID or workflow handoff solely to enforce a privilege partition.
+with them are trusted with the granted access.
 
 Fork exclusion remains explicit. Artifact-read token availability (§4.6) does not grant
 GitHub posting rights or establish that running fork code with the production Azure identity
@@ -1689,11 +1681,10 @@ The tool, companion and workflow layer have separate responsibilities:
   History analysis supplies the same context and base explicitly (§4.2).
   Note that `--include-improvements` no longer exists — direction is now a property of the
   mode (§4.3) — so nothing should pass it.
-* **PR storage combines local measurements with the durable baseline.** Local PR
-  measurements are analyzed together with the Azure baseline through `--local-input`,
-  without writing the PR points to Azure (§6). The view rejects mutations and keeps local
-  inputs outside the baseline cache. The workflow layer supplies credential wiring and
-  the matrix artifact handoff.
+* **PR storage is the ordinary configured store.** PR collection persists measurements
+  alongside the trunk baseline with `--skip-existing` (§6). Analysis reads that store with
+  the frozen head/base and validated collection machine keys. The workflow layer supplies
+  the shared identity, receipt handoff and restore-only Actions cache.
 * **The tool supplies reusable Azure provisioning.** `setup-azure` executes or exports the
   package-owned, self-contained deployment bundle. The action never deploys infrastructure;
   the [command contract](DESIGN.md#710-setup-azure) and
@@ -1769,11 +1760,12 @@ event's frozen base commit. The reusable workflow owns collection-scope policy a
 the selected scope to the lower action layer.
 
 Successful collection writes a receipt containing repository, instance, run, attempt, frozen
-head, platform and the actual machine key. The artifact also carries the local result store
-for PRs. Analysis reconciles receipts with each platform's latest GitHub job attempt: a failed
-retry cannot reuse an older receipt, while an untouched successful leg retains its earlier
-one. Missing evidence for a successful job is an error; total collection failure produces no
-synthetic report. Only selected successful platform data enters the local analysis input.
+head, platform and the actual machine key. The artifact contains only the receipt; measurements
+remain in configured storage. Analysis reconciles receipts with each platform's latest GitHub
+job attempt: a failed retry cannot reuse an older receipt, while an untouched successful leg
+retains its earlier one. Missing evidence for a successful job is an error; total collection
+failure produces no synthetic report. The selected successful machine keys scope ordinary
+configured-store analysis.
 
 The companion projects validated reports into workflow outputs selecting findings, clean or
 no-data publication. Failed execution uses the separately owned terminal-status path.
@@ -1784,9 +1776,8 @@ title search; PR comments and report-state metadata use standard markers. Output
 identity formats are not adopted, rewritten or removed.
 
 Azure configuration supplies one production managed-identity client ID and tenant ID.
-The identity supports history-branch and same-repository PR workflows; analysis may use it
-alongside the GitHub posting token in one job. Local PR collection remains a data-lifetime
-choice. No reader provisioning or writer-PR-trust retirement is part of activation.
+The identity supports collection and analysis in history-branch and same-repository PR
+workflows; analysis may use it alongside the GitHub posting token in one job.
 The preparation artifact is also required by notification jobs; inability to build or obtain
 the companion remains a failed workflow check rather than a successful notification.
 
@@ -1806,7 +1797,7 @@ are documented in the
 
 | # | Action | Gates | Notes |
 | --- | --- | --- | --- |
-| 1 | **Configure production storage and its identity** | Using the Azure-backed workflows | Use one federated managed identity for the history branch and PR analysis, record its non-secret identifiers, and verify storage access. An existing correctly configured identity needs no reader companion or staged retirement. |
+| 1 | **Configure production storage and its identity** | Using the Azure-backed workflows | Use one federated managed identity for history and PR collection and analysis, record its non-secret identifiers, and verify storage access. |
 | 2 | **Bootstrap new crates, then configure Trusted Publishing** | Installing published tool and companion versions | Follow `RELEASING.md`: first publication is a maintainer operation from clean `main` after review and merge; subsequent releases use the configured `folo-rs/folo` / `release.yml` Trusted Publisher. |
 | 3 | **Configure Marketplace publishing** — agreement, category and listing | Public action release | A one-time UI flow tied to the account, not to a release run (§8.1). |
 | 4 | **Define the `v1` compatibility promise** | Publishing and moving the floating major tag | Consumers inherit the release that the tag identifies; breaking changes require an appropriate new major. |

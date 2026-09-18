@@ -47,35 +47,6 @@ rare delete or overwrite. The cache is meaningful only with the cloud backend, s
 **conflicts with `--local`**. In GitHub Actions, persist the cache directory with the
 standard Actions cache so each run pays the network cost only for objects it has never seen.
 
-## Additional local results
-
-Use `--local-input <directory>` with [`analyze`](commands/analyze.md),
-[`list`](commands/list.md), or [`examine`](commands/examine.md) to read local results together
-with the selected baseline. This is useful for PR measurements: collect them locally, then
-compare them with shared history using only read access to Azure.
-
-```sh
-cargo bench-history collect --local=./pr-results
-cargo bench-history analyze --local-input ./pr-results --base origin/main --cache=./history-cache
-```
-
-The example uses the configured Azure baseline; pass the PR's actual base ref instead of
-`origin/main` when it differs. For local experimentation, use `--local=./baseline` with
-`--local-input ./pr-results` and omit `--cache`.
-
-The input directory must already exist and contain results in the ordinary storage layout.
-Keys from both sources are combined without duplicates. If a key exists in both, its local
-contents take precedence; unreadable or corrupt local data is not replaced by baseline data.
-The same project and selection options apply to both sources.
-
-These queries do not modify either source or upload the local measurements. Mutating commands
-do not accept `--local-input`. An optional cache mirrors only the Azure baseline: keep the
-local input outside its effective mirror directory, with neither directory containing the
-other. Aliases to overlapping directories are rejected as well.
-
-Relative input paths resolve against the working directory, independently of `--repo`.
-There is no separate environment variable or configuration-file field for this input.
-
 ## GitHub automation notes
 
 - [`analyze`](commands/analyze.md) needs a resolvable git repository with enough history to
@@ -85,3 +56,6 @@ There is no separate environment variable or configuration-file field for this i
 - Run CI collection with `--skip-existing` for append-only behavior: a same-commit re-run
   still benchmarks every engine (so a broken benchmark is caught) but writes nothing,
   keeping caches valid across runs.
+- PR and trunk collection use the same store so branch analysis can read both the head and
+  its baseline. Git topology keeps unrelated PR commits out of trunk analysis; storing a
+  branch measurement does not add it to the trunk series.

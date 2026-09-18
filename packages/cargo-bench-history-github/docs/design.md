@@ -108,11 +108,13 @@ The workflow derives its matrix jobs and later evidence inputs from those output
 maintaining separate platform lists or job-name conventions. Setup requires no repository or
 GitHub credential.
 
-Collection emits an internal, versioned receipt only after both collection and real machine-key
-capture succeed. A receipt binds repository, action instance, workflow run and attempt, frozen
-analysis head, platform identifier and machine key. It is not an analysis report or checksum
-manifest. Writing receipts and inspecting reports require neither a GitHub credential nor an
-HTTP client.
+Collection persists measurements to the configured store and emits an internal, versioned
+receipt only after both collection and real machine-key capture succeed. Collection artifacts
+contain only `receipt.json`; analysis reads measurements from the configured store for both
+history and pull-request runs. A receipt binds repository, action instance, workflow run and
+attempt, frozen analysis head, platform identifier and machine key. It is not an analysis report
+or checksum manifest. Writing receipts and inspecting reports require neither a GitHub
+credential nor an HTTP client.
 
 Analysis preparation lists every job attempt for the run with Actions-read permission. The
 collection job name is `cbh-collect:<instance>:<platform>`, either the entire name or its final
@@ -127,13 +129,12 @@ At least one platform must succeed. Total failure does not create a report or au
 empty analysis. Preparation supplies the actual selected machine keys to the existing analyzer
 recipe and reports platform coverage separately from the analyzer's series census.
 
-For PR analysis, only selected platforms' ordinary local result trees are composed into a fresh
-run-local input directory. Identical copies of an object are accepted; differing bytes at the
-same relative path are an error. Receipt files and failed-platform results never enter this
-directory. A successful collection with no objects may omit its results tree or supply an empty
-one; the real analyzer determines the resulting nothing-in-scope outcome. Input traversal accepts
-only ordinary directories and regular files, and destinations must be absent or empty, separate
-from inputs and from each other. Existing unrelated data is never deleted.
+Preparation writes machine-key files only for selected successful platforms. Collection receipts
+establish job coverage, not measurement availability; the real analyzer determines whether the
+configured store contains enough applicable data for a verdict. Receipt inputs accept only
+ordinary artifact directories and regular receipt files. The machine-key destination must be
+absent or empty and separate from receipt inputs and the workflow-output file. Existing unrelated
+data is never deleted.
 
 Report inspection projects the same validated evidence used by publication into workflow outputs,
 including the publication state. Only findings are notable. Only a clean report with a full

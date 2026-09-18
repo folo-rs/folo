@@ -16,6 +16,7 @@ use cbh_command::{
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
+use clap::error::ErrorKind;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
 
 use crate::setup_azure::SetupAzureCommand;
@@ -58,7 +59,6 @@ pub struct EarlyExit {
 impl EarlyExit {
     /// Classifies a `clap` parse error into the success/failure early-exit shape.
     fn from_clap(error: &clap::Error) -> Self {
-        use clap::error::ErrorKind;
         let success = matches!(
             error.kind(),
             ErrorKind::DisplayHelp
@@ -254,20 +254,6 @@ struct CacheArg {
                   --cache (Some(None) -> read the env var), or --cache=<path> (Some(Some(path)))"
     )]
     cache: Option<Option<PathBuf>>,
-}
-
-/// Additional stored results for queries that never mutate their data sources.
-#[derive(Args, Debug)]
-#[command(next_help_heading = HEADING_ENV)]
-struct LocalInputArg {
-    /// Read local results alongside the selected baseline, preferring local contents
-    /// for matching keys.
-    ///
-    /// The directory must already exist and use the ordinary stored-object layout.
-    /// Relative paths resolve against the working directory. The input and any
-    /// cache mirror must be disjoint directories.
-    #[arg(long, value_name = "PATH")]
-    local_input: Option<PathBuf>,
 }
 
 /// The repeatable, `all`-aware discriminant filters used by every query command.
@@ -547,9 +533,6 @@ struct AnalyzeCommand {
     cache: CacheArg,
 
     #[command(flatten)]
-    local_input: LocalInputArg,
-
-    #[command(flatten)]
     output: OutputArgs,
 
     #[command(flatten)]
@@ -584,7 +567,6 @@ impl AnalyzeCommand {
             repo: self.env.repo,
             local: local_selection(self.env.local),
             cache: cache_selection(self.cache.cache),
-            local_input: self.local_input.local_input,
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -642,9 +624,6 @@ struct ListCommand {
     cache: CacheArg,
 
     #[command(flatten)]
-    local_input: LocalInputArg,
-
-    #[command(flatten)]
     output: OutputArgs,
 
     #[command(flatten)]
@@ -672,7 +651,6 @@ impl ListCommand {
             repo: self.env.repo,
             local: local_selection(self.env.local),
             cache: cache_selection(self.cache.cache),
-            local_input: self.local_input.local_input,
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -707,9 +685,6 @@ struct ExamineCommand {
     cache: CacheArg,
 
     #[command(flatten)]
-    local_input: LocalInputArg,
-
-    #[command(flatten)]
     output: OutputArgs,
 
     #[command(flatten)]
@@ -740,7 +715,6 @@ impl ExamineCommand {
             repo: self.env.repo,
             local: local_selection(self.env.local),
             cache: cache_selection(self.cache.cache),
-            local_input: self.local_input.local_input,
             context: self.timeline.context,
             base: self.timeline.base,
             no_dirty: self.no_dirty,
@@ -1072,7 +1046,6 @@ fn resolve_packages(workspace: bool, package: Vec<String>) -> Vec<String> {
 pub(crate) mod tests {
     #[cfg(miri)]
     use clap::FromArgMatches;
-    use clap::error::ErrorKind;
     use clap::{Command as ClapCommand, CommandFactory};
 
     use super::*;
@@ -1537,99 +1510,6 @@ pub(crate) mod tests {
             panic!("expected analyze command");
         };
         assert_eq!(options.cache, None);
-        assert_eq!(options.local_input, None);
-    }
-
-    #[test]
-    fn analyze_local_input_keeps_the_cloud_cache_selection() {
-        let Command::Analyze(options) =
-            parse(&["analyze", "--local-input", "pr-results", "--cache=mirror"])
-        else {
-            panic!("expected analyze command");
-        };
-        assert_eq!(options.local_input, Some(PathBuf::from("pr-results")));
-        assert_eq!(options.local, None);
-        assert_eq!(
-            options.cache,
-            Some(CacheSelection::Path(PathBuf::from("mirror")))
-        );
-    }
-
-    #[test]
-    fn list_local_input_keeps_the_filesystem_baseline_selection() {
-        let Command::List(options) = parse(&[
-            "list",
-            "discriminants",
-            "--local=baseline",
-            "--local-input",
-            "pr-results",
-        ]) else {
-            panic!("expected list command");
-        };
-        assert_eq!(options.local_input, Some(PathBuf::from("pr-results")));
-        assert_eq!(
-            options.local,
-            Some(LocalStorageSelection::Path(PathBuf::from("baseline")))
-        );
-    }
-
-    #[test]
-    fn examine_accepts_the_same_local_input() {
-        let Command::Examine(options) = parse(&[
-            "examine",
-            "--benchmark",
-            "package/bench",
-            "--metric",
-            "wall_time",
-            "--local-input",
-            "pr-results",
-        ]) else {
-            panic!("expected examine command");
-        };
-        assert_eq!(options.local_input, Some(PathBuf::from("pr-results")));
-    }
-
-    #[test]
-    fn local_input_requires_an_explicit_path() {
-        from_args(&["cargo-bench-history"], &["analyze", "--local-input"]).unwrap_err();
-    }
-
-    fn assert_rejects_local_input(name: &str) {
-        let error = command_schema(name)
-            .unwrap()
-            .try_get_matches_from([name, "--local-input", "pr-results"])
-            .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
-    }
-
-    #[test]
-    fn collect_rejects_local_input() {
-        assert_rejects_local_input("collect");
-    }
-
-    #[test]
-    fn import_rejects_local_input() {
-        assert_rejects_local_input("import");
-    }
-
-    #[test]
-    fn backfill_rejects_local_input() {
-        assert_rejects_local_input("backfill");
-    }
-
-    #[test]
-    fn prune_rejects_local_input() {
-        assert_rejects_local_input("prune");
-    }
-
-    #[test]
-    fn bless_rejects_local_input() {
-        assert_rejects_local_input("bless");
-    }
-
-    #[test]
-    fn unbless_rejects_local_input() {
-        assert_rejects_local_input("unbless");
     }
 
     #[test]

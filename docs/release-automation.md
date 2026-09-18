@@ -73,6 +73,7 @@ build matrix. Today that set is:
 | --------------------------- | --------------------------- | -------------------------------------------------- |
 | `cargo-bench-history`       | `cargo-bench-history`       | Slow to build from source (Azure SDK), so the one that benefits most from a prebuilt binary. |
 | `cargo-bench-history-faker` | `cargo-bench-history-faker` | Unsupported test-support engine; published only so sibling repos can validate `cargo-bench-history` end to end (and fetch it via `cargo binstall`). No stable API or CLI. |
+| `cargo-bench-history-github` | `cargo-bench-history-github` | Independently versioned, unsupported GitHub automation companion; the action pins its released binary alongside the main tool. No stable API or CLI. |
 | `cargo-detect-package`      | `cargo-detect-package`      | Small, fast to build.                              |
 | `cargo-freeze-deps`         | `cargo-freeze-deps`         | Small, fast to build.                              |
 | `cargo-release-plan`        | `cargo-release-plan`        | Small, fast to build.                              |

@@ -14,7 +14,7 @@ the installed App's scheduling controls.
 | `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
-| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Local PR collection and combined production-backed analysis/publication for same-repository PRs. |
+| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Production-backed PR collection and combined analysis/publication for same-repository PRs. |
 
 ```text
 Deep validation on main: plan -> standard + deep checks -> report failures -> run report issue
@@ -52,20 +52,20 @@ notification is reported as successful when its executable could not run.
 The companion turns the configured platform CSV into the matrix and collection job prefix.
 Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
 `receipt.json` with its repository, instance, workflow run/attempt, frozen head, platform and
-machine key. PR collection artifacts additionally carry a `results` directory containing the
-ordinary local store. Artifact names are stable per platform within a run and overwritten on
+machine key. Collection artifacts contain only that receipt; measurements remain in the
+configured store. Artifact names are stable per platform within a run and overwritten on
 successful reruns.
 
 Analysis downloads through the REST run-artifacts endpoint so surviving older-attempt
 artifacts remain visible. Rust reconciles receipts with each platform's latest job attempt,
-then writes the selected machine keys and assembles only successful PR result trees. It
+then writes the selected machine keys for ordinary configured-store analysis. It
 rejects missing, conflicting or mismatched evidence instead of silently narrowing success.
-The local input and collection artifacts are outside the persisted history cache.
+Collection artifacts are outside the persisted history cache.
 Artifact downloads pass the ambient GitHub token, repository and run ID explicitly with
 Actions-read permission. Fork-origin PR runs have a read-only base-repository token capable
 of artifact reads; the same-repository workflow gate is independent of that capability.
 The temporary machine-key file stays outside the uploaded collection root: its value is
-captured in the receipt, and the artifact contains only that receipt and optional results.
+captured in the receipt rather than uploaded as a separate file.
 
 Automation and measured source are separate for PR runs. The workflow's merge checkout
 supplies current helpers, tool builds and configuration. The full real-head checkout under
@@ -100,8 +100,10 @@ after a failed preflight; a delayed start notice cannot arrive after its own res
 
 Azure configuration uses `AZURE_PROD_CLIENT_ID` for every production-history operation.
 Empty PR scope needs no Azure access. The shared identity has contributor access and branch/PR
-federation; the analysis/publication job also receives its GitHub posting scope. There is no
-Reader/Writer selector, second client ID, or privilege-driven report transfer.
+federation; PR collection and analysis receive OIDC permission and the analysis/publication job
+also receives its GitHub posting scope. PR analysis restores but never saves the Actions
+history cache. The tool re-lists configured storage and reads newly stored objects on a
+cache miss; topology selection excludes unrelated branch commits from trunk analysis.
 
 Ordinary collection, analysis and backfill retain their contracts. There is no recollection
 dispatch input, single-commit repair worktree or companion recipe; manual pruning and normal

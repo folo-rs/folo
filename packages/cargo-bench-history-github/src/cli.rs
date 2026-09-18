@@ -55,7 +55,7 @@ pub(crate) enum Command {
     WorkflowMatrix(MatrixArgs),
     /// Record successful collection and its actual machine key.
     CollectionReceipt(CollectionArgs),
-    /// Reconcile collection attempts and prepare selected analysis inputs.
+    /// Reconcile collection attempts and prepare successful machine-key inputs.
     PrepareAnalysis(PrepareArgs),
     /// Project validated analysis evidence into workflow outputs.
     InspectReport(InspectArgs),

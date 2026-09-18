@@ -17,25 +17,23 @@ gh-collect-bench-history:
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
 # PR automation is built from the event's automation checkout, while --repo points at the
-# separately checked-out real PR head. Explicit local storage avoids persisting disposable PR
-# measurements. CSV package inputs remain data, not interpolated PowerShell source.
+# separately checked-out real PR head. The automation configuration selects the shared store;
+# collection preserves existing measurements. CSV package inputs remain data, not PowerShell source.
 [group('automation')]
 [script]
-gh-collect-pr-bench-history $PACKAGES $STORE $REPOSITORY:
+gh-collect-pr-bench-history $PACKAGES $REPOSITORY:
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
-    Import-Module ./scripts/bench-history/BenchHistoryPath.psm1 -Force
 
     $packageList = @($env:PACKAGES.Split(',', [StringSplitOptions]::TrimEntries -bor [StringSplitOptions]::RemoveEmptyEntries))
     if ($packageList.Count -eq 0) {
         throw 'PR collection requires a nonempty package scope; refusing a whole-workspace fallback.'
     }
-    New-BenchHistoryDirectory -Path $env:STORE
     $env:RUSTFLAGS = Get-BenchHistoryRustFlag -Existing $env:RUSTFLAGS -Stability $env:BENCH_STABILITY_RUSTFLAGS
     $config = Join-Path (Get-Location).Path '.cargo/bench_history.toml'
-    $toolArgs = Get-BenchHistoryCollectCommand -Package $packageList -LocalStore $env:STORE -Repository $env:REPOSITORY -ConfigPath $config -Verbose
+    $toolArgs = Get-BenchHistoryCollectCommand -Package $packageList -Repository $env:REPOSITORY -ConfigPath $config -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
 # Nightly densification retains the existing quarantine/window, exclusions, all-features and
@@ -75,11 +73,11 @@ gh-write-bench-history-machine-key $FILE:
     Set-Content -LiteralPath $env:FILE -Value $key.ToLowerInvariant() -Encoding utf8 -NoNewline
 
 # Both read flows use the same invocation: history passes matching context/base, PRs pass
-# their frozen head/base plus an assembled local input and the real-head repository. The
+# their frozen head/base and the real-head repository against the same configured store. The
 # companion's inspect-report command emits workflow decisions from the resulting JSON.
 [group('automation')]
 [script]
-gh-analyze-bench-history $DIR $KEYDIR $CONTEXT $BASE $LOCAL_INPUT='' $REPOSITORY='':
+gh-analyze-bench-history $DIR $KEYDIR $CONTEXT $BASE $REPOSITORY='':
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
@@ -87,5 +85,5 @@ gh-analyze-bench-history $DIR $KEYDIR $CONTEXT $BASE $LOCAL_INPUT='' $REPOSITORY
     Import-Module ./scripts/bench-history/BenchHistoryPath.psm1 -Force
 
     New-BenchHistoryDirectory -Path $env:DIR
-    $toolArgs = Get-BenchHistoryAnalysisCommand -KeyDirectory $env:KEYDIR -ReportDirectory $env:DIR -Context $env:CONTEXT -Base $env:BASE -LocalInput $env:LOCAL_INPUT -Repository $env:REPOSITORY -Verbose
+    $toolArgs = Get-BenchHistoryAnalysisCommand -KeyDirectory $env:KEYDIR -ReportDirectory $env:DIR -Context $env:CONTEXT -Base $env:BASE -Repository $env:REPOSITORY -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs

@@ -122,12 +122,11 @@ collection-job namespace. Setup emits both the strategy matrix and expected-plat
 the same validated, sorted set, keeping workflow orchestration free of duplicate parsing rules.
 Report coverage uses the same identifier rule, including rejection of dot-only path components.
 
-Receipt decoding and job reconciliation operate on in-memory values. Filesystem adapters retain
-artifact paths outside the receipt model, then materialize only the selected indices after all
-identities and latest-attempt decisions have been validated. Local object merging compares bytes
-before writing anything, preserving ordinary relative store paths without a second storage format.
-Reserved LocalStorage atomic-write temporary files are not objects and are omitted from merging.
-Filesystem operations do not retry writes or clean existing destinations.
+Receipt decoding and job reconciliation operate on in-memory values. Filesystem adapters read
+receipt-only artifacts, then materialize machine-key files for only the selected indices after all
+identities and latest-attempt decisions have been validated. Collection and analysis use the
+configured measurement store directly; the companion does not traverse or copy measurement
+objects. Filesystem operations do not retry writes or clean existing destinations.
 
 Destination planning resolves missing paths through their existing canonical ancestors without
 creating directories. Input/output separation and destination suitability are checked before
@@ -149,7 +148,7 @@ credentials or real delay.
 
 The `private-test-util` feature exposes a deliberately unsupported preparation entry point for
 native integration tests. It injects already-discovered job records and bypasses only HTTP; real
-artifact traversal, selection, fresh destinations, ordinary object copying and workflow outputs
+receipt loading, selection, fresh machine-key destinations and workflow outputs
 execute unchanged. Offline commands also run through the binary without credential environment
 variables. This keeps real filesystem and process coverage outside the unit/Miri harness.
 
@@ -172,7 +171,6 @@ cargo-bench-history-github --repository owner/name --instance folo collection-re
 cargo-bench-history-github --repository owner/name --instance folo prepare-analysis
   --run-id N --head SHA --expected-platforms CSV
   --receipts-dir DOWNLOAD_ROOT --machine-key-dir KEY_ROOT --github-output PATH
-  [--local-results-dir RESULTS_ROOT]
 
 cargo-bench-history-github inspect-report
   --report-file PATH --analyzed-sha SHA --expected-platforms CSV
@@ -229,15 +227,13 @@ artifact contents:
 DOWNLOAD_ROOT\
   artifact-for-linux\
     receipt.json
-    results\                 optional; ordinary local store object paths below here
   artifact-for-windows\
     receipt.json
-    results\
 ```
 
-Artifact roots contain only `receipt.json` and optional `results`. Distinct historical attempts
-can be present; duplicate receipts for the same platform and attempt are rejected. History
-artifacts need only the receipt. The receipt JSON has `version`, `repository`, `instance`,
+Artifact roots contain only `receipt.json`. Distinct historical attempts can be present;
+duplicate receipts for the same platform and attempt are rejected.
+The receipt JSON has `version`, `repository`, `instance`,
 `run_id`, `run_attempt`, `head`, `platform` and `machine_key` fields; unknown fields or versions
 are errors.
 
@@ -251,8 +247,7 @@ complete=true
 ```
 
 Platform and deduplicated key lists are sorted. `complete` measures platform coverage only.
-The optional results destination exists even when selected collection produced no objects.
-Both destination directories must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
+The machine-key destination must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
 file with an existing parent directory; output appending preserves earlier workflow values.
 Inspection appends `outcome=<wire value>`, `notable=<bool>`, `can-clear=<bool>` and
 `publication-state=findings|clean|no-data`, using lowercase booleans and the tool's existing

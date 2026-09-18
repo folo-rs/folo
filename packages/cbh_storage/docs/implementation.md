@@ -24,19 +24,10 @@ while conditional creates persist an opaque request identity so a collision caus
 retry after a committed upload is recognized as success. Read-through caching uses per-project
 invalidation markers after remote overwrites and deletions.
 
-Read-only queries use a storage view over the selected baseline and an optional local input.
-The view merges key discovery and gives the local input precedence on reads, while rejecting
-every mutation at the wrapper boundary. The normal storage facade remains available to
-collection and administrative commands; a combined query does not change their write behavior.
-The composition is generic over storage ports so read precedence, error propagation and
-mutation isolation are exercised using in-memory stores.
-
-The baseline owns cache synchronization and hit/miss accounting. The input has no cache
-lifecycle and cannot arm or flush the baseline's invalidation marker. Before cache
-synchronization, the filesystem adapter verifies the input directory and separates it from
-the effective mirror directory using filesystem identities rather than operating-system
-case assumptions. Blocking identity inspection belongs to the adapter's Tokio blocking
-boundary, not to the query policy.
+Collection, queries and administrative commands select the same storage facade.
+Cloud queries may use the read-through cache; synchronization and hit/miss accounting
+belong to that facade. The analysis layer selects applicable stored commits by Git topology,
+so branch measurements and the shared baseline need no separate storage view.
 
 Azure and Azurite tests share a container-name generator behind `private-test-util`. Each
 container gets a fresh random UUID, retaining its full identity in Azure's lowercase naming

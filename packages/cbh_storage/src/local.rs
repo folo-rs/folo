@@ -41,10 +41,6 @@ impl LocalStorage {
         Self { root: root.into() }
     }
 
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// Maps an object key to a path under the root, rejecting any segment that
     /// is not a single ordinary path component. This excludes empty, `.`, and
     /// `..` segments as well as platform-absolute segments (e.g. a Windows
@@ -274,13 +270,6 @@ mod tests {
 
     use super::*;
     use crate::InvalidStorageKeyError;
-
-    #[test]
-    fn root_preserves_the_selected_directory() {
-        let path = PathBuf::from("chosen-input");
-        let storage = LocalStorage::new(path.clone());
-        assert_eq!(storage.root(), path);
-    }
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.

@@ -24,7 +24,7 @@ use cbh_config::{
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BlessingRecord, DiscriminantSet};
-use cbh_storage::{Storage, StorageFacade, resolve_read_storage};
+use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
@@ -67,16 +67,14 @@ pub async fn execute(
     let project_id = resolve_project_id(&config, workspace_dir);
     let local = resolve_local_path(options.local.as_ref(), storage_env().as_deref())?;
     let cache = resolve_cache_path(options.cache.as_ref(), cache_env().as_deref())?;
-    let storage = resolve_read_storage(
+    let storage = resolve_storage(
         storage_override,
         local.as_deref(),
         &config,
         workspace_dir,
         cache.as_deref(),
-        options.local_input.as_deref(),
         &reporter,
-    )
-    .await?;
+    )?;
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));

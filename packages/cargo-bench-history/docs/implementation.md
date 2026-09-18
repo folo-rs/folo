@@ -58,6 +58,11 @@ generic ports and resolved values, with deterministic substitutes used by compon
 keeps orchestration independent of a particular process, filesystem, storage service, clock, or
 task executor.
 
+Storage selection wires one backend, with an optional read-through cache for Azure. PR and
+trunk measurements use the same persistence path; query-time topology selection keeps
+unrelated branch commits out of trunk series. Local filesystem storage remains an alternative
+backend selected at run time.
+
 Error boundaries match the context each component owns. Semantic operations expose package
 aggregates where callers need a component-level boundary. Lower-level components instead return
 the foreign error that describes their mechanism: process and probe boundaries use `io::Result`,

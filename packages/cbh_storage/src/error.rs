@@ -90,20 +90,6 @@ pub(crate) struct StorageConfigurationError {
     pub(crate) message: String,
 }
 
-/// A read-only query attempted to mutate its data sources.
-#[ohno::error]
-#[display("cannot {operation} through a read-only storage view")]
-pub(crate) struct ReadOnlyStorageError {
-    pub(crate) operation: &'static str,
-}
-
-/// Inspecting an additional local input or its cache boundary failed.
-#[ohno::error]
-#[display("could not validate local input storage at {}", path.display())]
-pub(crate) struct ValidateLocalInputError {
-    pub(crate) path: PathBuf,
-}
-
 /// Creating the parent directories for a local object failed.
 #[ohno::error]
 #[display(
@@ -233,8 +219,6 @@ macro_rules! impl_other_storage_error {
 impl_other_storage_error!(
     InvalidStorageKeyError,
     StorageConfigurationError,
-    ReadOnlyStorageError,
-    ValidateLocalInputError,
     CreateLocalParentDirectoriesError,
     InspectLocalObjectExistenceError,
     WriteLocalObjectError,

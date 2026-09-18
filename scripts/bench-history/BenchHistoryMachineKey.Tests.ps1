@@ -32,13 +32,13 @@ BeforeAll {
 }
 
 Describe 'Get-BenchHistoryAnalysisCommand' {
-    It 'returns a flat argument vector with explicit frozen topology and isolated input' {
+    It 'returns a flat argument vector with frozen topology, measured repository and cache' {
         $keys = Join-Path $TestDrive 'keys'
         Write-KeyFile -Directory $keys -Name 'first' -Content 'abcdef0123456789'
         Write-KeyFile -Directory $keys -Name 'second' -Content '0123456789abcdef'
         $report = Join-Path $TestDrive 'report output'
         $result = Get-BenchHistoryAnalysisCommand -KeyDirectory $keys -ReportDirectory $report `
-            -Context ('a' * 40) -Base ('b' * 40) -LocalInput 'local input' -Repository 'measured repo'
+            -Context ('a' * 40) -Base ('b' * 40) -Repository 'measured repo'
         , $result | Should -BeOfType [string[]]
         $result | Should -Be @(
             'analyze', '--engine', 'all', '--target-triple', 'all'
@@ -48,16 +48,15 @@ Describe 'Get-BenchHistoryAnalysisCommand' {
             '--no-text', '--markdown', (Join-Path $report 'report.md')
             '--json', (Join-Path $report 'report.json')
             '--markdown-summary', (Join-Path $report 'summary.md')
-            '--local-input', 'local input', '--repo', 'measured repo'
+            '--repo', 'measured repo'
         )
     }
 
-    It 'omits local input for ordinary history analysis' {
+    It 'uses the current checkout for ordinary history analysis' {
         $keys = Join-Path $TestDrive 'history keys'
         Write-KeyFile -Directory $keys -Name 'first' -Content 'abcdef0123456789'
         $result = Get-BenchHistoryAnalysisCommand -KeyDirectory $keys -ReportDirectory $TestDrive `
             -Context ('a' * 40) -Base ('a' * 40)
-        $result | Should -Not -Contain '--local-input'
         $result | Should -Not -Contain '--repo'
     }
 

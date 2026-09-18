@@ -78,17 +78,14 @@ Describe 'Get-BenchHistoryRustFlag' {
 
 Describe 'Get-BenchHistoryCollectCommand' {
     Context 'separate automation and measured checkouts' {
-        It 'keeps local storage, measured repository and current configuration as distinct arguments' {
+        It 'uses the automation configuration with the measured repository and preserves existing results' {
             $result = Get-BenchHistoryCollectCommand -Package @('measured') `
-                -LocalStore "temporary store's data" -Repository 'measured checkout' -ConfigPath 'automation config.toml'
-            $result | Should -Contain "--local=temporary store's data"
-            $result[[Array]::IndexOf($result, '--repo') + 1] | Should -Be 'measured checkout'
-            $result[[Array]::IndexOf($result, '--config') + 1] | Should -Be 'automation config.toml'
-            $result | Should -Contain '--skip-existing'
-        }
-
-        It 'rejects an explicitly empty store instead of selecting cloud storage' {
-            { Get-BenchHistoryCollectCommand -Package @('measured') -LocalStore '' } | Should -Throw
+                -Repository "measured checkout's code" -ConfigPath 'automation config.toml'
+            $result | Should -Be @(
+                'collect', '--package', 'measured', '--all-features', '--best-of', '3', '--verbose'
+                '--repo', "measured checkout's code", '--config', 'automation config.toml'
+                '--skip-existing'
+            )
         }
 
         It 'rejects an explicitly empty measured repository' {

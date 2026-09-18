@@ -428,7 +428,7 @@ One production identity serves history; disposable backend tests retain their ow
 | push to `main` | `…:ref:refs/heads/main` | prod | History collection and analysis |
 | schedule on `main` | `…:ref:refs/heads/main` | prod | History backfill |
 | dispatch on `main` | `…:ref:refs/heads/main` | prod | History collection and analysis |
-| pull request | `…:pull_request` | prod | PR analysis |
+| pull request | `…:pull_request` | prod | PR collection and analysis |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
 | schedule/manual dispatch on `main` | `…:ref:refs/heads/main` | test | Scheduled `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
@@ -438,14 +438,12 @@ avoiding an exchange that cannot succeed.
 
 The production identity has account-scoped `Storage Blob Data Contributor`. Analysis and
 GitHub publication share a job with Azure federation and the required GitHub posting scope.
-PR collection writes run-local files because branch measurements are disposable, not because
-analysis has a distinct Reader role. Analysis reads those files together with the production
-baseline through `--local-input`.
+PR collection writes to the same configured store as main collection, and analysis reads the
+PR head and its baseline there. Existing measurements remain immutable under `--skip-existing`.
 
 Deployment provisions one production identity with branch and PR federation and preserves
-existing storage settings and history. There is no reader-first activation or writer-PR-trust
-retirement procedure. Disposable tests remain outside the production account because their
-fixtures are created and deleted independently. See
+existing storage settings and history. Disposable tests remain outside the production account
+because their fixtures are created and deleted independently. See
 [`infra/azure-bench-history-prod`](../../infra/azure-bench-history-prod/README.md).
 
 ## Benchmark history
@@ -610,16 +608,20 @@ expands impacted packages to dependents, and the shared collection exclusions re
 that this workflow does not maintain. An empty scope routes directly to an explanatory
 comment, without collecting or requiring Azure configuration.
 
-Each successful collection leg uploads its local store and a run/attempt-bound receipt.
-Analysis combines only validated successful inputs with the production baseline through
-`--local-input`, using the shared production identity, then publishes in the same job.
-It restores the main history cache without saving PR entries; artifact staging is
-outside the persisted cache path.
+Collection writes the frozen head to the same configured production store as main, using the
+same identity and append-only `--skip-existing` policy. Each successful leg uploads only its
+run/attempt-bound receipt. A successful rerun retains existing stored measurements; its receipt
+records collection completion, not replacement of those measurements. Analysis selects the
+validated successful machine keys and reads both the head and baseline from that store,
+then publishes in the same job.
+It restores the main history cache without saving PR cache entries; receipt staging is
+outside the persisted cache path. Git topology excludes unrelated PR commits from trunk
+analysis, so sharing storage does not add those measurements to the trunk series. Stored
+PR measurements follow ordinary retention and manual maintenance; the workflow does not prune them.
 
 Analysis remains unscoped by package name. Benchmark identities are engine-dependent, so
 name-prefix filtering could drop valid measurements. The tool's always-on ghost filter
-limits detection to identities present at the measured context, and local run objects take
-precedence over matching baseline objects.
+limits detection to identities present at the measured context in the selected machine partitions.
 
 Findings land in a single **rolling PR comment**, identified by a hidden marker. It reports
 both improvements and regressions, and discloses package scope, missing collection platforms,

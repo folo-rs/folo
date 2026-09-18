@@ -16,10 +16,6 @@ cargo bench-history list discriminants --local=./bench-history
 cargo bench-history list blessings --local=./bench-history
 ```
 
-When previewing an analysis with additional local measurements, pass the same
-[`--local-input <directory>`](../storage.md#additional-local-results) so both commands
-read the same combined data.
-
 ## Subjects
 
 - **`runs`** — mirrors `analyze`'s data-set-selection parameters exactly through the shared

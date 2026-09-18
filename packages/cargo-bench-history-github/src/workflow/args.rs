@@ -53,9 +53,6 @@ pub(crate) struct PrepareArgs {
     pub(crate) machine_key_dir: PathBuf,
     #[arg(long)]
     pub(crate) github_output: PathBuf,
-    /// Absent or empty destination for selected artifacts' ordinary results trees.
-    #[arg(long)]
-    pub(crate) local_results_dir: Option<PathBuf>,
 }
 
 /// Projection of the publication parser's evidence into analysis-job decisions.
@@ -67,4 +64,52 @@ pub(crate) struct InspectArgs {
     pub(crate) analyzed_sha: CommitSha,
     #[arg(long)]
     pub(crate) github_output: PathBuf,
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use clap::Command;
+    use clap::error::ErrorKind;
+
+    use super::*;
+
+    const PREPARATION_ARGS: &[&str] = &[
+        "prepare-analysis",
+        "--run-id",
+        "42",
+        "--head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--expected-platforms",
+        "linux,windows",
+        "--receipts-dir",
+        "receipts",
+        "--machine-key-dir",
+        "keys",
+        "--github-output",
+        "github-output",
+    ];
+
+    #[test]
+    fn preparation_arguments_accept_receipts() {
+        PrepareArgs::augment_args(Command::new("prepare-analysis"))
+            .try_get_matches_from(PREPARATION_ARGS)
+            .unwrap();
+    }
+
+    #[test]
+    fn preparation_arguments_reject_local_results() {
+        assert_eq!(
+            PrepareArgs::augment_args(Command::new("prepare-analysis"))
+                .try_get_matches_from(
+                    PREPARATION_ARGS
+                        .iter()
+                        .copied()
+                        .chain(["--local-results-dir", "results"])
+                )
+                .unwrap_err()
+                .kind(),
+            ErrorKind::UnknownArgument
+        );
+    }
 }

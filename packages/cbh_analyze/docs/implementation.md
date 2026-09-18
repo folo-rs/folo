@@ -18,11 +18,10 @@ delegating. Their inner `*_with` orchestrators receive generic ports and explici
 which keeps policy deterministic and same-crate tests in memory. The component crates own the
 adapter implementations; `cbh_analyze` selects and coordinates them.
 
-Read-only command entry points select a read-only storage view, optionally combining local
-input with their baseline before the shared selection pipeline runs. Cache synchronization
-and accounting remain baseline responsibilities. Administrative commands retain their
-ordinary storage facade and do not consume additional local input, keeping source selection
-for writes unambiguous.
+Every command selects the ordinary storage facade. Read-only queries synchronize its optional
+cloud cache before the shared selection pipeline and report cache activity afterward.
+Git-topology selection separates the target branch's measurements from the base-ref history
+within that store; unrelated branch commits do not enter the comparison.
 
 Operations cross the crate boundary through a transparent aggregate. Concrete conditions remain
 private to the responsibility that owns their context, while component failures remain attached

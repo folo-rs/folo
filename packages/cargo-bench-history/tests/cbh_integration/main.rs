@@ -21,7 +21,6 @@ mod harness;
 mod import;
 mod install;
 mod list;
-mod local_input;
 mod machine_key;
 mod prune;
 mod storage;

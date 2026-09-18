@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs::{self, FileType, Metadata, OpenOptions};
 use std::io::{ErrorKind, Read as _, Seek as _, SeekFrom, Write as _};
 #[cfg(windows)]
@@ -10,114 +9,27 @@ use ohno::AppError;
 
 use crate::workflow::receipt::Receipt;
 
-/// Downloaded receipts retain their artifact root only at the filesystem boundary.
-pub(crate) struct Artifacts {
-    pub(crate) receipts: Vec<Receipt>,
-    pub(crate) roots: Vec<PathBuf>,
-}
-
-// Fixed artifact names keep receipt metadata separate from ordinary store objects.
-pub(crate) const RECEIPT_FILE: &str = "receipt.json";
-const RESULTS_DIR: &str = "results";
-
-// Match LocalStorage's reserved atomic-write filename prefix (cbh_storage/src/local.rs).
-// The independent companion copies its on-disk layout without linking the storage backend.
-const TEMP_PREFIX: &str = ".cbh-tmp-";
+// Collection artifacts carry only this receipt; measurement objects stay in configured storage.
+const RECEIPT_FILE: &str = "receipt.json";
 
 // These adapters touch the real filesystem. Offline commands have native CLI integration
-// coverage; in-memory reconciliation, object merging and projection remain mutation targets.
+// coverage; in-memory receipt decoding, reconciliation and projection remain mutation targets.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn read_artifacts(root: &Path) -> Result<Artifacts, AppError> {
+pub(crate) fn read_receipts(root: &Path) -> Result<Vec<Receipt>, AppError> {
     require_kind(root, true)?;
-    let mut artifacts = Artifacts {
-        receipts: Vec::new(),
-        roots: Vec::new(),
-    };
+    let mut receipts = Vec::new();
     for directory in entries(root)? {
         require_kind(&directory, true)?;
         for entry in entries(&directory)? {
             match entry.file_name().and_then(|value| value.to_str()) {
                 Some(RECEIPT_FILE) => require_kind(&entry, false)?,
-                Some(RESULTS_DIR) => require_kind(&entry, true)?,
                 _ => return Err(InvalidArtifactPath::new(entry).into()),
             }
         }
         let receipt_path = directory.join(RECEIPT_FILE);
-        artifacts
-            .receipts
-            .push(Receipt::parse(&read_file(&receipt_path)?)?);
-        artifacts.roots.push(directory);
+        receipts.push(Receipt::parse(&read_file(&receipt_path)?)?);
     }
-    Ok(artifacts)
-}
-
-#[cfg_attr(test, mutants::skip)]
-pub(crate) fn read_results(
-    roots: impl IntoIterator<Item = PathBuf>,
-) -> Result<BTreeMap<PathBuf, Vec<u8>>, AppError> {
-    let mut objects = BTreeMap::new();
-    for root in roots {
-        let root = root.join(RESULTS_DIR);
-        if checked_metadata(&root)?.is_none() {
-            // Collecting no objects is valid. The analyzer owns the nothing-in-scope verdict.
-            continue;
-        }
-        require_kind(&root, true)?;
-        let mut pending = vec![root.clone()];
-        while let Some(directory) = pending.pop() {
-            for path in entries(&directory)? {
-                let metadata =
-                    checked_metadata(&path)?.ok_or_else(|| InvalidArtifactPath::new(&path))?;
-                if metadata.is_dir() {
-                    pending.push(path);
-                } else if metadata.is_file() {
-                    if is_temporary_file(&path) {
-                        continue;
-                    }
-                    let relative = path
-                        .strip_prefix(&root)
-                        .expect("directory traversal constructs every path below its result root");
-                    merge_object(&mut objects, relative, read_file(&path)?)?;
-                } else {
-                    return Err(InvalidArtifactPath::new(path).into());
-                }
-            }
-        }
-    }
-    Ok(objects)
-}
-
-fn is_temporary_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(TEMP_PREFIX))
-}
-
-pub(crate) fn merge_object(
-    objects: &mut BTreeMap<PathBuf, Vec<u8>>,
-    relative: &Path,
-    bytes: Vec<u8>,
-) -> Result<(), AppError> {
-    if relative.as_os_str().is_empty()
-        || relative.components().any(|component| {
-            let Component::Normal(name) = component else {
-                return true;
-            };
-            // Store object names are portable path components, not alternate separators,
-            // device syntax or Windows alternate data streams.
-            name.to_str().is_none_or(|name| name.contains(['\\', ':']))
-        })
-    {
-        return Err(InvalidArtifactPath::new(relative).into());
-    }
-    if let Some(existing) = objects.get(relative) {
-        if *existing != bytes {
-            return Err(ConflictingObject::new(relative).into());
-        }
-    } else {
-        objects.insert(relative.to_path_buf(), bytes);
-    }
-    Ok(())
+    Ok(receipts)
 }
 
 #[cfg_attr(test, mutants::skip)]
@@ -345,70 +257,17 @@ struct OccupiedDestination {
     path: PathBuf,
 }
 
-/// Local composition cannot choose arbitrarily between different copies of an object.
-#[ohno::error]
-#[display("Selected platforms contain conflicting bytes at '{}'", path.display())]
-struct ConflictingObject {
-    path: PathBuf,
-}
-
 impl UnwindSafe for ArtifactIo {}
 impl RefUnwindSafe for ArtifactIo {}
 impl UnwindSafe for InvalidArtifactPath {}
 impl RefUnwindSafe for InvalidArtifactPath {}
 impl UnwindSafe for OccupiedDestination {}
 impl RefUnwindSafe for OccupiedDestination {}
-impl UnwindSafe for ConflictingObject {}
-impl RefUnwindSafe for ConflictingObject {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-
-    #[test]
-    fn temporary_file_classification_uses_only_the_reserved_basename_prefix() {
-        assert!(is_temporary_file(Path::new(".cbh-tmp-crash")));
-        assert!(is_temporary_file(
-            &Path::new("nested").join(".cbh-tmp-crash")
-        ));
-        assert!(!is_temporary_file(Path::new("object.json")));
-        assert!(!is_temporary_file(Path::new(".CBH-TMP-other")));
-        assert!(!is_temporary_file(
-            &Path::new(".cbh-tmp-directory").join("object.json")
-        ));
-        assert!(!is_temporary_file(Path::new("")));
-    }
-
-    #[test]
-    fn identical_objects_merge_without_inventing_metadata() {
-        let path = Path::new("objects").join("run.json");
-        let mut objects = BTreeMap::new();
-        merge_object(&mut objects, &path, b"ordinary bytes".to_vec()).unwrap();
-        merge_object(&mut objects, &path, b"ordinary bytes".to_vec()).unwrap();
-        assert_eq!(
-            objects,
-            BTreeMap::from([(path.clone(), b"ordinary bytes".to_vec())])
-        );
-        let error = merge_object(&mut objects, &path, b"conflict".to_vec()).unwrap_err();
-        assert!(error.find_source::<ConflictingObject>().is_some());
-        assert_eq!(objects.get(&path).unwrap(), b"ordinary bytes");
-    }
-
-    #[test]
-    fn relative_object_paths_cannot_escape_or_inject_platform_syntax() {
-        let mut objects = BTreeMap::new();
-        for path in [
-            PathBuf::new(),
-            Path::new("..").join("outside"),
-            Path::new("objects").join("..").join("outside"),
-            PathBuf::from("object:stream"),
-        ] {
-            let error = merge_object(&mut objects, &path, vec![]).unwrap_err();
-            assert!(error.find_source::<InvalidArtifactPath>().is_some());
-        }
-        assert!(objects.is_empty());
-    }
 
     #[test]
     fn output_roots_cannot_overlap_in_either_direction() {

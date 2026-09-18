@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use ohno::AppError;
@@ -10,7 +9,7 @@ use crate::result::platform_list;
 use crate::workflow::args::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 use crate::workflow::files::{
     append_outputs, canonical_directory, canonical_file, directory_destination, disjoint,
-    fresh_directory, output_file, read_artifacts, read_file, read_results, write_new,
+    fresh_directory, output_file, read_file, read_receipts, write_new,
 };
 use crate::workflow::projection::{
     machine_key_files, matrix_outputs, preparation_diagnostics, preparation_outputs, report_outputs,
@@ -88,63 +87,27 @@ pub(crate) fn prepare_from_jobs(
     args: &PrepareArgs,
     jobs: &[WorkflowJob],
 ) -> Result<(), AppError> {
-    let artifacts = read_artifacts(&args.receipts_dir)?;
-    let selection = select_receipts(context, args, &artifacts.receipts, jobs)?;
-    let objects = if args.local_results_dir.is_some() {
-        read_results(selection.receipt_indices.iter().map(|index| {
-            artifacts
-                .roots
-                .get(*index)
-                .expect("selection indices address receipts with matching artifact roots")
-                .clone()
-        }))?
-    } else {
-        BTreeMap::new()
-    };
+    let receipts = read_receipts(&args.receipts_dir)?;
+    let selection = select_receipts(context, args, &receipts, jobs)?;
     let source = canonical_directory(&args.receipts_dir)?;
     let keys = directory_destination(&args.machine_key_dir)?;
-    let results = args
-        .local_results_dir
-        .as_deref()
-        .map(directory_destination)
-        .transpose()?;
     let output = output_file(&args.github_output)?;
-    require_separate(&source, &keys, results.as_deref(), &output)?;
+    require_separate(&source, &keys, &output)?;
     let keys = fresh_directory(&keys)?;
-    let results = results.as_deref().map(fresh_directory).transpose()?;
     let output = output_file(&output)?;
     // Retain actual filesystem identity checks as materialized paths may alias
     // spellings that looked distinct when their final components did not exist.
-    require_separate(&source, &keys, results.as_deref(), &output)?;
-    for (path, key) in machine_key_files(&selection, &artifacts.receipts) {
+    require_separate(&source, &keys, &output)?;
+    for (path, key) in machine_key_files(&selection, &receipts) {
         write_new(&keys.join(path), key.as_bytes())?;
     }
-    if let Some(results) = results {
-        for (relative, bytes) in objects {
-            write_new(&results.join(relative), &bytes)?;
-        }
-    }
-    append_outputs(
-        &output,
-        &preparation_outputs(&selection, &artifacts.receipts),
-    )
+    append_outputs(&output, &preparation_outputs(&selection, &receipts))
 }
 
-fn require_separate(
-    source: &Path,
-    keys: &Path,
-    results: Option<&Path>,
-    output: &Path,
-) -> Result<(), AppError> {
+fn require_separate(source: &Path, keys: &Path, output: &Path) -> Result<(), AppError> {
     disjoint(source, keys)?;
     disjoint(source, output)?;
-    disjoint(keys, output)?;
-    if let Some(results) = results {
-        disjoint(source, results)?;
-        disjoint(keys, results)?;
-        disjoint(results, output)?;
-    }
-    Ok(())
+    disjoint(keys, output)
 }
 
 fn select_receipts(
@@ -188,43 +151,14 @@ mod tests {
     fn destination_locations_are_pairwise_disjoint() {
         let source = Path::new("source");
         let keys = Path::new("keys");
-        let results = Path::new("results");
         let output = Path::new("output");
-        require_separate(source, keys, None, output).unwrap();
-        require_separate(source, keys, Some(results), output).unwrap();
-        for (keys, results, output) in [
-            (
-                source.join("keys"),
-                results.to_path_buf(),
-                output.to_path_buf(),
-            ),
-            (
-                keys.to_path_buf(),
-                source.join("results"),
-                output.to_path_buf(),
-            ),
-            (
-                keys.to_path_buf(),
-                results.to_path_buf(),
-                source.join("output"),
-            ),
-            (
-                keys.to_path_buf(),
-                keys.join("results"),
-                output.to_path_buf(),
-            ),
-            (
-                keys.to_path_buf(),
-                results.to_path_buf(),
-                keys.join("output"),
-            ),
-            (
-                keys.to_path_buf(),
-                results.to_path_buf(),
-                results.join("output"),
-            ),
+        require_separate(source, keys, output).unwrap();
+        for (keys, output) in [
+            (source.join("keys"), output.to_path_buf()),
+            (keys.to_path_buf(), source.join("output")),
+            (keys.to_path_buf(), keys.join("output")),
         ] {
-            require_separate(source, &keys, Some(&results), &output).unwrap_err();
+            require_separate(source, &keys, &output).unwrap_err();
         }
     }
 
@@ -252,7 +186,6 @@ mod tests {
             receipts_dir: PathBuf::new(),
             machine_key_dir: PathBuf::new(),
             github_output: PathBuf::new(),
-            local_results_dir: None,
         };
         let jobs = block_on(github.workflow_jobs(&context.repository, args.run_id)).unwrap();
         assert!(

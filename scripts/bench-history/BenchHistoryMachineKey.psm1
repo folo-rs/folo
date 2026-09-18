@@ -116,7 +116,6 @@ function Get-BenchHistoryAnalysisCommand {
         [Parameter(Mandatory)][string] $ReportDirectory,
         [Parameter(Mandatory)][string] $Context,
         [Parameter(Mandatory)][string] $Base,
-        [AllowEmptyString()][string] $LocalInput = '',
         [AllowEmptyString()][string] $Repository = ''
     )
     $keys = Get-MachineKeyArgument -KeyDirectory $KeyDirectory -Verbose
@@ -133,9 +132,6 @@ function Get-BenchHistoryAnalysisCommand {
         '--json', (Join-Path $ReportDirectory 'report.json')
         '--markdown-summary', (Join-Path $ReportDirectory 'summary.md')
     )
-    if (-not [string]::IsNullOrWhiteSpace($LocalInput)) {
-        $arguments += @('--local-input', $LocalInput)
-    }
     if (-not [string]::IsNullOrWhiteSpace($Repository)) {
         $arguments += @('--repo', $Repository)
     }

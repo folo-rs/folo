@@ -268,7 +268,6 @@ fn build_options(
         cache: storage
             .cache
             .map(|path| CacheSelection::Path(path.to_path_buf())),
-        local_input: None,
         context: Some(context.to_owned()),
         base: Some(base.to_owned()),
         no_dirty: false,

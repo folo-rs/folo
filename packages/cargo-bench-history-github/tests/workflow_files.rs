@@ -107,23 +107,12 @@ impl Fixture {
     }
 
     #[cfg(feature = "private-test-util")]
-    fn prepare(&self, jobs: &Value, local: bool) -> Result<(), AppError> {
-        self.prepare_to(
-            jobs,
-            &self.path("keys"),
-            local.then(|| self.path("local")).as_deref(),
-            &self.path("github-output"),
-        )
+    fn prepare(&self, jobs: &Value) -> Result<(), AppError> {
+        self.prepare_to(jobs, &self.path("keys"), &self.path("github-output"))
     }
 
     #[cfg(feature = "private-test-util")]
-    fn prepare_to(
-        &self,
-        jobs: &Value,
-        keys: &Path,
-        results: Option<&Path>,
-        output: &Path,
-    ) -> Result<(), AppError> {
+    fn prepare_to(&self, jobs: &Value, keys: &Path, output: &Path) -> Result<(), AppError> {
         let mut command = self.command();
         command
             .args([
@@ -145,9 +134,6 @@ impl Fixture {
             .arg(keys)
             .arg("--github-output")
             .arg(output);
-        if let Some(results) = results {
-            command.arg("--local-results-dir").arg(results);
-        }
         let cli =
             Cli::try_parse_from(std::iter::once(command.get_program()).chain(command.get_args()))
                 .unwrap();
@@ -357,59 +343,37 @@ fn malformed_or_mismatched_reports_never_append_success_outputs() {
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn preparation_materializes_only_latest_successful_legs_and_actual_key_files() {
+fn preparation_materializes_only_latest_successful_legs_machine_keys() {
     let fixture = Fixture::new();
-    let linux = fixture.artifact("linux", "0123456789abcdef");
-    let windows = fixture.artifact("windows", "fedcba9876543210");
-    let relative = Path::new("objects").join("run.json");
-    for (artifact, bytes) in [(&linux, "selected bytes"), (&windows, "failed-leg bytes")] {
-        let object = artifact.join("results").join(&relative);
-        fs::create_dir_all(object.parent().unwrap()).unwrap();
-        fs::write(object, bytes).unwrap();
-    }
+    fixture.artifact("linux", "0123456789abcdef");
+    fixture.artifact("windows", "fedcba9876543210");
+    fs::write(fixture.path("github-output"), "earlier=value\n").unwrap();
     fixture
-        .prepare(
-            &json!([
-                job(3, "windows", 3, "failure"),
-                job(1, "linux", 2, "success"),
-                job(2, "windows", 2, "success")
-            ]),
-            true,
-        )
+        .prepare(&json!([
+            job(3, "windows", 3, "failure"),
+            job(1, "linux", 2, "success"),
+            job(2, "windows", 2, "success")
+        ]))
         .unwrap();
-    assert_eq!(
-        fs::read(fixture.path("local").join(relative)).unwrap(),
-        b"selected bytes"
-    );
     assert_eq!(
         fs::read_to_string(fixture.path("keys").join("linux").join("machine-key.txt")).unwrap(),
         "0123456789abcdef\n"
     );
     assert!(!fixture.path("keys").join("windows").exists());
-    assert!(!fixture.path("local").join("receipt.json").exists());
     assert_eq!(
         fs::read_to_string(fixture.path("github-output")).unwrap(),
-        "completed-platforms=linux\nmachine-keys=0123456789abcdef\ncomplete=false\n"
+        "earlier=value\ncompleted-platforms=linux\nmachine-keys=0123456789abcdef\ncomplete=false\n"
     );
 }
 
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn identical_selected_objects_merge_and_key_output_is_sorted() {
+fn receipt_only_preparation_sorts_platforms_and_machine_keys() {
     let fixture = Fixture::new();
-    let linux = fixture.artifact("linux", "fedcba9876543210");
-    let windows = fixture.artifact("windows", "0123456789abcdef");
-    for artifact in [linux, windows] {
-        fs::create_dir_all(artifact.join("results")).unwrap();
-        fs::write(artifact.join("results").join("object"), "same bytes").unwrap();
-    }
-    fixture.prepare(&successful_jobs(), true).unwrap();
-    assert_eq!(fs::read_dir(fixture.path("local")).unwrap().count(), 1);
-    assert_eq!(
-        fs::read(fixture.path("local").join("object")).unwrap(),
-        b"same bytes"
-    );
+    fixture.artifact("windows", "0123456789abcdef");
+    fixture.artifact("linux", "fedcba9876543210");
+    fixture.prepare(&successful_jobs()).unwrap();
     assert_eq!(
         fs::read_to_string(fixture.path("github-output")).unwrap(),
         "completed-platforms=linux,windows\nmachine-keys=0123456789abcdef,fedcba9876543210\ncomplete=true\n"
@@ -419,68 +383,80 @@ fn identical_selected_objects_merge_and_key_output_is_sorted() {
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn atomic_write_temporary_files_do_not_enter_the_merged_input() {
-    let fixture = Fixture::new();
-    for (platform, partial) in [("linux", "first partial"), ("windows", "other partial")] {
-        let artifact = fixture.artifact(platform, "0123456789abcdef");
-        let root = artifact.join("results");
-        fs::create_dir_all(root.join("nested")).unwrap();
-        fs::create_dir_all(root.join(".cbh-tmp-directory")).unwrap();
-        // Differing temporary bytes at the same relative path must not create an object conflict.
-        fs::write(root.join(".cbh-tmp-crash"), partial).unwrap();
-        fs::write(root.join("nested").join(".cbh-tmp-crash"), partial).unwrap();
-        fs::write(root.join("nested").join("object.json"), "stored bytes").unwrap();
-        fs::write(
-            root.join(".cbh-tmp-directory").join("object.json"),
-            "nested stored bytes",
-        )
-        .unwrap();
+fn preparation_rejects_non_receipt_artifact_contents_before_writing_outputs() {
+    for entry in ["results", "unexpected.json"] {
+        let fixture = Fixture::new();
+        fixture.artifact("linux", "0123456789abcdef");
+        let windows = fixture.artifact("windows", "0123456789abcdef");
+        let unexpected = windows.join(entry);
+        if entry == "results" {
+            fs::create_dir_all(&unexpected).unwrap();
+        } else {
+            fs::write(&unexpected, "unrelated").unwrap();
+        }
+        fixture.prepare(&successful_jobs()).unwrap_err();
+        assert!(unexpected.exists());
+        assert!(!fixture.path("keys").exists());
+        assert!(!fixture.path("github-output").exists());
     }
-    fixture.prepare(&successful_jobs(), true).unwrap();
-    let input = fixture.path("local");
-    assert!(!input.join(".cbh-tmp-crash").exists());
-    assert!(!input.join("nested").join(".cbh-tmp-crash").exists());
-    assert_eq!(
-        fs::read(input.join("nested").join("object.json")).unwrap(),
-        b"stored bytes"
-    );
-    assert_eq!(
-        fs::read(input.join(".cbh-tmp-directory").join("object.json")).unwrap(),
-        b"nested stored bytes"
-    );
 }
 
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn conflicting_selected_objects_fail_before_materializing_outputs() {
-    let fixture = Fixture::new();
-    for (platform, bytes) in [("linux", "first"), ("windows", "conflicting")] {
-        let artifact = fixture.artifact(platform, "0123456789abcdef");
-        fs::create_dir_all(artifact.join("results")).unwrap();
-        fs::write(artifact.join("results").join("object"), bytes).unwrap();
+fn preparation_requires_regular_receipts_in_artifact_directories() {
+    for invalid in ["missing-receipt", "receipt-directory", "artifact-file"] {
+        let fixture = Fixture::new();
+        fixture.artifact("linux", "0123456789abcdef");
+        let windows = fixture.artifact("windows", "0123456789abcdef");
+        fs::remove_file(windows.join("receipt.json")).unwrap();
+        match invalid {
+            "receipt-directory" => fs::create_dir_all(windows.join("receipt.json")).unwrap(),
+            "artifact-file" => {
+                fs::remove_dir(&windows).unwrap();
+                fs::write(&windows, "not a directory").unwrap();
+            }
+            _ => {}
+        }
+        fixture.prepare(&successful_jobs()).unwrap_err();
+        assert!(!fixture.path("keys").exists());
+        assert!(!fixture.path("github-output").exists());
     }
-    fixture.prepare(&successful_jobs(), true).unwrap_err();
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
+fn successful_retry_requires_a_new_receipt_before_writing_outputs() {
+    let fixture = Fixture::new();
+    fixture.artifact("linux", "0123456789abcdef");
+    fixture.artifact("windows", "0123456789abcdef");
+    fixture
+        .prepare(&json!([
+            job(1, "linux", 2, "success"),
+            job(2, "windows", 2, "success"),
+            job(3, "windows", 3, "success")
+        ]))
+        .unwrap_err();
     assert!(!fixture.path("keys").exists());
-    assert!(!fixture.path("local").exists());
     assert!(!fixture.path("github-output").exists());
 }
 
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn data_less_success_creates_empty_real_analysis_input_without_a_fake_report() {
+fn platforms_with_a_shared_machine_key_remain_independent_without_a_fake_report() {
     let fixture = Fixture::new();
     fixture.artifact("linux", "0123456789abcdef");
-    let windows = fixture.artifact("windows", "0123456789abcdef");
-    fs::create_dir_all(windows.join("results")).unwrap();
-    fixture.prepare(&successful_jobs(), true).unwrap();
-    assert!(
-        fs::read_dir(fixture.path("local"))
-            .unwrap()
-            .next()
-            .is_none()
-    );
+    fixture.artifact("windows", "0123456789abcdef");
+    fixture.prepare(&successful_jobs()).unwrap();
+    for platform in ["linux", "windows"] {
+        assert_eq!(
+            fs::read_to_string(fixture.path("keys").join(platform).join("machine-key.txt"))
+                .unwrap(),
+            "0123456789abcdef\n"
+        );
+    }
     assert!(!fixture.path("report.json").exists());
     assert_eq!(
         fs::read_to_string(fixture.path("github-output")).unwrap(),
@@ -491,38 +467,22 @@ fn data_less_success_creates_empty_real_analysis_input_without_a_fake_report() {
 #[cfg(feature = "private-test-util")]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn history_preparation_needs_only_receipts_and_does_not_create_local_inputs() {
-    let fixture = Fixture::new();
-    fixture.artifact("linux", "0123456789abcdef");
-    fixture.artifact("windows", "0123456789abcdef");
-    fixture.prepare(&successful_jobs(), false).unwrap();
-    assert!(!fixture.path("local").exists());
-    assert!(
-        fixture
-            .path("keys")
-            .join("windows")
-            .join("machine-key.txt")
-            .is_file()
-    );
-}
-
-#[cfg(feature = "private-test-util")]
-#[test]
-#[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
 fn preparation_does_not_clean_or_adopt_occupied_destinations() {
-    for destination in ["keys", "local"] {
+    for directory in [true, false] {
         let fixture = Fixture::new();
         fixture.artifact("linux", "0123456789abcdef");
         fixture.artifact("windows", "0123456789abcdef");
-        fs::create_dir_all(fixture.path(destination)).unwrap();
-        let sentinel = fixture.path(destination).join("unrelated");
+        let keys = fixture.path("keys");
+        let sentinel = if directory {
+            fs::create_dir_all(&keys).unwrap();
+            keys.join("unrelated")
+        } else {
+            keys
+        };
         fs::write(&sentinel, "keep").unwrap();
-        fixture.prepare(&successful_jobs(), true).unwrap_err();
+        fixture.prepare(&successful_jobs()).unwrap_err();
         assert_eq!(fs::read(sentinel).unwrap(), b"keep");
         assert!(!fixture.path("github-output").exists());
-        if destination == "local" {
-            assert!(!fixture.path("keys").exists());
-        }
     }
 }
 
@@ -530,32 +490,49 @@ fn preparation_does_not_clean_or_adopt_occupied_destinations() {
 #[test]
 #[cfg_attr(miri, ignore = "Native destination planning and filesystem state.")]
 fn rejected_destination_relationships_do_not_create_directories() {
-    for (keys, results, output) in [
-        ("receipts/new-keys", "local", "github-output"),
-        ("keys", "receipts/linux/new-results", "github-output"),
-        ("keys", "keys/new-results", "github-output"),
-        ("local/new-keys", "local", "github-output"),
-        ("keys", "keys", "github-output"),
-        ("keys", "local", "keys"),
-        ("keys", "local", "local/output"),
-        ("keys", "local", "receipts/output"),
+    let keys = Path::new("keys");
+    let receipts = Path::new("receipts");
+    let output = Path::new("github-output");
+    for (keys, output) in [
+        (receipts.join("new-keys"), output.to_path_buf()),
+        (keys.to_path_buf(), keys.to_path_buf()),
+        (keys.to_path_buf(), keys.join("output")),
+        (keys.to_path_buf(), receipts.join("output")),
+        (keys.to_path_buf(), Path::new("missing").join("output")),
+        (keys.join("..").join("outside"), output.to_path_buf()),
     ] {
         let fixture = Fixture::new();
         fixture.artifact("linux", "0123456789abcdef");
         fixture.artifact("windows", "0123456789abcdef");
-        let keys = fixture.path(keys);
-        let results = fixture.path(results);
-        let output = fixture.path(output);
+        let keys = fixture.0.join(keys);
+        let output = fixture.0.join(output);
         let before = fs::read_dir(&fixture.0).unwrap().count();
         fixture
-            .prepare_to(&successful_jobs(), &keys, Some(&results), &output)
+            .prepare_to(&successful_jobs(), &keys, &output)
             .unwrap_err();
         assert!(!keys.exists());
-        assert!(!results.exists());
         assert!(!output.exists());
         assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), before);
         assert_eq!(fs::read_dir(fixture.path("receipts")).unwrap().count(), 2);
     }
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native destination planning and filesystem state.")]
+fn invalid_output_file_does_not_create_machine_key_directories() {
+    let fixture = Fixture::new();
+    fixture.artifact("linux", "0123456789abcdef");
+    fixture.artifact("windows", "0123456789abcdef");
+    fs::create_dir_all(fixture.path("github-output")).unwrap();
+    fixture.prepare(&successful_jobs()).unwrap_err();
+    assert!(!fixture.path("keys").exists());
+    assert!(
+        fs::read_dir(fixture.path("github-output"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[cfg(feature = "private-test-util")]
@@ -566,13 +543,11 @@ fn disjoint_missing_destination_ancestors_are_materialized_after_validation() {
     fixture.artifact("linux", "0123456789abcdef");
     fixture.artifact("windows", "0123456789abcdef");
     let keys = fixture.path("new-parent").join("keys");
-    let results = fixture.path("other-parent").join("deep").join("results");
     let output = fixture.path("github-output");
     fixture
-        .prepare_to(&successful_jobs(), &keys, Some(&results), &output)
+        .prepare_to(&successful_jobs(), &keys, &output)
         .unwrap();
     assert!(keys.join("linux").join("machine-key.txt").is_file());
-    assert!(results.is_dir());
     assert!(output.is_file());
 }
 
@@ -584,7 +559,7 @@ fn malformed_artifacts_do_not_narrow_successful_platform_coverage() {
     fixture.artifact("linux", "0123456789abcdef");
     let windows = fixture.artifact("windows", "0123456789abcdef");
     fs::write(windows.join("receipt.json"), "{}").unwrap();
-    fixture.prepare(&successful_jobs(), true).unwrap_err();
+    fixture.prepare(&successful_jobs()).unwrap_err();
     assert!(!fixture.path("keys").exists());
     assert!(!fixture.path("github-output").exists());
 }
@@ -592,20 +567,17 @@ fn malformed_artifacts_do_not_narrow_successful_platform_coverage() {
 #[cfg(all(unix, feature = "private-test-util"))]
 #[test]
 #[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
-fn preparation_rejects_links_inside_selected_results() {
+fn preparation_rejects_linked_receipts() {
     let fixture = Fixture::new();
     let linux = fixture.artifact("linux", "0123456789abcdef");
     fixture.artifact("windows", "0123456789abcdef");
-    fs::create_dir_all(linux.join("results")).unwrap();
-    fs::write(fixture.path("outside"), "unrelated").unwrap();
-    symlink(
-        fixture.path("outside"),
-        linux.join("results").join("object"),
-    )
-    .unwrap();
-    fixture.prepare(&successful_jobs(), true).unwrap_err();
+    let receipt = linux.join("receipt.json");
+    let outside = fixture.path("outside");
+    fs::rename(&receipt, &outside).unwrap();
+    symlink(&outside, &receipt).unwrap();
+    fixture.prepare(&successful_jobs()).unwrap_err();
     assert!(!fixture.path("keys").exists());
-    assert!(!fixture.path("local").exists());
+    assert!(!fixture.path("github-output").exists());
 }
 
 #[cfg(unix)]

@@ -184,10 +184,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
     # Hosted-runner maximum: the shared best-of policy repeats a long benchmark suite.
     timeout-minutes: 360
-    # Collection only writes disposable local measurements, so it needs no Azure login.
+    # PR measurements share the production store and identity with main collection.
     # Ref: design.md#pr-benchmark-history.
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout automation
         uses: actions/checkout@v7
@@ -199,7 +200,15 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           path: benchmark-source
-      - name: Collect local PR measurements
+      - name: Configure production Azure identity
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+      - name: Collect PR measurements
         shell: pwsh
         env:
           PACKAGES: ${{ needs.delta.outputs.packages }}
@@ -207,9 +216,8 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $store = Join-Path $env:RUNNER_TEMP 'cbh-collection/results'
           $repository = Join-Path $env:GITHUB_WORKSPACE 'benchmark-source'
-          just gh-collect-pr-bench-history $env:PACKAGES $store $repository
+          just gh-collect-pr-bench-history $env:PACKAGES $repository
       - name: Record successful collection
         shell: pwsh
         env:
@@ -220,15 +228,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $directory = Join-Path $env:RUNNER_TEMP 'cbh-collection'
-          # The uploaded root accepts only receipt.json and results; the key is an intermediate.
+          # Keep intermediate key files outside the receipt-only collection artifact.
           $key = Join-Path $env:RUNNER_TEMP 'cbh-machine-key.txt'
           just gh-write-bench-history-machine-key $key
           cargo run -p cargo-bench-history-github --locked -- --instance $env:CBH_INSTANCE collection-receipt --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT --head $env:HEAD_SHA --platform $env:PLATFORM --machine-key-file $key --file (Join-Path $directory 'receipt.json')
-      - name: Upload local collection and receipt
+      - name: Upload collection receipt
         uses: actions/upload-artifact@v7
         with:
           name: pr-bench-history-collection-${{ env.CBH_INSTANCE }}-${{ matrix.platform }}
-          path: ${{ runner.temp }}/cbh-collection
+          path: ${{ runner.temp }}/cbh-collection/receipt.json
           if-no-files-found: error
           overwrite: true
 
@@ -291,17 +299,17 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
           Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
-      - name: Restore baseline cache without saving PR data
+      - name: Restore history cache without saving
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/bench-history/cache
           key: bench-history-cache-pr-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             bench-history-cache-
-      # Inputs and receipts are outside the persisted cache. All-attempt downloads plus
-      # job/receipt reconciliation support partial reruns without accepting stale failed-leg data.
+      # Receipts are outside the persisted cache. All-attempt downloads plus
+      # job/receipt reconciliation support partial reruns without accepting stale failed-leg receipts.
       # Ref: implementation.md#benchmark-workflow-artifacts.
-      - name: Download platform collections
+      - name: Download collection receipts
         uses: actions/download-artifact@v8
         with:
           pattern: pr-bench-history-collection-${{ env.CBH_INSTANCE }}-*
@@ -309,7 +317,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
-      - name: Assemble validated local input
+      - name: Select validated collection machine keys
         id: collection
         shell: pwsh
         env:
@@ -321,7 +329,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $scratch = Join-Path $env:RUNNER_TEMP 'bench-history'
-          & $env:CBH_COMPANION --instance $env:CBH_INSTANCE --verbose prepare-analysis --run-id $env:GITHUB_RUN_ID --head $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --receipts-dir (Join-Path $scratch 'collections') --machine-key-dir (Join-Path $scratch 'keys') --local-results-dir (Join-Path $scratch 'inputs') --github-output $env:GITHUB_OUTPUT
+          & $env:CBH_COMPANION --instance $env:CBH_INSTANCE --verbose prepare-analysis --run-id $env:GITHUB_RUN_ID --head $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --receipts-dir (Join-Path $scratch 'collections') --machine-key-dir (Join-Path $scratch 'keys') --github-output $env:GITHUB_OUTPUT
       - name: Analyze frozen PR head against its frozen base
         shell: pwsh
         env:
@@ -332,7 +340,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $scratch = Join-Path $env:RUNNER_TEMP 'bench-history'
-          just gh-analyze-bench-history $scratch (Join-Path $scratch 'keys') $env:HEAD_SHA $env:BASE_SHA (Join-Path $scratch 'inputs') (Join-Path $env:GITHUB_WORKSPACE 'benchmark-source')
+          just gh-analyze-bench-history $scratch (Join-Path $scratch 'keys') $env:HEAD_SHA $env:BASE_SHA (Join-Path $env:GITHUB_WORKSPACE 'benchmark-source')
       - name: Validate report evidence
         id: verdict
         shell: pwsh

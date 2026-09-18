@@ -1555,9 +1555,11 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let workspace = Workspace::repo(&storage_only_config());
     // Master carries a clean sustained regression.
     workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 130.0);
-    // A feature branch with an unrelated dirty improvement that master must ignore.
+    // The same store holds clean PR measurements and dirty snapshots; neither may
+    // enter the trunk's comparison merely because it shares the storage backend.
     workspace.checkout_new_branch("feature");
     workspace.commit_dated("2024-02-01", "f1");
+    workspace.seed_callgrind("f1", 10.0);
     workspace.seed_dirty_callgrind("2024-02-01", "f1", 10.0);
 
     let report = workspace
@@ -1566,8 +1568,9 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
-        "the master regression is selected, the feature snapshot ignored: {report}"
+        "the master regression is selected, the feature measurements ignored: {report}"
     );
+    assert_eq!(parsed["runs"], u64::try_from(MIN_SERIES_POINTS).unwrap());
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 

@@ -124,7 +124,6 @@ rand = { version = "0.10.1", default-features = false, features = ["std"] }
 rasciigraph = { version = "0.3.0", default-features = false }
 reqwest = { version = "0.13.4", default-features = false }
 rsevents = { version = "0.3.1", default-features = false }
-same-file = { version = "1.0.6", default-features = false }
 scc = { version = "3.0.2", default-features = false }
 scopeguard = { version = "1.2.0", default-features = false }
 semver = { version = "1.0.28", default-features = false, features = ["std"] }

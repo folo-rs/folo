@@ -146,18 +146,11 @@ function Get-BenchHistoryCollectCommand {
         [AllowEmptyCollection()]
         [string[]] $Package,
 
-        [AllowNull()][AllowEmptyString()][string] $LocalStore,
         [AllowNull()][AllowEmptyString()][string] $Repository,
         [AllowNull()][AllowEmptyString()][string] $ConfigPath
     )
 
     $scope = Get-BenchHistoryScopeArgument -Package $Package
-    if ($PSBoundParameters.ContainsKey('LocalStore')) {
-        if ([string]::IsNullOrWhiteSpace($LocalStore)) {
-            throw 'An explicit local collection store must not be empty; refusing to fall back to cloud storage.'
-        }
-        $scope += "--local=$LocalStore"
-    }
     foreach ($binding in @(
             @{ Parameter = 'Repository'; Flag = '--repo'; Value = $Repository }
             @{ Parameter = 'ConfigPath'; Flag = '--config'; Value = $ConfigPath }

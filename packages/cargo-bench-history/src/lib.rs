@@ -267,13 +267,6 @@
 //! PATH` to resolve git state from another directory, and `--verbose` to emit a
 //! step-by-step diagnostic trail to standard error.
 //!
-//! `analyze`, `list`, and `examine` also accept `--local-input PATH` to read
-//! locally collected results alongside that baseline. Matching keys use the
-//! local contents. These queries do not modify either source or upload the local
-//! results. The input must be an existing directory; relative paths resolve
-//! against the working directory. An Azure baseline may still use `--cache`,
-//! whose mirror must be disjoint from the local input.
-//!
 //! ## Azure Blob storage
 //!
 //! The Azure backend authenticates with **Microsoft Entra ID** (OAuth): it stores
