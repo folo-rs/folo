@@ -56,8 +56,10 @@ Report-file orchestration preflights all destinations through its output port be
 write. The filesystem adapter resolves existing ancestors before missing path components and
 compares existing objects by file identity, including hard links. Prospective names are probed in
 their actual parent filesystem using an owned scratch tree; output parents are not created during
-preflight. This preserves symlink traversal and filesystem-specific name equivalence without
-assuming case sensitivity from the OS. An unresolvable existing link is an inspection error,
+preflight. Probe destinations are files, and ancestor identity checks reject a report file that
+would need to act as another report's directory in either output order. The checks preserve
+symlink traversal and filesystem-specific name equivalence without assuming case sensitivity
+from the OS. An unresolvable existing link is an inspection error,
 not evidence that destinations differ. Native integration tests exercise these filesystem rules;
 in-memory port tests cover collision decisions and the absence of earlier writes.
 

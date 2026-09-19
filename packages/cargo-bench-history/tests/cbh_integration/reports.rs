@@ -10,6 +10,178 @@ use serde_json::Value;
 use crate::harness::*;
 
 #[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "checks report file/directory conflicts on the real filesystem"
+)]
+async fn report_outputs_reject_exact_prefixes_in_either_order() {
+    for (json, outcome) in [
+        ("report", "report/outcome.txt"),
+        ("report/outcome.txt", "report"),
+        ("new/report", "new/report/nested/outcome.txt"),
+        ("new/report/nested/outcome.txt", "new/report"),
+    ] {
+        let workspace = Workspace::repo(&storage_only_config());
+        fs::write(workspace.root().join("earlier.md"), "existing Markdown").unwrap();
+
+        let result = workspace
+            .drive(&[
+                "analyze",
+                "--markdown",
+                "earlier.md",
+                "--json",
+                json,
+                "--outcome",
+                outcome,
+            ])
+            .await;
+
+        _ = result.unwrap_err();
+        assert_eq!(
+            workspace.read("earlier.md").as_deref(),
+            Some("existing Markdown")
+        );
+        assert!(!workspace.root().join("report").exists());
+        assert!(!workspace.root().join("new").exists());
+    }
+}
+
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "checks existing filesystem prefixes in both output orders"
+)]
+async fn report_outputs_reject_existing_prefixes_before_any_write() {
+    for directory in [false, true] {
+        for (json, outcome) in [
+            ("report", "report/nested/outcome.txt"),
+            ("report/nested/outcome.txt", "report"),
+        ] {
+            let workspace = Workspace::repo(&storage_only_config());
+            fs::write(workspace.root().join("earlier.md"), "existing Markdown").unwrap();
+            let preserved = if directory {
+                let parent = workspace.root().join("report").join("nested");
+                fs::create_dir_all(&parent).unwrap();
+                parent.join("keep.txt")
+            } else {
+                workspace.root().join("report")
+            };
+            fs::write(&preserved, "existing bytes").unwrap();
+
+            let result = workspace
+                .drive(&[
+                    "analyze",
+                    "--markdown",
+                    "earlier.md",
+                    "--json",
+                    json,
+                    "--outcome",
+                    outcome,
+                ])
+                .await;
+
+            _ = result.unwrap_err();
+            assert_eq!(
+                workspace.read("earlier.md").as_deref(),
+                Some("existing Markdown")
+            );
+            assert_eq!(fs::read_to_string(preserved).unwrap(), "existing bytes");
+            assert!(
+                !workspace
+                    .root()
+                    .join("report")
+                    .join("nested")
+                    .join("outcome.txt")
+                    .exists()
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[cfg_attr(miri, ignore = "resolves real directory aliases and report prefixes")]
+async fn report_outputs_reject_prefixes_through_symlinked_parents_in_either_order() {
+    for (json, outcome) in [
+        ("alias/report", "real/report/outcome.txt"),
+        ("real/report/outcome.txt", "alias/report"),
+    ] {
+        let workspace = Workspace::repo(&storage_only_config());
+        let real = workspace.root().join("real");
+        fs::create_dir_all(&real).unwrap();
+        symlink(&real, workspace.root().join("alias")).unwrap();
+        fs::write(workspace.root().join("earlier.md"), "existing Markdown").unwrap();
+
+        let result = workspace
+            .drive(&[
+                "analyze",
+                "--markdown",
+                "earlier.md",
+                "--json",
+                json,
+                "--outcome",
+                outcome,
+            ])
+            .await;
+
+        _ = result.unwrap_err();
+        assert_eq!(
+            workspace.read("earlier.md").as_deref(),
+            Some("existing Markdown")
+        );
+        assert!(!real.join("report").exists());
+    }
+}
+
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "probes actual filesystem case equivalence for output prefixes"
+)]
+async fn report_outputs_handle_case_equivalent_prefixes_in_either_order() {
+    for (json, outcome) in [
+        ("report", "REPORT/outcome.txt"),
+        ("REPORT/outcome.txt", "report"),
+    ] {
+        let workspace = Workspace::repo(&storage_only_config());
+        let lower = workspace.root().join("report");
+        let upper = workspace.root().join("REPORT");
+        fs::write(&lower, "probe").unwrap();
+        let names_alias = upper.try_exists().unwrap();
+        fs::remove_file(&lower).unwrap();
+        eprintln!("prefix probe: {json}, {outcome}; case aliases: {names_alias}");
+        fs::write(workspace.root().join("earlier.md"), "existing Markdown").unwrap();
+
+        let result = workspace
+            .drive(&[
+                "analyze",
+                "--markdown",
+                "earlier.md",
+                "--json",
+                json,
+                "--outcome",
+                outcome,
+            ])
+            .await;
+
+        if names_alias {
+            _ = result.unwrap_err();
+            assert_eq!(
+                workspace.read("earlier.md").as_deref(),
+                Some("existing Markdown")
+            );
+            assert!(!lower.exists());
+            assert!(!upper.exists());
+        } else {
+            _ = result.unwrap();
+            let report: Value = serde_json::from_str(&workspace.read(json).unwrap()).unwrap();
+            assert_eq!(report["outcome"], "nothing_in_scope");
+            assert_eq!(workspace.read(outcome).as_deref(), Some("nothing_in_scope"));
+        }
+    }
+}
+
+#[tokio::test]
 #[cfg_attr(miri, ignore = "writes reports through the real filesystem adapter")]
 async fn report_outputs_reject_json_outcome_collision_before_any_write() {
     let workspace = Workspace::repo(&storage_only_config());

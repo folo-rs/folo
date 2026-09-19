@@ -469,10 +469,10 @@ impl HarvestFailedError {
     }
 }
 
-/// Report formats requested the same filesystem destination.
+/// Requested report files cannot coexist at their destinations.
 #[ohno::error]
 #[display(
-    "the {first_label} report ({}) and {second_label} report ({}) share an output destination",
+    "the {first_label} report ({}) and {second_label} report ({}) have conflicting output destinations",
     first_path.display(),
     second_path.display()
 )]

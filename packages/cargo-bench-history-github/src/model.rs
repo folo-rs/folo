@@ -30,7 +30,9 @@ impl FromStr for Repository {
             return Err(InvalidRepositoryError::new(value).into());
         };
         let valid_part = |part: &str| {
+            // Dot components would be normalized away when constructing REST URLs.
             !part.is_empty()
+                && !matches!(part, "." | "..")
                 && part
                     .bytes()
                     .all(|one| one.is_ascii_alphanumeric() || matches!(one, b'.' | b'-' | b'_'))
@@ -135,6 +137,21 @@ mod tests {
         assert_eq!(repository.name(), "folo");
         for invalid in ["folo", "/folo", "folo-rs/", "a/b/c"] {
             assert!(invalid.parse::<Repository>().is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn repository_rejects_url_dot_segments() {
+        for invalid in ["./issues", "../issues", "folo-rs/.", "folo-rs/.."] {
+            assert!(invalid.parse::<Repository>().is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn repository_preserves_dots_within_literal_names() {
+        for valid in ["folo-rs/.github", "folo-rs/repo..name"] {
+            let repository = valid.parse::<Repository>().unwrap();
+            assert_eq!(repository.to_string(), valid);
         }
     }
 

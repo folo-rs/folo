@@ -25,7 +25,7 @@ use cbh_diag::{Reporter, ReporterExt};
 use ohno::AppError;
 
 use crate::errors::{ConflictingReportDestinationsError, WriteReportFailedError};
-use crate::output_destination::same_destination;
+use crate::output_destination::destinations_conflict;
 
 /// Checks report destinations and writes reports, overwriting existing files.
 ///
@@ -33,10 +33,13 @@ use crate::output_destination::same_destination;
 /// strings and the binary hands them here, so the report rendering stays Miri-safe
 /// and an in-memory fake can stand in under test.
 pub(crate) trait OutputWriter {
-    /// Compares destinations as the filesystem would resolve them, without writing reports
-    /// or creating their parent directories.
-    fn same_destination(&self, left: &Path, right: &Path)
-    -> impl Future<Output = io::Result<bool>>;
+    /// Checks whether destinations alias or require one report to be another's directory,
+    /// without writing reports or creating their parent directories.
+    fn destinations_conflict(
+        &self,
+        left: &Path,
+        right: &Path,
+    ) -> impl Future<Output = io::Result<bool>>;
 
     /// Writes `contents` to `path`, creating parent directories as needed and
     /// replacing any existing file (a re-run refreshes the report in place).
@@ -65,10 +68,10 @@ impl TokioOutputWriter {
 impl OutputWriter for TokioOutputWriter {
     // Filesystem identity is exercised by native command integration tests.
     #[cfg_attr(test, mutants::skip)]
-    async fn same_destination(&self, left: &Path, right: &Path) -> io::Result<bool> {
+    async fn destinations_conflict(&self, left: &Path, right: &Path) -> io::Result<bool> {
         let left = rebase(&self.base, left.to_path_buf());
         let right = rebase(&self.base, right.to_path_buf());
-        tokio::task::spawn_blocking(move || same_destination(&left, &right))
+        tokio::task::spawn_blocking(move || destinations_conflict(&left, &right))
             .await
             .map_err(io::Error::other)?
     }
@@ -100,8 +103,9 @@ impl OutputWriter for TokioOutputWriter {
 ///
 /// # Errors
 ///
-/// Returns a [`ConflictingReportDestinationsError`] if reports share a destination,
-/// before any report is written. Returns a [`WriteReportFailedError`] if checking
+/// Returns a [`ConflictingReportDestinationsError`] if report destinations alias or
+/// require a report to be a directory, before any report is written.
+/// Returns a [`WriteReportFailedError`] if checking
 /// or writing a requested file fails.
 pub(crate) async fn write_reports<W: OutputWriter>(
     writer: &W,
@@ -157,7 +161,7 @@ pub(crate) async fn write_reports<W: OutputWriter>(
         for &(earlier_path, _, earlier_label) in reports.iter().take(index) {
             if path == earlier_path
                 || writer
-                    .same_destination(earlier_path, path)
+                    .destinations_conflict(earlier_path, path)
                     .await
                     .map_err(|error| WriteReportFailedError::caused_by(label, path, error))?
             {
@@ -239,13 +243,14 @@ mod fake {
     }
 
     impl OutputWriter for MemoryOutputWriter {
-        fn same_destination(
+        fn destinations_conflict(
             &self,
             left: &Path,
             right: &Path,
         ) -> impl Future<Output = io::Result<bool>> {
-            ready(Ok(self.aliases.get(left).map_or(left, PathBuf::as_path)
-                == self.aliases.get(right).map_or(right, PathBuf::as_path)))
+            let left = self.aliases.get(left).map_or(left, PathBuf::as_path);
+            let right = self.aliases.get(right).map_or(right, PathBuf::as_path);
+            ready(Ok(left.starts_with(right) || right.starts_with(left)))
         }
 
         fn write(&self, path: &Path, contents: &str) -> impl Future<Output = io::Result<()>> {
@@ -263,7 +268,7 @@ mod fake {
     pub(crate) struct FailingOutputWriter;
 
     impl OutputWriter for FailingOutputWriter {
-        fn same_destination(
+        fn destinations_conflict(
             &self,
             _left: &Path,
             _right: &Path,
@@ -384,6 +389,46 @@ mod tests {
         assert!(writer.written(markdown).is_none());
         assert!(writer.written(outcome).is_none());
         assert!(reporter.notes().is_empty());
+    }
+
+    #[test]
+    fn write_reports_rejects_prefix_conflicts_in_either_order_before_any_write() {
+        let markdown = Path::new("earlier.md");
+        let parent = Path::new("report");
+        let child = Path::new("report/outcome.txt");
+        for (json, outcome) in [(parent, child), (child, parent)] {
+            let writer = MemoryOutputWriter::new();
+            let reporter = RecordingReporter::new();
+            block_on(writer.write(markdown, "existing Markdown")).unwrap();
+            let rendered = RenderedReports {
+                markdown_summary: None,
+                ..all_formats()
+            };
+
+            let error = block_on(write_reports(
+                &writer,
+                &reporter,
+                Some(markdown),
+                Some(json),
+                None,
+                Some(outcome),
+                &rendered,
+            ))
+            .unwrap_err();
+
+            let collision = error
+                .find_source::<ConflictingReportDestinationsError>()
+                .unwrap();
+            assert_eq!(collision.first_path, json);
+            assert_eq!(collision.second_path, outcome);
+            assert_eq!(
+                writer.written(markdown).as_deref(),
+                Some("existing Markdown")
+            );
+            assert!(writer.written(json).is_none());
+            assert!(writer.written(outcome).is_none());
+            assert!(reporter.notes().is_empty());
+        }
     }
 
     #[test]

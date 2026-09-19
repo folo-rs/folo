@@ -3,6 +3,8 @@
 Pure marker and message composition is synchronous. Lifecycle orchestration is generic over the
 `GitHub` port; unit tests use an in-memory fake and `futures::executor::block_on`, with no runtime,
 network or real-time delay. The production `RestGitHub` adapter is the only HTTP boundary.
+Repository identities are validated as literal owner/name path segments before REST URL
+construction, rejecting dot components as well as separators and escape syntax.
 
 The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
 update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent

@@ -97,8 +97,9 @@ accurate, not create issues merely to announce workflow status.
 
 ## Publication evidence
 
-Result publication consumes the JSON report and nonblank Markdown summary from the same successful
-analysis pass. The JSON supplies the named outcome, analysis mode, commit and coverage census.
+Callers supply the JSON report and nonblank Markdown summary from the same successful
+analysis pass and are responsible for keeping those outputs paired. The companion embeds
+Markdown verbatim; the JSON supplies the named outcome, analysis mode, commit and coverage census.
 The requested commit must match the report, which must describe an unmodified working tree;
 unknown or inconsistent verdict/coverage metadata is an error rather than a default clean state.
 
