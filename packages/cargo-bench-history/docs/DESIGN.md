@@ -1576,6 +1576,12 @@ and effective-partition summaries, verbose reasoning, timings, and failures go t
 Benchmark child processes inherit the parent process's standard streams and may write directly
 to either one.
 
+File outputs requested together must identify distinct destinations, including the analysis
+summary and outcome. The shell checks the complete set before writing any report, accounting for
+equivalent relative paths and existing filesystem aliases. A rejected collision leaves existing
+reports untouched. Distinct outputs retain the normal overwrite behavior for refreshing reports.
+This is a destination preflight, not a transaction or protection against concurrent filesystem changes.
+
 Failures identify the attempted operation, retain relevant underlying causes, render their causal
 diagnostics once without redundant category prefixes on stderr, and return a failure status.
 Internal package ownership and execution boundaries are documented in the

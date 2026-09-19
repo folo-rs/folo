@@ -488,6 +488,7 @@ dependencies = [
  "nonempty",
  "ohno",
  "reqwest",
+ "same-file",
  "serde_json",
  "serial_test",
  "static_assertions",

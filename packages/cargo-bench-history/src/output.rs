@@ -11,7 +11,7 @@
 //! used by `install`) so the write path stays filesystem-agnostic: production uses
 //! [`TokioOutputWriter`], while tests drive an in-memory fake.
 //!
-//! A relative `--markdown`/`--markdown-summary`/`--json` path resolves against the
+//! A relative `--markdown`/`--markdown-summary`/`--json`/`--outcome` path resolves against the
 //! working directory (the same base as `--config`), so the resolution happens at the
 //! IO edge inside [`TokioOutputWriter`].
 
@@ -24,14 +24,20 @@ use cbh_config::rebase;
 use cbh_diag::{Reporter, ReporterExt};
 use ohno::AppError;
 
-use crate::errors::WriteReportFailedError;
+use crate::errors::{ConflictingReportDestinationsError, WriteReportFailedError};
+use crate::output_destination::same_destination;
 
-/// Writes a rendered report to a destination path, overwriting any existing file.
+/// Checks report destinations and writes reports, overwriting existing files.
 ///
 /// This is the filesystem edge of the per-format output model: `cbh_analyze` renders
 /// strings and the binary hands them here, so the report rendering stays Miri-safe
 /// and an in-memory fake can stand in under test.
 pub(crate) trait OutputWriter {
+    /// Compares destinations as the filesystem would resolve them, without writing reports
+    /// or creating their parent directories.
+    fn same_destination(&self, left: &Path, right: &Path)
+    -> impl Future<Output = io::Result<bool>>;
+
     /// Writes `contents` to `path`, creating parent directories as needed and
     /// replacing any existing file (a re-run refreshes the report in place).
     fn write(&self, path: &Path, contents: &str) -> impl Future<Output = io::Result<()>>;
@@ -57,6 +63,18 @@ impl TokioOutputWriter {
 }
 
 impl OutputWriter for TokioOutputWriter {
+    // Filesystem identity is exercised by native command integration tests.
+    #[cfg_attr(test, mutants::skip)]
+    async fn same_destination(&self, left: &Path, right: &Path) -> io::Result<bool> {
+        let left = rebase(&self.base, left.to_path_buf());
+        let right = rebase(&self.base, right.to_path_buf());
+        tokio::task::spawn_blocking(move || same_destination(&left, &right))
+            .await
+            .map_err(io::Error::other)?
+    }
+
+    // Filesystem writes are exercised by native command integration tests.
+    #[cfg_attr(test, mutants::skip)]
     async fn write(&self, path: &Path, contents: &str) -> io::Result<()> {
         let resolved = rebase(&self.base, path.to_path_buf());
         if let Some(parent) = resolved.parent()
@@ -82,7 +100,9 @@ impl OutputWriter for TokioOutputWriter {
 ///
 /// # Errors
 ///
-/// Returns a [`WriteReportFailedError`] if writing a requested file fails.
+/// Returns a [`ConflictingReportDestinationsError`] if reports share a destination,
+/// before any report is written. Returns a [`WriteReportFailedError`] if checking
+/// or writing a requested file fails.
 pub(crate) async fn write_reports<W: OutputWriter>(
     writer: &W,
     reporter: &dyn Reporter,
@@ -107,20 +127,52 @@ pub(crate) async fn write_reports<W: OutputWriter>(
         rendered.markdown_summary.is_some(),
         "a --markdown-summary path and a rendered summary must accompany each other"
     );
-    if let (Some(path), Some(contents)) = (markdown, rendered.markdown.as_deref()) {
-        write_report(writer, reporter, path, contents, "Markdown").await?;
-    }
-    if let (Some(path), Some(contents)) = (json, rendered.json.as_deref()) {
-        write_report(writer, reporter, path, contents, "JSON").await?;
-    }
-    if let (Some(path), Some(contents)) = (markdown_summary, rendered.markdown_summary.as_deref()) {
-        write_report(writer, reporter, path, contents, "Markdown summary").await?;
-    }
-    if let Some(path) = outcome {
-        let value = rendered
+    let outcome_contents = outcome.map(|_| {
+        rendered
             .outcome
-            .expect("an --outcome path is valid only for analyze, which always has an outcome");
-        write_report(writer, reporter, path, value.as_str(), "analysis outcome").await?;
+            .expect("an --outcome path is valid only for analyze, which always has an outcome")
+            .as_str()
+    });
+    let reports = [
+        (markdown, rendered.markdown.as_deref(), "Markdown"),
+        (json, rendered.json.as_deref(), "JSON"),
+        (
+            markdown_summary,
+            rendered.markdown_summary.as_deref(),
+            "Markdown summary",
+        ),
+        (outcome, outcome_contents, "analysis outcome"),
+    ];
+    let reports: Vec<_> = reports
+        .into_iter()
+        .filter_map(|(path, contents, label)| {
+            path.zip(contents)
+                .map(|(path, contents)| (path, contents, label))
+        })
+        .collect();
+
+    // Check the entire set before the first write: a collision between the last reports
+    // must also leave earlier, unrelated destinations untouched.
+    for (index, &(path, _, label)) in reports.iter().enumerate() {
+        for &(earlier_path, _, earlier_label) in reports.iter().take(index) {
+            if path == earlier_path
+                || writer
+                    .same_destination(earlier_path, path)
+                    .await
+                    .map_err(|error| WriteReportFailedError::caused_by(label, path, error))?
+            {
+                return Err(ConflictingReportDestinationsError::new(
+                    earlier_label,
+                    earlier_path,
+                    label,
+                    path,
+                )
+                .into());
+            }
+        }
+    }
+    for (path, contents, label) in reports {
+        write_report(writer, reporter, path, contents, label).await?;
     }
     Ok(())
 }
@@ -166,6 +218,7 @@ mod fake {
     #[derive(Debug, Default)]
     pub(crate) struct MemoryOutputWriter {
         files: Mutex<HashMap<PathBuf, String>>,
+        aliases: HashMap<PathBuf, PathBuf>,
     }
 
     impl MemoryOutputWriter {
@@ -178,9 +231,23 @@ mod fake {
         pub(crate) fn written(&self, path: &Path) -> Option<String> {
             self.files.lock().unwrap().get(path).cloned()
         }
+
+        pub(crate) fn alias(&mut self, path: &Path, destination: &Path) {
+            self.aliases
+                .insert(path.to_path_buf(), destination.to_path_buf());
+        }
     }
 
     impl OutputWriter for MemoryOutputWriter {
+        fn same_destination(
+            &self,
+            left: &Path,
+            right: &Path,
+        ) -> impl Future<Output = io::Result<bool>> {
+            ready(Ok(self.aliases.get(left).map_or(left, PathBuf::as_path)
+                == self.aliases.get(right).map_or(right, PathBuf::as_path)))
+        }
+
         fn write(&self, path: &Path, contents: &str) -> impl Future<Output = io::Result<()>> {
             self.files
                 .lock()
@@ -190,12 +257,20 @@ mod fake {
         }
     }
 
-    /// An [`OutputWriter`] whose every write fails, so the write error path is
-    /// exercised under Miri without touching the filesystem.
+    /// An [`OutputWriter`] whose inspections and writes fail, exercising error
+    /// propagation under Miri without touching the filesystem.
     #[derive(Debug, Default)]
     pub(crate) struct FailingOutputWriter;
 
     impl OutputWriter for FailingOutputWriter {
+        fn same_destination(
+            &self,
+            _left: &Path,
+            _right: &Path,
+        ) -> impl Future<Output = io::Result<bool>> {
+            ready(Err(io::ErrorKind::PermissionDenied.into()))
+        }
+
         fn write(&self, _path: &Path, _contents: &str) -> impl Future<Output = io::Result<()>> {
             ready(Err(io::Error::other("write refused")))
         }
@@ -205,12 +280,159 @@ mod fake {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #![allow(
+        clippy::indexing_slicing,
+        reason = "fixed-size report fixtures use known indices"
+    )]
+
     use cbh_diag::RecordingReporter;
     use futures::executor::block_on;
 
     use super::fake::{FailingOutputWriter, MemoryOutputWriter};
     use super::*;
     use crate::AnalysisOutcome;
+
+    fn all_formats() -> RenderedReports {
+        RenderedReports {
+            outcome: Some(AnalysisOutcome::Clean),
+            text: None,
+            markdown: Some("Markdown".to_owned()),
+            json: Some("Json".to_owned()),
+            markdown_summary: Some("Summary".to_owned()),
+        }
+    }
+
+    fn assert_collision(paths: [&Path; 4], first: usize, second: usize) {
+        let writer = MemoryOutputWriter::new();
+        let reporter = RecordingReporter::new();
+        for path in paths {
+            block_on(writer.write(path, "existing contents")).unwrap();
+        }
+        let error = block_on(write_reports(
+            &writer,
+            &reporter,
+            Some(paths[0]),
+            Some(paths[1]),
+            Some(paths[2]),
+            Some(paths[3]),
+            &all_formats(),
+        ))
+        .unwrap_err();
+
+        let collision = error
+            .find_source::<ConflictingReportDestinationsError>()
+            .unwrap();
+        let labels = ["Markdown", "JSON", "Markdown summary", "analysis outcome"];
+        assert_eq!(collision.first_label, labels[first]);
+        assert_eq!(collision.second_label, labels[second]);
+        assert_eq!(collision.first_path, paths[first]);
+        assert_eq!(collision.second_path, paths[second]);
+        for path in paths {
+            assert_eq!(writer.written(path).as_deref(), Some("existing contents"));
+        }
+        assert!(reporter.notes().is_empty());
+    }
+
+    #[test]
+    fn write_reports_rejects_every_format_pair_without_writing() {
+        let paths = [
+            Path::new("report.md"),
+            Path::new("report.json"),
+            Path::new("summary.md"),
+            Path::new("outcome.txt"),
+        ];
+        for first in 0..paths.len() {
+            for second in (first + 1)..paths.len() {
+                let mut paths = paths;
+                paths[second] = paths[first];
+                assert_collision(paths, first, second);
+            }
+        }
+    }
+
+    #[test]
+    fn write_reports_rejects_filesystem_aliases_before_earlier_writes() {
+        let mut writer = MemoryOutputWriter::new();
+        let reporter = RecordingReporter::new();
+        let markdown = Path::new("report.md");
+        let json = Path::new("report.json");
+        let outcome = Path::new("alias.json");
+        writer.alias(outcome, json);
+        block_on(writer.write(json, "existing JSON")).unwrap();
+        let rendered = RenderedReports {
+            markdown_summary: None,
+            ..all_formats()
+        };
+
+        let error = block_on(write_reports(
+            &writer,
+            &reporter,
+            Some(markdown),
+            Some(json),
+            None,
+            Some(outcome),
+            &rendered,
+        ))
+        .unwrap_err();
+
+        let collision = error
+            .find_source::<ConflictingReportDestinationsError>()
+            .unwrap();
+        assert_eq!(collision.first_path, json);
+        assert_eq!(collision.second_path, outcome);
+        assert_eq!(writer.written(json).as_deref(), Some("existing JSON"));
+        assert!(writer.written(markdown).is_none());
+        assert!(writer.written(outcome).is_none());
+        assert!(reporter.notes().is_empty());
+    }
+
+    #[test]
+    fn write_reports_stops_on_preflight_io_failure() {
+        let error = block_on(write_reports(
+            &FailingOutputWriter,
+            &RecordingReporter::new(),
+            Some(Path::new("report.md")),
+            Some(Path::new("report.json")),
+            Some(Path::new("summary.md")),
+            Some(Path::new("outcome.txt")),
+            &all_formats(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<WriteReportFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn write_reports_writes_all_distinct_formats() {
+        let writer = MemoryOutputWriter::new();
+        let paths = [
+            Path::new("report.md"),
+            Path::new("report.json"),
+            Path::new("summary.md"),
+            Path::new("outcome.txt"),
+        ];
+        block_on(write_reports(
+            &writer,
+            &RecordingReporter::new(),
+            Some(paths[0]),
+            Some(paths[1]),
+            Some(paths[2]),
+            Some(paths[3]),
+            &all_formats(),
+        ))
+        .unwrap();
+
+        for (path, contents) in paths
+            .into_iter()
+            .zip(["Markdown", "Json", "Summary", "clean"])
+        {
+            assert_eq!(writer.written(path).as_deref(), Some(contents));
+        }
+    }
 
     #[test]
     fn write_reports_writes_both_files_and_still_announces_them() {
@@ -356,57 +578,5 @@ mod tests {
         assert_eq!(write_error.label, "JSON");
         assert_eq!(write_error.path, json);
         assert!(error.find_source::<io::Error>().is_some());
-    }
-}
-
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod real_writer_tests {
-    use tempfile::tempdir;
-
-    use super::{OutputWriter, TokioOutputWriter};
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn write_creates_missing_parent_directories() {
-        let dir = tempdir().unwrap();
-        let writer = TokioOutputWriter::new(dir.path().to_path_buf());
-
-        writer
-            .write("nested/report.md".as_ref(), "payload")
-            .await
-            .unwrap();
-
-        let written = std::fs::read_to_string(dir.path().join("nested/report.md")).unwrap();
-        assert_eq!(written, "payload");
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn write_overwrites_an_existing_file() {
-        let dir = tempdir().unwrap();
-        let writer = TokioOutputWriter::new(dir.path().to_path_buf());
-        writer.write("report.json".as_ref(), "stale").await.unwrap();
-
-        writer.write("report.json".as_ref(), "fresh").await.unwrap();
-
-        let written = std::fs::read_to_string(dir.path().join("report.json")).unwrap();
-        assert_eq!(written, "fresh");
-    }
-
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn write_resolves_an_absolute_path_without_rebasing() {
-        let base = tempdir().unwrap();
-        let elsewhere = tempdir().unwrap();
-        let writer = TokioOutputWriter::new(base.path().to_path_buf());
-        let absolute = elsewhere.path().join("report.json");
-
-        writer.write(&absolute, "payload").await.unwrap();
-
-        assert_eq!(std::fs::read_to_string(&absolute).unwrap(), "payload");
-        // The base directory is untouched, confirming the absolute path was not
-        // rebased onto it.
-        assert!(!base.path().join("report.json").exists());
     }
 }

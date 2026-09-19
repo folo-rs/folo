@@ -341,6 +341,7 @@ mod dispatch;
 mod errors;
 mod outcome;
 mod output;
+mod output_destination;
 
 pub use cbh_analyze::{AnalysisOutcome, AutoDiscriminants};
 pub use cbh_cli::{Cli, EarlyExit};
