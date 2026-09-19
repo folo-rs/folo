@@ -5,10 +5,9 @@
 //! before writing any report is tested against the in-memory `OutputWriter` under Miri/mutants.
 
 use std::ffi::OsString;
-use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Component, Path, PathBuf, absolute};
-use std::str;
+use std::{fs, str};
 
 use same_file::is_same_file;
 use tempfile::Builder;

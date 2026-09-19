@@ -117,7 +117,11 @@ impl Fixture {
     }
 
     fn tool_command(&self, input: &Value, tool: &Path) -> Command {
-        let mut command = self.command(input);
+        self.tool_command_with_temp(input, tool, self.root.path())
+    }
+
+    fn tool_command_with_temp(&self, input: &Value, tool: &Path, temp: &Path) -> Command {
+        let mut command = self.command_with_temp(input, temp);
         command
             .arg("--tool")
             .arg(tool)
@@ -275,6 +279,67 @@ fn native_core_commands_preserve_environment_checkout_streams_and_reports() {
         .unwrap();
     assert!(!failed.status.success());
     assert_eq!(fixture.outputs(), before);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Real Git, subprocess and filesystem artifact-path boundary."
+)]
+fn native_artifact_paths_require_literal_glob_handoff() {
+    let fixture = Fixture::new();
+    fixture.initialize_git();
+    let tool = fixture.build_tool();
+    let keys = fixture.path("keys");
+    fs::create_dir_all(&keys).unwrap();
+    fs::write(keys.join("machine-key.txt"), "0123456789abcdef").unwrap();
+    let input = json!({
+        "command":"analyze-history", "machine-keys":keys,
+        "local-path":fixture.path("store"),
+        "expected-platforms":"canary", "completed-platforms":"canary"
+    });
+    let mut cases = vec![
+        ("class[ab]", false),
+        ("literal{a,b}", true),
+        ("literal]suffix", true),
+    ];
+    if !cfg!(windows) {
+        cases.extend([
+            ("wild*card", false),
+            ("wild?card", false),
+            (r"literal\name", false),
+        ]);
+    }
+    for (name, accepted) in cases {
+        let temp = fixture.path(name);
+        fs::create_dir_all(&temp).unwrap();
+        fs::write(fixture.path("outputs"), "prior=untouched\n").unwrap();
+        let result = fixture
+            .tool_command_with_temp(&input, &tool, &temp)
+            .output()
+            .unwrap();
+        if accepted {
+            success(&result);
+            let outputs = fixture.outputs();
+            for key in ["report-markdown=", "report-json=", "report-summary="] {
+                assert!(
+                    fixture
+                        .report_path(&outputs, key)
+                        .starts_with(fs::canonicalize(&temp).unwrap())
+                );
+            }
+        } else {
+            assert!(!result.status.success());
+            assert_eq!(fixture.outputs(), "prior=untouched\n");
+            // Core analysis really completed; unsupported handoff paths must not turn that
+            // into success outputs or an escaped spelling that names a different file.
+            let directory = fs::read_dir(&temp).unwrap().next().unwrap().unwrap().path();
+            let report: Value =
+                serde_json::from_slice(&fs::read(directory.join("report.json")).unwrap()).unwrap();
+            assert_eq!(report.get("outcome").unwrap(), "findings");
+        }
+    }
+    assert!(fixture.git(&["status", "--porcelain"]).is_empty());
 }
 
 #[test]

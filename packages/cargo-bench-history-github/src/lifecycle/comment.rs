@@ -76,10 +76,12 @@ pub(crate) async fn comment_report(
     require_packages(packages)?;
     report.validate(AnalysisMode::Branch, state)?;
     let existing = find_comment(github, context, pull_request).await?;
-    if existing
+    let previous = existing
         .as_ref()
-        .and_then(|comment| marker::find_owner(&comment.body, &context.instance))
-        .is_some_and(|owner| superseded(&owner, &report.owner))
+        .and_then(|comment| marker::find_owner(&comment.body, &context.instance));
+    if previous
+        .as_ref()
+        .is_some_and(|owner| superseded(owner, &report.owner))
     {
         note(
             context,
@@ -100,15 +102,29 @@ pub(crate) async fn comment_report(
         .await
     {
         Ok(live) if live != report.owner.head => {
-            if existing.as_ref().is_some_and(|comment| {
-                marker::find_owner(&comment.body, &context.instance)
-                    .is_some_and(|owner| owner.head == live)
-            }) {
-                note(
-                    context,
-                    "the existing comment belongs to the live head; preserving its state",
-                );
-                return Ok(());
+            if let Some(owner) = &previous {
+                if owner.head == live {
+                    note(
+                        context,
+                        "the existing comment belongs to the live head; preserving its state",
+                    );
+                    return Ok(());
+                }
+                // Both heads can be stale. Only a verified commit advance may replace
+                // different owned state; identical heads still follow publication order.
+                // Ref: docs/design.md, Pull-request lifecycle.
+                if owner.head != report.owner.head
+                    && !compare_or_unknown(github, context, &owner.head, &report.owner.head)
+                        .await
+                        .ahead_by
+                        .is_some_and(|distance| distance > 0)
+                {
+                    note(
+                        context,
+                        "the incoming report is stale and is not verified as newer than the existing owned head; preserving the comment",
+                    );
+                    return Ok(());
+                }
             }
             let distance = compare_or_unknown(github, context, &report.owner.head, &live)
                 .await

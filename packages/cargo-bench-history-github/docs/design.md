@@ -201,8 +201,11 @@ modifying the comment.
 Publication checks the live head immediately before writing, after finding the existing
 comment. If the PR has advanced, results receive a staleness warning. An existing comment
 owned by the live head is preserved, whether it contains results, pending work or a terminal
-note. A failed freshness query produces a visible warning rather than unqualified fresh-looking
-results.
+note. When both the incoming report and the existing owned head are stale, a different incoming
+head must be verified as a forward commit advance before replacing that state. Newer or
+unorderable existing state is preserved. Distinct-run reports for the same stale commit still
+follow serialized publication order. A failed live-head query produces a visible warning rather
+than unqualified fresh-looking results.
 
 ## Identity
 

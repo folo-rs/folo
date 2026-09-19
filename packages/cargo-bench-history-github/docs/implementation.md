@@ -45,8 +45,15 @@ outside the canonical Git checkout, and ownership persists beyond the command fo
 Workflow output paths are a separate representation from native canonical paths. The output
 projection uses `dunce` to simplify Windows drive paths only when their ordinary spelling
 preserves their meaning. It rejects remaining verbatim paths rather than giving the artifact
-uploader a root containing glob syntax. Native I/O, existing-ancestor resolution and checkout
-containment continue using the original canonical paths; no filesystem case-folding is added.
+uploader a root containing glob syntax. The same projection reserves wildcard and character-class
+syntax on every platform, and backslash escapes on non-Windows platforms. It does not emit escaped
+glob patterns because report readers also consume these outputs as literal file paths.
+The uploader's `@actions/glob` configuration disables brace expansion and extended matching
+operators; literal braces, closing brackets and parentheses do not require rejection.
+See [artifact file discovery](https://github.com/actions/upload-artifact/blob/v7/src/shared/search.ts)
+and the [pinned glob matcher](https://cdn.jsdelivr.net/npm/@actions/glob@0.6.1/lib/internal-pattern.js).
+Native I/O, existing-ancestor resolution and checkout containment continue using the original
+canonical paths; no filesystem case-folding is added.
 
 See [action execution](action.md) for the bootstrap invocation and input/output contract.
 
@@ -73,6 +80,11 @@ Attempt supersession compares attempt numbers only when run IDs match; the owner
 has no total ordering. Distinct runs use the existing freshness guards, and serialized
 publication order decides which same-commit report remains. No run-number or timestamp lookup
 is needed, and exact failed-state ownership remains independent of that ordering policy.
+For a comment report known to be stale, an existing different owned head is replaced only after
+a positive forward comparison proves the incoming commit advances it. This also protects
+reports and notes that no longer match the live head. Identical heads retain serialized arrival
+ordering, and incoming live-head reports retain their authority. Failure to query the live head
+keeps the explicit freshness-unverified publication path.
 History issue replacement also checks commit ordering: the same commit or a verified forward
 comparison may replace existing findings, while an absent, backward or unknown ordering leaves
 them intact. Both publication and all-clear share this guard.

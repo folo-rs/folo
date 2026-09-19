@@ -124,6 +124,10 @@ reports must be nonblank. No success outputs are appended on work or evidence fa
 
 Windows report outputs use ordinary paths for artifact-upload compatibility. Temporary locations
 that cannot be represented in this supported form are rejected.
+Temporary path components must not contain `*`, `?` or `[`, or backslashes on non-Windows
+platforms. Those characters are reserved for artifact pattern matching, while report outputs
+remain literal paths for both artifact upload and report readers. Braces and closing brackets
+remain literal under the uploader's glob configuration.
 
 `--github-output` preserves earlier records, including a preceding record without its
 final newline. The caller supplies a regular output file, or an absent file with an
