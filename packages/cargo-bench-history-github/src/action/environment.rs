@@ -18,6 +18,9 @@ pub(crate) struct Environment {
 }
 
 impl Environment {
+    /// Captures execution identity needed for fork policy and publication fallbacks.
+    ///
+    /// The host supplies environment and event I/O; this snapshot never reads GitHub credentials.
     pub(crate) fn read(host: &impl Host, invocation_dir: &Path) -> Result<Self, AppError> {
         let mut values = BTreeMap::new();
         // This allow-list intentionally excludes both GitHub credential variables.
@@ -56,6 +59,9 @@ impl Environment {
         Ok(Self { values, event })
     }
 
+    /// Applies the product's same-repository gate from event repository identities.
+    ///
+    /// This does not infer authorization from an OIDC subject or a token's permissions.
     pub(crate) fn fork(&self) -> bool {
         self.event.pull_request.as_ref().is_some_and(|pr| {
             match (&pr.head.repo, &pr.base.repo) {
@@ -66,6 +72,7 @@ impl Environment {
         })
     }
 
+    /// Resolves the publication repository from explicit Actions context or the event envelope.
     pub(crate) fn repository(&self) -> Result<Repository, AppError> {
         self.value("GITHUB_REPOSITORY")
             .or_else(|| {
@@ -83,10 +90,12 @@ impl Environment {
             .parse()
     }
 
+    /// Returns captured context without performing another ambient environment read.
     pub(crate) fn value(&self, name: &str) -> Option<&str> {
         self.values.get(name).map(String::as_str)
     }
 
+    /// Supplies a real PR head before considering the non-PR `GITHUB_SHA` fallback.
     pub(crate) fn head(&self) -> Option<&str> {
         match &self.event.pull_request {
             Some(pr) => Some(pr.head.sha.as_str()),
@@ -94,6 +103,7 @@ impl Environment {
         }
     }
 
+    /// Obtains the event's PR identity for comment commands whose input omits it.
     pub(crate) fn pull_request(&self) -> Option<NonZero<u64>> {
         self.event
             .pull_request

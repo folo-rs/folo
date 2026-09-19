@@ -10,13 +10,19 @@ This package implements its GitHub lifecycle and workflow-evidence responsibilit
 It deliberately has no stable API
 or command-line contract; the separately versioned action pins a tested companion version.
 
+A **project** is one configured benchmark history. Its **project namespace** is the canonical
+storage identity resolved by the core tool from the project configuration or directory fallback.
+An **action instance** is that project's automation within a GitHub repository. Its internal
+`instance` value carries the project namespace so reports, collection jobs and receipts for
+different projects do not collide. It is not a separate consumer-selected identity.
+
 ## Post-install action execution
 
-The companion is the root action's execution boundary after installation. It validates
-command-specific string inputs before benchmark, storage or publication work. Installation
-method and source checkout belong to the bootstrap, not this boundary. The measured working
-directory independently selects the checkout and configuration; the project namespace uses
-the core tool's canonical storage identity.
+The action's PowerShell bootstrap selects the installation method and Folo source checkout,
+installs the required binaries, and invokes the companion. The companion owns post-installation
+execution: it validates command-specific string inputs before benchmark, storage or publication
+work and drives the selected command. The measured working directory independently selects the
+checkout and configuration; the project namespace uses the core tool's canonical storage identity.
 
 Collection and backfill preserve the core tool's scope, feature, repetition and write-mode
 choices. Analysis validates full Git history, resolves the context commit and uses only the
@@ -30,8 +36,11 @@ log. Only dedicated machine-key and Git responses are captured. Successful outpu
 appended only after the selected work and its evidence checks succeed.
 
 Fork-origin PR events, including `pull_request_target`, skip benchmark and publication work
-with a diagnostic and explicit skip outputs. The companion does not initialize GitHub authentication
-for offline collection, backfill or analysis. Child processes inherit the caller's environment for
+with a diagnostic and explicit skip outputs. Fork benchmarking is blocked pending supported,
+secure federated access to the target branch's benchmark history. The repository's
+`pull_request` OIDC subject does not itself distinguish a fork head from a same-repository head.
+The companion does not initialize GitHub authentication for offline collection, backfill or
+analysis. Child processes inherit the caller's environment for
 builds and benchmarks. Publication reuses the existing report evidence and lifecycle policy;
 missing execution identity is an error, not permission to invent a workflow run or verdict.
 
@@ -59,7 +68,10 @@ Reports use a shared message catalogue, including advisory wording and the publi
 [cargo-bench-history guide](https://folo-rs.github.io/folo/cargo-bench-history/).
 Regression issues use `Benchmark history findings for <project> (updated YYYY-MM-DD)`.
 The project-qualified prefix identifies the rolling issue; the suffix is the UTC date of
-the companion's last body update, not the last measurement. No-op operations leave it unchanged.
+the companion's last body update, not the last measurement. For example, repeating an identical
+publication for the same run, attempt, commit and report artifacts does not change the existing
+body. That request makes no issue update, so its title date remains unchanged even if the retry
+occurs on another day.
 Workflow-failure issues use `Benchmark history workflow failed for <project> (run <run-id>)`.
 The caller supplies report artifacts and evidence, not titles, introductions, documentation
 links or comment identities.
@@ -69,6 +81,12 @@ alerts describe individual workflow runs and stay unchanged when later runs succ
 Empty pull-request scope always creates or updates an explanatory note rather than deleting
 the rolling comment.
 
+A **staleness warning** identifies results for a head other than the head being reported.
+It includes a commit distance when GitHub can verify the forward relationship. Otherwise the
+**unknown-distance warning** says the results are out of date but the distance is unavailable;
+it does not guess a count for unrelated history or an unavailable comparison. This differs from
+the freshness-unverified warning used when the live PR head itself cannot be read.
+
 ## Publication states
 
 Commands use `publish-<sink>-<state>`, with `comment` or `issue` as the sink and `findings`,
@@ -76,24 +94,45 @@ Commands use `publish-<sink>-<state>`, with `comment` or `issue` as the sink and
 The successful report and its platform evidence select findings, clean or no-data; callers
 cannot use a command name to bypass the corresponding evidence requirement.
 
-`findings` retains findings even when coverage is partial. `clean` requires a fully judged,
-nonempty analysis and complete intended-platform coverage. `no-data` means no complete verdict
-is available, not necessarily that no measurements exist: its message includes the actual
-insufficient-baseline, unjudged-series or missing-platform explanation and any useful partial
-result. An explicit empty-scope input covers preflight selecting no benchmarkable packages
-without running analysis; omission of report evidence alone is never that signal. `failed`
-records failure or cancellation rather than inventing an analysis outcome.
+Findings and coverage answer different questions: whether the tool found a notable change,
+and how much of the intended benchmark scope it could judge. Findings take precedence.
+
+| Successful evidence | Publication state |
+| --- | --- |
+| Any notable findings, including improvements in branch mode | `findings`, retaining any missing-platform or unjudged-series qualification |
+| No findings, a fully judged nonempty analysis, and every intended platform completed | `clean` |
+| No findings, but insufficient baseline, empty analysis scope, unjudged series or missing platforms | `no-data`, retaining the useful limited result and its explanation |
+| Scope preflight explicitly selected no benchmarkable packages, so analysis did not run | `no-data`, explaining the empty scope |
+
+For example, findings from a successful Linux collection still use `findings` when the Windows
+collection failed. If the Linux analysis instead reports no findings, that missing Windows
+coverage prevents a complete clean verdict and selects `no-data`.
+Thus the partial result in `no-data` is not a set of hidden findings: it describes the judged
+portion and why a complete verdict is unavailable. An omitted report is never an empty-scope
+signal. `failed` records execution failure or cancellation, not a successful analysis outcome.
 
 Comment findings, clean and no-data publication create or update the rolling comment.
 Comment preflight seeds an owned placeholder or marks existing results stale; failed
 publication changes only its own unfinished placeholder and never creates a comment.
 
-Only issue findings publication creates a rolling regression issue. Issue clean publishes
-all-clear; preflight marks a pending run; no-data explains why recovery could not be established;
-failed retires only its own pending annotation. No-data and failed preserve the previous report,
-its measured commit and staleness. These issue commands are a logged no-op when no issue is
-open, but still reject invalid evidence. Their role is to keep an existing investigation
-accurate, not create issues merely to announce workflow status.
+Issue commands have distinct creation and update roles:
+
+| Command | Creates an issue | Changes an existing open issue | Closes an issue | Reopens a closed issue |
+| --- | --- | --- | --- | --- |
+| `publish-issue-findings` | When no matching open rolling issue exists | Publishes eligible findings | Never | Never |
+| `publish-issue-clean` | No | Publishes eligible all-clear, leaving the investigation open | Never | Never |
+| `publish-issue-preflight` | No | Marks retained results stale and records pending work | Never | Never |
+| `publish-issue-no-data` | No | Explains why recovery is unproven while retaining the previous report | Never | Never |
+| `publish-issue-failed` | No | Retires only its own pending annotation, retaining the previous report | Never | Never |
+| `alert` | When that project's run has no existing alert, open or closed | No | Never | Never |
+
+Rolling-issue lookup considers open issues. A human-closed rolling issue stays closed; a later
+findings publication can create a new rolling issue rather than reopening it. Alert lookup also
+considers closed issues, so retrying an alert preserves a human-closed alert instead of
+recreating it.
+Non-creating rolling commands are logged no-ops when no open issue exists, but still validate
+their inputs. Freshness and ownership guards can also preserve an existing issue unchanged.
+No-data and failed annotations retain the report's measured commit and staleness.
 
 ## Publication evidence
 
@@ -145,8 +184,7 @@ both runs analyze the same commit.
 
 ## Workflow evidence
 
-The instance is the resolved project namespace supplied internally by workflow setup, not a
-raw arbitrary project ID or a separate consumer override.
+Workflow setup passes the action instance's project namespace to collection and analysis helpers.
 
 `workflow-matrix` validates the requested platform CSV and emits the collection strategy
 matrix, normalized expected-platform CSV, instance, and instance-qualified collection-job prefix.
@@ -249,8 +287,17 @@ failed-state publication must not overwrite the successful qualified report.
 
 ## Authentication
 
-The real adapter reads `GITHUB_TOKEN`, falling back to `GH_TOKEN`, and uses the GitHub REST API.
-No personal access token or other long-lived credential is introduced.
+The real adapter uses the GitHub REST API and accepts either of the environment names already
+used by its callers. `GITHUB_TOKEN` supports workflow environments that export GitHub Actions'
+job token. `GH_TOKEN` supports environments prepared for GitHub CLI use, including local
+OAuth-authenticated tooling. The companion does not run `gh`, read its credential store or
+mint a token; the caller supplies the credential in the environment.
+
+The companion selects a nonblank `GITHUB_TOKEN` first and uses a nonblank `GH_TOKEN` only when
+the former is absent or blank. If both are supplied, `GITHUB_TOKEN` wins. It does not switch to
+the other token after an authentication failure or combine their permissions. This precedence
+is the companion's own rule, not GitHub CLI's environment-variable ordering.
+No personal access token or other long-lived credential fallback is introduced.
 Analysis preparation requires Actions-read access; offline matrix setup, receipt creation and
 report inspection do not read either credential variable.
 The companion can run in the same job as Azure-backed analysis. The binary boundary separates

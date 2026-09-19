@@ -1,3 +1,5 @@
+//! Semantic GitHub operations and their REST implementation for lifecycle and evidence callers.
+
 mod http;
 mod job;
 mod port;

@@ -18,6 +18,7 @@ pub(crate) struct Reports {
 }
 
 impl Reports {
+    /// Assigns the core pass's report files within the invocation-owned scratch directory.
     pub(crate) fn new(directory: &Path) -> Self {
         Self {
             markdown: directory.join("report.md"),
@@ -28,6 +29,10 @@ impl Reports {
     }
 }
 
+/// Plans collect/backfill arguments while preserving scope, feature and write-mode choices.
+///
+/// The host executes this argument vector in the measured checkout with inherited streams;
+/// installation-source selection does not choose that checkout.
 pub(crate) fn build_process(
     inputs: &Inputs,
     cwd: &Path,
@@ -86,6 +91,10 @@ pub(crate) fn build_process(
     })
 }
 
+/// Plans the core comparison question and artifact destinations from already resolved evidence.
+///
+/// History uses one commit as context and base; PR analysis leaves an omitted base to the
+/// core. Keys are the validated collection filters, not an inference from the analyzer host.
 pub(crate) fn analysis_process(
     inputs: &Inputs,
     cwd: &Path,
@@ -130,6 +139,7 @@ pub(crate) fn analysis_process(
     }
 }
 
+/// Applies shared core diagnostics and checkout-relative configuration/storage paths.
 fn common_arguments(inputs: &Inputs, cwd: &Path, args: &mut Vec<OsString>) {
     args.push("--verbose".into());
     for (input, flag) in [("config", "--config"), ("local-path", "--local")] {
@@ -139,6 +149,7 @@ fn common_arguments(inputs: &Inputs, cwd: &Path, args: &mut Vec<OsString>) {
     }
 }
 
+/// Encodes one value as a single process argument rather than a shell fragment.
 fn option(args: &mut Vec<OsString>, flag: &str, value: impl AsRef<OsStr>) {
     // Joined arguments preserve leading dashes as values without invoking any shell.
     let mut argument = OsString::from(flag);

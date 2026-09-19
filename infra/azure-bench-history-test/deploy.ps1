@@ -1,4 +1,4 @@
-#requires -Version 7
+#Requires -Version 7.6
 
 <#
 .SYNOPSIS
@@ -8,38 +8,62 @@
 .DESCRIPTION
     Idempotently provisions a resource group, an Entra-only Storage account, a
     user-assigned managed identity with GitHub OIDC federated credentials, and the
-    `Storage Blob Data Contributor` role assignments needed by CI and (optionally) a
-    local developer principal. Re-running it converges to the same state, so the
+    `Storage Blob Data Contributor` role assignments needed by CI and (optionally) an
+    additional user or group. Re-running it converges to the same state, so the
     paired `teardown.ps1` + this script let you delete and re-create everything at
     will.
 
-    Requires the Azure CLI (`az`) and an authenticated session (`az login`) for an
-    account with rights to create the resources and role assignments.
+    Uses the canonical bundle's prerequisite and current-user checks, but keeps
+    the throwaway test storage lifecycle and CI identity separate from production.
+    Requires Azure CLI, installed Bicep and an authenticated session with rights
+    to create resources and role assignments. See README.md for that boundary.
 
 .PARAMETER SubscriptionId
-    Target subscription id.
+    Required ID of an existing subscription, for example
+    00000000-0000-0000-0000-000000000001.
 
 .PARAMETER ResourceGroup
-    Resource group to create/use. Defaults to 'rg-folo-bench-history'.
+    Optional resource group to create/reuse, for example rg-team-tests.
+    Defaults to rg-folo-bench-history.
 
 .PARAMETER Location
-    Azure region. Defaults to 'swedencentral'.
+    Optional Azure region name for deployed resources, for example westeurope.
+    Defaults to swedencentral; match existing resources on updates.
 
 .PARAMETER StorageAccountName
-    Globally-unique Storage account name (3-24 lowercase alphanumerics).
+    Required globally unique account name (3-24 lowercase alphanumerics), for
+    example teamhistorytests. Created or updated with the test storage policy.
 
-.PARAMETER LocalPrincipalId
-    Object id of a local developer principal (user or group) to grant data access.
-    Omit to grant CI access only. Tip: your own user id is
-    `az ad signed-in-user show --query id -o tsv`.
+.PARAMETER ManagedIdentityName
+    Optional identity name, for example id-team-history-ci. Created or updated
+    in the selected resource group; defaults to id-folo-bench-history-ci.
 
-.PARAMETER LocalPrincipalType
-    'User' (default) or 'Group', matching LocalPrincipalId.
+.PARAMETER GithubOrg
+    Optional existing GitHub owner, for example example-org. Defaults to folo-rs.
+    Selects the OIDC repository subject; does not create GitHub resources.
+
+.PARAMETER GithubRepo
+    Optional existing repository name without owner, for example project.
+    Defaults to folo; selects OIDC trust without modifying GitHub.
+
+.PARAMETER CustomPrincipalId
+    Optional existing Entra user/group object ID in the subscription's tenant,
+    for example 00000000-0000-0000-0000-000000000002. Supply CustomPrincipalType too.
+    Grants account-scoped blob contributor access, without creating a principal.
+
+.PARAMETER CustomPrincipalType
+    Required with CustomPrincipalId: User or Group. Conflicts with CurrentUser.
+
+.PARAMETER CurrentUser
+    Optional switch resolving the Azure CLI signed-in user in the explicit
+    subscription's tenant before any Azure changes. Grants additional access;
+    requires that subscription to be active in Azure CLI and conflicts with either
+    custom principal flag.
 
 .EXAMPLE
     ./deploy.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 `
         -StorageAccountName stfolobenchhist `
-        -LocalPrincipalId (az ad signed-in-user show --query id -o tsv)
+        -CurrentUser
 #>
 [CmdletBinding()]
 param(
@@ -60,23 +84,36 @@ param(
 
     [string] $GithubRepo = 'folo',
 
-    [string] $LocalPrincipalId = '',
+    [string] $CustomPrincipalId = '',
 
-    [ValidateSet('User', 'Group')]
-    [string] $LocalPrincipalType = 'User'
+    [ValidateSet('', 'User', 'Group')]
+    [string] $CustomPrincipalType = '',
+
+    [switch] $CurrentUser
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-Write-Verbose "Selecting subscription $SubscriptionId."
-az account set --subscription $SubscriptionId
+if ($CurrentUser -and ($CustomPrincipalId -or $CustomPrincipalType)) {
+    throw 'CurrentUser cannot be combined with CustomPrincipalId or CustomPrincipalType.'
+}
+if ([string]::IsNullOrEmpty($CustomPrincipalId) -ne [string]::IsNullOrEmpty($CustomPrincipalType)) {
+    throw 'CustomPrincipalId and CustomPrincipalType must be supplied together.'
+}
+Import-Module (Join-Path $PSScriptRoot '..' '..' 'packages' 'cargo-bench-history' 'src' 'azure_bundle' 'ProductionIdentityDeployment.psm1') -Force
+$context = Get-AzureDeploymentContext -SubscriptionId $SubscriptionId -CurrentUser:$CurrentUser
+if ($CurrentUser) {
+    $CustomPrincipalId = $context.CurrentUserPrincipalId
+    $CustomPrincipalType = 'User'
+}
 
-Write-Verbose "Ensuring resource group '$ResourceGroup' exists in '$Location'."
-az group create --name $ResourceGroup --location $Location --output none
+Write-Verbose "Ensuring resource group '$ResourceGroup' in '$Location' only after shared tooling, subscription and optional user checks succeeded."
+az group create --subscription $SubscriptionId --name $ResourceGroup --location $Location --output none
 
 Write-Verbose 'Exporting parameters for main.bicepparam (readEnvironmentVariable).'
 $env:AZURE_STORAGE_ACCOUNT_NAME = $StorageAccountName
@@ -84,14 +121,14 @@ $env:AZURE_LOCATION = $Location
 $env:AZURE_MANAGED_IDENTITY_NAME = $ManagedIdentityName
 $env:GITHUB_ORG = $GithubOrg
 $env:GITHUB_REPO = $GithubRepo
-$env:AZURE_LOCAL_PRINCIPAL_ID = $LocalPrincipalId
-$env:AZURE_LOCAL_PRINCIPAL_TYPE = $LocalPrincipalType
+$env:AZURE_CUSTOM_PRINCIPAL_ID = $CustomPrincipalId
+$env:AZURE_CUSTOM_PRINCIPAL_TYPE = if ($CustomPrincipalType) { $CustomPrincipalType } else { 'User' }
 
-if ([string]::IsNullOrEmpty($LocalPrincipalId)) {
-    Write-Verbose 'No LocalPrincipalId supplied; granting data access to the CI identity only.'
+if ([string]::IsNullOrEmpty($CustomPrincipalId)) {
+    Write-Verbose 'No additional principal supplied; granting data access to the CI identity only.'
 }
 else {
-    Write-Verbose "Granting data access to local $LocalPrincipalType '$LocalPrincipalId'."
+    Write-Verbose "Granting account-scoped data access to additional $CustomPrincipalType '$CustomPrincipalId'."
 }
 
 $bicepFile = Join-Path $scriptDir 'main.bicep'
@@ -100,8 +137,10 @@ $deploymentName = "bench-history-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
 
 Write-Verbose "Deploying '$bicepFile' as '$deploymentName'."
 $outputJson = az deployment group create `
+    --subscription $SubscriptionId `
     --resource-group $ResourceGroup `
     --name $deploymentName `
+    --mode Incremental `
     --template-file $bicepFile `
     --parameters $paramFile `
     --query properties.outputs `

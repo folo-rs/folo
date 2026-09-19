@@ -61,6 +61,20 @@ canonical paths; no filesystem case-folding is added.
 
 See [action execution](action.md) for the bootstrap invocation and input/output contract.
 
+## Execution scale
+
+The companion operates on workflow control data, not the stored benchmark series. Root-action
+planning runs once per invocation; collection reconciliation runs once for an analysis
+preparation; lifecycle decisions run once for the selected publication command.
+
+The main size-dependent work is indexing job/receipt attempts, selecting expected platforms,
+and scanning or composing a single report/comment body. Reconciliation uses ordered indices
+rather than rescanning every job for every platform. Marker interpretation makes fixed-purpose
+passes over the selected body; it does not traverse measurement history. Title search has a
+server-result cap and direct body reads follow exact candidate selection. Job and comment
+pagination still validate the entire returned set; there is no implicit local limit that turns
+incomplete discovery into success.
+
 ## Evidence and state transitions
 
 JSON decoding produces a validated analysis report before any publication operation. The

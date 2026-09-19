@@ -16,9 +16,16 @@ use crate::commands::setup_azure::bundle::BundleFile;
 pub(crate) trait BundleFiles {
     type Temporary: AsRef<Path>;
 
+    /// Writes a caller-owned export destination without replacing existing contents.
     fn export(&self, path: &Path, files: &[BundleFile]) -> impl Future<Output = io::Result<()>>;
+
+    /// Allocates the uniquely owned bundle directory used only by execution mode.
     fn temporary(&self) -> impl Future<Output = io::Result<Self::Temporary>>;
+
+    /// Materializes embedded files into an empty directory using exclusive creation.
     fn populate(&self, path: &Path, files: &[BundleFile]) -> impl Future<Output = io::Result<()>>;
+
+    /// Consumes execution's ownership token to remove only its extracted bundle.
     fn cleanup(&self, directory: Self::Temporary) -> impl Future<Output = io::Result<()>>;
 }
 
@@ -33,6 +40,7 @@ pub(crate) struct ProcessOutput {
 
 /// Executes PowerShell with structural argv, never executable user-supplied text.
 pub(crate) trait SetupProcess {
+    /// Runs a prerequisite probe or standalone driver and captures its diagnostic streams.
     fn run(&self, arguments: &[OsString]) -> impl Future<Output = io::Result<ProcessOutput>>;
 }
 

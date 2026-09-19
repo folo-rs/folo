@@ -22,27 +22,35 @@ pub(crate) struct IssueCandidate {
     pub(crate) title: String,
 }
 
-/// A GitHub pull-request comment.
+/// A discovered PR conversation body and its update identity for the rolling-comment lifecycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Comment {
     pub(crate) id: u64,
     pub(crate) body: String,
 }
 
-/// How far the compared head is ahead of the analyzed commit.
+/// Verified forward ancestry used for replacement authority and staleness wording.
+///
+/// `None` carries no positive ordering proof; reverse, divergent and unavailable comparisons
+/// must not be interpreted as an identical or fresh commit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Comparison {
     pub(crate) ahead_by: Option<u64>,
 }
 
-/// Semantic GitHub operations used by the report lifecycles.
+/// Semantic GitHub operations used by publication and workflow-evidence orchestration.
+///
+/// Implementations provide complete discovery and direct artifact reads. The caller owns
+/// lifecycle decisions and ambiguous-create reconciliation; no close/reopen operation is exposed.
 pub(crate) trait GitHub {
+    /// Supplies all attempts so a failed retry cannot inherit an older collection success.
     fn workflow_jobs(
         &self,
         repository: &Repository,
         run_id: NonZero<u64>,
     ) -> impl Future<Output = Result<Vec<WorkflowJob>, AppError>>;
 
+    /// Finds issue-title candidates within the repository, optionally including closed alerts.
     fn search_issues(
         &self,
         repository: &Repository,
@@ -50,12 +58,14 @@ pub(crate) trait GitHub {
         include_closed: bool,
     ) -> impl Future<Output = Result<Vec<IssueCandidate>, AppError>>;
 
+    /// Obtains authoritative current contents after title discovery has selected a candidate.
     fn read_issue(
         &self,
         repository: &Repository,
         number: u64,
     ) -> impl Future<Output = Result<Issue, AppError>>;
 
+    /// Attempts one creation whose ambiguous outcome the lifecycle must reconcile, not replay.
     fn create_issue(
         &self,
         repository: &Repository,
@@ -63,6 +73,7 @@ pub(crate) trait GitHub {
         body: &str,
     ) -> impl Future<Output = Result<Issue, AppError>>;
 
+    /// Updates title and body of a known issue without changing its open/closed disposition.
     fn update_issue(
         &self,
         repository: &Repository,
@@ -71,12 +82,14 @@ pub(crate) trait GitHub {
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>>;
 
+    /// Lists the PR conversation completely so marker discovery can detect absence or ambiguity.
     fn comments(
         &self,
         repository: &Repository,
         pull_request: u64,
     ) -> impl Future<Output = Result<Vec<Comment>, AppError>>;
 
+    /// Attempts one PR-comment creation; the caller reconciles an uncertain result by identity.
     fn create_comment(
         &self,
         repository: &Repository,
@@ -84,6 +97,7 @@ pub(crate) trait GitHub {
         body: &str,
     ) -> impl Future<Output = Result<Comment, AppError>>;
 
+    /// Replaces the body at a known comment identity after lifecycle ownership checks.
     fn update_comment(
         &self,
         repository: &Repository,
@@ -91,12 +105,14 @@ pub(crate) trait GitHub {
         body: &str,
     ) -> impl Future<Output = Result<(), AppError>>;
 
+    /// Reads the live head used by preflight and finish-side freshness guards.
     fn pull_request_head(
         &self,
         repository: &Repository,
         pull_request: u64,
     ) -> impl Future<Output = Result<CommitSha, AppError>>;
 
+    /// Supplies verified directional commit evidence rather than a run-number ordering proxy.
     fn compare(
         &self,
         repository: &Repository,

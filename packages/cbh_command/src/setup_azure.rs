@@ -26,18 +26,23 @@ pub struct SetupAzureOptions {
     pub container: Option<String>,
     /// Identity override; omission derives a name from the selected account.
     pub managed_identity: Option<String>,
-    /// Optional local principal receiving Storage Blob Data Contributor access.
-    pub local_principal_id: Option<String>,
-    /// Type of the optional local principal, supplied together with its ID.
-    pub local_principal_type: Option<LocalPrincipalType>,
+    /// Optional additional principal receiving account-scoped blob contributor access.
+    pub custom_principal_id: Option<String>,
+    /// Type of the custom principal, supplied together with its object ID.
+    pub custom_principal_type: Option<CustomPrincipalType>,
+    /// Grant the Azure CLI signed-in user access in the selected subscription's tenant.
+    ///
+    /// The selected subscription must also be active in Azure CLI for directory lookup.
+    /// Requires execution mode and cannot be combined with an explicit custom principal.
+    pub current_user: bool,
     /// Emit explanatory deployment diagnostics.
     pub verbose: bool,
 }
 
-/// The local Entra principal to which optional history access is granted.
+/// The additional Entra principal to which optional history access is granted.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LocalPrincipalType {
+pub enum CustomPrincipalType {
     /// An individual maintainer.
     User,
     /// A group of maintainers.

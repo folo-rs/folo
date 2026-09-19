@@ -1452,6 +1452,11 @@ fn branch_relation(kind: MetricKind, direction: Direction) -> &'static str {
     }
 }
 
+/// Builds the machine-readable report from one completed analysis.
+///
+/// This is the JSON branch of [`render`]. It uses the shared coverage and outcome projections
+/// so the verdict, legacy `notable` flag, and census describe the same findings and coverage.
+/// Per-set summaries and finding details come from the same [`ReportInput`].
 // Pure serialization glue, fully exercised by `json_report_is_structured` and
 // `report_renders_direction_labels` in regular CI. Skipped for mutation only: the
 // empty-string mutant is caught fast by those lib tests locally, but tips the 60s

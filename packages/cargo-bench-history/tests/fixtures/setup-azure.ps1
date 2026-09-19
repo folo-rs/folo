@@ -18,6 +18,10 @@ $global:AzureSetupFixture = @{
     DeploymentCount = 0
     Expected = (Get-Content -LiteralPath (Join-Path $BundleDirectory 'parameters.json') -Raw | ConvertFrom-Json)
     BundleDirectory = $BundleDirectory
+    PrincipalId = ''
+    PrincipalType = 'User'
+    RequireUserResolution = $false
+    UserResolved = $false
 }
 
 function global:az {
@@ -26,7 +30,8 @@ function global:az {
     if ($operation -in @('storage account', 'storage container-rm', 'deployment group')) {
         $operation = $args[0..2] -join ' '
     }
-    if ($args[0] -notin @('version', 'bicep')) {
+    $activeAccount = $operation -eq 'account show' -and $args -notcontains '--subscription'
+    if ($args[0] -notin @('version', 'bicep', 'ad') -and -not $activeAccount) {
         if ($args[[array]::IndexOf($args, '--subscription') + 1] -ne $global:AzureSetupFixture.Expected.SubscriptionId) {
             throw 'Selected subscription was not forwarded.'
         }
@@ -35,10 +40,26 @@ function global:az {
         'version' { return '{}' }
         'bicep version' { return 'Installed Bicep' }
         'account show' {
-            return ConvertTo-Json @{ id = $global:AzureSetupFixture.Expected.SubscriptionId; state = 'Enabled'; tenantId = 'tenant-canary' }
+            return ConvertTo-Json @{
+                id = $global:AzureSetupFixture.Expected.SubscriptionId
+                state = 'Enabled'
+                tenantId = 'tenant-canary'
+                environmentName = 'AzureCloud'
+                user = @{ type = 'user' }
+            }
         }
         'account get-access-token' { return 'expiry-not-token' }
+        'ad signed-in-user' {
+            if ($args[2] -cne 'show') {
+                throw 'User lookup did not use the signed-in user.'
+            }
+            $global:AzureSetupFixture.UserResolved = $true
+            return $global:AzureSetupFixture.PrincipalId
+        }
         'group create' {
+            if ($global:AzureSetupFixture.RequireUserResolution -and -not $global:AzureSetupFixture.UserResolved) {
+                throw 'Azure was mutated before user resolution.'
+            }
             if ($args[[array]::IndexOf($args, '--name') + 1] -cne $global:AzureSetupFixture.Expected.ResourceGroup) {
                 throw 'Literal resource group was altered.'
             }
@@ -76,9 +97,9 @@ function global:az {
                     throw "Deployment parameter '$name' was not forwarded."
                 }
             }
-            # No local principal was requested; the required Bicep type remains a placeholder.
-            if ($parameters.localPrincipalId -cne '' -or $parameters.localPrincipalType -cne 'User') {
-                throw 'Absent local access was not forwarded.'
+            if ($parameters.customPrincipalId -cne $global:AzureSetupFixture.PrincipalId -or
+                $parameters.customPrincipalType -cne $global:AzureSetupFixture.PrincipalType) {
+                throw 'Additional principal access was not forwarded.'
             }
             $template = $args[[array]::IndexOf($args, '--template-file') + 1]
             if ((Split-Path $template -Parent) -cne $global:AzureSetupFixture.BundleDirectory) {
@@ -102,4 +123,13 @@ function global:az {
 & (Join-Path $BundleDirectory 'deploy.ps1')
 & (Join-Path $BundleDirectory 'deploy.ps1')
 if ($global:AzureSetupFixture.DeploymentCount -ne 2) { throw 'The standalone driver did not deploy twice.' }
+$global:AzureSetupFixture.PrincipalId = '00000000-0000-0000-0000-000000000002'
+$global:AzureSetupFixture.RequireUserResolution = $true
+& (Join-Path $BundleDirectory 'deploy.ps1') -CurrentUser
+if (-not $global:AzureSetupFixture.UserResolved) { throw 'The current-user switch was not forwarded.' }
+$global:AzureSetupFixture.PrincipalId = '00000000-0000-0000-0000-000000000003'
+$global:AzureSetupFixture.PrincipalType = 'Group'
+& (Join-Path $BundleDirectory 'deploy.ps1') `
+    -CustomPrincipalId $global:AzureSetupFixture.PrincipalId -CustomPrincipalType Group
+if ($global:AzureSetupFixture.DeploymentCount -ne 4) { throw 'Additional grants did not deploy.' }
 Write-Output 'standalone-repeat-canary'

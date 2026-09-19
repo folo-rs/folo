@@ -12,6 +12,10 @@ use crate::github::rest::{PaginationError, RestGitHub};
 use crate::model::Repository;
 
 impl<H: Http> RestGitHub<H> {
+    /// Reads every job attempt needed to decide each platform's latest collection result.
+    ///
+    /// Stable totals, unique IDs and run identity establish complete discovery before receipts
+    /// can authorize analysis. A PR merge-ref SHA in job metadata does not replace receipt heads.
     pub(crate) async fn list_jobs(
         &self,
         repository: &Repository,

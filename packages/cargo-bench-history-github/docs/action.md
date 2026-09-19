@@ -26,8 +26,10 @@ has no role in selecting the measured checkout.
 
 The common JSON inputs are `command`, `working-directory` and `config`. Omitted `config`
 uses the core `.cargo/bench_history.toml` discovery and project-directory fallback.
-Neither `install-method` nor `source-path` is accepted; the bootstrap owns both.
-There is no consumer namespace override.
+The project namespace is the core-resolved storage identity used to separate this project's
+reports and workflow evidence within the repository; it is emitted as `instance`.
+Neither `install-method` nor `source-path` is accepted: the bootstrap uses those inputs to
+install binaries before invoking this command. There is no consumer namespace override.
 
 ## Command-specific inputs
 

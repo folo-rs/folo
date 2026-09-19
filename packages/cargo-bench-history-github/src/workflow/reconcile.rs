@@ -9,6 +9,9 @@ use crate::model::{CommitSha, Instance, Repository};
 use crate::workflow::receipt::{Receipt, validate_platform};
 
 /// Successful receipts in platform order, with platform coverage independent of report coverage.
+///
+/// Indices borrow identity from the original receipt slice so filesystem and output projections
+/// consume the same reconciliation decision without copying or reselecting evidence.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Selection {
     pub(crate) receipt_indices: Vec<usize>,
@@ -18,10 +21,16 @@ pub(crate) struct Selection {
 // Workflow setup and job reconciliation must agree on the collection job namespace.
 const COLLECTION_JOB_PREFIX: &str = "cbh-collect";
 
+/// Names the collection jobs that setup creates and reconciliation is allowed to consider.
 pub(crate) fn collection_job_prefix(instance: &Instance) -> String {
     format!("{COLLECTION_JOB_PREFIX}:{}", instance.as_str())
 }
 
+/// Selects successful latest-attempt receipts for the requested repository and frozen head.
+///
+/// Preparation supplies complete job discovery and decoded receipts. The returned indices refer
+/// to that same receipt slice; failed retries do not recover coverage from older successes.
+/// This establishes collection provenance, not the analyzer's eventual measurement verdict.
 pub(crate) fn reconcile(
     repository: &Repository,
     instance: &Instance,
@@ -103,6 +112,7 @@ pub(crate) fn reconcile(
     })
 }
 
+/// Distinguishes a completed success from known failures without accepting unfinished evidence.
 fn successful(job: &WorkflowJob) -> Result<bool, AppError> {
     if job.status != "completed" {
         return Err(InvalidCollectionJobs::new("latest collection job is not completed").into());

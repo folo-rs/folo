@@ -61,12 +61,13 @@ directly:
   Keep a **Version/release plan** section current with every expanded-plan package/group,
   previous and proposed versions, change levels, and substantive reasons, including
   dependent/group movements; explicitly state when there are no released-content or
-  version changes. Keep `[Copilot speaking]` first in agent-authored PR bodies.
+  version changes.
   Follow [docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section) and
   [docs/release-versioning.md](docs/release-versioning.md#on-a-pull-request).
 * **Run the repository-specific extension after version planning.** After
   `increment-versions`, including after reassessment, run
   [`pair-benchmark-action-release`](.github/skills/pair-benchmark-action-release/SKILL.md).
+  Start with its one-line relevance check; a false result ends repo-specific action work.
   Follow [benchmark action releases](docs/benchmark-action-releases.md) for paired PRs,
   independent action-version decisions and publication follow-up.
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a

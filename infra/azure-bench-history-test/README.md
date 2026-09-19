@@ -13,35 +13,48 @@ can be deleted and re-created with one command.
   disabled** (Entra ID only, so there is no account key to leak). Container and blob
   soft-delete are disabled so a deleted test container is gone immediately.
 - A **user-assigned managed identity** — the CI principal — with **GitHub OIDC
-  federated credentials** (one per trusted branch, plus same-repo pull requests).
+  federated credentials** (one per trusted branch, plus an optional repository
+  pull-request subject). Workflow policy gates out forks before identity use;
+  the PR subject itself does not distinguish fork heads.
   GitHub Actions signs in with no stored secret.
 - **`Storage Blob Data Contributor`** role assignments on the account for the managed
-  identity and (optionally) a local developer principal. That single role covers
+  identity and (optionally) an additional user or group. That single role covers
   container create/delete and blob read/write/delete via the data plane, which is all
   the tool's `run` and the tests' container cleanup need.
 
 ## Prerequisites
 
-- Azure CLI (`az`) and PowerShell 7+.
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
+  [PowerShell 7.6 or later](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)
+  and [installed Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/install#azure-cli).
 - `az login` as an account allowed to create these resources and assign roles
-  (Owner or User Access Administrator on the target scope).
+  (Owner, or Contributor combined with User Access Administrator on the target
+  scope). User Access Administrator alone cannot provision resources.
+
+The script shares read-only prerequisite and current-user checks with the
+production bundle. These run before resource-group creation and never install
+tools, initiate login or change the active CLI subscription.
 
 ## Deploy
 
 ```powershell
-# Your own object id for local data-plane access (optional but recommended):
-$me = az ad signed-in-user show --query id -o tsv
-
 ./deploy.ps1 `
     -SubscriptionId <subscription-guid> `
     -StorageAccountName <globally-unique-name> `
-    -LocalPrincipalId $me
+    -CurrentUser
 ```
 
 Key parameters (see `deploy.ps1 -?` for all): `-ResourceGroup` (default
 `rg-folo-bench-history`), `-Location` (default `swedencentral`), `-StorageAccountName`
-(3-24 lowercase alphanumerics, globally unique), `-LocalPrincipalId` /
-`-LocalPrincipalType` (`User` or `Group`).
+(3-24 lowercase alphanumerics, globally unique), `-CustomPrincipalId` /
+`-CustomPrincipalType` (`User` or `Group`).
+
+`-CurrentUser` resolves your signed-in user in the explicitly selected
+subscription's tenant, including a guest user's object in that tenant. It requires
+a user login, Microsoft Graph access and the target subscription active in Azure CLI,
+and conflicts with either custom-principal
+flag. Alternatively, supply both custom flags with an existing user/group object
+ID from the target tenant. Neither path creates an Entra principal.
 
 On success the script prints the identifiers to record in `constants.env`.
 
@@ -63,7 +76,25 @@ These are identifiers, not credentials — authentication is via Microsoft Entra
 (local `az login` / CI OIDC federation), so there is nothing to leak by committing
 them. They do not by themselves run the real-Azure tests: those run only when
 `ENABLE_AZURE` is set, which the `just test-azure` recipe does. Pull requests from
-forks cannot mint a token for the tenant and so the CI job skips for them.
+forks are skipped by an explicit same-repository workflow gate. The Azure
+`repo:<owner>/<repository>:pull_request` subject is not itself a fork boundary.
+
+## Relationship to production storage
+
+Tooling/authentication checks, current-user resolution and custom-principal naming
+are shared with production. Both identities use account-scoped Storage Blob Data
+Contributor and serialize federated-credential creation on each identity.
+
+Their resource lifecycles are intentionally different. Test Bicep owns disposable
+account properties and reapplies disabled soft-delete settings on deployment; tests
+create and delete their own containers. Production provisioning preserves existing
+account/container properties and durable history. Test deployment retains its
+separate identity, configurable trusted-branch list and optional PR trust; it does
+not acquire the production identity or access to production history.
+
+Test deployment is incremental: additional custom-principal grants do not remove
+earlier grants. This is not a promise to preserve manually changed test account
+settings. The explicit teardown below is destructive.
 
 ## Run the tests locally
 

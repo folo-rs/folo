@@ -470,6 +470,10 @@ impl HarvestFailedError {
 }
 
 /// Requested report files cannot coexist at their destinations.
+///
+/// Report preflight uses this condition to identify formats whose paths alias or form a
+/// file/directory prefix. The original requested paths remain available for diagnostics
+/// when the condition is carried through the shell's application error boundary.
 #[ohno::error]
 #[display(
     "the {first_label} report ({}) and {second_label} report ({}) have conflicting output destinations",

@@ -227,6 +227,7 @@ pub(crate) struct ResultArgs {
     pub(crate) completed_platforms: String,
 }
 
+/// Checks the package-scope disclosure required by direct PR lifecycle commands.
 fn package_list(value: &str) -> Result<String, String> {
     if value.split(',').any(|package| package.trim().is_empty()) {
         return Err("packages must be a nonempty comma-separated list".to_owned());

@@ -9,6 +9,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
+# deploy.ps1 calls this policy boundary for both CLI-driven and exported deployments.
+# It discovers missing storage before invoking Bicep and returns validated non-secret
+# outputs for the driver's configuration handoff; Bicep remains the resource authority.
 function Invoke-ProductionIdentityDeployment {
     [CmdletBinding()]
     param(
@@ -28,15 +31,19 @@ function Invoke-ProductionIdentityDeployment {
         [string] $ManagedIdentityName = '',
         [ValidatePattern('^(?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$', Options = 'None')]
         [string] $HistoryContainerName = 'bench-history',
-        [string] $LocalPrincipalId = '',
-        [ValidateSet('', 'User', 'Group')][string] $LocalPrincipalType = ''
+        [string] $CustomPrincipalId = '',
+        [ValidateSet('', 'User', 'Group')][string] $CustomPrincipalType = '',
+        [switch] $CurrentUser
     )
 
     if ([string]::IsNullOrEmpty($ManagedIdentityName)) {
         $ManagedIdentityName = "id-$StorageAccountName-bench-history"
     }
-    if ([string]::IsNullOrEmpty($LocalPrincipalId) -ne [string]::IsNullOrEmpty($LocalPrincipalType)) {
-        throw 'LocalPrincipalId and LocalPrincipalType must be supplied together.'
+    if ($CurrentUser -and ($CustomPrincipalId -or $CustomPrincipalType)) {
+        throw 'CurrentUser cannot be combined with CustomPrincipalId or CustomPrincipalType.'
+    }
+    if ([string]::IsNullOrEmpty($CustomPrincipalId) -ne [string]::IsNullOrEmpty($CustomPrincipalType)) {
+        throw 'CustomPrincipalId and CustomPrincipalType must be supplied together.'
     }
     # Apply Git's literal branch-name rules without requiring Git in the exported bundle.
     # Component suffixes and HEAD are case-sensitive; @ is valid within refs/heads/@.
@@ -51,23 +58,11 @@ function Invoke-ProductionIdentityDeployment {
         throw 'HistoryBranch must be a branch name, not a ref or revision expression.'
     }
 
-    # These read-only probes precede even resource-group creation. `bicep version`
-    # fails when Bicep is absent instead of implicitly installing it.
-    Invoke-ProductionIdentityAz -Arguments @('version', '--output', 'json') | Out-Null
-    Invoke-ProductionIdentityAz -Arguments @('bicep', 'version') | Out-Null
-    $account = Invoke-ProductionIdentityAz -Arguments @(
-        'account', 'show', '--subscription', $SubscriptionId, '--output', 'json'
-    ) | ConvertFrom-Json
-    if ($account.id -ne $SubscriptionId -or $account.state -ne 'Enabled' -or
-        [string]::IsNullOrWhiteSpace($account.tenantId)) {
-        throw "An authenticated, enabled context for subscription '$SubscriptionId' is required."
+    $context = Get-AzureDeploymentContext -SubscriptionId $SubscriptionId -CurrentUser:$CurrentUser
+    if ($CurrentUser) {
+        $CustomPrincipalId = $context.CurrentUserPrincipalId
+        $CustomPrincipalType = 'User'
     }
-    # A cached subscription entry alone does not demonstrate a usable credential.
-    # Suppress the token completely: none of the command's outputs contain secrets.
-    Invoke-ProductionIdentityAz -Arguments @(
-        'account', 'get-access-token', '--subscription', $SubscriptionId,
-        '--query', 'expires_on', '--output', 'tsv'
-    ) | Out-Null
 
     Write-Verbose "Ensuring resource group '$ResourceGroup' in explicitly selected subscription '$SubscriptionId'; all tooling and authentication probes succeeded."
     Invoke-ProductionIdentityAz -Arguments @(
@@ -93,7 +88,7 @@ function Invoke-ProductionIdentityDeployment {
     }
 
     Write-Verbose "Account '$StorageAccountName' needs bootstrap: $createStorageAccount; container '$HistoryContainerName' needs bootstrap: $createHistoryContainer. Existing storage is reference-only to preserve properties and history."
-    Write-Verbose "Identity '$ManagedIdentityName' receives account-scoped Storage Blob Data Contributor and repository '$GithubOrg/$GithubRepo' branch '$HistoryBranch' plus PR federation. Optional local access uses the same role independently."
+    Write-Verbose "Identity '$ManagedIdentityName' receives account-scoped Storage Blob Data Contributor and repository '$GithubOrg/$GithubRepo' branch '$HistoryBranch' plus PR federation. Optional custom principal access uses the same role independently."
     $outputs = Invoke-ProductionIdentityAz -Arguments @(
         'deployment', 'group', 'create', '--subscription', $SubscriptionId,
         '--resource-group', $ResourceGroup,
@@ -109,9 +104,9 @@ function Invoke-ProductionIdentityDeployment {
         "githubOrg=$GithubOrg",
         "githubRepo=$GithubRepo",
         "historyBranch=$HistoryBranch",
-        "localPrincipalId=$LocalPrincipalId",
-        # An empty ID suppresses the local role; the placeholder type only satisfies Bicep's allowed values.
-        "localPrincipalType=$(if ($LocalPrincipalType) { $LocalPrincipalType } else { 'User' })",
+        "customPrincipalId=$CustomPrincipalId",
+        # An empty ID suppresses the additional role; the placeholder type satisfies Bicep's allowed values.
+        "customPrincipalType=$(if ($CustomPrincipalType) { $CustomPrincipalType } else { 'User' })",
         '--query', 'properties.outputs', '--output', 'json'
     ) | ConvertFrom-Json
 
@@ -124,6 +119,64 @@ function Invoke-ProductionIdentityDeployment {
     return $outputs
 }
 
+# Production provisioning and the throwaway test driver call this before any Azure
+# mutation. It verifies tooling and the target login, returning a resolved user ID
+# only when requested. Sharing preflight does not share storage or federation policy.
+function Get-AzureDeploymentContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrWhiteSpace()][string] $SubscriptionId,
+        [switch] $CurrentUser
+    )
+
+    # `bicep version` fails when Bicep is absent instead of implicitly installing it.
+    Invoke-ProductionIdentityAz -Arguments @('version', '--output', 'json') | Out-Null
+    Invoke-ProductionIdentityAz -Arguments @('bicep', 'version') | Out-Null
+    $account = Invoke-ProductionIdentityAz -Arguments @(
+        'account', 'show', '--subscription', $SubscriptionId, '--output', 'json'
+    ) | ConvertFrom-Json
+    if ($account.id -ne $SubscriptionId -or $account.state -ne 'Enabled' -or
+        [string]::IsNullOrWhiteSpace($account.tenantId)) {
+        throw "An authenticated, enabled context for subscription '$SubscriptionId' is required."
+    }
+    # A cached subscription entry alone does not demonstrate a usable credential.
+    # Suppress the token completely: none of the command's outputs contain secrets.
+    Invoke-ProductionIdentityAz -Arguments @(
+        'account', 'get-access-token', '--subscription', $SubscriptionId,
+        '--query', 'expires_on', '--output', 'tsv'
+    ) | Out-Null
+
+    $principalId = ''
+    if ($CurrentUser) {
+        if (-not $account.PSObject.Properties['user'] -or $account.user.type -ne 'user') {
+            throw "CurrentUser requires Azure CLI to be signed in as a user for subscription '$SubscriptionId'. Sign in with az login --tenant $($account.tenantId), or supply an explicit custom principal."
+        }
+        # Directory lookup uses the active CLI context; its command has no
+        # subscription selector. Check it instead of changing the user's default
+        # or handling a raw access token. This also selects the correct guest object.
+        # Ref: README.md, "Deploy".
+        $activeAccount = Invoke-ProductionIdentityAz -Arguments @(
+            'account', 'show', '--output', 'json'
+        ) | ConvertFrom-Json
+        if ($activeAccount.id -ne $SubscriptionId -or $activeAccount.tenantId -ne $account.tenantId) {
+            throw "CurrentUser requires the selected subscription to be active for directory lookup. Run az account set --subscription $SubscriptionId, then retry. No Azure resources were changed."
+        }
+        Write-Verbose "Resolving the signed-in user in tenant '$($account.tenantId)' through subscription '$SubscriptionId' before any Azure changes."
+        $principalId = Invoke-ProductionIdentityAz -Arguments @(
+            'ad', 'signed-in-user', 'show', '--query', 'id', '--output', 'tsv'
+        )
+        $principalGuid = [guid]::Empty
+        if (-not [guid]::TryParseExact($principalId, 'D', [ref] $principalGuid) -or
+            $principalGuid -eq [guid]::Empty) {
+            throw "Could not resolve the signed-in user's Entra object ID in tenant '$($account.tenantId)'. No Azure resources were changed."
+        }
+    }
+    return [pscustomobject]@{ CurrentUserPrincipalId = $principalId }
+}
+
+# Shared native-call boundary for provisioning and preflight. Keeping Azure stdout
+# separate from stderr lets callers parse JSON/IDs while retaining operation and
+# exit diagnostics on failure, without interpreting a failed probe as absence.
 function Invoke-ProductionIdentityAz {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]] $Arguments)
@@ -145,4 +198,4 @@ function Invoke-ProductionIdentityAz {
     }
 }
 
-Export-ModuleMember -Function Invoke-ProductionIdentityDeployment
+Export-ModuleMember -Function Invoke-ProductionIdentityDeployment, Get-AzureDeploymentContext

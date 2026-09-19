@@ -120,6 +120,19 @@ validate-scripts:
 hack:
     cargo hack check {{ target_package }} --feature-powerset --locked
 
+# Offline compiler/type-catalog checks own Bicep semantics; no Azure authentication or deployment.
+# Ref: docs/build-and-tooling.md#bicep-validation.
+[group('quality')]
+[script]
+validate-bicep:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/build/Bicep.psm1 -Force
+    Invoke-BicepValidation -RepositoryRoot "{{justfile_directory()}}" -Version $env:BICEP_VERSION `
+        -DiagnosticsDirectory (Join-Path "{{justfile_directory()}}" 'target/bicep-validation')
+
 [group('quality')]
 machete:
     cargo machete --skip-target-dir
@@ -246,6 +259,7 @@ validate-local:
     just package="{{ package }}" validate-workflows
     just package="{{ package }}" validate-binstall
     just package="{{ package }}" validate-scripts
+    just package="{{ package }}" validate-bicep
     just package="{{ package }}" check dev
     just package="{{ package }}" clippy dev
     just package="{{ package }}" test

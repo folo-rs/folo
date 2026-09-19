@@ -1,3 +1,5 @@
+//! Report-state publication, ownership guards and ambiguous-create recovery over GitHub operations.
+
 mod comment;
 mod discovery;
 mod issue;

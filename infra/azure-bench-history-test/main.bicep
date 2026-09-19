@@ -8,7 +8,7 @@
 //     federated credentials, so GitHub Actions can sign in without a stored
 //     secret;
 //   * `Storage Blob Data Contributor` role assignments on the account for the
-//     managed identity and (optionally) a local developer principal.
+//     managed identity and (optionally) an additional user or group.
 //
 // Everything is idempotent and fully described here, so the resource group can be
 // torn down (`teardown.ps1`) and re-created at will.
@@ -35,18 +35,18 @@ param githubBranches array = [
   'main'
 ]
 
-@description('Whether to trust pull-request workflow runs from the same repository.')
+@description('Whether to trust the repository pull_request subject; workflows must gate out fork heads.')
 param trustPullRequests bool = true
 
-@description('Object id of a local developer principal (user or group) to grant data access. Empty skips the grant.')
-param localPrincipalId string = ''
+@description('Object ID of an existing additional Entra user or group to grant data access. Empty skips the grant.')
+param customPrincipalId string = ''
 
-@description('Type of the local developer principal.')
+@description('Type of the custom principal.')
 @allowed([
   'User'
   'Group'
 ])
-param localPrincipalType string = 'User'
+param customPrincipalType string = 'User'
 
 // `Storage Blob Data Contributor`: read/write/delete blobs AND create/delete
 // containers via the data plane, so the tool's `run` (which creates the
@@ -77,7 +77,7 @@ var pullRequestCredential = trustPullRequests
   : []
 var federatedCredentials = concat(branchCredentials, pullRequestCredential)
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageAccountName
   location: location
   sku: {
@@ -98,7 +98,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 // Disable container/blob soft delete so a deleted test container is gone
 // immediately and its name can be reused without colliding with a soft-deleted
 // remnant.
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storageAccount
   name: 'default'
   properties: {
@@ -111,7 +111,7 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   }
 }
 
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: managedIdentityName
   location: location
 }
@@ -122,7 +122,7 @@ resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 // collection (they conflict). `@batchSize(1)` serialises the loop so each
 // credential is created only after the previous one finishes.
 @batchSize(1)
-resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = [
+resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2024-11-30' = [
   for credential in federatedCredentials: {
     parent: managedIdentity
     name: credential.name
@@ -146,13 +146,13 @@ resource managedIdentityBlobRole 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
-resource localPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(localPrincipalId)) {
-  name: guid(storageAccount.id, localPrincipalId, blobDataContributorRoleId)
+resource customPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(customPrincipalId)) {
+  name: guid(storageAccount.id, customPrincipalId, blobDataContributorRoleId)
   scope: storageAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
-    principalId: localPrincipalId
-    principalType: localPrincipalType
+    principalId: customPrincipalId
+    principalType: customPrincipalType
   }
 }
 

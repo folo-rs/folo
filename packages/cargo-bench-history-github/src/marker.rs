@@ -1,6 +1,7 @@
 use crate::cli::{PendingArgs, RunArgs};
 use crate::model::{CommitSha, Instance, IssueKind};
 
+/// Identifies an issue body after title-based discovery selects its repository-scoped candidate.
 pub(crate) fn issue(instance: &Instance, kind: IssueKind) -> String {
     format!(
         "<!-- cargo-bench-history:{}:issue:{} -->",
@@ -9,6 +10,7 @@ pub(crate) fn issue(instance: &Instance, kind: IssueKind) -> String {
     )
 }
 
+/// Names the rolling comment that discovery selects within one pull request.
 pub(crate) fn pr_comment(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:pr-comment -->",
@@ -16,6 +18,7 @@ pub(crate) fn pr_comment(instance: &Instance) -> String {
     )
 }
 
+/// Records the report's measured commit independently of later pending-work annotations.
 pub(crate) fn analyzed_sha(instance: &Instance, sha: &CommitSha) -> String {
     format!(
         "<!-- cargo-bench-history:{}:analyzed-sha:{} -->",
@@ -24,6 +27,7 @@ pub(crate) fn analyzed_sha(instance: &Instance, sha: &CommitSha) -> String {
     )
 }
 
+/// Marks an unfinished PR placeholder that only its owning run may retire as failed.
 pub(crate) fn in_progress(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:in-progress -->",
@@ -31,6 +35,7 @@ pub(crate) fn in_progress(instance: &Instance) -> String {
     )
 }
 
+/// Records run, attempt and frozen head for lifecycle ownership checks.
 pub(crate) fn run_owner(instance: &Instance, owner: &PendingArgs) -> String {
     format!(
         "<!-- cargo-bench-history:{}:run:{}:{}:{} -->",
@@ -41,6 +46,7 @@ pub(crate) fn run_owner(instance: &Instance, owner: &PendingArgs) -> String {
     )
 }
 
+/// Recovers one coherent ownership record without assigning chronology to distinct run IDs.
 pub(crate) fn find_owner(body: &str, instance: &Instance) -> Option<PendingArgs> {
     let value = unique_value(body, instance, "run")?;
     let mut parts = value.split(':');
@@ -54,6 +60,7 @@ pub(crate) fn find_owner(body: &str, instance: &Instance) -> Option<PendingArgs>
     parts.next().is_none().then_some(owner)
 }
 
+/// Carries the validated report or annotation state for subsequent lifecycle interpretation.
 pub(crate) fn state(instance: &Instance, state: &str) -> String {
     format!(
         "<!-- cargo-bench-history:{}:state:{state} -->",
@@ -61,15 +68,18 @@ pub(crate) fn state(instance: &Instance, state: &str) -> String {
     )
 }
 
+/// Reads a unique state value; callers decide whether that state is legal for the body kind.
 pub(crate) fn find_state<'a>(body: &'a str, instance: &Instance) -> Option<&'a str> {
     unique_value(body, instance, "state")
 }
 
+/// Detects even malformed value-bearing metadata when note/report states must remain separate.
 pub(crate) fn has_value(body: &str, instance: &Instance, key: &str) -> bool {
     let prefix = value_prefix(instance, key);
     body.lines().any(|line| line.starts_with(&prefix))
 }
 
+/// Opens the owned status block that issue updates may replace without rewriting the report.
 pub(crate) fn annotation_start(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:annotation:start -->",
@@ -77,6 +87,7 @@ pub(crate) fn annotation_start(instance: &Instance) -> String {
     )
 }
 
+/// Closes the owned issue annotation so lifecycle parsing can preserve the report separately.
 pub(crate) fn annotation_end(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:annotation:end -->",
@@ -84,6 +95,7 @@ pub(crate) fn annotation_end(instance: &Instance) -> String {
     )
 }
 
+/// Binds a one-off alert body to the workflow run identified by its title.
 pub(crate) fn alert_run(instance: &Instance, run_id: u64) -> String {
     format!(
         "<!-- cargo-bench-history:{}:alert-run:{run_id} -->",
@@ -91,6 +103,7 @@ pub(crate) fn alert_run(instance: &Instance, run_id: u64) -> String {
     )
 }
 
+/// Identifies an explicit no-benchmarkable-packages PR note, not a missing report.
 pub(crate) fn empty_scope(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:empty-scope -->",
@@ -98,10 +111,12 @@ pub(crate) fn empty_scope(instance: &Instance) -> String {
     )
 }
 
+/// Identifies a terminal PR execution notice that later preflight may replace.
 pub(crate) fn failed(instance: &Instance) -> String {
     format!("<!-- cargo-bench-history:{}:failed -->", instance.as_str())
 }
 
+/// Opens the replaceable warning block without changing the report's ownership metadata.
 pub(crate) fn stale_start(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:stale:start -->",
@@ -109,6 +124,7 @@ pub(crate) fn stale_start(instance: &Instance) -> String {
     )
 }
 
+/// Closes the warning block used by staleness-banner replacement.
 pub(crate) fn stale_end(instance: &Instance) -> String {
     format!(
         "<!-- cargo-bench-history:{}:stale:end -->",
@@ -116,10 +132,12 @@ pub(crate) fn stale_end(instance: &Instance) -> String {
     )
 }
 
+/// Reads the uniquely recorded measured commit used by freshness guards.
 pub(crate) fn find_analyzed_sha(body: &str, instance: &Instance) -> Option<CommitSha> {
     unique_value(body, instance, "analyzed-sha")?.parse().ok()
 }
 
+/// Treats malformed or repeated metadata as unusable rather than choosing an arbitrary value.
 fn unique_value<'a>(body: &'a str, instance: &Instance, key: &str) -> Option<&'a str> {
     let prefix = value_prefix(instance, key);
     let mut values = body.lines().filter_map(|line| line.strip_prefix(&prefix));
@@ -127,6 +145,7 @@ fn unique_value<'a>(body: &'a str, instance: &Instance, key: &str) -> Option<&'a
     values.next().is_none().then_some(value)
 }
 
+/// Keeps metadata readers and writers on the same project-qualified marker namespace.
 fn value_prefix(instance: &Instance, key: &str) -> String {
     format!("<!-- cargo-bench-history:{}:{key}:", instance.as_str())
 }

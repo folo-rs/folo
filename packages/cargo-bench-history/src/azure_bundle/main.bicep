@@ -35,15 +35,15 @@ param githubRepo string
 @minLength(1)
 param historyBranch string
 
-@description('Object id of a local developer principal (user or group) to grant data access. Empty skips the grant.')
-param localPrincipalId string = ''
+@description('Object ID of an existing additional Entra user or group to grant data access. Empty skips the grant.')
+param customPrincipalId string = ''
 
-@description('Type of the local developer principal.')
+@description('Type of the custom principal.')
 @allowed([
   'User'
   'Group'
 ])
-param localPrincipalType string = 'User'
+param customPrincipalType string = 'User'
 
 // `Storage Blob Data Contributor`: read/write/delete blobs AND create/delete
 // containers via the data plane, so the tool's `run` (which creates the
@@ -79,7 +79,7 @@ module storageBootstrap './storage-bootstrap.bicep' = if (createStorageAccount) 
   }
 }
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' existing = {
   name: storageAccountName
 }
 
@@ -94,7 +94,7 @@ module containerBootstrap './container-bootstrap.bicep' = if (createHistoryConta
   ]
 }
 
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: managedIdentityName
   location: location
 }
@@ -105,7 +105,7 @@ resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 // collection (they conflict). `@batchSize(1)` serialises the loop so each
 // credential is created only after the previous one finishes.
 @batchSize(1)
-resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = [
+resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2024-11-30' = [
   for credential in credentials: {
     parent: managedIdentity
     name: credential.name
@@ -132,13 +132,13 @@ resource managedIdentityBlobRole 'Microsoft.Authorization/roleAssignments@2022-0
   ]
 }
 
-resource localPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(localPrincipalId)) {
-  name: guid(storageAccount.id, localPrincipalId, blobDataContributorRoleId)
+resource customPrincipalBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(customPrincipalId)) {
+  name: guid(storageAccount.id, customPrincipalId, blobDataContributorRoleId)
   scope: storageAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
-    principalId: localPrincipalId
-    principalType: localPrincipalType
+    principalId: customPrincipalId
+    principalType: customPrincipalType
   }
   dependsOn: [
     storageBootstrap

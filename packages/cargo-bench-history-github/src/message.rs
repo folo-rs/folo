@@ -10,6 +10,7 @@ const WARNING_HEADING: &str = "> [!WARNING]";
 const DOCUMENTATION_URL: &str = "https://folo-rs.github.io/folo/cargo-bench-history/";
 const ADVISORY: &str = "Benchmark results are advisory and do not block merging.";
 
+/// Wraps validated history evidence and the caller-paired summary in the rolling issue body.
 pub(crate) fn regression_issue(
     instance: &Instance,
     owner: &PendingArgs,
@@ -35,6 +36,7 @@ pub(crate) fn regression_issue(
     join_sections(sections)
 }
 
+/// Builds the independent run-failure alert, without claiming an analysis verdict or recovery.
 pub(crate) fn failure_issue(instance: &Instance, run_id: u64, run_url: &str) -> String {
     let mut sections = vec![
         marker::issue(instance, IssueKind::FailureAlert),
@@ -48,6 +50,9 @@ pub(crate) fn failure_issue(instance: &Instance, run_id: u64, run_url: &str) -> 
     join_sections(sections)
 }
 
+/// Composes a PR result with ownership, measured commit and disclosed collection scope.
+///
+/// The summary remains tool-owned prose; finish-side freshness is applied by the lifecycle.
 pub(crate) fn pr_result(
     instance: &Instance,
     owner: &PendingArgs,
@@ -75,6 +80,7 @@ pub(crate) fn pr_result(
     join_sections(sections)
 }
 
+/// Seeds the owned placeholder for a nonempty package scope while collection is pending.
 pub(crate) fn pr_in_progress(instance: &Instance, packages: &str, owner: &PendingArgs) -> String {
     join_sections(vec![
         marker::pr_comment(instance),
@@ -86,6 +92,7 @@ pub(crate) fn pr_in_progress(instance: &Instance, packages: &str, owner: &Pendin
     ])
 }
 
+/// Explains an explicit scope-selection result even when no rolling comment previously existed.
 pub(crate) fn pr_nothing_in_scope(instance: &Instance, owner: &PendingArgs) -> String {
     join_sections(vec![
         marker::pr_comment(instance),
@@ -96,6 +103,7 @@ pub(crate) fn pr_nothing_in_scope(instance: &Instance, owner: &PendingArgs) -> S
     ])
 }
 
+/// Replaces an owned unfinished PR placeholder with its terminal execution notice.
 pub(crate) fn pr_failed(
     instance: &Instance,
     owner: &PendingArgs,
@@ -112,6 +120,7 @@ pub(crate) fn pr_failed(
     ])
 }
 
+/// Keeps cancellation distinct from failure in terminal messages shared by both sinks.
 pub(crate) fn failure_notice(conclusion: Conclusion) -> &'static str {
     match conclusion {
         Conclusion::Failure => "Benchmarking failed; no completed analysis verdict is available.",
@@ -121,6 +130,7 @@ pub(crate) fn failure_notice(conclusion: Conclusion) -> &'static str {
     }
 }
 
+/// Explains an inconclusive history analysis while its previous issue report remains intact.
 pub(crate) fn no_data_details(
     evidence: &Evidence,
     summary: &str,
@@ -136,6 +146,7 @@ pub(crate) fn no_data_details(
     join_sections(sections)
 }
 
+/// Describes known stale attribution with a verified distance or an explicit unknown distance.
 pub(crate) fn stale_warning(distance: Option<u64>) -> String {
     match distance {
         Some(commits) => {
@@ -146,10 +157,15 @@ pub(crate) fn stale_warning(distance: Option<u64>) -> String {
     }
 }
 
+/// Qualifies publication when the live-head lookup cannot establish freshness at all.
 pub(crate) fn freshness_unverified(subject: &str) -> String {
     format!("{subject} freshness could not be verified.")
 }
 
+/// Replaces complete owned warning blocks while preserving the surrounding report.
+///
+/// Preflight and finish-side publication share this operation. An unterminated block does not
+/// authorize dropping the rest of the body.
 pub(crate) fn insert_stale_banner(body: &str, instance: &Instance, warning: &str) -> String {
     let start = marker::stale_start(instance);
     let end = marker::stale_end(instance);
@@ -194,11 +210,13 @@ pub(crate) fn insert_stale_banner(body: &str, instance: &Instance, warning: &str
     without_old.join("\n")
 }
 
+/// Identifies placeholders eligible for exact-owner failed-state retirement.
 pub(crate) fn is_in_progress(body: &str, instance: &Instance) -> bool {
     let in_progress = marker::in_progress(instance);
     body.lines().any(|line| line == in_progress)
 }
 
+/// Distinguishes restartable execution/scope notes from completed report bodies.
 pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
     let empty_scope = marker::empty_scope(instance);
     let failed = marker::failed(instance);
@@ -206,6 +224,7 @@ pub(crate) fn is_terminal_note(body: &str, instance: &Instance) -> bool {
         .any(|line| line == empty_scope || line == failed)
 }
 
+/// Adds coverage qualifications and the outcome headline without replacing domain prose.
 fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
     let outcome = evidence.report.outcome;
     if !evidence.platforms.is_complete() {
@@ -235,6 +254,7 @@ fn push_result_status(sections: &mut Vec<String>, evidence: &Evidence) {
     sections.push(headline.to_owned());
 }
 
+/// Renders the package selection consistently across pending and completed PR comments.
 fn format_scope(packages: &str) -> String {
     let packages = packages
         .split(',')
@@ -246,6 +266,7 @@ fn format_scope(packages: &str) -> String {
     format!("Packages benchmarked: {packages}")
 }
 
+/// Adds the optional report artifact and the fixed reading guide to standard messages.
 fn push_links(sections: &mut Vec<String>, artifact_url: Option<&str>) {
     if let Some(url) = artifact_url {
         sections.push(format!("[Download the full report bundle]({url})"));
@@ -253,6 +274,7 @@ fn push_links(sections: &mut Vec<String>, artifact_url: Option<&str>) {
     sections.push(format!("[How to read this report]({DOCUMENTATION_URL})"));
 }
 
+/// Assembles optional message sections without introducing empty presentation blocks.
 fn join_sections(sections: Vec<String>) -> String {
     sections
         .into_iter()

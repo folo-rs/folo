@@ -18,6 +18,7 @@ use crate::workflow::receipt::{InvalidMachineKey, Receipt, machine_key, validate
 use crate::workflow::reconcile::{Selection, reconcile};
 
 // File-backed command adapters are covered natively; their transformations are pure unit targets.
+/// Runs offline matrix setup and appends the common platform and job-identity outputs.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn workflow_matrix(
     instance: &Instance,
@@ -36,6 +37,10 @@ pub(crate) fn workflow_matrix(
     Ok(())
 }
 
+/// Records a caller-confirmed successful collection with its captured hardware fingerprint.
+///
+/// The caller invokes this after collection; this operation does not run benchmarks or copy
+/// measurement storage. A new receipt file is the artifact consumed by preparation.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn collection_receipt(context: &Context, args: CollectionArgs) -> Result<(), AppError> {
     validate_platform(&args.platform)?;
@@ -60,6 +65,10 @@ pub(crate) fn collection_receipt(context: &Context, args: CollectionArgs) -> Res
     Ok(())
 }
 
+/// Loads analysis metadata and emits the publication decision without constructing a client.
+///
+/// Inspection shares evidence validation with publication and keeps its output file separate
+/// from the report it reads.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn inspect_report(args: InspectArgs) -> Result<(), AppError> {
     let report = canonical_file(&args.evidence.report_file)?;
@@ -69,6 +78,7 @@ pub(crate) async fn inspect_report(args: InspectArgs) -> Result<(), AppError> {
     append_outputs(&output, &report_outputs(&evidence))
 }
 
+/// Discovers every job attempt before preparing the analyzer's trusted collection inputs.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn prepare_analysis(
     github: &impl GitHub,
@@ -81,6 +91,10 @@ pub(crate) async fn prepare_analysis(
     prepare_from_jobs(context, &args, &jobs)
 }
 
+/// Materializes selected key files after receipt, job and destination validation completes.
+///
+/// Production supplies discovered jobs; native tests supply the same semantic records directly.
+/// Both use this filesystem orchestration, without copying measurement storage.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn prepare_from_jobs(
     context: &Context,
@@ -104,12 +118,14 @@ pub(crate) fn prepare_from_jobs(
     append_outputs(&output, &preparation_outputs(&selection, &receipts))
 }
 
+/// Keeps receipt inputs, generated keys and workflow outputs from overlapping.
 fn require_separate(source: &Path, keys: &Path, output: &Path) -> Result<(), AppError> {
     disjoint(source, keys)?;
     disjoint(source, output)?;
     disjoint(keys, output)
 }
 
+/// Applies the expected matrix to discovery evidence and explains the resulting selection.
 fn select_receipts(
     context: &Context,
     args: &PrepareArgs,

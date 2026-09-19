@@ -11,7 +11,7 @@ use std::io;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
 
-use cbh_command::{LocalPrincipalType, SetupAzureOptions};
+use cbh_command::{CustomPrincipalType, SetupAzureOptions};
 use cbh_diag::RecordingReporter;
 use futures::executor::block_on;
 use serde_json::{Value, from_str};
@@ -25,7 +25,7 @@ use crate::commands::setup_azure::execute::execute_with;
 use crate::commands::setup_azure::ports::{BundleFiles, ProcessOutput, SetupProcess};
 
 assert_impl_all!(SetupAzureOptions: UnwindSafe, RefUnwindSafe);
-assert_impl_all!(LocalPrincipalType: UnwindSafe, RefUnwindSafe);
+assert_impl_all!(CustomPrincipalType: UnwindSafe, RefUnwindSafe);
 
 /// In-memory bundle ownership with ordered events shared by the process fake.
 #[derive(Default)]
@@ -157,8 +157,8 @@ fn export_bypasses_every_process_and_temporary_operation() {
 fn supplied_parameters_are_literal_json_data() {
     let mut options = options();
     options.resource_group = Some("group'\"$()\\value".into());
-    options.local_principal_id = Some("local-id".into());
-    options.local_principal_type = Some(LocalPrincipalType::Group);
+    options.custom_principal_id = Some("custom-id".into());
+    options.custom_principal_type = Some(CustomPrincipalType::Group);
     options.managed_identity = Some("custom-identity".into());
     options.container = Some("custom-history".into());
     let files = prepare(&options).unwrap();
@@ -171,8 +171,8 @@ fn supplied_parameters_are_literal_json_data() {
     )
     .unwrap();
     assert_eq!(parameters["ResourceGroup"], "group'\"$()\\value");
-    assert_eq!(parameters["LocalPrincipalType"], "Group");
-    assert_eq!(parameters["LocalPrincipalId"], "local-id");
+    assert_eq!(parameters["CustomPrincipalType"], "Group");
+    assert_eq!(parameters["CustomPrincipalId"], "custom-id");
     assert_eq!(parameters["ManagedIdentityName"], "custom-identity");
     assert_eq!(parameters["HistoryContainerName"], "custom-history");
     assert_eq!(parameters["HistoryBranch"], "main");
@@ -348,7 +348,7 @@ fn missing_execute_parameter_is_rejected_before_any_io() {
 }
 
 #[test]
-fn invalid_names_and_partial_local_access_are_rejected() {
+fn invalid_names_and_partial_custom_access_are_rejected() {
     for account in ["ab", "UPPER", "with-hyphen", "accountnameistoolongforazure"] {
         let mut options = options();
         options.storage_account = Some(account.into());
@@ -361,11 +361,78 @@ fn invalid_names_and_partial_local_access_are_rejected() {
         prepare(&options).unwrap_err();
     }
     let mut options = options();
-    options.local_principal_id = Some("id".into());
+    options.custom_principal_id = Some("id".into());
     prepare(&options).unwrap_err();
-    options.local_principal_id = None;
-    options.local_principal_type = Some(LocalPrincipalType::User);
+    options.custom_principal_id = None;
+    options.custom_principal_type = Some(CustomPrincipalType::User);
     prepare(&options).unwrap_err();
+}
+
+#[test]
+fn current_user_is_a_driver_switch_not_an_exported_identity() {
+    let files = FakeFiles::default();
+    let process = process(&files, vec![output(true, "", ""), output(true, "", "")]);
+    let mut options = options();
+    options.current_user = true;
+    block_on(execute_with(
+        &options,
+        Path::new("invocation"),
+        &files,
+        &process,
+        &RecordingReporter::new(),
+    ))
+    .unwrap();
+    assert_eq!(
+        *files.events.borrow(),
+        ["process", "temporary", "populate", "process", "cleanup"]
+    );
+    assert_eq!(
+        process.arguments.borrow()[1].last(),
+        Some(&OsString::from("-CurrentUser"))
+    );
+    let parameters: Value = from_str(&files.files.borrow()["parameters.json"]).unwrap();
+    assert!(parameters["CustomPrincipalId"].is_null());
+    assert!(parameters["CustomPrincipalType"].is_null());
+}
+
+#[test]
+fn current_user_conflicts_fail_before_any_io() {
+    for conflict in [
+        SetupAzureOptions {
+            out_dir: Some("export".into()),
+            ..options()
+        },
+        SetupAzureOptions {
+            custom_principal_id: Some("principal".into()),
+            ..options()
+        },
+        SetupAzureOptions {
+            custom_principal_type: Some(CustomPrincipalType::User),
+            ..options()
+        },
+    ] {
+        let files = FakeFiles::default();
+        let process = process(&files, vec![]);
+        let error = block_on(execute_with(
+            &SetupAzureOptions {
+                current_user: true,
+                ..conflict
+            },
+            Path::new("invocation"),
+            &files,
+            &process,
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error
+                .find_source::<SetupParameterError>()
+                .unwrap()
+                .parameter,
+            "CurrentUser"
+        );
+        assert!(files.events.borrow().is_empty());
+    }
 }
 
 #[test]

@@ -3,16 +3,16 @@
 param storageAccountName string
 param historyContainerName string
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' existing = {
   name: storageAccountName
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' existing = {
   parent: storageAccount
   name: 'default'
 }
 
-resource historyContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource historyContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   parent: blobService
   name: historyContainerName
   properties: {

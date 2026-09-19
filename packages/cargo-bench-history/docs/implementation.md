@@ -118,8 +118,16 @@ and PR federation.
 Rust owns parameter validation, the PowerShell prerequisite, bundle materialization, process
 invocation and output/error handling, not a second implementation of those Azure decisions.
 The standalone driver verifies Azure CLI, installed Bicep and an authenticated enabled
-subscription (including token acquisition) before any resource mutation. JSON parameter
+subscription (including token acquisition) before any resource mutation. Its shared preflight
+also serves Folo's throwaway test deployment, which retains separate Bicep resource definitions
+and storage lifecycle. Current-user resolution checks that the active Azure CLI subscription
+and tenant match the explicit target before calling `az ad signed-in-user show`, whose
+directory lookup uses the active context. A mismatch reports how to select that subscription;
+the driver does not change persisted CLI defaults or handle raw secret tokens.
+The user account check and object-ID validation precede resource-group creation.
+JSON parameter
 values remain literal data; script flags may explicitly override them for standalone use.
+The current-user switch is execution-only, not a new value type in the exported parameter file.
 Callers serialize invocations sharing a storage account or managed identity because discovery
 and subsequent writes address those shared resources, including the identity's
 federated-credential collection. Unique Azure deployment names do not coordinate these writes.

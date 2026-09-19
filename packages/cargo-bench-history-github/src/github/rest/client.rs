@@ -40,6 +40,9 @@ impl<H: fmt::Debug> fmt::Debug for RestGitHub<H> {
 }
 
 impl RestGitHub {
+    /// Constructs the live publisher after a command has established that it needs GitHub access.
+    ///
+    /// Workflow-style credentials take precedence over the GitHub CLI-compatible fallback name.
     pub(crate) fn from_env() -> Result<Self, AppError> {
         let token = SecretToken::select(env::var("GITHUB_TOKEN").ok(), env::var("GH_TOKEN").ok())?;
         Ok(Self::new(ReqwestHttp::new()?, token, DEFAULT_PAGE_SIZE))
@@ -47,6 +50,7 @@ impl RestGitHub {
 }
 
 impl<H: Http> RestGitHub<H> {
+    /// Supplies a transport and discovery page size for the same real and scripted REST policy.
     pub(crate) fn new(http: H, token: SecretToken, page_size: NonZero<usize>) -> Self {
         Self {
             http,
@@ -55,6 +59,7 @@ impl<H: Http> RestGitHub<H> {
         }
     }
 
+    /// Builds an authenticated repository-scoped request without executing or retrying it.
     pub(crate) fn request(
         &self,
         method: Method,
@@ -92,6 +97,7 @@ impl<H: Http> RestGitHub<H> {
         Ok(request)
     }
 
+    /// Adds a buffered JSON body that the idempotent sender can clone across permitted retries.
     fn json_request(
         &self,
         method: Method,
@@ -109,6 +115,7 @@ impl<H: Http> RestGitHub<H> {
         Ok(request)
     }
 
+    /// Decodes a successful exchange into the wire type selected by the semantic operation.
     pub(crate) async fn send_json<T: DeserializeOwned>(
         &self,
         operation: &str,
@@ -119,11 +126,16 @@ impl<H: Http> RestGitHub<H> {
             .map_err(|error| InvalidResponseError::caused_by(operation, error).into())
     }
 
+    /// Completes a known-artifact update whose response content is not part of lifecycle state.
     async fn send_empty(&self, operation: &str, request: Request) -> Result<(), AppError> {
         _ = self.send(operation, request).await?;
         Ok(())
     }
 
+    /// Owns method-aware retry policy and credential-safe failure diagnostics.
+    ///
+    /// Only reads and updates may retry here. Creates return uncertainty to lifecycle
+    /// reconciliation instead of risking a duplicate artifact.
     async fn send(&self, operation: &str, request: Request) -> Result<HttpResponse, AppError> {
         // A POST may already have created its artifact even when the response was lost.
         let retry_safe = matches!(*request.method(), Method::GET | Method::PATCH);
@@ -167,6 +179,10 @@ impl<H: Http> RestGitHub<H> {
         }
     }
 
+    /// Reads complete list-style discovery while rejecting repeated identities and bad progress.
+    ///
+    /// Absence from a partial comment list cannot authorize creation. Search and job envelopes
+    /// use their own total-count checks rather than this plain-list adapter.
     async fn paginate<T: DeserializeOwned>(
         &self,
         operation: &str,
@@ -205,6 +221,7 @@ impl<H: Http> RestGitHub<H> {
 }
 
 impl<H: Http> GitHub for RestGitHub<H> {
+    /// Connects collection preparation to complete, all-attempt job discovery.
     async fn workflow_jobs(
         &self,
         repository: &Repository,
@@ -213,6 +230,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         self.list_jobs(repository, run_id).await
     }
 
+    /// Connects reserved-title lifecycle discovery to the search-envelope adapter.
     async fn search_issues(
         &self,
         repository: &Repository,
@@ -222,6 +240,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         self.search(repository, phrase, include_closed).await
     }
 
+    /// Rechecks the chosen issue identity using current data rather than indexed search content.
     async fn read_issue(&self, repository: &Repository, number: u64) -> Result<Issue, AppError> {
         let number = artifact_id(number)?;
         let operation = "reading an issue";
@@ -233,6 +252,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         Ok(value.into())
     }
 
+    /// Attempts the single POST whose uncertainty is handled by lifecycle reconciliation.
     async fn create_issue(
         &self,
         repository: &Repository,
@@ -253,6 +273,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         Ok(value.into())
     }
 
+    /// Sends the captured title/body update without changing the issue's open/closed state.
     async fn update_issue(
         &self,
         repository: &Repository,
@@ -270,6 +291,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         self.send_empty("updating an issue", request).await
     }
 
+    /// Supplies complete current PR comment bodies for unique marker-based discovery.
     async fn comments(
         &self,
         repository: &Repository,
@@ -291,6 +313,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         Ok(values.into_iter().map(Comment::from).collect())
     }
 
+    /// Attempts a comment POST without an adapter-level retry that could duplicate publication.
     async fn create_comment(
         &self,
         repository: &Repository,
@@ -310,6 +333,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         Ok(value.into())
     }
 
+    /// Applies the lifecycle's chosen body at an already-known comment identity.
     async fn update_comment(
         &self,
         repository: &Repository,
@@ -327,6 +351,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
             .await
     }
 
+    /// Obtains the real current PR head for freeze and finish-side freshness checks.
     async fn pull_request_head(
         &self,
         repository: &Repository,
@@ -340,6 +365,7 @@ impl<H: Http> GitHub for RestGitHub<H> {
         value.head.sha.parse()
     }
 
+    /// Distinguishes unavailable commit evidence from other failures and validates the relationship.
     async fn compare(
         &self,
         repository: &Repository,
@@ -362,6 +388,9 @@ impl<H: Http> GitHub for RestGitHub<H> {
 pub(crate) struct SecretToken(String);
 
 impl SecretToken {
+    /// Chooses the first nonblank credential, preferring `GITHUB_TOKEN` over `GH_TOKEN`.
+    ///
+    /// Selection happens once at client creation; authorization failures do not switch tokens.
     pub(crate) fn select(
         primary: Option<String>,
         fallback: Option<String>,
@@ -373,6 +402,7 @@ impl SecretToken {
             .ok_or_else(|| MissingTokenError::new().into())
     }
 
+    /// Restricts raw credential access to request authorization and diagnostic redaction.
     fn expose(&self) -> &str {
         &self.0
     }
@@ -406,10 +436,12 @@ impl RefUnwindSafe for InvalidArtifactIdError {}
 const DEFAULT_PAGE_SIZE: NonZero<usize> =
     NonZero::new(100).expect("GitHub's maximum page size is nonzero");
 
+/// Reasserts positive artifact identity before constructing a REST path from semantic-port data.
 fn artifact_id(value: u64) -> Result<NonZero<u64>, AppError> {
     NonZero::new(value).ok_or_else(|| InvalidArtifactIdError::new().into())
 }
 
+/// Recognizes an unavailable comparison without converting unrelated API failures to absence.
 fn is_not_found(error: &AppError) -> bool {
     error
         .find_source::<UnexpectedStatusError>()

@@ -5,7 +5,7 @@ use ohno::AppError;
 
 use crate::errors::{InvalidCommitShaError, InvalidInstanceError, InvalidRepositoryError};
 
-/// A GitHub repository in `owner/name` form.
+/// Identifies one repository for scoped REST requests and lifecycle discovery.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Repository {
     owner: String,
@@ -25,6 +25,7 @@ impl Repository {
 impl FromStr for Repository {
     type Err = AppError;
 
+    /// Validates literal owner/name URL segments before they enter repository-scoped operations.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let Some((owner, name)) = value.split_once('/') else {
             return Err(InvalidRepositoryError::new(value).into());
@@ -53,7 +54,10 @@ impl fmt::Display for Repository {
     }
 }
 
-/// A namespace separating independent action instances in one repository.
+/// The project namespace separating report and workflow identities within a repository.
+///
+/// Action setup resolves storage identity through the core helpers; this type validates its
+/// marker-safe representation without defining another project-normalization rule.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Instance(String);
 
@@ -66,6 +70,7 @@ impl Instance {
 impl FromStr for Instance {
     type Err = AppError;
 
+    /// Accepts an internally resolved namespace for use in body markers and job identities.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value.is_empty()
             || !value
@@ -78,7 +83,7 @@ impl FromStr for Instance {
     }
 }
 
-/// A full Git commit ID used by report freshness markers.
+/// A full commit identity binding reports, collection receipts and ownership guards.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct CommitSha(String);
 
@@ -91,6 +96,7 @@ impl CommitSha {
 impl FromStr for CommitSha {
     type Err = AppError;
 
+    /// Normalizes full hexadecimal identities without resolving a ref or guessing a commit.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         const SHA_DIGITS: usize = 40;
 

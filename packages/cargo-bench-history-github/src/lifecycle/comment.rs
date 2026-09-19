@@ -10,6 +10,10 @@ use crate::operations::{Context, note};
 use crate::result::{AnalysisMode, PublicationState};
 use crate::{marker, message};
 
+/// Announces pending PR work while retaining completed results and their measured commit.
+///
+/// Dispatch supplies a frozen owner and package scope. The live-head check and same-run attempt
+/// guard prevent obsolete preflight from replacing the current comment's state.
 pub(crate) async fn comment_preflight(
     github: &impl GitHub,
     context: &Context,
@@ -65,6 +69,10 @@ pub(crate) async fn comment_preflight(
     write_comment(github, context, pull_request, existing, &body).await
 }
 
+/// Publishes a validated branch result after checking the comment's owner and live PR head.
+///
+/// Findings, clean and report-bearing no-data share this finish-side freshness policy.
+/// Distinct runs use commit relationships, not numeric run-ID or attempt ordering.
 pub(crate) async fn comment_report(
     github: &impl GitHub,
     context: &Context,
@@ -148,6 +156,10 @@ pub(crate) async fn comment_report(
     write_comment(github, context, pull_request, existing, &body).await
 }
 
+/// Routes inconclusive PR evidence or explicit empty scope through the corresponding lifecycle.
+///
+/// A report retains its limited result and freshness qualification. Empty scope instead names
+/// the live frozen head and carries no report whose absence could be mistaken for a verdict.
 pub(crate) async fn comment_no_data(
     github: &impl GitHub,
     context: &Context,
@@ -201,6 +213,10 @@ pub(crate) async fn comment_no_data(
     }
 }
 
+/// Retires only the unfinished PR placeholder owned by this run, attempt and head.
+///
+/// This records execution status without creating a failure comment or replacing completed
+/// results; one-off issue alerts are a separate operation.
 pub(crate) async fn comment_failed(
     github: &impl GitHub,
     context: &Context,
@@ -229,6 +245,7 @@ pub(crate) async fn comment_failed(
     write_comment(github, context, pull_request, Some(comment), &body).await
 }
 
+/// Enforces the nonempty scope disclosure required by report-bearing and pending PR messages.
 fn require_packages(packages: &str) -> Result<(), AppError> {
     if packages.split(',').any(|package| package.trim().is_empty()) {
         return Err(InvalidPublication::new().into());

@@ -9,6 +9,10 @@ use crate::marker;
 use crate::model::{CommitSha, Instance, IssueKind};
 use crate::operations::Context;
 
+/// Discovers one reserved issue identity and revalidates its directly read lifecycle body.
+///
+/// Lifecycle callers receive absence only after complete title discovery. Search candidates
+/// are locators, not authoritative body or state snapshots.
 pub(crate) async fn find_issue(
     github: &impl GitHub,
     context: &Context,
@@ -53,6 +57,9 @@ pub(crate) async fn find_issue(
     Ok(Some(issue))
 }
 
+/// Selects one coherent project-owned lifecycle comment within the requested PR conversation.
+///
+/// Ownership here is the design's reserved marker/metadata identity, not an author check.
 pub(crate) async fn find_comment(
     github: &impl GitHub,
     context: &Context,
@@ -74,6 +81,7 @@ pub(crate) async fn find_comment(
     Ok(first)
 }
 
+/// Distinguishes valid notes and reports before any discovered comment can be modified.
 fn require_comment_metadata(body: &str, instance: &Instance) -> Result<(), AppError> {
     let owner = marker::find_owner(body, instance).ok_or_else(UninterpretableComment::new)?;
     let identity = marker::pr_comment(instance);
@@ -107,6 +115,10 @@ fn require_comment_metadata(body: &str, instance: &Instance) -> Result<(), AppEr
     Ok(())
 }
 
+/// Performs one issue create and reconciles an ambiguous result without another create.
+///
+/// Reconciliation requires the intended identity and exact content, so another publication at
+/// the same title cannot be mistaken for this operation's success.
 pub(crate) async fn create_issue(
     github: &impl GitHub,
     context: &Context,
@@ -137,6 +149,10 @@ pub(crate) async fn create_issue(
     Err(error.enrich("bounded issue reconciliation could not establish that the create committed"))
 }
 
+/// Commits a lifecycle-selected comment body using update or one reconciled create.
+///
+/// Policy callers have already checked freshness and ownership. An identical body needs no
+/// write; an ambiguous create is resolved only by finding this same intended content.
 pub(crate) async fn write_comment(
     github: &impl GitHub,
     context: &Context,
@@ -167,6 +183,10 @@ pub(crate) async fn write_comment(
     }
 }
 
+/// Obtains commit-order evidence without turning a failed comparison into a numeric distance.
+///
+/// Lifecycle callers use the optional distance either to qualify retained reports or to require
+/// a verified forward advance before replacement.
 pub(crate) async fn compare_or_unknown(
     github: &impl GitHub,
     context: &Context,

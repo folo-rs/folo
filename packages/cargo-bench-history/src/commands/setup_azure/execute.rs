@@ -14,6 +14,10 @@ use crate::commands::setup_azure::ports::{
     BundleFiles, ProcessOutput, SetupProcess, TokioBundleFiles, TokioSetupProcess,
 };
 
+/// Connects command dispatch to the native bundle, process and diagnostic adapters.
+///
+/// The lifecycle lives in `execute_with`, letting native execution and in-process
+/// orchestration tests share the same export/deployment decisions.
 pub(crate) async fn execute(
     options: &SetupAzureOptions,
     working_directory: &Path,
@@ -30,6 +34,10 @@ pub(crate) async fn execute(
     .await
 }
 
+/// Runs export or deployment through the supplied filesystem and process ports.
+///
+/// Used by the native entry point and fake-driven tests. It owns bundle materialization,
+/// prerequisite ordering and cleanup; Azure resource policy stays in the standalone driver.
 pub(crate) async fn execute_with(
     options: &SetupAzureOptions,
     working_directory: &Path,
@@ -83,6 +91,9 @@ pub(crate) async fn execute_with(
             OsString::from("-ParametersFile"),
             path.join("parameters.json").into_os_string(),
         ];
+        if options.current_user {
+            arguments.push(OsString::from("-CurrentUser"));
+        }
         if options.verbose {
             arguments.push(OsString::from("-Verbose"));
         }
@@ -100,6 +111,10 @@ pub(crate) async fn execute_with(
     result.map(|message| RunOutcome::Completed { message })
 }
 
+/// Preserves child diagnostics at the shared prerequisite and deployment boundary.
+///
+/// Callers name the attempted operation so launch and exit failures remain actionable
+/// after bundle cleanup, with captured stdout and stderr attached to the application error.
 async fn run_process(
     process: &impl SetupProcess,
     arguments: &[OsString],

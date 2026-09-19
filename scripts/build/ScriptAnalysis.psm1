@@ -23,6 +23,7 @@ function Invoke-WorkspaceScriptAnalysis {
     # none loses analysis by living outside scripts/.
     foreach ($relativePath in @(
             'infra\azure-bench-history-prod',
+            'infra\azure-bench-history-test',
             'packages\cargo-bench-history\src\azure_bundle',
             'packages\cargo-bench-history\tests\fixtures'
         )) {

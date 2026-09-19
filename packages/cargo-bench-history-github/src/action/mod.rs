@@ -1,3 +1,5 @@
+//! Post-install action validation and planning over separately supplied native effects.
+
 mod args;
 mod artifact_path;
 mod environment;

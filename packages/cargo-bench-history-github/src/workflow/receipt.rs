@@ -20,6 +20,7 @@ pub(crate) struct Receipt {
 }
 
 impl Receipt {
+    /// Decodes artifact evidence before it can participate in job-attempt reconciliation.
     pub(crate) fn parse(json: &[u8]) -> Result<Self, AppError> {
         let raw: ReceiptWire = serde_json::from_slice(json).map_err(InvalidReceipt::caused_by)?;
         if raw.version != RECEIPT_VERSION {
@@ -37,6 +38,7 @@ impl Receipt {
         })
     }
 
+    /// Serializes validated collection identity for the receipt-only artifact handoff.
     pub(crate) fn encode(&self) -> Result<Vec<u8>, AppError> {
         serde_json::to_vec(&ReceiptWire {
             version: RECEIPT_VERSION,
@@ -69,6 +71,7 @@ struct ReceiptWire {
     machine_key: String,
 }
 
+/// Validates and normalizes a captured core fingerprint for receipts and analyzer filters.
 pub(crate) fn machine_key(value: &str) -> Result<String, AppError> {
     // The machine-key command prints the core tool's 64-bit hexadecimal fingerprint.
     const KEY_DIGITS: usize = 16;
@@ -78,6 +81,7 @@ pub(crate) fn machine_key(value: &str) -> Result<String, AppError> {
     Ok(value.to_ascii_lowercase())
 }
 
+/// Applies the shared identifier rule before a platform names a job or artifact directory.
 pub(crate) fn validate_platform(value: &str) -> Result<(), AppError> {
     if !is_platform_identifier(value) {
         return Err(InvalidCollectionPlatform::new().into());

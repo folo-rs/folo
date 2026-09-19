@@ -33,8 +33,11 @@ use crate::output_destination::destinations_conflict;
 /// strings and the binary hands them here, so the report rendering stays Miri-safe
 /// and an in-memory fake can stand in under test.
 pub(crate) trait OutputWriter {
-    /// Checks whether destinations alias or require one report to be another's directory,
-    /// without writing reports or creating their parent directories.
+    /// Checks for aliases and file/directory conflicts between report paths.
+    ///
+    /// Uses the same path resolution as [`Self::write`], without writing reports or creating
+    /// their parent directories. [`write_reports`] uses this before writing any format so
+    /// an incompatible destination pair rejects the complete output batch.
     fn destinations_conflict(
         &self,
         left: &Path,
@@ -66,6 +69,10 @@ impl TokioOutputWriter {
 }
 
 impl OutputWriter for TokioOutputWriter {
+    /// Runs native destination preflight off the async executor.
+    ///
+    /// Rebasing matches report writes, while the blocking task keeps filesystem identity
+    /// queries and name probes at the I/O edge rather than in the report orchestrator.
     // Filesystem identity is exercised by native command integration tests.
     #[cfg_attr(test, mutants::skip)]
     async fn destinations_conflict(&self, left: &Path, right: &Path) -> io::Result<bool> {
@@ -91,7 +98,11 @@ impl OutputWriter for TokioOutputWriter {
     }
 }
 
-/// Writes each rendered report to its requested destination path.
+/// Preflights and writes the complete set of requested report files.
+///
+/// Reporting command wrappers hand off one rendered batch here. This boundary owns
+/// set-wide conflict checking before any output is refreshed; the writer supplies the
+/// shared path-resolution rules for checking and writing.
 ///
 /// The `Some`-ness of each [`RenderedReports`] field is the single source of truth
 /// for what gets written for the optional report formats: `cbh_analyze` renders a

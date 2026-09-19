@@ -10,7 +10,10 @@ use serde::{Deserialize, Deserializer};
 use crate::action::errors::InvalidInput;
 use crate::result::PlatformCoverage;
 
-/// Command-specific, validated string inputs; bootstrap choices never enter this boundary.
+/// Validated post-install command inputs consumed by process and publication planning.
+///
+/// Installation selection belongs to the action bootstrap; this representation contains only
+/// inputs whose applicability and basic value forms have been checked for the chosen command.
 #[derive(Debug)]
 pub(crate) struct Inputs {
     pub(crate) command: ActionCommand,
@@ -18,6 +21,7 @@ pub(crate) struct Inputs {
 }
 
 impl Inputs {
+    /// Establishes command-specific validity before orchestration performs benchmark or I/O work.
     pub(crate) fn parse(json: &[u8]) -> Result<Self, AppError> {
         let InputObject(mut values) = serde_json::from_slice(json).map_err(|error| {
             InvalidInput::caused_by("inputs-file", "expected a string object", error)
@@ -37,15 +41,18 @@ impl Inputs {
         Ok(inputs)
     }
 
+    /// Exposes a supplied nonempty value without applying a command-independent default.
     pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }
 
+    /// Requires execution data that the selected planner cannot obtain from another source.
     pub(crate) fn required(&self, key: &str) -> Result<&str, AppError> {
         self.get(key)
             .ok_or_else(|| InvalidInput::new(key, "required").into())
     }
 
+    /// Resolves an action Boolean using the calling command's chosen default.
     pub(crate) fn boolean(&self, key: &str, default: bool) -> Result<bool, AppError> {
         match self.get(key) {
             None => Ok(default),
@@ -55,6 +62,7 @@ impl Inputs {
         }
     }
 
+    /// Produces individual argument values from a nonempty, comma-separated scope selection.
     pub(crate) fn list(&self, key: &str) -> Result<Vec<&str>, AppError> {
         self.get(key).map_or_else(
             || Ok(Vec::new()),
@@ -77,6 +85,7 @@ impl Inputs {
         )
     }
 
+    /// Keeps intended/completed platform evidence independent of measured-key deduplication.
     pub(crate) fn platforms(&self) -> Result<PlatformCoverage, AppError> {
         PlatformCoverage::parse(
             self.required("expected-platforms")?,
@@ -84,6 +93,7 @@ impl Inputs {
         )
     }
 
+    /// Checks the full selected input group, including state-specific report/scope requirements.
     fn validate(&self) -> Result<(), AppError> {
         for (key, value) in &self.values {
             if !self.command.accepts(key) {
@@ -185,6 +195,7 @@ impl Inputs {
         Ok(())
     }
 
+    /// Rejects simultaneous selections rather than silently choosing one planner interpretation.
     fn conflict(&self, left: &str, right: &str) -> Result<(), AppError> {
         if self.get(left).is_some() && self.get(right).is_some() {
             return Err(InvalidInput::new(left, format!("conflicts with {right}")).into());
@@ -205,10 +216,12 @@ pub(crate) enum ActionCommand {
 }
 
 impl ActionCommand {
+    /// Identifies publication inputs that must disclose a PR's benchmarked package scope.
     fn is_comment(self) -> bool {
         matches!(self, Self::Publish(Sink::Comment, _))
     }
 
+    /// Defines which supplied fields have meaning for each root command.
     fn accepts(self, key: &str) -> bool {
         if matches!(key, "command" | "working-directory" | "config") {
             return true;
@@ -251,6 +264,7 @@ impl ActionCommand {
 impl FromStr for ActionCommand {
     type Err = AppError;
 
+    /// Decodes the fixed root-stage vocabulary without adding aliases or a caller-selected mode.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "collect" => Ok(Self::Collect),
@@ -308,6 +322,7 @@ pub(crate) enum PublishState {
 }
 
 impl PublishState {
+    /// Identifies states that may require analysis evidence rather than only execution ownership.
     fn is_report(self) -> bool {
         matches!(self, Self::Findings | Self::Clean | Self::NoData)
     }
@@ -371,6 +386,7 @@ const ALL_INPUTS: &[&str] = &[
 struct InputObject(BTreeMap<String, String>);
 
 impl<'de> Deserialize<'de> for InputObject {
+    /// Selects object decoding so scalar and array inputs cannot bypass string-field validation.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_map(InputVisitor)
     }
@@ -389,6 +405,7 @@ impl<'de> Visitor<'de> for InputVisitor {
         formatter.write_str("an object with unique keys and string values")
     }
 
+    /// Preserves duplicate-key detection before the raw string object becomes validated inputs.
     fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
         let mut values = BTreeMap::new();
         while let Some((key, value)) = map.next_entry::<String, String>()? {

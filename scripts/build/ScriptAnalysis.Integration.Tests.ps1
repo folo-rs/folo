@@ -72,6 +72,7 @@ foreach ($target in $Target) { $target }
 
     It 'applies configured rules to script outside the scripts tree <RelativePath>' -ForEach @(
         @{ RelativePath = 'infra\azure-bench-history-prod\wrapper-rule-canary.ps1' },
+        @{ RelativePath = 'infra\azure-bench-history-test\wrapper-rule-canary.ps1' },
         @{ RelativePath = 'packages\cargo-bench-history\src\azure_bundle\bundled-rule-canary.ps1' },
         @{ RelativePath = 'packages\cargo-bench-history\tests\fixtures\native-rule-canary.ps1' }
     ) {

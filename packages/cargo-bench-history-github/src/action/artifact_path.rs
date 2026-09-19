@@ -5,6 +5,10 @@ use ohno::AppError;
 
 use crate::action::errors::InvalidOutput;
 
+/// Selects a literal report-path spelling usable by both upload and report-reading steps.
+///
+/// This output-only projection does not replace native canonical paths used for containment
+/// checks. Unsupported glob syntax is rejected rather than encoded as a different file name.
 pub(crate) fn for_output(path: &Path) -> Result<&str, AppError> {
     // Artifact upload interprets paths as Node glob patterns. Keep canonical paths for
     // native I/O and containment checks, simplifying only this handoff representation.

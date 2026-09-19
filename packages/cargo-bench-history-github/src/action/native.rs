@@ -20,16 +20,21 @@ use crate::operations::{Context, dispatch};
 use crate::workflow::files::{append_outputs, canonical_directory, canonical_file};
 
 /// Real filesystem, environment and process primitives for action orchestration.
+///
+/// The installed action uses this host; unit tests supply an in-memory host instead. Native
+/// paths remain authoritative for filesystem checks, separate from workflow-output spelling.
 pub(crate) struct NativeHost;
 
 // Native boundaries have integration coverage; policy runs through Host fakes in unit tests.
 #[cfg_attr(test, mutants::skip)]
 impl Host for NativeHost {
+    /// Anchors relative invocation inputs without changing the caller's global working directory.
     fn current_dir(&self) -> Result<PathBuf, AppError> {
         env::current_dir()
             .map_err(|error| ActionIo::caused_by("read working directory", ".", error).into())
     }
 
+    /// Distinguishes absent context from unreadable environment text for input diagnostics.
     fn environment(&self, name: &str) -> Result<Option<String>, AppError> {
         match env::var(name) {
             Ok(value) => Ok(Some(value)),
@@ -40,16 +45,19 @@ impl Host for NativeHost {
         }
     }
 
+    /// Loads input and report artifacts while retaining the failing filesystem path.
     fn read(&self, path: &Path) -> Result<Vec<u8>, AppError> {
         fs::read(path).map_err(|error| ActionIo::caused_by("read file", path, error).into())
     }
 
+    /// Resolves an existing physical directory before measured-checkout and containment use.
     fn directory(&self, path: &Path) -> Result<PathBuf, AppError> {
         let path = fs::canonicalize(path)
             .map_err(|error| ActionIo::caused_by("resolve directory", path, error))?;
         canonical_directory(&path)
     }
 
+    /// Validates the workflow-output destination before successful records can be appended.
     fn output_file(&self, path: &Path) -> Result<PathBuf, AppError> {
         let resolved = resolve_destination(path)?;
         if resolved.exists() {
@@ -63,6 +71,7 @@ impl Host for NativeHost {
         }
     }
 
+    /// Keeps report/cache writes out of the checkout after resolving existing path ancestors.
     fn outside_checkout(&self, path: &Path, checkout: &Path) -> Result<(), AppError> {
         let path = resolve_destination(path)?;
         let checkout = self.directory(checkout)?;
@@ -76,6 +85,7 @@ impl Host for NativeHost {
         Ok(())
     }
 
+    /// Allocates one persistent job-local report directory rather than reusing another invocation.
     fn scratch(&self, root: &Path) -> Result<PathBuf, AppError> {
         let directory = Builder::new()
             .prefix("bench-history-")
@@ -85,6 +95,7 @@ impl Host for NativeHost {
         Ok(directory.keep())
     }
 
+    /// Traverses only the selected ordinary key-file tree before pure fingerprint validation.
     fn key_files(&self, root: &Path) -> Result<Vec<Vec<u8>>, AppError> {
         let mut directories = vec![self.directory(root)?];
         let mut files = Vec::new();
@@ -119,20 +130,26 @@ impl Host for NativeHost {
         Ok(files)
     }
 
+    /// Uses the shared append-only output adapter after action work has completed successfully.
     fn append_outputs(&self, path: &Path, outputs: &str) -> Result<(), AppError> {
         append_outputs(path, outputs)
     }
 
+    /// Sends action decision context to stderr without contaminating machine-readable outputs.
     fn note(&self, message: &str) {
         eprintln!("[cargo-bench-history-github] {message}");
     }
 
+    /// Loads the selected checkout's configuration before applying canonical core identity rules.
     async fn instance(&self, cwd: &Path, config: Option<&Path>) -> Result<Instance, AppError> {
         let path = resolve_config_path(cwd, config);
         let config = load_config(&path, config.is_some()).await?;
         project_instance(&config, cwd)
     }
 
+    /// Executes core/Git work without a shell and preserves the caller's child environment.
+    ///
+    /// Only dedicated machine output is buffered; benchmark logs stream through inherited handles.
     async fn process(&self, process: &Process) -> Result<String, AppError> {
         let mut command = NativeCommand::new(&process.program);
         command
@@ -172,11 +189,15 @@ impl Host for NativeHost {
     }
 }
 
+/// Reuses core identity rules so storage, reports and collection evidence share a namespace.
 pub(crate) fn project_instance(config: &Config, cwd: &Path) -> Result<Instance, AppError> {
     sanitize_segment(&resolve_project_id(config, cwd)).parse()
 }
 
-// Resolve missing output/cache paths through existing ancestors without creating them.
+/// Resolves prospective output/cache paths through existing ancestors without creating them.
+///
+/// The native host uses this for containment checks and output planning; path spelling alone
+/// does not establish which filesystem location a caller selected.
 #[cfg_attr(test, mutants::skip)]
 fn resolve_destination(path: &Path) -> Result<PathBuf, AppError> {
     let mut ancestor = path;
@@ -209,6 +230,7 @@ pub(crate) struct LivePublisher;
 
 #[cfg_attr(test, mutants::skip)]
 impl Publisher for LivePublisher {
+    /// Constructs authentication and the clock only when validated action work reaches publication.
     async fn publish(&self, command: Command, context: &Context) -> Result<(), AppError> {
         let github = RestGitHub::from_env()?;
         let clock = Clock::new_tokio();

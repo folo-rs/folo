@@ -18,6 +18,7 @@ pub(crate) struct IssueResponse {
 }
 
 impl From<IssueResponse> for Issue {
+    /// Transfers decoded issue state into the lifecycle model after response identity checks.
     fn from(value: IssueResponse) -> Self {
         Self {
             number: value.number.get(),
@@ -44,6 +45,7 @@ pub(crate) struct CommentResponse {
 }
 
 impl From<CommentResponse> for Comment {
+    /// Gives marker discovery the current body and stable comment update identity.
     fn from(value: CommentResponse) -> Self {
         Self {
             id: value.id.get(),
@@ -102,6 +104,10 @@ pub(crate) struct IssueUpdate<'a> {
     pub(crate) body: &'a str,
 }
 
+/// Converts consistent GitHub relationship facts into usable forward-distance evidence.
+///
+/// Replacement guards and staleness messages must not infer freshness from reverse/divergent
+/// comparisons or contradictory status/count combinations.
 pub(crate) fn comparison(value: &CompareResponse) -> Result<Comparison, AppError> {
     let ahead_by = match value.status {
         CompareStatus::Ahead if value.ahead_by > 0 && value.behind_by == 0 => Some(value.ahead_by),

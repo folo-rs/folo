@@ -8,6 +8,9 @@ use crate::result::{AnalysisMode, Evidence, PublicationState};
 use crate::{marker, message};
 
 /// A successful analysis and its independently identified workflow writer.
+///
+/// File loading assembles this input for report-bearing lifecycle commands. The caller pairs
+/// the summary with its JSON; the lifecycle validates sink/state and ownership before mutation.
 #[derive(Clone, Debug)]
 pub(crate) struct Report {
     pub(crate) owner: PendingArgs,
@@ -17,6 +20,10 @@ pub(crate) struct Report {
 }
 
 impl Report {
+    /// Checks the sink, requested state and measured ownership before lifecycle discovery.
+    ///
+    /// The caller keeps JSON and summary paired; this validates the metadata and nonblank
+    /// summary without reconstructing the tool's domain rendering.
     pub(crate) fn validate(
         &self,
         mode: AnalysisMode,
@@ -34,7 +41,10 @@ impl Report {
     }
 }
 
-/// Successful no-verdict publication, backed by a report or explicitly empty scope.
+/// Publication without a complete verdict, backed by a report or explicit empty scope.
+///
+/// This keeps absent benchmark scope distinct from an inconclusive completed analysis so
+/// comments and retained-issue annotations can choose the appropriate explanation.
 #[derive(Debug)]
 pub(crate) enum NoData {
     Empty(PendingArgs),
@@ -42,6 +52,7 @@ pub(crate) enum NoData {
 }
 
 impl NoData {
+    /// Supplies ownership uniformly for explicit empty scope and report-backed no-data.
     pub(crate) fn owner(&self) -> &PendingArgs {
         match self {
             Self::Empty(owner) => owner,
@@ -49,6 +60,7 @@ impl NoData {
         }
     }
 
+    /// Requires inconclusive evidence for report-backed no-data while retaining explicit scope.
     pub(crate) fn validate(&self, mode: AnalysisMode) -> Result<(), AppError> {
         match self {
             Self::Empty(_) => Ok(()),
@@ -56,6 +68,7 @@ impl NoData {
         }
     }
 
+    /// Supplies annotation prose without replacing the issue's retained report.
     pub(crate) fn details(&self) -> String {
         match self {
             Self::Empty(_) => {
@@ -72,6 +85,9 @@ impl NoData {
 }
 
 /// Interpreted rolling body, separating a retained report from one bounded run annotation.
+///
+/// Discovery establishes this view before lifecycle code decides whether to replace results
+/// or update status without losing the report's measured commit and ownership.
 pub(crate) struct IssueBody<'a> {
     pub(crate) report: &'a str,
     pub(crate) owner: PendingArgs,
@@ -80,6 +96,9 @@ pub(crate) struct IssueBody<'a> {
 }
 
 impl<'a> IssueBody<'a> {
+    /// Interprets coherent issue markers while keeping retained results separate from status.
+    ///
+    /// Discovery and lifecycle guards use this view before deciding which part may change.
     pub(crate) fn parse(body: &'a str, instance: &Instance) -> Result<Self, AppError> {
         let (report, annotation) = split_annotation(body, instance)?;
         let identity = marker::issue(instance, IssueKind::Regression);
@@ -118,6 +137,7 @@ impl<'a> IssueBody<'a> {
         })
     }
 
+    /// Selects annotation ownership when present without treating it as the measured commit.
     pub(crate) fn latest_owner(&self) -> &PendingArgs {
         self.annotation
             .as_ref()
@@ -125,7 +145,7 @@ impl<'a> IssueBody<'a> {
     }
 }
 
-/// The lifecycle status of the run described above a retained report.
+/// Ownership and lifecycle status carried alongside a retained report.
 pub(crate) struct Annotation {
     pub(crate) owner: PendingArgs,
     pub(crate) state: AnnotationState,
@@ -139,6 +159,7 @@ pub(crate) enum AnnotationState {
     Failed,
 }
 
+/// Isolates one complete owned annotation without adopting ambiguous or partial delimiters.
 fn split_annotation<'a>(
     body: &'a str,
     instance: &Instance,
@@ -160,6 +181,10 @@ fn split_annotation<'a>(
     Ok((report, Some(annotation)))
 }
 
+/// Appends a replacement lifecycle annotation to the retained report portion.
+///
+/// Callers pass `IssueBody::report`, not the previously annotated whole body, to keep one
+/// bounded status block while retaining report ownership and measured-commit metadata.
 pub(crate) fn annotate(
     report: &str,
     instance: &Instance,
@@ -176,6 +201,10 @@ pub(crate) fn annotate(
     )
 }
 
+/// Applies attempt precedence only to two writers belonging to the same workflow run.
+///
+/// Cross-run authority is decided by commit/live-head guards and serialized same-commit
+/// publication, not by this predicate.
 pub(crate) fn superseded(existing: &PendingArgs, incoming: &PendingArgs) -> bool {
     // Run IDs identify writers, not chronology. Distinct runs rely on freshness guards
     // and serialized arrival order at the same commit. Ref: docs/design.md, Run ownership.

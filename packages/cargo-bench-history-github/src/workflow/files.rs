@@ -14,6 +14,7 @@ const RECEIPT_FILE: &str = "receipt.json";
 
 // These adapters touch the real filesystem. Offline commands have native CLI integration
 // coverage; in-memory receipt decoding, reconciliation and projection remain mutation targets.
+/// Loads receipt-only artifact directories for subsequent in-memory reconciliation.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn read_receipts(root: &Path) -> Result<Vec<Receipt>, AppError> {
     require_kind(root, true)?;
@@ -32,12 +33,14 @@ pub(crate) fn read_receipts(root: &Path) -> Result<Vec<Receipt>, AppError> {
     Ok(receipts)
 }
 
+/// Reads an ordinary artifact file after checking its path components and file kind.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>, AppError> {
     require_kind(path, false)?;
     fs::read(path).map_err(|error| ArtifactIo::caused_by("reading", path, error).into())
 }
 
+/// Creates a new receipt or key file without adopting or overwriting an existing destination.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     if checked_metadata(path)?.is_some() {
@@ -56,6 +59,10 @@ pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
         .map_err(|error| ArtifactIo::caused_by("writing", path, error).into())
 }
 
+/// Appends a validated workflow-output block while preserving earlier output records.
+///
+/// Command adapters call this only after their work succeeds; it also separates a prior record
+/// whose producer omitted its final newline.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn append_outputs(path: &Path, value: &str) -> Result<(), AppError> {
     if let Some(metadata) = checked_metadata(path)?
@@ -92,6 +99,10 @@ pub(crate) fn append_outputs(path: &Path, value: &str) -> Result<(), AppError> {
         .map_err(|error| ArtifactIo::caused_by("appending workflow output", path, error).into())
 }
 
+/// Resolves a fresh key-directory destination without creating it during validation.
+///
+/// Missing suffixes are anchored to an existing canonical directory so overlap checks can run
+/// before preparation creates any output.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn directory_destination(path: &Path) -> Result<PathBuf, AppError> {
     if let Some(metadata) = checked_metadata(path)? {
@@ -121,6 +132,7 @@ pub(crate) fn directory_destination(path: &Path) -> Result<PathBuf, AppError> {
     Ok(destination)
 }
 
+/// Materializes a previously acceptable empty directory and returns its physical location.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn fresh_directory(path: &Path) -> Result<PathBuf, AppError> {
     let destination = directory_destination(path)?;
@@ -129,6 +141,7 @@ pub(crate) fn fresh_directory(path: &Path) -> Result<PathBuf, AppError> {
     canonical_directory(&destination)
 }
 
+/// Checks canonical input/output relationships before artifact materialization.
 pub(crate) fn disjoint(left: &Path, right: &Path) -> Result<(), AppError> {
     if left.starts_with(right) || right.starts_with(left) {
         return Err(OccupiedDestination::new(right).into());
@@ -136,6 +149,7 @@ pub(crate) fn disjoint(left: &Path, right: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Resolves an ordinary directory for physical containment and separation checks.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn canonical_directory(path: &Path) -> Result<PathBuf, AppError> {
     require_kind(path, true)?;
@@ -143,6 +157,7 @@ pub(crate) fn canonical_directory(path: &Path) -> Result<PathBuf, AppError> {
         .map_err(|error| ArtifactIo::caused_by("resolving directory", path, error).into())
 }
 
+/// Resolves an ordinary file so artifact readers compare filesystem locations, not spellings.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn canonical_file(path: &Path) -> Result<PathBuf, AppError> {
     require_kind(path, false)?;
@@ -150,6 +165,7 @@ pub(crate) fn canonical_file(path: &Path) -> Result<PathBuf, AppError> {
         .map_err(|error| ArtifactIo::caused_by("resolving file", path, error).into())
 }
 
+/// Plans an output file location without creating it before command validation succeeds.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn output_file(path: &Path) -> Result<PathBuf, AppError> {
     if checked_metadata(path)?.is_some() {
@@ -165,6 +181,7 @@ pub(crate) fn output_file(path: &Path) -> Result<PathBuf, AppError> {
     Ok(canonical_directory(parent)?.join(name))
 }
 
+/// Gives artifact validation a deterministic traversal order while retaining directory errors.
 #[cfg_attr(test, mutants::skip)]
 fn entries(path: &Path) -> Result<Vec<PathBuf>, AppError> {
     let mut paths = fs::read_dir(path)
@@ -179,6 +196,7 @@ fn entries(path: &Path) -> Result<Vec<PathBuf>, AppError> {
     Ok(paths)
 }
 
+/// Enforces the ordinary-file/directory expectation at an artifact I/O operation.
 #[cfg_attr(test, mutants::skip)]
 fn require_kind(path: &Path, directory: bool) -> Result<(), AppError> {
     let metadata = checked_metadata(path)?.ok_or_else(|| InvalidArtifactPath::new(path))?;
@@ -189,6 +207,10 @@ fn require_kind(path: &Path, directory: bool) -> Result<(), AppError> {
     }
 }
 
+/// Inspects each path prefix so traversal and links cannot redirect artifact operations.
+///
+/// Absence is returned for destination planning; malformed paths and inspection failures remain
+/// errors rather than being treated as available output locations.
 #[cfg_attr(test, mutants::skip)]
 fn checked_metadata(path: &Path) -> Result<Option<Metadata>, AppError> {
     if path.components().any(|component| match component {
@@ -222,6 +244,7 @@ fn checked_metadata(path: &Path) -> Result<Option<Metadata>, AppError> {
 }
 
 #[cfg(windows)]
+/// Recognizes Windows redirection points when validating artifact paths.
 #[cfg_attr(test, mutants::skip)]
 fn is_link(kind: FileType, metadata: &Metadata) -> bool {
     // Junctions and other reparse points also redirect traversal outside the artifact tree.
@@ -230,6 +253,7 @@ fn is_link(kind: FileType, metadata: &Metadata) -> bool {
 }
 
 #[cfg(not(windows))]
+/// Recognizes symbolic-link redirection when validating artifact paths.
 #[cfg_attr(test, mutants::skip)]
 fn is_link(kind: FileType, _metadata: &Metadata) -> bool {
     kind.is_symlink()

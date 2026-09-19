@@ -21,10 +21,15 @@ use crate::result::{AnalysisMode, AnalysisReport, Evidence};
 use crate::workflow::projection::report_outputs;
 use crate::workflow::receipt::machine_key;
 
+/// Connects the installed root-action command to native effects and lazy publication setup.
 pub(crate) async fn run(args: ActionArgs) -> Result<(), AppError> {
     run_with(args, &NativeHost, &LivePublisher).await
 }
 
+/// Executes one validated action invocation against independently supplied effect providers.
+///
+/// This owns measured-checkout selection, the fork gate and success-only output emission.
+/// Fake-driven tests use the same orchestration as the native entry point.
 pub(crate) async fn run_with(
     args: ActionArgs,
     host: &impl Host,
@@ -85,6 +90,10 @@ pub(crate) async fn run_with(
     host.append_outputs(&output, &outputs)
 }
 
+/// Prepares one core analysis pass without mutating checkout history or deriving fake coverage.
+///
+/// The resolved commit, actual keys and externally owned report directory constrain the
+/// subprocess plan; completed artifacts are then validated before any output is exposed.
 async fn analyze(
     inputs: &Inputs,
     cwd: &Path,
@@ -137,6 +146,7 @@ async fn analyze(
     analysis_outputs(inputs, &commit, &reports, host)
 }
 
+/// Captures dedicated Git machine output without mixing it with long-running benchmark logs.
 async fn git(host: &impl Host, cwd: &Path, args: &[&str]) -> Result<String, AppError> {
     host.process(&Process {
         program: "git".into(),
@@ -147,6 +157,9 @@ async fn git(host: &impl Host, cwd: &Path, args: &[&str]) -> Result<String, AppE
     .await
 }
 
+/// Builds deterministic analyzer filters from the selected fingerprint-file contents.
+///
+/// Duplicate hardware keys do not merge or establish the caller's platform coverage.
 pub(crate) fn machine_keys(files: Vec<Vec<u8>>) -> Result<Vec<String>, AppError> {
     let keys = files
         .into_iter()
@@ -166,6 +179,10 @@ pub(crate) fn machine_keys(files: Vec<Vec<u8>>) -> Result<Vec<String>, AppError>
     Ok(keys.into_iter().collect())
 }
 
+/// Validates the successful pass's artifacts and projects them into job-local workflow outputs.
+///
+/// The internal outcome file checks consistency; callers receive its validated verdict value,
+/// not another path output. Markdown is checked for presence, not parsed for meaning.
 fn analysis_outputs(
     inputs: &Inputs,
     commit: &CommitSha,
@@ -214,6 +231,7 @@ fn analysis_outputs(
     Ok(outputs)
 }
 
+/// Reads a rendered artifact through the host while preserving decoding failures as evidence errors.
 fn read_text(host: &impl Host, path: &Path) -> Result<String, AppError> {
     String::from_utf8(host.read(path)?)
         .map_err(|error| InvalidOutput::caused_by("report is not UTF-8", error).into())

@@ -19,8 +19,9 @@ param(
     [string] $GithubOrg = 'folo-rs',
     [string] $GithubRepo = 'folo',
     [string] $HistoryBranch = 'main',
-    [string] $LocalPrincipalId = '',
-    [ValidateSet('', 'User', 'Group')][string] $LocalPrincipalType = ''
+    [string] $CustomPrincipalId = '',
+    [ValidateSet('', 'User', 'Group')][string] $CustomPrincipalType = '',
+    [switch] $CurrentUser
 )
 
 Set-StrictMode -Version Latest
@@ -43,10 +44,13 @@ $cargoArgs = @(
     '--history-branch', $HistoryBranch,
     '--verbose'
 )
-if (-not [string]::IsNullOrEmpty($LocalPrincipalId)) {
-    $cargoArgs += @('--local-principal-id', $LocalPrincipalId)
+if (-not [string]::IsNullOrEmpty($CustomPrincipalId)) {
+    $cargoArgs += @('--custom-principal-id', $CustomPrincipalId)
 }
-if (-not [string]::IsNullOrEmpty($LocalPrincipalType)) {
-    $cargoArgs += @('--local-principal-type', $LocalPrincipalType.ToLowerInvariant())
+if (-not [string]::IsNullOrEmpty($CustomPrincipalType)) {
+    $cargoArgs += @('--custom-principal-type', $CustomPrincipalType.ToLowerInvariant())
+}
+if ($CurrentUser) {
+    $cargoArgs += '--current-user'
 }
 cargo @cargoArgs

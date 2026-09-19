@@ -11,6 +11,7 @@ release plan. It coordinates the corresponding PR in `folo-rs/cargo-bench-histor
 under the [benchmark-action release policy](../../../docs/benchmark-action-releases.md).
 It consumes the general skill's evidence; it does not decide or apply crate increments.
 
+Run the fast relevance check before inspecting the action repository or PRs.
 Read the action repository's contribution and release instructions before changing it.
 Its manifest and release policy determine the pinned tool set and independent action version.
 Completing this skill authorizes neither merging either PR nor publishing packages, tags or
@@ -19,7 +20,8 @@ action releases. Missing access or incomplete evidence is an explicit handoff bl
 # Inputs and working files
 
 Use the completed `increment-versions` run's absolute `WORK_DIR` and `VERIFY_DIR`.
-Read the resolved `preview/plan.json`, retained pending-release assessments, and Stage 7
+Stage 1 needs only the verified report. If it returns `true`, read the resolved
+`preview/plan.json`, retained pending-release assessments, and Stage 7
 verification report and compatibility evidence, together with the current
 **Version/release plan** section, prepared locally if the PR does not exist yet.
 An empty applied plan does not mean there are no pending releases. If evidence is missing or
@@ -39,13 +41,33 @@ these working files.
 |-------------|-------------|
 | `WORK_DIR` | The absolute untracked evidence directory from the completed general version-planning run. |
 | `VERIFY_DIR` | That run's separate absolute Stage 7 verification directory. |
+| `ACTION_MANIFEST` | Optional local action `release.json`, for bootstrap or proposed pins not on the default branch. |
 | `ACTION_BRANCH` | The published action branch containing this verified release's pins and action version. |
 | `ACTION_TITLE` | The action PR title describing the release change. |
 | `ACTION_BODY`, `MONOREPO_BODY` | Absolute paths to the complete prepared PR descriptions under `WORK_DIR`. |
 | `ACTION_PR`, `MONOREPO_PR` | The discovered or created PR numbers or URLs in their respective repositories. |
 | `ACTION_RUN` | The workflow run for the current action PR revision whose required installation check must be rerun after publication. |
 
-# Stage 1: Discover the pairing and affected pins
+# Stage 1: Check relevance cheaply
+
+Run the repository-specific checker against the completed generic skill's verified report:
+
+> just benchmark-action-pairing-needed "{{VERIFY_DIR}}\report.json"
+
+For initial action bootstrap or an explicitly selected proposed manifest:
+
+> just benchmark-action-pairing-needed "{{VERIFY_DIR}}\report.json" "{{ACTION_MANIFEST}}"
+
+It prints one Boolean on stdout. On `false`, record that no pinned package is pending release
+in `{{WORK_DIR}}\action-pairing.md` and finish; do not discover PRs or require an action checkout.
+On `true`, continue below. A pin already updated in a paired PR still counts because publication
+and installation follow-up remain necessary. On any nonzero exit, stop and report the diagnostic:
+missing or malformed inputs cannot authorize a no-op.
+
+The helper skips manifest access when there are no pending releases. Otherwise it reads the
+authoritative action tool list, including fixture tools, without cloning the repository.
+
+# Stage 2: Discover the pairing and affected pins
 
 Discover the action repository and existing open PRs before creating a pairing:
 
@@ -71,10 +93,10 @@ applied by `increment-versions`. Private implementation packages matter through 
 binary versions they move. Do not infer a released predecessor when the evidence has none.
 A pin already updated in the existing paired PR still needs its publication/check follow-up.
 
-If no manifest pin is affected, record that evidence and finish with the Stage 4 handoff;
+If no manifest pin is affected, record that evidence and finish with the Stage 5 handoff;
 do not create an unrelated action PR.
 
-# Stage 2: Update the action and cross-link the PRs
+# Stage 3: Update the action and cross-link the PRs
 
 When a pinned tool moves, update the action manifest to the final exact tool versions and
 choose the appropriate action-version increment under that repository's release instructions.
@@ -108,7 +130,7 @@ PR blindly. Verify that both returned descriptions contain the correct reciproca
 If readback fails, the pairing remains unverified. Fulfill any deferred cross-link obligation
 when the monorepo PR is created.
 
-# Stage 3: Follow publication and the required installation gate
+# Stage 4: Follow publication and the required installation gate
 
 Keep the pair current after any reassessment, including release-baseline recovery. The
 monorepo merges first under its normal authorization and checks. Creating the paired PR is
@@ -118,8 +140,8 @@ the action merge, not the monorepo merge that starts asynchronous dependency pub
 The check must really install the exact manifest packages and promised archives as specified
 by the [installation gate](../../../docs/benchmark-action-releases.md#publication-and-required-installation-gate).
 Expected early failure while publication is pending remains merge-blocking for the action.
-Source dogfooding, source fallback for a promised archive, an existing binary cache, and the
-optional-check waiting policy cannot substitute for this gate.
+Source dogfooding, source fallback for a promised archive, or an existing binary cache cannot
+substitute for this required check. Unlike an advisory check, it must pass before action merge.
 
 The paired PR's author follows publication and explicitly reruns the failed check after all
 required packages and archives are available:
@@ -133,7 +155,7 @@ publication dependencies; a rerun request is not a passing check. A failed rerun
 is a handoff blocker. Preserve the pending follow-up when publication has not completed;
 do not merge or publish anything to unblock it from this skill.
 
-# Stage 4: Hand off the verified state and blockers
+# Stage 5: Hand off the verified state and blockers
 
 Keep `{{WORK_DIR}}\action-pairing.md` current and summarize its disposition to the caller:
 the affected pins and verified reciprocal PR links, the action-version decision, why an
@@ -141,6 +163,6 @@ existing PR was reused or a new one was needed, the next publication/check follo
 any access, PR-creation or verification blocker, or the evidence for no affected pins.
 Reference the verified release plan rather than duplicating its version inventory.
 
-When a summary is posted as a GitHub comment, keep `[Copilot speaking]` first and place
-execution diagnostics in a collapsible section. The handoff does not grant merge or
+When a summary is posted as a GitHub comment, place execution diagnostics in a collapsible
+section. The handoff does not grant merge or
 publication authority.

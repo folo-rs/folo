@@ -15,6 +15,11 @@ use crate::identity::validate_run_url;
 use crate::model::{Instance, Repository};
 use crate::operations::Context;
 
+/// Converts validated root-action inputs into the existing typed lifecycle command.
+///
+/// Execution data may come from known event context, but report state and ownership are not
+/// invented. The caller dispatches the result through the same publication implementation as
+/// the companion's direct lifecycle CLI.
 pub(crate) fn publication(
     inputs: &Inputs,
     cwd: &Path,
@@ -105,6 +110,7 @@ pub(crate) fn publication(
     Ok((command, context))
 }
 
+/// Validates required run/PR identity without substituting a fabricated numeric default.
 fn positive(key: &str, value: Option<&str>) -> Result<NonZero<u64>, AppError> {
     value
         .ok_or_else(|| InvalidInput::new(key, "required without known Actions execution context"))?
@@ -112,6 +118,7 @@ fn positive(key: &str, value: Option<&str>) -> Result<NonZero<u64>, AppError> {
         .map_err(|error| InvalidInput::caused_by(key, "expected a positive integer", error).into())
 }
 
+/// Binds report paths and explicit coverage to the publishing run for later evidence loading.
 fn report(inputs: &Inputs, cwd: &Path, run: RunArgs) -> Result<ReportArgs, AppError> {
     Ok(ReportArgs {
         run,
@@ -126,6 +133,7 @@ fn report(inputs: &Inputs, cwd: &Path, run: RunArgs) -> Result<ReportArgs, AppEr
     })
 }
 
+/// Constructs frozen-head ownership for preflight, empty-scope and failed-state commands.
 fn pending(
     inputs: &Inputs,
     environment: &Environment,
@@ -141,6 +149,7 @@ fn pending(
     })
 }
 
+/// Preserves the validated distinction between explicit empty scope and incomplete analysis.
 fn no_data(
     inputs: &Inputs,
     cwd: &Path,
@@ -174,6 +183,7 @@ fn no_data(
     })
 }
 
+/// Carries terminal execution status and exact pending ownership into failure publication.
 fn failed(
     inputs: &Inputs,
     environment: &Environment,
@@ -192,6 +202,7 @@ fn failed(
     })
 }
 
+/// Resolves a supplied or context-derived failure link and binds it to the declared run.
 fn run_url(
     inputs: &Inputs,
     environment: &Environment,

@@ -207,7 +207,8 @@
 //!
 //! Provisions an Azure history store and one managed identity for history-branch and
 //! pull-request workflows. The identity has account-scoped Storage Blob Data Contributor
-//! access; optional local access grants the same role. Run
+//! access; an optional custom user or group receives the same role. `--current-user`
+//! grants access to the Azure CLI signed-in user in the chosen subscription's tenant. Run
 //! `cargo bench-history setup-azure --help` for the explicit deployment inputs.
 //! Execution requires Azure CLI, PowerShell 7.6 or later, installed Bicep and an
 //! authenticated subscription. Repeated deployments preserve existing storage
@@ -347,7 +348,7 @@ pub use cbh_analyze::{AnalysisOutcome, AutoDiscriminants};
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalPrincipalType,
+    CustomPrincipalType, ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject,
     LocalStorageSelection, MachineKeyOptions, PruneOptions, SetupAzureOptions, UnblessOptions,
 };
 pub use cbh_config::default_template;

@@ -169,6 +169,18 @@ uploading consumes the generated report.
 Only pull requests use affected-package and tooling-input selection. Pushes to `main` and
 scheduled/manual main runs use the full set without invoking delta.
 
+### Bicep validation
+
+The `test-scripts` job also executes `just validate-bicep` when the non-Cargo plan selects
+maintained Bicep templates/parameters, `bicepconfig.json`, the compiler wrapper or shared
+tooling inputs. Its step has an independent post-setup condition, so another check's failure
+does not suppress compilation and a Bicep failure still fails the required fan-in.
+
+The native compiler, its pinned API type catalog and the configured linter own validation.
+The PowerShell wrapper only selects maintained inputs, invokes the compiler and forwards
+SARIF warning/error verdicts under the workspace's zero-warning policy. It performs no
+Azure authentication, resource lookup or deployment. Diagnostics are retained on failure.
+
 ### Azure emulator coverage
 
 The Azurite coverage job runs both the CLI integration suite and the storage partition's

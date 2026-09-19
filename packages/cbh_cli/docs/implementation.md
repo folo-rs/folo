@@ -13,4 +13,5 @@ and parser-specific concerns out of command implementations.
 
 Standalone Azure setup has its own argument group rather than flattening benchmark
 environment options. Export admits partial deployment inputs; execution requires explicit
-placement and repository inputs. Optional local access is a paired CLI constraint.
+placement and repository inputs. Explicit custom access is a paired CLI constraint.
+Current-user lookup conflicts with those explicit values and with offline export.

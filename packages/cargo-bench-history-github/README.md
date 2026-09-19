@@ -26,11 +26,11 @@ report and collection-platform evidence. It publishes through
 `publish-comment-{findings,clean,preflight,no-data,failed}` and
 `publish-issue-{findings,clean,preflight,no-data,failed}`.
 
-Findings remain findings when coverage is partial. Clean publication requires a
-fully judged, nonempty analysis and every intended platform. No-data explains why a
-successful analysis cannot establish a complete verdict, preserving useful partial
-results. An explicit `--empty-scope` form covers runs with no benchmarkable packages;
-execution failures are not analysis verdicts.
+Any notable findings select findings publication, even when coverage is partial.
+Clean publication requires a fully judged, nonempty analysis and every intended platform.
+No-data explains why a successful analysis without findings cannot establish a complete verdict,
+preserving the judged portion and explaining missing coverage. An explicit `--empty-scope` form
+covers runs with no benchmarkable packages; execution failures are not analysis verdicts.
 
 Only findings create rolling issues. Clean leaves an existing issue open. No-data
 and failure annotations preserve its previous report. Comment preflight and failure
@@ -53,6 +53,8 @@ provide matrix, collection-attempt and report evidence for workflow orchestratio
 Inspection emits `publication-state=findings|clean|no-data` from the same validation
 used by publication; `can-clear` applies only to history issues.
 
-The HTTP adapter uses `GITHUB_TOKEN`, falling back to `GH_TOKEN`. Repository inputs
+The HTTP adapter prefers a nonblank `GITHUB_TOKEN` from workflow environments and otherwise
+accepts `GH_TOKEN` from environments prepared for GitHub CLI use. It does not read the CLI's
+credential store or change tokens after an authentication failure. Repository inputs
 fall back to `GITHUB_REPOSITORY`. Matrix setup and report inspection need neither a
 repository nor credentials; receipt creation also runs without credentials.

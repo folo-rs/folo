@@ -2,7 +2,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Executes the production wrapper with a mocked Cargo boundary, guarding its public CLI handoff.
-# Deployment defaults and optional local grants reach setup-azure without invoking Azure.
+# Deployment defaults and optional additional grants reach setup-azure without invoking Azure.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -10,6 +10,7 @@ $VerbosePreference = 'Continue'
 
 BeforeAll {
     $script:Wrapper = Join-Path $PSScriptRoot '..' '..' 'infra' 'azure-bench-history-prod' 'deploy.ps1'
+    function cargo { throw 'Cargo calls must be mocked.' }
 }
 
 Describe 'Production deployment CLI handoff' {
@@ -52,8 +53,8 @@ Describe 'Production deployment CLI handoff' {
             GithubOrg = 'owner-canary'
             GithubRepo = 'repository-canary'
             HistoryBranch = 'history/branch'
-            LocalPrincipalId = 'principal-canary'
-            LocalPrincipalType = $Type
+            CustomPrincipalId = 'principal-canary'
+            CustomPrincipalType = $Type
         }
         & $script:Wrapper @parameters
 
@@ -64,15 +65,23 @@ Describe 'Production deployment CLI handoff' {
             '--storage-account', 'customhistory', '--managed-identity', 'identity-canary',
             '--container', 'custom-history', '--github-owner', 'owner-canary',
             '--github-repository', 'repository-canary', '--history-branch', 'history/branch',
-            '--verbose', '--local-principal-id', 'principal-canary', '--local-principal-type', $CliType
+            '--verbose', '--custom-principal-id', 'principal-canary', '--custom-principal-type', $CliType
         )
     }
 
-    It 'preserves an incomplete local-grant request for CLI validation' {
-        & $script:Wrapper -SubscriptionId 'subscription-canary' -LocalPrincipalType User
+    It 'preserves an incomplete custom-grant request for CLI validation' {
+        & $script:Wrapper -SubscriptionId 'subscription-canary' -CustomPrincipalType User
 
-        $script:State.CargoArgs | Should -Contain '--local-principal-type'
-        $script:State.CargoArgs | Should -Not -Contain '--local-principal-id'
+        $script:State.CargoArgs | Should -Contain '--custom-principal-type'
+        $script:State.CargoArgs | Should -Not -Contain '--custom-principal-id'
+    }
+
+    It 'forwards the current-user shortcut without performing identity lookup itself' {
+        & $script:Wrapper -SubscriptionId 'subscription-canary' -CurrentUser
+
+        $script:State.CargoArgs | Should -Contain '--current-user'
+        $script:State.CargoArgs | Should -Not -Contain '--custom-principal-id'
+        $script:State.CargoArgs | Should -Not -Contain '--custom-principal-type'
     }
 
     It 'propagates CLI failures' {

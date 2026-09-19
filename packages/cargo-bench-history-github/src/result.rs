@@ -16,6 +16,7 @@ pub(crate) struct Evidence {
 }
 
 impl Evidence {
+    /// Checks that a named publication command agrees with the shared evidence projection.
     pub(crate) fn require_state(&self, state: PublicationState) -> Result<(), AppError> {
         if self.publication_state() != state {
             return Err(WrongPublicationState::new().into());
@@ -23,10 +24,15 @@ impl Evidence {
         Ok(())
     }
 
+    /// Determines whether outcome and coverage together authorize clean publication.
     pub(crate) fn is_all_clear(&self) -> bool {
         self.publication_state() == PublicationState::Clean
     }
 
+    /// Chooses findings first, then fully covered clean, otherwise the no-data explanation.
+    ///
+    /// Inspection and both report sinks use this same decision; platform incompleteness
+    /// qualifies findings rather than suppressing them.
     pub(crate) fn publication_state(&self) -> PublicationState {
         match self.report.outcome {
             Outcome::Findings => PublicationState::Findings,
@@ -68,6 +74,10 @@ pub(crate) struct AnalysisReport {
 }
 
 impl AnalysisReport {
+    /// Validates the core metadata needed to publish a caller-paired report.
+    ///
+    /// The commit, clean-tree attribution, verdict and census must agree. Finding descriptions
+    /// and unjudged-reason prose are intentionally left to the tool-rendered summary.
     pub(crate) fn parse(json: &str, expected_commit: &CommitSha) -> Result<Self, AppError> {
         let raw: ReportInput = serde_json::from_str(json).map_err(InvalidReportJson::caused_by)?;
         let commit: CommitSha = raw.tip_commit.parse()?;
@@ -110,6 +120,7 @@ impl AnalysisReport {
         })
     }
 
+    /// Keeps a history report out of the PR flow and a branch report out of the issue flow.
     pub(crate) fn require_mode(&self, mode: AnalysisMode) -> Result<(), AppError> {
         if self.mode != mode {
             return Err(WrongAnalysisMode::new().into());
@@ -168,6 +179,9 @@ pub(crate) struct PlatformCoverage {
 }
 
 impl PlatformCoverage {
+    /// Builds matrix coverage from explicit expected and successfully completed identifiers.
+    ///
+    /// Receipt/job reconciliation supplies completion; distinct hardware keys do not imply it.
     pub(crate) fn parse(expected: &str, completed: &str) -> Result<Self, AppError> {
         let expected = platform_list(expected)?;
         let completed = platform_list(completed)?;
@@ -181,6 +195,7 @@ impl PlatformCoverage {
         })
     }
 
+    /// Checks collection-platform completeness, not the analyzer's per-series census.
     pub(crate) fn is_complete(&self) -> bool {
         self.missing.is_empty()
     }
@@ -194,6 +209,7 @@ impl PlatformCoverage {
     }
 }
 
+/// Normalizes matrix identifiers shared by setup, reconciliation and publication coverage.
 pub(crate) fn platform_list(input: &str) -> Result<BTreeSet<String>, AppError> {
     input
         .split(',')
@@ -209,6 +225,7 @@ pub(crate) fn platform_list(input: &str) -> Result<BTreeSet<String>, AppError> {
         .collect()
 }
 
+/// Defines the common platform syntax used in job names, artifact directories and messages.
 pub(crate) fn is_platform_identifier(value: &str) -> bool {
     !value.is_empty()
         && !matches!(value, "." | "..")

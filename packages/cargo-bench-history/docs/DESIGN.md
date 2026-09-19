@@ -850,14 +850,18 @@ Execution requires an explicit subscription ID, resource group, location, storag
 GitHub `owner/repository`, and history branch. It does not infer a target subscription from
 the active Azure CLI default or inherit Folo's deployment names. The container defaults to
 `bench-history`; the managed identity name derives from the selected storage account, with an
-optional explicit name for existing deployments. Optional local access takes a principal ID
-and its `User` or `Group` type together. These inputs describe actual resource placement and access;
+optional explicit name for existing deployments. Optional additional access takes a custom
+principal's object ID and its `User` or `Group` type together. `--current-user` instead resolves
+the Azure CLI signed-in user in the explicitly selected subscription's tenant before any
+Azure changes. It requires a user login, successful Microsoft Graph lookup and an active
+Azure CLI subscription matching the explicit target; it never changes the CLI default. It conflicts
+with explicit custom principal values and offline export. These inputs describe resource placement and access;
 resource tuning beyond the standard setup belongs in an exported bundle, not additional knobs.
 
 The explicit command inputs are `--subscription-id`, `--resource-group`, `--location`,
 `--storage-account`, `--github-owner`, `--github-repository` and `--history-branch`.
 `--container` and `--managed-identity` override the resource-name defaults.
-`--local-principal-id` pairs with `--local-principal-type user|group`.
+`--custom-principal-id` pairs with `--custom-principal-type user|group`.
 `--verbose` enables explanatory deployment diagnostics.
 
 Before any cloud mutation, execution verifies Azure CLI, PowerShell 7.6 or later, an already
@@ -871,13 +875,20 @@ Newly created history storage is private and Entra-only. The deployment supplies
 identity with an account-scoped Storage Blob Data Contributor role assignment and federated
 identity credentials for the selected history branch and the repository's PR subject,
 supporting collection, backfill and analysis.
-Optional local access to the same role is independent. The PR federated subject does not
-distinguish same-repository and fork heads; workflow policy supplies that gate. Provisioning
+Additional user or group access to the same role is independent. The role permits blob
+read/write/delete and container creation/deletion across the account, not only the configured
+history container. The PR federated subject does not distinguish same-repository and fork heads;
+the documented caller workflows supply that gate before credentialed work. Custom workflows must do
+the same. Callers grant `id-token: write` to obtain OIDC tokens. The trusted subjects name the
+repository and event/branch, not a particular workflow file or action. Provisioning
 OIDC trust requires no GitHub API access or stored credential.
 
-Repeated deployments preserve existing storage properties, history and optional local grants
-while ensuring the configured identity and federated subjects exist. Deployment is incremental,
-not a cleanup of unrelated resources. Serialize invocations targeting the same storage account
+Repeated deployments preserve existing storage properties, history and previous additional grants.
+Changing the custom principal adds its grant without removing earlier grants; omission does
+not revoke access. Deployment is incremental, not a cleanup of unrelated resources. Federation
+is configuration rather than an append-only grant list: changing the repository or history
+branch reconfigures the existing branch/PR credentials on the selected identity.
+Serialize invocations targeting the same storage account
 or managed identity in the selected subscription and resource group.
 
 Successful execution reports the storage account, container, endpoint, tenant and subscription

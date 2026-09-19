@@ -8,6 +8,6 @@
   "HistoryBranch": null,
   "HistoryContainerName": "bench-history",
   "ManagedIdentityName": null,
-  "LocalPrincipalId": null,
-  "LocalPrincipalType": null
+  "CustomPrincipalId": null,
+  "CustomPrincipalType": null
 }

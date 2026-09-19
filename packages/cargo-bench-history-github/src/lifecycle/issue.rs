@@ -14,6 +14,10 @@ use crate::message;
 use crate::operations::{Context, note};
 use crate::result::{AnalysisMode, PublicationState};
 
+/// Publishes eligible history findings or all-clear while preserving newer owned issue state.
+///
+/// This is the only rolling operation that may create an issue, and only for findings.
+/// Validation and replacement authority are established before a body mutation is attempted.
 pub(crate) async fn issue_report(
     github: &impl GitHub,
     context: &Context,
@@ -49,6 +53,9 @@ pub(crate) async fn issue_report(
     }
 }
 
+/// Records pending history work on an existing issue without discarding its retained report.
+///
+/// Both the report head and any later annotation participate in freshness protection.
 pub(crate) async fn issue_preflight(
     github: &impl GitHub,
     context: &Context,
@@ -118,6 +125,10 @@ pub(crate) async fn issue_preflight(
     update(github, context, clock, &issue, &body).await
 }
 
+/// Explains unproven recovery while retaining the issue's previous report and attribution.
+///
+/// Explicit empty scope and inconclusive analysis share annotation ownership, not report
+/// replacement. Work at an already-pending head can retire that pending status.
 pub(crate) async fn issue_no_data(
     github: &impl GitHub,
     context: &Context,
@@ -172,6 +183,10 @@ pub(crate) async fn issue_no_data(
     update(github, context, clock, &issue, &body).await
 }
 
+/// Replaces this run's pending issue annotation with a failure or cancellation notice.
+///
+/// The previous report remains intact; absence, terminal state and another owner's annotation
+/// are not reasons to create or overwrite a failure record here.
 pub(crate) async fn issue_failed(
     github: &impl GitHub,
     context: &Context,
@@ -212,6 +227,10 @@ pub(crate) async fn issue_failed(
     update(github, context, clock, &issue, &body).await
 }
 
+/// Creates at most one independently discovered failure alert for this project and run.
+///
+/// Existing open or human-closed alerts retain their content and disposition. This operation
+/// does not mutate the rolling regression issue.
 pub(crate) async fn alert(
     github: &impl GitHub,
     context: &Context,
@@ -231,6 +250,9 @@ pub(crate) async fn alert(
     create_issue(github, context, &identity, &identity.phrase(), &body).await
 }
 
+/// Updates title and body together only when lifecycle composition changes the body.
+///
+/// Capturing the UTC title date here keeps retries consistent and no-op dates unchanged.
 async fn update(
     github: &impl GitHub,
     context: &Context,
@@ -248,6 +270,10 @@ async fn update(
         .await
 }
 
+/// Establishes replacement authority across both retained-report and annotation ownership.
+///
+/// Same-commit arrivals remain serializable; different commits need forward evidence, and
+/// attempt precedence applies only within the same run.
 async fn may_replace(
     github: &impl GitHub,
     context: &Context,

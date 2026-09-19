@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use cbh_command::{LocalPrincipalType, SetupAzureOptions};
+use cbh_command::{CustomPrincipalType, SetupAzureOptions};
 use ohno::AppError;
 use serde_json::{Value, from_str, to_string_pretty};
 
@@ -37,7 +37,22 @@ const PARAMETER_TEMPLATE: &str = include_str!("../../azure_bundle/parameters.jso
 const ACCOUNT_NAME_LENGTH: RangeInclusive<usize> = 3..=24;
 const CONTAINER_NAME_LENGTH: RangeInclusive<usize> = 3..=63;
 
+/// Builds the deployment driver's literal inputs before either mode performs I/O.
+///
+/// Export and execution share this validation boundary, including callers that bypass
+/// CLI parsing. Supplied values populate JSON data, never executable PowerShell text.
 pub(crate) fn prepare(options: &SetupAzureOptions) -> Result<Vec<BundleFile>, AppError> {
+    if options.current_user
+        && (options.out_dir.is_some()
+            || options.custom_principal_id.is_some()
+            || options.custom_principal_type.is_some())
+    {
+        return Err(SetupParameterError::new(
+            "CurrentUser",
+            "requires execution mode without an explicit custom principal",
+        )
+        .into());
+    }
     let values = [
         ("SubscriptionId", options.subscription_id.as_deref()),
         ("ResourceGroup", options.resource_group.as_deref()),
@@ -55,10 +70,10 @@ pub(crate) fn prepare(options: &SetupAzureOptions) -> Result<Vec<BundleFile>, Ap
     }
     validate_text("HistoryContainerName", options.container.as_deref())?;
     validate_text("ManagedIdentityName", options.managed_identity.as_deref())?;
-    validate_text("LocalPrincipalId", options.local_principal_id.as_deref())?;
-    if options.local_principal_id.is_some() != options.local_principal_type.is_some() {
+    validate_text("CustomPrincipalId", options.custom_principal_id.as_deref())?;
+    if options.custom_principal_id.is_some() != options.custom_principal_type.is_some() {
         return Err(SetupParameterError::new(
-            "LocalPrincipalId/LocalPrincipalType",
+            "CustomPrincipalId/CustomPrincipalType",
             "supply both the principal ID and its type",
         )
         .into());
@@ -95,12 +110,12 @@ pub(crate) fn prepare(options: &SetupAzureOptions) -> Result<Vec<BundleFile>, Ap
     for (name, value) in values.into_iter().chain([
         ("HistoryContainerName", options.container.as_deref()),
         ("ManagedIdentityName", options.managed_identity.as_deref()),
-        ("LocalPrincipalId", options.local_principal_id.as_deref()),
+        ("CustomPrincipalId", options.custom_principal_id.as_deref()),
         (
-            "LocalPrincipalType",
-            options.local_principal_type.map(|kind| match kind {
-                LocalPrincipalType::User => "User",
-                LocalPrincipalType::Group => "Group",
+            "CustomPrincipalType",
+            options.custom_principal_type.map(|kind| match kind {
+                CustomPrincipalType::User => "User",
+                CustomPrincipalType::Group => "Group",
             }),
         ),
     ]) {
@@ -124,6 +139,10 @@ pub(crate) fn prepare(options: &SetupAzureOptions) -> Result<Vec<BundleFile>, Ap
     Ok(files)
 }
 
+/// Screens supplied parameter text while leaving export omissions for later completion.
+///
+/// Bundle preparation uses this independently of execution's required-value checks,
+/// so partially populated exports receive the same text validation as deployments.
 fn validate_text(name: &'static str, value: Option<&str>) -> Result<(), AppError> {
     if value.is_some_and(|value| value.trim().is_empty() || value.chars().any(char::is_control)) {
         return Err(

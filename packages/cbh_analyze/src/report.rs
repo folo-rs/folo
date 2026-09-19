@@ -89,8 +89,11 @@ impl ReportRequest {
         })
     }
 
-    /// Resolves and validates the requested outputs for `analyze`, which additionally
-    /// offers `--markdown-summary <path>`.
+    /// Validates analysis output selection before the query pipeline runs.
+    ///
+    /// An outcome-only request is sufficient even when no rendering is selected: analysis
+    /// always computes that verdict for the shell. This records format selection, not
+    /// filesystem destinations; the shell owns path compatibility checks and file writes.
     ///
     /// # Errors
     ///
@@ -145,8 +148,11 @@ impl ReportRequest {
         }
     }
 
-    /// Renders each requested format for `analyze`, including the condensed summary
-    /// when requested.
+    /// Packages requested analysis renderings with their shared verdict.
+    ///
+    /// The orchestrator supplies the outcome and rendering closures from the same completed
+    /// analysis. The bundle always carries that outcome for the shell's typed return and
+    /// optional outcome file; this boundary does not derive another verdict.
     ///
     /// The `render_summary` closure runs only when `--markdown-summary` was requested,
     /// so an unrequested summary is never rendered.

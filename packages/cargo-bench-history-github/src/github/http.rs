@@ -14,8 +14,10 @@ use crate::errors::RequestFailedError;
 /// Keeping both external effects here allows tests to drive the same REST logic without
 /// network access, a runtime, or a real clock.
 pub(crate) trait Http {
+    /// Executes one exchange, including the response body, without adding semantic retries.
     fn send(&self, request: Request) -> impl Future<Output = Result<HttpResponse, TransportError>>;
 
+    /// Performs the delay selected by REST policy; fakes record it without using real time.
     fn sleep(&self, delay: Duration) -> impl Future<Output = ()>;
 }
 
@@ -26,6 +28,7 @@ pub(crate) struct ReqwestHttp {
 }
 
 impl ReqwestHttp {
+    /// Builds the bounded transport while leaving redirects and retry authority to REST policy.
     pub(crate) fn new() -> Result<Self, AppError> {
         // Bound a stalled connection and the entire response body, not just its headers.
         // These budgets allow degraded service while still releasing the workflow runner.
@@ -46,6 +49,7 @@ impl ReqwestHttp {
 }
 
 impl Http for ReqwestHttp {
+    /// Executes the transport exchange selected by REST policy and reads its complete body.
     // The only network primitive; request policy and response interpretation run above it
     // and are exercised with the in-process HTTP fake.
     #[cfg_attr(test, mutants::skip)]
@@ -72,6 +76,7 @@ impl Http for ReqwestHttp {
         })
     }
 
+    /// Implements policy-selected waits; in-process HTTP fakes record them instead.
     fn sleep(&self, delay: Duration) -> impl Future<Output = ()> {
         tokio::time::sleep(delay)
     }
@@ -97,6 +102,7 @@ impl UnwindSafe for TransportError {}
 impl RefUnwindSafe for TransportError {}
 
 impl TransportError {
+    /// Exposes whether REST policy may retry this transport failure for an idempotent operation.
     pub(crate) fn retryable(&self) -> bool {
         self.retryable
     }
@@ -111,6 +117,10 @@ pub(crate) const RETRY_DELAYS: [Duration; 2] =
 // Ref: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
+/// Selects a bounded retry wait from GitHub's status, quota hints and prior throttling delay.
+///
+/// The REST sender calls this only for operations it can safely repeat. Absence of a supported
+/// wait preserves the response failure instead of retrying early or inventing a reset time.
 pub(crate) fn retry_delay(
     response: &HttpResponse,
     fallback: Duration,
@@ -156,6 +166,7 @@ pub(crate) fn retry_delay(
     (delay <= MAX_RETRY_AFTER).then_some(delay)
 }
 
+/// Recognizes GitHub's secondary-throttling response without treating every forbidden response alike.
 fn secondary_rate_limit(body: &[u8]) -> bool {
     let Ok(body) = serde_json::from_slice::<Value>(body) else {
         return false;

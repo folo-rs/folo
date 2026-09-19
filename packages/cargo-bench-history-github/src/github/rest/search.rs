@@ -13,6 +13,10 @@ use crate::github::rest::{PaginationError, RestGitHub};
 use crate::model::Repository;
 
 impl<H: Http> RestGitHub<H> {
+    /// Obtains a complete title-candidate set without scanning repository-wide issue bodies.
+    ///
+    /// Lifecycle discovery applies exact title matching and direct reads afterward. Capped,
+    /// incomplete or changing results cannot establish that an issue is absent.
     pub(crate) async fn search(
         &self,
         repository: &Repository,
@@ -76,6 +80,7 @@ impl<H: Http> RestGitHub<H> {
     }
 }
 
+/// Keeps project text literal within GitHub's search language before URL encoding.
 fn title_query(repository: &Repository, phrase: &str, include_closed: bool) -> String {
     // Escape the query language before URL encoding. Project text is a literal phrase,
     // never additional search qualifiers; the date is intentionally not part of identity.

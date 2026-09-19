@@ -93,12 +93,19 @@ Describe 'Production identity deployment policy' {
             $script:SubscriptionState = 'Enabled'
             $script:ReturnedSubscription = 'subscription-one'
             $script:MissingOutput = $false
+            $script:UserType = 'user'
+            $script:UserId = '00000000-0000-0000-0000-000000000002'
+            $script:ActiveSubscription = 'subscription-one'
+            $script:ActiveTenant = 'tenant-one'
 
             Mock az {
                 $global:LASTEXITCODE = 0
                 $operation = if ($args[0] -eq 'version') { 'version' } else { $args[0..1] -join ' ' }
                 if ($operation -in @('storage account', 'storage container-rm', 'deployment group')) {
                     $operation = $args[0..2] -join ' '
+                }
+                if ($operation -eq 'account show' -and $args -notcontains '--subscription') {
+                    $operation = 'active account show'
                 }
                 $script:Calls.Add($operation)
                 if ($operation -eq $script:FailOperation) {
@@ -113,9 +120,18 @@ Describe 'Production identity deployment policy' {
                             id = $script:ReturnedSubscription
                             state = $script:SubscriptionState
                             tenantId = 'tenant-one'
+                            environmentName = 'AzureCloud'
+                            user = @{ type = $script:UserType }
                         }
                     }
                     'account get-access-token' { return 'expiry-not-token' }
+                    'active account show' {
+                        return ConvertTo-Json @{
+                            id = $script:ActiveSubscription
+                            tenantId = $script:ActiveTenant
+                        }
+                    }
+                    'ad signed-in-user' { return $script:UserId }
                     'group create' { return }
                     'storage account list' {
                         return ConvertTo-Json -InputObject $script:Accounts -Compress
@@ -197,13 +213,13 @@ Describe 'Production identity deployment policy' {
             $script:DeploymentParameters.managedIdentityName | Should -Be 'id-historyone-bench-history'
         }
 
-        It 'forwards literal custom parameters and independent local access' {
+        It 'forwards literal custom parameters and independent additional access' {
             $script:Parameters.ResourceGroup = 'group''"$() literal'
-            $script:Parameters.LocalPrincipalId = 'local-one'
-            $script:Parameters.LocalPrincipalType = 'Group'
+            $script:Parameters.CustomPrincipalId = 'custom-one'
+            $script:Parameters.CustomPrincipalType = 'Group'
             Invoke-ProductionIdentityDeployment @script:Parameters | Out-Null
-            $script:DeploymentParameters.localPrincipalId | Should -Be 'local-one'
-            $script:DeploymentParameters.localPrincipalType | Should -Be 'Group'
+            $script:DeploymentParameters.customPrincipalId | Should -Be 'custom-one'
+            $script:DeploymentParameters.customPrincipalType | Should -Be 'Group'
             $script:DeploymentParameters.githubOrg | Should -Be 'owner-one'
             $script:DeploymentParameters.githubRepo | Should -Be 'repository-one'
             Should -Invoke az -Times 1 -Exactly -ParameterFilter {
@@ -244,12 +260,84 @@ Describe 'Production identity deployment policy' {
             @{ name = 'HistoryContainerName'; value = 'Uppercase' }
             @{ name = 'HistoryContainerName'; value = 'two--hyphens' }
             @{ name = 'StorageAccountName'; value = 'Uppercase' }
-            @{ name = 'LocalPrincipalId'; value = 'unpaired' }
-            @{ name = 'LocalPrincipalType'; value = 'User' }
+            @{ name = 'CustomPrincipalId'; value = 'unpaired' }
+            @{ name = 'CustomPrincipalType'; value = 'User' }
         ) {
             $script:Parameters[$name] = $value
             { Invoke-ProductionIdentityDeployment @script:Parameters } | Should -Throw
             Should -Invoke az -Times 0 -Exactly
+        }
+
+        It 'resolves the current user through the selected subscription before any Azure mutation' {
+            Invoke-ProductionIdentityDeployment @script:Parameters -CurrentUser | Out-Null
+            $script:Calls[0..6] | Should -Be @(
+                'version', 'bicep version', 'account show', 'account get-access-token',
+                'active account show', 'ad signed-in-user', 'group create'
+            )
+            $script:DeploymentParameters.customPrincipalId | Should -Be $script:UserId
+            $script:DeploymentParameters.customPrincipalType | Should -Be 'User'
+            Should -Invoke az -Times 1 -Exactly -ParameterFilter {
+                ($args[0..2] -join ' ') -eq 'ad signed-in-user show' -and
+                $args[[array]::IndexOf($args, '--query') + 1] -eq 'id'
+            }
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'set' }
+        }
+
+        It 'rejects a mismatched active directory context before lookup or mutations: <_>' -ForEach @(
+            'subscription', 'tenant'
+        ) {
+            if ($_ -eq 'subscription') { $script:ActiveSubscription = 'other-subscription' }
+            else { $script:ActiveTenant = 'other-tenant' }
+            { Invoke-ProductionIdentityDeployment @script:Parameters -CurrentUser } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter {
+                $args[0] -eq 'ad' -or $args -contains 'create'
+            }
+        }
+
+        It 'rejects non-user logins before identity lookup or Azure mutations' {
+            $script:UserType = 'servicePrincipal'
+            { Invoke-ProductionIdentityDeployment @script:Parameters -CurrentUser } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter {
+                $args[0] -eq 'ad' -or $args -contains 'create'
+            }
+        }
+
+        It 'rejects unresolved current-user IDs before Azure mutations: <_>' -ForEach @(
+            '', 'not-an-id', '00000000-0000-0000-0000-000000000000'
+        ) {
+            $script:UserId = $_
+            { Invoke-ProductionIdentityDeployment @script:Parameters -CurrentUser } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'create' }
+        }
+
+        It 'does not mutate Azure when current-user prerequisites fail: <_>' -ForEach @(
+            'active account show', 'ad signed-in-user'
+        ) {
+            $script:FailOperation = $_
+            { Invoke-ProductionIdentityDeployment @script:Parameters -CurrentUser } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'create' }
+        }
+
+        It 'rejects current-user conflicts before probing Azure: <_>' -ForEach @(
+            'CustomPrincipalId', 'CustomPrincipalType'
+        ) {
+            $script:Parameters[$_] = if ($_ -eq 'CustomPrincipalType') { 'User' } else { 'custom-one' }
+            { Invoke-ProductionIdentityDeployment @script:Parameters -CurrentUser } | Should -Throw
+            Should -Invoke az -Times 0 -Exactly
+        }
+
+        It 'grants another principal incrementally without requesting removal or recreating storage' {
+            foreach ($principal in @('first-user', 'additional-user')) {
+                Invoke-ProductionIdentityDeployment @script:Parameters `
+                    -CustomPrincipalId $principal -CustomPrincipalType User | Out-Null
+                $script:DeploymentParameters.customPrincipalId | Should -Be $principal
+                $script:DeploymentParameters.createStorageAccount | Should -Be 'false'
+                $script:DeploymentParameters.createHistoryContainer | Should -Be 'false'
+            }
+            Should -Invoke az -Times 2 -Exactly -ParameterFilter {
+                $args[0] -eq 'deployment' -and $args -contains 'Incremental'
+            }
+            Should -Invoke az -Times 0 -Exactly -ParameterFilter { $args -contains 'delete' }
         }
 
         It 'rejects an invalid literal branch before Azure calls: <_>' -ForEach @(

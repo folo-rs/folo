@@ -121,7 +121,7 @@ jobs:
   # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
   test-scripts:
     needs: prepare
-    if: needs.prepare.outputs.script_domains != '[]' || fromJSON(needs.prepare.outputs.plan).script_analysis
+    if: needs.prepare.outputs.script_domains != '[]' || fromJSON(needs.prepare.outputs.plan).script_analysis || fromJSON(needs.prepare.outputs.plan).bicep
     runs-on: ubuntu-latest
 
     steps:
@@ -140,6 +140,17 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           just validate-scripts
+
+      # Bicep owns syntax/type/API-version checks; the shared recipe rejects warning diagnostics.
+      # No Azure login or deployment occurs. Ref: .github/workflows/implementation.md#bicep-validation.
+      - name: Validate Bicep templates and parameters
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && fromJSON(needs.prepare.outputs.plan).bicep }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just validate-bicep
 
       - name: Run script test suites
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.script_domains != '[]' }}
@@ -162,6 +173,14 @@ jobs:
         with:
           name: script-analysis-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/script-analysis
+          if-no-files-found: ignore
+
+      - name: Retain Bicep diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: bicep-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/bicep-validation
           if-no-files-found: ignore
 
   # Reuse the pinned standalone installers without restoring the Rust development environment.

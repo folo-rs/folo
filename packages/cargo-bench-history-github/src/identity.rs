@@ -18,6 +18,7 @@ pub(crate) enum IssueIdentity {
 }
 
 impl IssueIdentity {
+    /// Supplies the stable title phrase used for server-side discovery, excluding update dates.
     pub(crate) fn phrase(&self) -> String {
         match self {
             Self::Rolling(instance) => {
@@ -32,10 +33,12 @@ impl IssueIdentity {
         }
     }
 
+    /// Selects alert discovery across closed issues so human disposition remains authoritative.
     pub(crate) fn includes_closed(&self) -> bool {
         matches!(self, Self::Alert(..))
     }
 
+    /// Distinguishes the reserved title form from merely similar search results.
     pub(crate) fn matches(&self, title: &str) -> bool {
         let phrase = self.phrase();
         match self {
@@ -53,6 +56,7 @@ impl IssueIdentity {
         }
     }
 
+    /// Builds a title for a body mutation, using the injected clock only for rolling issues.
     pub(crate) fn title(&self, clock: &Clock) -> Result<String, AppError> {
         match self {
             Self::Alert(..) => Ok(self.phrase()),
@@ -66,6 +70,10 @@ impl IssueIdentity {
     }
 }
 
+/// Binds a failure notice's link to its declared repository and workflow run.
+///
+/// Lifecycle commands call this before discovery so missing artifacts cannot conceal
+/// inconsistent execution identity.
 pub(crate) fn validate_run_url(
     repository: &Repository,
     run: NonZero<u64>,

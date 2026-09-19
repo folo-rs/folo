@@ -22,6 +22,11 @@ struct Destination {
 }
 
 impl Destination {
+    /// Resolves a report target into an existing anchor and a missing suffix.
+    ///
+    /// Preflight uses the verified anchor for filesystem identity checks and reserves the
+    /// missing suffix for prospective-name probes. An empty suffix identifies an existing
+    /// target. Resolution does not create the directories that report writing may need.
     #[cfg_attr(test, mutants::skip)]
     fn resolve(path: &Path) -> io::Result<Self> {
         let resolved = resolve_path(path)?;
@@ -47,6 +52,12 @@ impl Destination {
     }
 }
 
+/// Checks whether report destinations alias or form a file/directory prefix.
+///
+/// The output writer calls this native preflight after rebasing the requested paths.
+/// It inspects current filesystem identities without writing reports or creating their
+/// requested parents. Inspection and probe failures remain I/O errors for the shell to
+/// contextualize, rather than evidence that the destinations are independent.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn destinations_conflict(left: &Path, right: &Path) -> io::Result<bool> {
     let left = Destination::resolve(left)?;
@@ -59,6 +70,12 @@ pub(crate) fn destinations_conflict(left: &Path, right: &Path) -> io::Result<boo
     )
 }
 
+/// Decides report-path compatibility using injected filesystem comparisons.
+///
+/// Both the native preflight and its in-memory tests use this decision boundary. Inputs
+/// have the anchor/suffix invariants established by [`Destination::resolve`]. `same_file`
+/// compares existing identities; `probe_missing` receives nonempty suffixes whose anchors
+/// identify the same existing directory.
 fn destinations_conflict_with(
     left: &Destination,
     right: &Destination,
@@ -84,6 +101,11 @@ fn destinations_conflict_with(
     probe_missing(left, right)
 }
 
+/// Tests whether an identity occurs in another path's inclusive ancestry.
+///
+/// Existing-target checks and prospective-name probes share this prefix-conflict test.
+/// Callers supply resolved anchors or owned probe paths; the comparison callback controls
+/// lookup-error handling, including whether missing probe paths are expected.
 fn matches_ancestor(
     path: &Path,
     other: &Path,
@@ -97,12 +119,15 @@ fn matches_ancestor(
     Ok(false)
 }
 
+/// Compares prospective report names using their actual parent filesystem.
+///
+/// The conflict decision calls this only for nonempty suffixes below the same existing
+/// directory. Owned probes model report leaves as files so both name aliases and
+/// file/directory prefixes are detected without materializing requested output parents.
 #[cfg_attr(test, mutants::skip)]
 fn probe_missing_destinations(left: &Destination, right: &Destination) -> io::Result<bool> {
-    // Probe prospective names in their actual parent, using a common random prefix on the
-    // first missing component. Each report is a file; only its parents can be directories.
-    // The owned tree follows the writer's rules without creating any output parents.
-    // No extra wrapper directory may change the first component's case-sensitivity rules.
+    // Keep the first probe component in the actual parent: an extra wrapper directory
+    // could change its case-sensitivity rules.
     let mut left_components = left.suffix.components();
     let mut right_components = right.suffix.components();
     let left_name = left_components
@@ -162,6 +187,12 @@ fn probe_missing_destinations(left: &Destination, right: &Destination) -> io::Re
     )
 }
 
+/// Normalizes a report path while preserving existing filesystem traversal.
+///
+/// [`Destination::resolve`] needs an absolute comparison path even when the report or
+/// its parents are absent. Existing ancestors and symlinks establish the filesystem
+/// location before missing tails are normalized, preserving the meaning of `..`
+/// without creating directories.
 #[cfg_attr(test, mutants::skip)]
 fn resolve_path(path: &Path) -> io::Result<PathBuf> {
     let mut ancestor = absolute(path)?;
@@ -215,6 +246,11 @@ fn resolve_path(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
+/// Distinguishes absent path components from existing unresolvable links.
+///
+/// Path normalization uses this after canonicalization reports `NotFound`: rebuilding a
+/// missing suffix must not reinterpret an existing symlink as a new name. Success permits
+/// ordinary missing-component handling; inspection failures remain errors.
 #[cfg_attr(test, mutants::skip)]
 fn reject_unresolved_link(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {

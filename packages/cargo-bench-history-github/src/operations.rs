@@ -12,6 +12,9 @@ use crate::result::{AnalysisReport, Evidence, PlatformCoverage, PublicationState
 use crate::{action, workflow};
 
 /// Namespace and diagnostics shared by lifecycle and workflow operations.
+///
+/// Process setup resolves repository and instance before creating this context; individual
+/// operations add their run ownership and evidence rather than embedding them here.
 #[derive(Clone, Debug)]
 pub(crate) struct Context {
     pub(crate) repository: Repository,
@@ -61,6 +64,10 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
 
 // Dispatch loads real report artifacts. Native integration tests inject only GitHub
 // and the clock; they execute these same command branches and filesystem adapters.
+/// Loads online-command inputs and delegates state policy to the shared lifecycle operations.
+///
+/// Process setup has already handled offline commands. Injecting GitHub and the clock here
+/// lets native file-backed tests exercise the same dispatcher without network writes.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn dispatch(
     command: Command,
@@ -152,6 +159,7 @@ pub(crate) async fn dispatch(
     }
 }
 
+/// Loads the JSON verdict and explicit collection coverage used by inspection and publication.
 pub(crate) async fn load_evidence(
     args: ResultArgs,
     commit: &CommitSha,
@@ -165,6 +173,7 @@ pub(crate) async fn load_evidence(
     })
 }
 
+/// Joins caller-paired summary files with validated metadata and the publishing run's owner.
 async fn load_report(args: ReportArgs) -> Result<Report, AppError> {
     let evidence = load_evidence(args.evidence, &args.analyzed_sha).await?;
     let summary = tokio::fs::read_to_string(&args.body_file)
@@ -183,6 +192,7 @@ async fn load_report(args: ReportArgs) -> Result<Report, AppError> {
 
 // CLI and action validation guarantee the selected group's required fields; integration tests
 // exercise this adapter without teaching the unit harness to perform real I/O.
+/// Materializes the validated empty-scope or report-backed form of no-data publication.
 #[cfg_attr(test, mutants::skip)]
 async fn load_no_data(args: NoDataArgs) -> Result<NoData, AppError> {
     if args.empty_scope {
@@ -219,6 +229,7 @@ async fn load_no_data(args: NoDataArgs) -> Result<NoData, AppError> {
 }
 
 // Diagnostic output has no policy effect; capturing global stderr would cross the unit boundary.
+/// Emits repository-qualified decision context only when the caller requested diagnostics.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn note(context: &Context, message: &str) {
     if context.verbose {

@@ -9,6 +9,10 @@ use crate::result::{AnalysisMode, Evidence, Outcome, platform_list};
 use crate::workflow::receipt::Receipt;
 use crate::workflow::reconcile::{Selection, collection_job_prefix};
 
+/// Builds setup outputs that keep matrix jobs and later evidence on one platform set.
+///
+/// `workflow_matrix` appends this block to the runner's output file. The shared normalization
+/// also supplies the collection-job prefix consumed by job reconciliation.
 pub(crate) fn matrix_outputs(platforms: &str, instance: &Instance) -> Result<String, AppError> {
     let platforms = platform_list(platforms)?;
     let expected = platforms
@@ -24,6 +28,10 @@ pub(crate) fn matrix_outputs(platforms: &str, instance: &Instance) -> Result<Str
     ))
 }
 
+/// Exposes reconciled collection coverage and deduplicated hardware keys to the next step.
+///
+/// The receipt slice must be the one used to create `selection`; platform completeness comes
+/// from job evidence and remains independent of the number of distinct machine keys.
 pub(crate) fn preparation_outputs(selection: &Selection, receipts: &[Receipt]) -> String {
     let selected = selected_receipts(selection, receipts);
     let completed = selected
@@ -41,6 +49,10 @@ pub(crate) fn preparation_outputs(selection: &Selection, receipts: &[Receipt]) -
     )
 }
 
+/// Explains which latest job attempts contributed receipts and why coverage may be partial.
+///
+/// Preparation emits these messages only in verbose mode; constructing them separately lets
+/// fake-driven tests exercise the selection explanation without capturing global stderr.
 pub(crate) fn preparation_diagnostics(
     selection: &Selection,
     receipts: &[Receipt],
@@ -73,6 +85,10 @@ pub(crate) fn preparation_diagnostics(
     messages
 }
 
+/// Plans the analyzer's key-file tree using only successfully reconciled receipts.
+///
+/// Preparation materializes these relative paths in a validated fresh directory. Measurement
+/// objects stay in configured storage rather than being copied into collection artifacts.
 pub(crate) fn machine_key_files(
     selection: &Selection,
     receipts: &[Receipt],
@@ -87,6 +103,7 @@ pub(crate) fn machine_key_files(
         .collect()
 }
 
+/// Resolves selection indices against their original receipts for output projections.
 fn selected_receipts<'a>(
     selection: &'a Selection,
     receipts: &'a [Receipt],
@@ -98,6 +115,10 @@ fn selected_receipts<'a>(
     })
 }
 
+/// Projects validated evidence into workflow decisions without interpreting report prose.
+///
+/// Inspection and root-action analysis share this projection with the publication gates.
+/// `can-clear` is history-specific; the publication state also serves PR comments.
 pub(crate) fn report_outputs(evidence: &Evidence) -> String {
     let outcome = evidence.report.outcome.as_str();
     // Use the publication gates themselves: their validated parser owns census semantics.

@@ -11,7 +11,7 @@ of the commands below are automatic rollout steps.
 - One **production identity**, `id-folo-bench-history-prod` by default, has
   `Storage Blob Data Contributor` on the storage account. Collection, backfill and
   analysis share it; there is no separate reader role or client ID.
-- An optional local user or group receives account-scoped
+- An optional additional user or group receives account-scoped
   `Storage Blob Data Contributor`, independently of the production identity.
 
 The production identity uses the issuer `https://token.actions.githubusercontent.com`
@@ -80,10 +80,14 @@ Other parameters (see `deploy.ps1 -?`):
 | `-HistoryContainerName` | `bench-history`; must match repository storage configuration |
 | `-GithubOrg` / `-GithubRepo` | `folo-rs` / `folo` |
 | `-HistoryBranch` | `main`; branch allowed to federate alongside PRs |
-| `-LocalPrincipalId` / `-LocalPrincipalType` | Optional object ID and `User` or `Group` |
+| `-CustomPrincipalId` / `-CustomPrincipalType` | Optional existing Entra object ID and `User` or `Group` |
+| `-CurrentUser` | Resolve the Azure CLI signed-in user in the selected subscription's tenant |
 
-For local data-plane access, optionally include
-`-LocalPrincipalId (az ad signed-in-user show --query id -o tsv) -LocalPrincipalType User`.
+For workstation data-plane access, optionally include `-CurrentUser`. It requires
+a user login, Microsoft Graph access and the target subscription active in Azure CLI,
+and conflicts with the explicit custom
+principal flags. Those flags let you grant an existing user or group access by its
+object ID in the target tenant instead.
 
 ### Non-secret output handoff
 
@@ -98,7 +102,13 @@ Provisioning alone does not activate any workflow.
 | `AZURE_PROD_CLIENT_ID` in `constants.env` | `managedIdentityClientId` |
 | `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | `tenantId` / `subscriptionId` |
 
-`managedIdentityPrincipalId` and `blobEndpoint` are also available as deployment outputs.
+`managedIdentityPrincipalId` identifies the principal in Azure role-assignment
+diagnostics; it is not a workflow client ID. `blobEndpoint` is for connectivity
+diagnostics, not an additional benchmark configuration field.
+Generic exported deployments describe GitHub repository variables; Folo instead uses
+the `constants.env` mappings above and supplies them to its workflow callers.
+The callers need `id-token: write` for OIDC; direct benchmark OIDC requires only
+client and tenant IDs, not the subscription ID.
 
 ## Deployment behavior
 
@@ -119,8 +129,19 @@ definition authority.
   initially disable container/blob soft delete, and create the private history container.
 - **Identity:** fresh and repeated deployments ensure the same production identity,
   `Storage Blob Data Contributor` role and configured branch/PR federated subjects.
-- **Incremental mode:** unmentioned resources and optional local grants remain.
-  Omission is not a general-purpose resource deletion mechanism.
+- **Incremental grants:** unmentioned resources and previous custom-principal
+  grants remain. Granting another principal access does not remove earlier grants.
+  Omission is not revocation and existing storage/history is not destroyed.
+- **Federation configuration:** changing the repository or branch updates the
+  selected identity's existing credentials. The `github-branch-main` resource key
+  is fixed even when `-HistoryBranch` selects a different branch; its subject is
+  replaced rather than adding another branch credential.
+
+The [test stack](../azure-bench-history-test/) shares tooling/authentication and
+current-user preflight with this stack, and uses the same custom-principal vocabulary.
+Its Bicep deliberately remains separate: it owns disposable test storage, enforces
+test retention settings on updates and keeps its own CI identity and trust controls.
+Deploying it does not grant access to production history.
 
 Always use the wrapper for routine deployments. Direct Bicep/ARM callers bypass
 its state discovery. They must explicitly select `createStorageAccount` and

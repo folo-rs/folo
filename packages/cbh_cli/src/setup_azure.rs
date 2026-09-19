@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cbh_command::{LocalPrincipalType, SetupAzureOptions};
+use cbh_command::{CustomPrincipalType, SetupAzureOptions};
 use clap::{Args, ValueEnum};
 
 /// Standalone provisioning inputs, deliberately independent of benchmark configuration.
@@ -64,17 +64,30 @@ pub(crate) struct SetupAzureCommand {
         help_heading = "GitHub federation"
     )]
     history_branch: Option<String>,
-    /// Optional local Entra principal object ID to grant contributor access.
-    #[arg(long, requires = "local_principal_type", help_heading = "Local access")]
-    local_principal_id: Option<String>,
-    /// Type of the optional local principal.
+    /// Existing Entra user/group object ID to grant account-scoped blob contributor access.
+    #[arg(
+        long,
+        requires = "custom_principal_type",
+        help_heading = "Additional access"
+    )]
+    custom_principal_id: Option<String>,
+    /// Type of the custom principal.
     #[arg(
         long,
         value_enum,
-        requires = "local_principal_id",
-        help_heading = "Local access"
+        requires = "custom_principal_id",
+        help_heading = "Additional access"
     )]
-    local_principal_type: Option<PrincipalType>,
+    custom_principal_type: Option<PrincipalType>,
+    /// Grant the Azure CLI signed-in user access in the selected subscription's tenant.
+    ///
+    /// The selected subscription must also be active in Azure CLI for directory lookup.
+    #[arg(
+        long,
+        conflicts_with_all = ["out_dir", "custom_principal_id", "custom_principal_type"],
+        help_heading = "Additional access"
+    )]
+    current_user: bool,
     /// Emit explanatory deployment diagnostics.
     #[arg(long, help_heading = "Output")]
     verbose: bool,
@@ -93,11 +106,12 @@ impl SetupAzureCommand {
             history_branch: self.history_branch,
             container: self.container,
             managed_identity: self.managed_identity,
-            local_principal_id: self.local_principal_id,
-            local_principal_type: self.local_principal_type.map(|kind| match kind {
-                PrincipalType::User => LocalPrincipalType::User,
-                PrincipalType::Group => LocalPrincipalType::Group,
+            custom_principal_id: self.custom_principal_id,
+            custom_principal_type: self.custom_principal_type.map(|kind| match kind {
+                PrincipalType::User => CustomPrincipalType::User,
+                PrincipalType::Group => CustomPrincipalType::Group,
             }),
+            current_user: self.current_user,
             verbose: self.verbose,
         }
     }
@@ -137,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_explicit_deployment_and_local_access_values() {
+    fn maps_explicit_deployment_and_custom_access_values() {
         let command = from_args(
             &["cbh"],
             &[
@@ -160,9 +174,9 @@ mod tests {
                 "container",
                 "--managed-identity",
                 "identity",
-                "--local-principal-id",
+                "--custom-principal-id",
                 "principal",
-                "--local-principal-type",
+                "--custom-principal-type",
                 "group",
                 "--verbose",
             ],
@@ -181,8 +195,9 @@ mod tests {
                 history_branch: Some("history/main".into()),
                 container: Some("container".into()),
                 managed_identity: Some("identity".into()),
-                local_principal_id: Some("principal".into()),
-                local_principal_type: Some(LocalPrincipalType::Group),
+                custom_principal_id: Some("principal".into()),
+                custom_principal_type: Some(CustomPrincipalType::Group),
+                current_user: false,
                 verbose: true,
                 out_dir: None,
             })
@@ -190,16 +205,16 @@ mod tests {
     }
 
     #[test]
-    fn maps_local_user_access() {
+    fn maps_custom_user_access() {
         let Command::SetupAzure(options) = from_args(
             &["cbh"],
             &[
                 "setup-azure",
                 "--out-dir",
                 "bundle",
-                "--local-principal-id",
+                "--custom-principal-id",
                 "principal",
-                "--local-principal-type",
+                "--custom-principal-type",
                 "user",
             ],
         )
@@ -207,22 +222,104 @@ mod tests {
         .into_command() else {
             panic!()
         };
-        assert_eq!(options.local_principal_type, Some(LocalPrincipalType::User));
+        assert_eq!(
+            options.custom_principal_type,
+            Some(CustomPrincipalType::User)
+        );
     }
 
     #[test]
-    fn local_access_requires_both_fields() {
-        for flag in ["--local-principal-id", "--local-principal-type"] {
-            let value = if flag == "--local-principal-id" {
-                "id"
-            } else {
-                "user"
-            };
-            from_args(
-                &["cbh"],
-                &["setup-azure", "--out-dir", "bundle", flag, value],
-            )
-            .unwrap_err();
-        }
+    fn custom_access_requires_type() {
+        from_args(
+            &["cbh"],
+            &[
+                "setup-azure",
+                "--out-dir",
+                "bundle",
+                "--custom-principal-id",
+                "id",
+            ],
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn custom_access_requires_id() {
+        from_args(
+            &["cbh"],
+            &[
+                "setup-azure",
+                "--out-dir",
+                "bundle",
+                "--custom-principal-type",
+                "user",
+            ],
+        )
+        .unwrap_err();
+    }
+
+    // Representative placement keeps access conflicts independent of missing-input errors.
+    const CURRENT_USER_INPUTS: &[&str] = &[
+        "setup-azure",
+        "--subscription-id",
+        "subscription",
+        "--resource-group",
+        "group",
+        "--location",
+        "region",
+        "--storage-account",
+        "account",
+        "--github-owner",
+        "owner",
+        "--github-repository",
+        "repository",
+        "--history-branch",
+        "main",
+        "--current-user",
+    ];
+
+    #[test]
+    fn maps_current_user() {
+        let Command::SetupAzure(options) = from_args(&["cbh"], CURRENT_USER_INPUTS)
+            .unwrap()
+            .into_command()
+        else {
+            panic!()
+        };
+        assert!(options.current_user);
+        assert!(options.custom_principal_id.is_none());
+        assert!(options.custom_principal_type.is_none());
+    }
+
+    #[test]
+    fn current_user_conflicts_with_export() {
+        rejects_current_user_conflict(&["--out-dir", "bundle"]);
+    }
+
+    #[test]
+    fn current_user_conflicts_with_custom_id() {
+        rejects_current_user_conflict(&["--custom-principal-id", "id"]);
+    }
+
+    #[test]
+    fn current_user_conflicts_with_custom_type() {
+        rejects_current_user_conflict(&["--custom-principal-type", "user"]);
+    }
+
+    #[test]
+    fn current_user_conflicts_with_custom_principal() {
+        rejects_current_user_conflict(&[
+            "--custom-principal-id",
+            "id",
+            "--custom-principal-type",
+            "user",
+        ]);
+    }
+
+    fn rejects_current_user_conflict(conflicting: &[&str]) {
+        let mut inputs = CURRENT_USER_INPUTS.to_vec();
+        inputs.extend(conflicting);
+        let error = from_args(&["cbh"], &inputs).unwrap_err();
+        assert!(error.status.is_err());
     }
 }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 
-/// File and executable boundaries supplied by the installation bootstrap.
+/// Bootstrap-to-companion handoff for input, output and executable locations.
 #[derive(Args, Debug)]
 pub(crate) struct ActionArgs {
     /// Strict JSON object of string action inputs, relative to the invocation directory.
