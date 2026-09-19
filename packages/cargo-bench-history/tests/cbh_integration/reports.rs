@@ -393,6 +393,39 @@ async fn report_outputs_write_all_distinct_formats_and_create_parents() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "refreshes existing report files and creates distinct filesystem outputs"
+)]
+async fn report_outputs_accept_mixed_existing_and_missing_destinations_in_either_order() {
+    for (json, outcome, existing) in [
+        ("report.json", "outcome.txt", "report.json"),
+        ("report.json", "outcome.txt", "outcome.txt"),
+        ("report.json", "new/nested/outcome.txt", "report.json"),
+        ("new/nested/report.json", "outcome.txt", "outcome.txt"),
+    ] {
+        let workspace = Workspace::repo(&storage_only_config());
+        fs::write(workspace.root().join(existing), "stale report").unwrap();
+
+        let result = workspace
+            .drive(&["analyze", "--json", json, "--outcome", outcome])
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            RunOutcome::Analyzed {
+                outcome: AnalysisOutcome::NothingInScope,
+                ..
+            }
+        ));
+        let report: Value = serde_json::from_str(&workspace.read(json).unwrap()).unwrap();
+        assert_eq!(report["outcome"], "nothing_in_scope");
+        assert_eq!(workspace.read(outcome).as_deref(), Some("nothing_in_scope"));
+    }
+}
+
+#[tokio::test]
 #[cfg_attr(miri, ignore = "overwrites a real output file outside the workspace")]
 async fn report_outputs_keep_single_output_overwrite_and_absolute_path_behavior() {
     let workspace = Workspace::repo(&storage_only_config());
