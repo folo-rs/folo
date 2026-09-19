@@ -41,6 +41,9 @@ concurrency:
   group: bench-history-backfill
   cancel-in-progress: false
 
+# TODO(#284): Migrate this job graph to
+# folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml when that reusable workflow
+# is published. Folo keeps its schedule, configuration and bench-history-setup hook.
 jobs:
   backfill:
     # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's identity can
@@ -117,6 +120,7 @@ jobs:
       # fingerprint (no fixed machine key). BACKFILL_TO_COMMIT is empty on a scheduled run; it is
       # passed through the environment so an untrusted dispatch input is never spliced into a shell
       # command line here.
+      # The shared workflow will invoke the root action's backfill command instead of this recipe.
       - name: Backfill benchmark history
         shell: pwsh
         env:

@@ -191,7 +191,7 @@ binary version comes from the action release's manifest. There is no caller vers
 override or independently moving latest-tool selection. Updating the tested combination is
 an action release, which may change only that manifest. Tool and action version numbers
 remain independent. Every monorepo PR moving a pinned tool version has a paired action PR
-to adopt it, following the [release policy](../../../docs/release-versioning.md#paired-benchmark-action-releases).
+to adopt it, following the [release policy](../../../docs/benchmark-action-releases.md).
 
 A pinned action release or commit selects an exact tested combination. The floating `v1`
 tag advances only among action releases with their own tested manifests. `path` deliberately
@@ -1485,11 +1485,12 @@ There is no manual tag-preparation step or crates.io publication in the action r
 6. The action's release workflow publishes the reviewed version and advances its floating
    major after the final availability gate.
 
-The [monorepo release policy](../../../docs/release-versioning.md#paired-benchmark-action-releases)
-and `increment-versions` skill require this pairing, including dependency/group and version-only
-movements. The manifest is the scope authority, including its test-only faker pin and workflow
-helpers. Reuse an existing pairing when appropriate and refresh both PRs after any version-plan
-change. A tool-pin-only action change still carries an action-version increment.
+The [repository-specific release policy](../../../docs/benchmark-action-releases.md)
+and [`pair-benchmark-action-release` skill](../../../.github/skills/pair-benchmark-action-release/SKILL.md),
+run after general `increment-versions`, require this pairing, including dependency/group and
+version-only movements. The manifest is the scope authority, including its test-only faker pin
+and workflow helpers. Reuse an existing pairing when appropriate and refresh both PRs after any
+version-plan change. A tool-pin-only action change still carries an action-version increment.
 
 **`install-tools` is a required, fail-closed availability check.** It reads the PR's own
 manifest and invokes the shared installation canaries, not a second installer and not the

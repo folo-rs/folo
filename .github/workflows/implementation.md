@@ -43,9 +43,10 @@ This keeps repository-specific preparation separate from tool installation and G
 
 Benchmark automation has preparation, collection, combined analysis/publication and
 independently scheduled lifecycle work.
-Preparation builds the Linux companion with the repository's pinned Rust toolchain and
-archives its executable permissions. The combined job and lifecycle jobs reuse that run-scoped
-archive rather than independently rebuilding the companion.
+Preparation uses the standard `setup-environment` action and its shared development-tool caches.
+It builds the Linux companion in Cargo's ordinary target directory, resolves the executable
+from Cargo's build output and archives its executable permissions. The combined job and
+lifecycle jobs reuse that run-scoped archive rather than independently rebuilding the companion.
 Notification depends on this executable and has no independent publisher. A failure to
 prepare or obtain the companion keeps the workflow visibly failed rather than claiming
 notification success; issue alerting is not guaranteed while the executable is unavailable.
@@ -115,6 +116,26 @@ cache miss; topology selection excludes unrelated branch commits from trunk anal
 Manual pruning and ordinary backfill cover the supported data-maintenance path. Benchmark
 workflows expose no targeted historical recollection. Their triggers exclude `merge_group`
 and enqueue/dequeue activity because the workflows are advisory.
+
+### Shared action migration
+
+The job graphs and CI-only `gh-*` recipes are intermediate wiring for issue #284.
+Their migration targets in `folo-rs/cargo-bench-history-action` are:
+
+| Folo workflow | Shared reusable workflow |
+| --- | --- |
+| `bench-history.yml` | `.github/workflows/history.yml` |
+| `pr-bench-history.yml` | `.github/workflows/pr.yml` |
+| `bench-history-backfill.yml` | `.github/workflows/backfill.yml` |
+
+Once those reusable workflows are published, they own installation, collection and analysis
+orchestration, receipt/artifact handoff, publication lifecycles and job coordination.
+Their root composite action supplies the individual tool commands. Folo retains its triggers,
+repository configuration, caller permissions/inputs and the fixed `bench-history-setup` hook,
+using source installation to exercise the monorepo tools.
+The CI-only recipes, companion-archive builder and helpers without other callers can then be
+removed. The initial root-action release alone does not provide the reusable-workflow layer.
+Manual Azure provisioning remains a separate maintainer operation through `setup-azure`.
 
 ## Standard validation structure
 

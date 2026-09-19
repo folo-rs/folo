@@ -29,12 +29,13 @@ same-repository PRs and must not expose privileged credentials to fork code.
 The absence of stored secrets is not itself an OIDC authorization boundary.
 
 Analysis and GitHub publication may run in one job. Azure access uses this identity;
-issue/comment access uses the job's built-in GitHub token. Local PR measurement artifacts
-avoid retaining disposable branch data in production; they do not require a reader identity.
+issue/comment access uses the job's built-in GitHub token. PR and trunk measurements use
+the configured store; collection artifacts carry receipts rather than a second copy of data.
 
 ## Prerequisites
 
-- PowerShell 7.6, Azure CLI, and an **already installed Bicep CLI** accessible to
+- The repository's Rust development environment, PowerShell 7.6, Azure CLI, and an
+  **already installed Bicep CLI** accessible to
   Azure CLI. `az bicep version` must succeed. The deployment wrapper checks this
   before any Azure changes and does not install tooling.
 - `az login` as a maintainer with resource provisioning and role-assignment rights
@@ -101,11 +102,13 @@ Provisioning alone does not activate any workflow.
 
 ## Deployment behavior
 
-`deploy.ps1` supplies Folo defaults to the [canonical deployment bundle](../../packages/cargo-bench-history/src/azure_bundle/).
-That bundle is embedded by `cargo-bench-history setup-azure` and can be exported without a
-checkout. Its driver calls the Pester-tested `ProductionIdentityDeployment.psm1` module.
-This is a thin Azure CLI provisioning boundary usable without a Rust toolchain;
-Bicep remains the resource definition authority.
+`deploy.ps1` supplies Folo defaults to `cargo run -p cargo-bench-history --bin cargo-bench-history
+--locked -- setup-azure`. Routine production provisioning therefore exercises the source-built
+CLI, including its prerequisite checks and embedded
+[canonical deployment bundle](../../packages/cargo-bench-history/src/azure_bundle/).
+The exported bundle remains usable without a Rust toolchain; its driver calls the
+Pester-tested `ProductionIdentityDeployment.psm1` module. Bicep remains the resource
+definition authority.
 
 - **Existing storage:** successful management-plane listings select
   `createStorageAccount=false` and, if present, `createHistoryContainer=false`.

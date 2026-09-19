@@ -4,8 +4,8 @@
 .SYNOPSIS
     Deploys the Folo production benchmark history stack.
 .DESCRIPTION
-    Supplies Folo-specific names to the canonical standalone deployment driver
-    embedded by cargo-bench-history setup-azure. It requires no compiled Rust.
+    Supplies Folo-specific names to the source-built cargo-bench-history setup-azure
+    command, exercising its CLI, prerequisite checks and embedded deployment bundle.
     See README.md for privileges, storage preservation and configuration handoff.
 #>
 [CmdletBinding()]
@@ -28,17 +28,25 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
-$parameters = @{
-    SubscriptionId = $SubscriptionId
-    ResourceGroup = $ResourceGroup
-    Location = $Location
-    StorageAccountName = $StorageAccountName
-    ManagedIdentityName = $ManagedIdentityName
-    HistoryContainerName = $HistoryContainerName
-    GithubOrg = $GithubOrg
-    GithubRepo = $GithubRepo
-    HistoryBranch = $HistoryBranch
-    LocalPrincipalId = $LocalPrincipalId
-    LocalPrincipalType = $LocalPrincipalType
+$cargoArgs = @(
+    'run', '--manifest-path', (Join-Path $PSScriptRoot '..' '..' 'Cargo.toml'),
+    '--package', 'cargo-bench-history', '--bin', 'cargo-bench-history', '--locked', '--',
+    'setup-azure',
+    '--subscription-id', $SubscriptionId,
+    '--resource-group', $ResourceGroup,
+    '--location', $Location,
+    '--storage-account', $StorageAccountName,
+    '--managed-identity', $ManagedIdentityName,
+    '--container', $HistoryContainerName,
+    '--github-owner', $GithubOrg,
+    '--github-repository', $GithubRepo,
+    '--history-branch', $HistoryBranch,
+    '--verbose'
+)
+if (-not [string]::IsNullOrEmpty($LocalPrincipalId)) {
+    $cargoArgs += @('--local-principal-id', $LocalPrincipalId)
 }
-& (Join-Path $PSScriptRoot '..' '..' 'packages' 'cargo-bench-history' 'src' 'azure_bundle' 'deploy.ps1') @parameters -Verbose
+if (-not [string]::IsNullOrEmpty($LocalPrincipalType)) {
+    $cargoArgs += @('--local-principal-type', $LocalPrincipalType.ToLowerInvariant())
+}
+cargo @cargoArgs

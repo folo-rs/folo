@@ -1,6 +1,12 @@
 # Monorepo benchmark workflow entry points. Rust owns report/evidence decisions and GitHub
 # publication; these recipes only assemble native invocations through the existing collection,
 # path and machine-key helpers. Ref: .github/workflows/design.md#benchmark-history.
+#
+# TODO(#284): Retire these CI-only recipes when the history.yml, pr.yml and backfill.yml
+# reusable workflows in folo-rs/cargo-bench-history-action are published and adopted.
+# The root action owns collect, backfill and analyze-history/analyze-pr invocations; the
+# reusable workflows own collection receipts and machine-key handoff. Folo's configuration
+# and .github/actions/bench-history-setup remain repository-owned.
 
 # Main collection leaves stored measurements unchanged. Manual pruning and ordinary backfill
 # cover data maintenance; the workflow has no targeted historical repair mode.

@@ -12,12 +12,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 Import-Module (Join-Path $PSScriptRoot 'BenchHistoryPath.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..' 'build' 'CargoExecutable.psm1') -Force
 
 # Posting jobs are explicitly x86_64 Ubuntu. Pinning the target, not the toolchain version,
 # keeps an ambient Cargo cross-compilation setting from changing the archive layout.
 $target = 'x86_64-unknown-linux-gnu'
-$buildDirectory = Join-Path (Get-Location).Path 'target/bench-history-companion'
-cargo build --locked --package cargo-bench-history-github --bin cargo-bench-history-github --target $target --target-dir $buildDirectory
+# Use Cargo's ordinary target directory so the standard environment cache owns the build.
+$messages = @(cargo build --locked --package cargo-bench-history-github --bin cargo-bench-history-github --target $target --message-format=json-render-diagnostics)
+$binary = Resolve-CargoExecutable -CargoMessage $messages -TargetName 'cargo-bench-history-github'
 New-BenchHistoryDirectory -Path (Split-Path -Parent $ArchivePath)
-tar -czf $ArchivePath -C (Join-Path $buildDirectory "$target/debug") cargo-bench-history-github
-
+tar -czf $ArchivePath -C (Split-Path -Parent $binary) (Split-Path -Leaf $binary)
+$binary

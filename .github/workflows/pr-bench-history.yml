@@ -19,6 +19,9 @@ env:
   CBH_INSTANCE: folo
   CBH_PLATFORMS: ubuntu-latest,windows-latest
 
+# TODO(#284): Migrate this job graph to
+# folo-rs/cargo-bench-history-action/.github/workflows/pr.yml when that reusable workflow
+# is published. Folo keeps its PR triggers, configuration and bench-history-setup hook.
 jobs:
   unsupported:
     if: >-
@@ -41,8 +44,8 @@ jobs:
       && github.event.action != 'closed'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    # Generous cold compiler/build watchdog; preparation never runs benchmarks.
-    timeout-minutes: 30
+    # Includes a cold standard development-environment setup as well as the companion build.
+    timeout-minutes: 150
     permissions:
       contents: read
     outputs:

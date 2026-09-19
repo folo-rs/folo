@@ -16,14 +16,14 @@ to `main`. Version increments land in the pull request that causes them; see
   pull-request conventions), [`build-and-tooling.md`](build-and-tooling.md)
   (`just` recipes), [`.github/workflows/design.md`](../.github/workflows/design.md)
   (the bench matrix this reuses), [`RELEASING.md`](../RELEASING.md) (first
-  publish, emergency manual publish, required GitHub configuration).
+  publish, emergency manual publish, required GitHub configuration),
+  [`benchmark-action-releases.md`](benchmark-action-releases.md) (repository-specific
+  action pairing and publication follow-up).
 
 ## The flow
 
 A pull request that changes released content increments the affected packages.
 Merge to `main` starts automatic registry and binary-archive publication.
-[Paired action releases](release-versioning.md#paired-benchmark-action-releases) also require
-the author's cross-repository follow-up after those dependencies are published.
 
 ```mermaid
 flowchart TD
@@ -44,12 +44,6 @@ flowchart TD
 CI automates the *publish* and *binary* halves. Version numbers are decided in
 the pull request, with `cargo-semver-checks` as a floor — see
 [`release-versioning.md`](release-versioning.md).
-
-Tool versions consumed by `folo-rs/cargo-bench-history-action` also have a
-[paired action PR](release-versioning.md#paired-benchmark-action-releases).
-That PR waits for both registry publication and its promised prebuilt assets,
-not merely the monorepo merge. Its author reruns the action's installation gate
-after publication; this workflow does not dispatch cross-repository checks.
 
 ### `verify-semver-checks` canary
 
