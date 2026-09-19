@@ -108,9 +108,8 @@ fetching; shallow checkouts must use `fetch-depth: 0`. It creates a unique owned
 directory beneath the temporary root, outside the canonical checkout. A supplied cache
 must also be outside the checkout. These locations avoid dirtying measured source.
 
-Reports persist after process exit. The owned directory contains `report.md`, `report.json`,
-`summary.md` and `outcome.txt`, ready for a later job-local artifact upload. The action does
-not clean them or upload them itself.
+Reports persist after process exit for later job-local artifact upload through the Markdown,
+JSON and summary path outputs. The action does not clean them or upload them itself.
 
 Successful invocations append `instance=<canonical project namespace>` to `--github-output`.
 Collection additionally appends `machine-key=<fingerprint>`, only after both collection and
@@ -119,7 +118,8 @@ the dedicated machine-key command succeed.
 Analysis appends the shared evidence projection `outcome`, `notable`, `can-clear` and
 `publication-state`, plus `partial-platform-coverage`, `regressions`, `report-markdown`,
 `report-json` and `report-summary`. Booleans are lowercase; report paths are absolute
-and local to this job. The outcome file must agree with the validated JSON, and rendered
+and local to this job. `outcome` exposes the verdict value, not a file path.
+The internal outcome file must agree with the validated JSON, and rendered
 reports must be nonblank. No success outputs are appended on work or evidence failure.
 
 Windows report outputs use ordinary paths for artifact-upload compatibility. Temporary locations

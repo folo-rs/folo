@@ -37,6 +37,8 @@ The action planner translates publication input names into the existing typed CL
 groups and uses the same lifecycle dispatcher. Analysis output projection uses the existing
 validated report and platform evidence, not Markdown interpretation. The report's regression
 tally is passed through as data; findings and unjudged-reason vocabulary remain core-owned.
+The temporary outcome file is an internal consistency check against JSON. Callers receive
+the validated verdict as the scalar `outcome` output; it is not an additional report-path API.
 
 Native process invocation uses argument vectors, an explicit working directory and inherited
 streams for the main work. Child processes inherit the caller's environment unchanged, including

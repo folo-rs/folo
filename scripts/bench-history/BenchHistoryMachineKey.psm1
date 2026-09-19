@@ -1,31 +1,21 @@
 #requires -Version 7
 
-# Machine-key threading for the benchmark-history `analyze` step, shared by the push-to-main workflow
-# (.github/workflows/bench-history.yml, via the gh-analyze-bench-history recipe) and the per-PR
-# workflow (.github/workflows/pr-bench-history.yml, through the same analysis recipe).
-#
-# Collection runs as a matrix across a heterogeneous GitHub runner pool, so each leg stamps its
-# results with its OWN real hardware fingerprint (there is no longer a fixed `github` key). Analysis,
-# by contrast, runs as a single job that cannot re-derive those keys from its own hardware, so each
-# collect leg writes its fingerprint to a file and uploads it as an artifact; the analyze job
-# downloads them all into one directory and this module turns that directory into the repeated
-# `--machine-key <fingerprint>` argument vector the tool is invoked with. Threading the EXACT keys
-# collected this run (rather than `--machine-key all`) keeps the analysis scoped to the machines that
-# actually measured this commit, without assuming anything about other data in the shared store.
-#
-# Building the vector is real logic - directory scan, per-file validation, dedupe and ordering, plus
-# the empty-directory edge case a total collect failure produces - so it lives here behind a seam the
-# Pester suite (BenchHistoryMachineKey.Tests.ps1) exercises, and the recipe is a thin import + call.
+# Builds analysis arguments for the history and PR workflows through gh-analyze-bench-history.
+# The companion reconciles collection receipts and writes the selected machine-key files.
+# These keys scope analysis to this workflow's collection evidence, rather than every stored
+# machine partition at the commit. The analysis runner must not substitute its own fingerprint.
+# Directory scanning, key validation, deduplication and argument assembly are covered by Pester.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 function Get-MachineKeyArgument {
-    # Reads every machine-key file the collect matrix uploaded into $KeyDirectory and returns the
+    # Reads the reconciled machine-key files in $KeyDirectory and returns the
     # `--machine-key <fingerprint>` argument vector (a string[]) to splat into the analyze tool call.
-    # Each collect leg's artifact contributes one `machine-key.txt` holding a single 16-hex-character
-    # fingerprint (as emitted by `cargo-bench-history machine-key`); the scan is restricted to that
-    # exact filename and recursive, so it does not matter whether the download flattened the files or
-    # kept one subdirectory per artifact, while stray files the download may drop alongside them (e.g.
+    # Each selected platform contributes one `machine-key.txt` holding its receipt's fingerprint
+    # (as emitted by `cargo-bench-history machine-key`); the scan is restricted to that exact filename
+    # and recursive, so callers may retain platform subdirectories while stray files (e.g.
     # `actions/download-artifact` metadata, a `.DS_Store`, an accidental readme) are ignored rather
     # than mistaken for a corrupt key and failing the whole analysis.
     #
@@ -125,7 +115,9 @@ function Get-BenchHistoryAnalysisCommand {
     $arguments = @(
         'analyze', '--engine', 'all', '--target-triple', 'all'
     ) + $keys + @(
-        '--context', $Context, '--base', $Base, '--verbose'
+        # CI compares clean stored commits, not developer snapshots for the same branch.
+        # Ref: .github/workflows/implementation.md#benchmark-workflow-artifacts.
+        '--context', $Context, '--base', $Base, '--no-dirty', '--verbose'
         "--cache=$(Join-Path $ReportDirectory 'cache')"
         '--no-text'
         '--markdown', (Join-Path $ReportDirectory 'report.md')

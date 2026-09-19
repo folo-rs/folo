@@ -78,6 +78,10 @@ requiring every open PR head to contain new automation files.
 The source-built collector inherits the automation-selected toolchain while benchmarking the
 frozen head; measurement provenance records that compiler.
 
+Both analysis flows exclude stored dirty snapshots, matching the root action's clean-only
+selection. Workflow results describe frozen clean commits rather than developer snapshots
+for a matching branch.
+
 The analysis bundle always contains the tool's full Markdown, JSON and summary. The companion
 projects validated JSON into `outcome`, `notable`, `can-clear` and `publication-state` outputs.
 The history-only `can-clear` output describes eligibility for the all-clear presentation;
