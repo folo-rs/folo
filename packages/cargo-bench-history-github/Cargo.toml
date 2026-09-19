@@ -1,0 +1,66 @@
+[package]
+name = "cargo-bench-history-github"
+description = "Unsupported GitHub automation companion for cargo-bench-history; no stable API or CLI"
+publish = true
+version = "0.2.7"
+
+authors.workspace = true
+edition.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "clap_builder::derive::Args",
+    "clap_builder::derive::CommandFactory",
+    "clap_builder::derive::FromArgMatches",
+    "clap_builder::derive::Parser",
+    "ohno::app::error::AppError",
+]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[package.metadata.release-plan]
+private-api = true
+
+[[bin]]
+name = "cargo-bench-history-github"
+path = "src/main.rs"
+
+[features]
+# Native integration tests inject completed job discovery without live GitHub access.
+private-test-util = []
+
+[dependencies]
+# Canonical configuration and storage identity are shared behavior, not a shared release group.
+# Compatible requirements keep this companion independently versioned from the core tool.
+cbh_config = { version = "0.2.14", path = "../cbh_config", default-features = false }
+cbh_model = { version = "0.2.14", path = "../cbh_model", default-features = false }
+clap = { workspace = true, features = ["derive"] }
+dunce = { workspace = true }
+jiff = { workspace = true }
+mimalloc = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+reqwest = { workspace = true, features = ["rustls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tick = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["fs", "macros", "process", "rt", "time"] }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+tick = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

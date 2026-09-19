@@ -47,6 +47,22 @@ These boundaries are directional: component crates do not depend on the shell, a
 policy remains with the application even when a component implements it. More detailed analysis
 data flow is documented in the [analysis implementation guide](analyze.md).
 
+The renderer owns the shared analysis-outcome projection. Query orchestration carries the
+outcome with its rendered reports, and the shell exposes the typed value or writes the
+requested outcome file without introducing another decision rule. Projection ownership is
+described in the [renderer guide](../../cbh_render/docs/implementation.md).
+
+Report-file orchestration preflights all destinations through its output port before the first
+write. The filesystem adapter resolves existing ancestors before missing path components and
+compares existing objects by file identity, including hard links. Prospective names are probed in
+their actual parent filesystem using an owned scratch tree; output parents are not created during
+preflight. Probe destinations are files, and ancestor identity checks reject a report file that
+would need to act as another report's directory in either output order. The checks preserve
+symlink traversal and filesystem-specific name equivalence without assuming case sensitivity
+from the OS. An unresolvable existing link is an inspection error,
+not evidence that destinations differ. Native integration tests exercise these filesystem rules;
+in-memory port tests cover collision decisions and the absence of earlier writes.
+
 ## Implementation tenets
 
 Pure transformation and decision logic remains synchronous in component crates. External work is
@@ -57,6 +73,11 @@ runtime clock, and Tokio task-execution capabilities. The inner `*_with` orchest
 generic ports and resolved values, with deterministic substitutes used by component tests. This
 keeps orchestration independent of a particular process, filesystem, storage service, clock, or
 task executor.
+
+Storage selection wires one backend, with an optional read-through cache for Azure. PR and
+trunk measurements use the same persistence path; query-time topology selection keeps
+unrelated branch commits out of trunk series. Local filesystem storage remains an alternative
+backend selected at run time.
 
 Error boundaries match the context each component owns. Semantic operations expose package
 aggregates where callers need a component-level boundary. Lower-level components instead return
@@ -75,3 +96,51 @@ public constructor and inject it as an override.
 Integration-only benchmark engines and stress tools remain outside the production dependency
 boundary. They drive the same public shell or persisted format without adding test-only behavior
 to the shipped application.
+
+## Azure provisioning bundle
+
+The shell owns `setup-azure` execution and export; `cbh_cli` parses its arguments and
+`cbh_command` carries the typed options, following the ordinary command boundary. It does not
+construct benchmark storage, probe the measured machine, or resolve a Git checkout. Its
+behavioral contract is [Azure setup](DESIGN.md#710-setup-azure).
+
+One package-owned bundle contains the Bicep resource definitions, parameter template, deployment
+script and its PowerShell module dependencies. The binary embeds these files at compile time.
+They live in `src/azure_bundle/` so the ordinary package allow-list includes them; a
+registry source install must not rely on repository-root `infra/` or `scripts/` files.
+The export is self-contained, with bundle-relative imports and no dependency on `constants.env`.
+Folo's infrastructure entry point supplies Folo-specific parameters to this same implementation;
+it does not maintain another copy of the Bicep or deployment policy.
+
+Bicep owns resource definitions. The single PowerShell driver owns Azure CLI discovery,
+state-preserving bootstrap decisions and deployment of one production identity with branch
+and PR federation.
+Rust owns parameter validation, the PowerShell prerequisite, bundle materialization, process
+invocation and output/error handling, not a second implementation of those Azure decisions.
+The standalone driver verifies Azure CLI, installed Bicep and an authenticated enabled
+subscription (including token acquisition) before any resource mutation. JSON parameter
+values remain literal data; script flags may explicitly override them for standalone use.
+Callers serialize invocations sharing a storage account or managed identity because discovery
+and subsequent writes address those shared resources, including the identity's
+federated-credential collection. Unique Azure deployment names do not coordinate these writes.
+The PowerShell boundary is deliberate: an exported bundle remains independently editable and
+executable with Azure tooling, without a Rust toolchain or this application. Porting the driver
+to Rust solely to remove `pwsh` would require a replacement standalone deployment path; that
+additional maintenance is not justified by this command.
+
+All prerequisite probes precede mutations. Process arguments are passed structurally rather
+than interpolated into executable shell text, and the chosen subscription is explicit on Azure
+operations. Export bypasses process and credential adapters entirely. Filesystem/process ports
+let in-process tests prove dispatch, argv, prerequisite ordering and error propagation without
+starting tools. Native integration tests cover temporary-directory ownership, export destinations
+and execution of an extracted bundle; deployment policy retains its mocked-Azure coverage.
+
+The workspace tests exercise export and standalone-driver behavior through the workspace-built
+binary and mocked Azure. They do not establish a packaged-source build or Bicep compilation.
+Fresh and repeated deployments share the same policy tests through both entry points.
+
+Maintainers separately invoke packaged-source build/export checks and offline Bicep compilation
+to verify distribution and bundle imports. Registry-source installation checks run after their
+required dependencies are published. These explicit checks are separate from the workspace suite,
+not an implicit CI gate. They do not deploy live resources; provisioning remains an explicit
+maintainer action.

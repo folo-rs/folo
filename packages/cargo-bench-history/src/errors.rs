@@ -469,7 +469,24 @@ impl HarvestFailedError {
     }
 }
 
-/// Writing a requested report file failed.
+/// Requested report files cannot coexist at their destinations.
+#[ohno::error]
+#[display(
+    "the {first_label} report ({}) and {second_label} report ({}) have conflicting output destinations",
+    first_path.display(),
+    second_path.display()
+)]
+pub(crate) struct ConflictingReportDestinationsError {
+    pub(crate) first_label: String,
+    pub(crate) first_path: PathBuf,
+    pub(crate) second_label: String,
+    pub(crate) second_path: PathBuf,
+}
+
+impl UnwindSafe for ConflictingReportDestinationsError {}
+impl RefUnwindSafe for ConflictingReportDestinationsError {}
+
+/// Checking or writing a requested report file failed.
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("failed to write the {label} report to {}", path.display())]
@@ -746,6 +763,14 @@ mod tests {
     assert_impl_all!(HarvestFailedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(
         WriteReportFailedError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        ConflictingReportDestinationsError: Send,
         Sync,
         Debug,
         Error,

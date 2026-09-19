@@ -61,6 +61,16 @@ function Get-ValidationPlan {
             $null = $domains.Add('scheduled')
             Write-Verbose "'$path' is an input to documentation-link tests; selecting the scheduled test domain."
         }
+        if ($path -cmatch '^infra/azure-bench-history-prod/' -or
+            $path -cmatch '^packages/cargo-bench-history/src/azure_bundle/' -or
+            $path -cmatch '^packages/cargo-bench-history/tests/fixtures/.+\.ps(m1|d1|1)$' -or
+            $path -cmatch '^\.github/actions/build-bench-history-companion/' -or
+            $path -cmatch '^\.github/actions/bench-history-setup/' -or
+            $path -cin @('.github/workflows/bench-history.yml', '.github/workflows/pr-bench-history.yml', '.github/workflows/bench-history-backfill.yml')) {
+            $null = $domains.Add('bench-history')
+            if ($path -cmatch '\.ps(m1|d1|1)$') { $analysis = $true }
+            Write-Verbose "'$path' owns benchmark deployment or invocation wiring; selecting benchmark helper tests."
+        }
 
         if ($path -ceq 'PSScriptAnalyzerSettings.psd1') {
             $analysis = $true

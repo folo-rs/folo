@@ -2,6 +2,9 @@
 
 This chapter covers conventions for working with git and GitHub pull requests.
 
+For repository-specific benchmark-action coordination, see
+[paired PR presentation](benchmark-action-releases.md#paired-pr-presentation).
+
 ## Creating GitHub pull requests
 
 When creating PRs with `gh pr create`, do not pass the `--body` flag with an

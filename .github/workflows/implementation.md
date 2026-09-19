@@ -14,7 +14,7 @@ the installed App's scheduling controls.
 | `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
-| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened. | Advisory production-backed benchmark feedback for same-repository PRs. |
+| `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Production-backed PR collection and combined analysis/publication for same-repository PRs. |
 
 ```text
 Deep validation on main: plan -> standard + deep checks -> report failures -> run report issue
@@ -34,6 +34,112 @@ normal PR relationship, not a main-push confirmation workflow.
 Standard validation and its close companion share the `standard-validation-`
 ref-specific concurrency group. The merge-blocking job/check name and ruleset
 target are exactly `required-checks`.
+
+## Benchmark workflow artifacts
+
+Collection and backfill use the fixed `bench-history-setup` local action. Folo's wrapper
+selects the shared setup environment with Valgrind enabled; it contains only that configuration.
+This keeps repository-specific preparation separate from tool installation and GitHub posting.
+
+Benchmark automation has preparation, collection, combined analysis/publication and
+independently scheduled lifecycle work.
+Preparation uses the standard `setup-environment` action and its shared development-tool caches.
+It builds the Linux companion in Cargo's ordinary target directory, resolves the executable
+from Cargo's build output and archives its executable permissions. The combined job and
+lifecycle jobs reuse that run-scoped archive rather than independently rebuilding the companion.
+Notification depends on this executable and has no independent publisher. A failure to
+prepare or obtain the companion keeps the workflow visibly failed rather than claiming
+notification success; issue alerting is not guaranteed while the executable is unavailable.
+
+The companion turns the configured platform CSV into the matrix and collection job prefix.
+Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
+`receipt.json` with its repository, instance, workflow run/attempt, frozen head, platform and
+machine key. Collection artifacts contain only that receipt; measurements remain in the
+configured store. Artifact names are stable per platform within a run and overwritten on
+successful reruns.
+
+Analysis downloads through the REST run-artifacts endpoint so surviving older-attempt
+artifacts remain visible. Rust reconciles receipts with each platform's latest job attempt,
+then writes the selected machine keys for ordinary configured-store analysis. It
+rejects missing, conflicting or mismatched evidence instead of silently narrowing success.
+Collection artifacts are outside the persisted history cache.
+Artifact downloads pass the ambient GitHub token, repository and run ID explicitly with
+Actions-read permission. Fork-origin PR runs have a read-only base-repository token capable
+of artifact reads; the same-repository workflow gate is independent of that capability.
+The temporary machine-key file stays outside the uploaded collection root: its value is
+captured in the receipt rather than uploaded as a separate file.
+
+Automation and measured source are separate for PR runs. The workflow's merge checkout
+supplies current helpers, tool builds and configuration. The full real-head checkout under
+`benchmark-source` supplies Cargo scope, benchmark execution and git topology. Collection
+passes its repository and the automation configuration explicitly; analysis passes that
+repository and the frozen event head/base. This preserves real commit attribution without
+requiring every open PR head to contain new automation files.
+The source-built collector inherits the automation-selected toolchain while benchmarking the
+frozen head; measurement provenance records that compiler.
+
+Both analysis flows exclude stored dirty snapshots, matching the root action's clean-only
+selection. Workflow results describe frozen clean commits rather than developer snapshots
+for a matching branch.
+
+The analysis bundle always contains the tool's full Markdown, JSON and summary. The companion
+projects validated JSON into `outcome`, `notable`, `can-clear` and `publication-state` outputs.
+The history-only `can-clear` output describes eligibility for the all-clear presentation;
+`clean` is a publication-state value. The
+[companion command contract](../../packages/cargo-bench-history-github/docs/implementation.md#command-and-artifact-contract)
+owns these outputs. The same job uploads the reports, then publishes using those local files
+and the artifact link.
+Main issue writers share an instance concurrency group, and PR comment writers share a project/PR
+group. Issue lookup uses project-qualified title search followed by a current read by number;
+PR comment lookup remains marker-based. Body markers carry commit and state; outputs outside
+the companion's defined formats are not adopted. Titles, advisory wording and book links
+come from the companion's message catalogue rather than workflow parameters.
+
+Both sinks use `publish-<sink>-<state>` commands. A successful report selects findings, clean
+or no-data from validated evidence; scope preflight supplies explicit empty scope when no
+analysis is needed. Preflight and failed-state commands share run/attempt/head ownership,
+and failed publication never replaces a completed report. Issue no-data/failed annotations
+preserve the existing investigation rather than creating a status-only issue. The separate
+`alert` uses project/run identity, includes closed issues in deduplication and has no
+successful-run resolution job. Partial collection can publish qualified findings and alert
+on failed jobs without publishing failed status over those findings.
+
+Preflight publishes its actual run-attempt as a job output. A partial rerun can reuse that
+successful job, so terminal commands use the preserved owner attempt rather than assuming
+the current execution created the pending marker. Successful reports use the current attempt.
+The combined analysis/publication job waits for preflight to finish but can still publish
+after a failed preflight; a delayed start notice cannot arrive after its own result.
+
+Azure configuration uses `AZURE_PROD_CLIENT_ID` for every production-history operation.
+Empty PR scope needs no Azure access. The shared identity has contributor access and branch/PR
+federation; PR collection and analysis receive OIDC permission and the analysis/publication job
+also receives its GitHub posting scope. PR analysis restores but never saves the Actions
+history cache. The tool re-lists configured storage and reads newly stored objects on a
+cache miss; topology selection excludes unrelated branch commits from trunk analysis.
+
+Manual pruning and ordinary backfill cover the supported data-maintenance path. Benchmark
+workflows expose no targeted historical recollection. Their triggers exclude `merge_group`
+and enqueue/dequeue activity because the workflows are advisory.
+
+### Shared action migration
+
+The job graphs and CI-only `gh-*` recipes are intermediate wiring for issue #284.
+Their migration targets in `folo-rs/cargo-bench-history-action` are:
+
+| Folo workflow | Shared reusable workflow |
+| --- | --- |
+| `bench-history.yml` | `.github/workflows/history.yml` |
+| `pr-bench-history.yml` | `.github/workflows/pr.yml` |
+| `bench-history-backfill.yml` | `.github/workflows/backfill.yml` |
+
+Once those reusable workflows are published, they own installation, collection and analysis
+orchestration, receipt/artifact handoff, publication lifecycles and job coordination.
+Their root composite action supplies the individual tool commands. Folo retains its triggers,
+repository configuration, caller permissions/inputs and the fixed `bench-history-setup` hook,
+using source installation to exercise the monorepo tools.
+The CI-only recipes, companion-archive builder and helpers without other callers can then be
+removed. The initial root-action release alone does not provide the reusable-workflow layer.
+Manual Azure provisioning remains a separate maintainer operation through `setup-azure`.
 
 ## Standard validation structure
 

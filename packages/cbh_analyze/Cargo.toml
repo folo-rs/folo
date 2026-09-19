@@ -4,7 +4,7 @@
 name = "cbh_analyze"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.13"
+version = "0.2.14"
 
 authors.workspace = true
 edition.workspace = true
@@ -26,6 +26,7 @@ allowed_external_types = [
     "cbh_command::command::UnblessOptions",
     "cbh_config::error::ConfigError",
     "cbh_detect::detect::findings::AnalysisMode",
+    "cbh_render::coverage::AnalysisOutcome",
     "cbh_storage::error::StorageError",
     "cbh_storage::facade::StorageFacade",
     "ohno::enrichable::Enrichable",

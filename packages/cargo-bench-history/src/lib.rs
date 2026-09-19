@@ -117,9 +117,11 @@
 //! `<package>/<group>/<case>/<value>` identity) to scope the analysis to a subset
 //! of benchmarks. Findings are *advisory*: the exit code reflects only whether the
 //! analysis ran, never what it found. Downstream automation reads the
-//! machine-readable signal from the `json` report — `mode`, the boolean `notable`
-//! (any finding survived), each finding's `direction`, and the full
-//! per-finding `series` for charting. See [Analyze modes](#analyze-modes) below.
+//! machine-readable signal from the `json` report — `mode`, the named `outcome`,
+//! the backward-compatible boolean `notable` (any finding survived), each finding's
+//! `direction`, and the full per-finding `series` for charting. `--outcome <path>`
+//! writes just the stable outcome wire name for lightweight automation. See
+//! [Analyze modes](#analyze-modes) below.
 //!
 //! ## `list`
 //!
@@ -201,6 +203,19 @@
 //! factor-set version tag) are written to standard error, so a change in the key can be
 //! traced to the specific factor that moved.
 //!
+//! ## `setup-azure`
+//!
+//! Provisions an Azure history store and one managed identity for history-branch and
+//! pull-request workflows. The identity has account-scoped Storage Blob Data Contributor
+//! access; optional local access grants the same role. Run
+//! `cargo bench-history setup-azure --help` for the explicit deployment inputs.
+//! Execution requires Azure CLI, PowerShell 7.6 or later, installed Bicep and an
+//! authenticated subscription. Repeated deployments preserve existing storage
+//! properties and data.
+//!
+//! `cargo bench-history setup-azure --out-dir ./azure-history` instead exports a
+//! self-contained deployment bundle without invoking tools or checking credentials.
+//!
 //! # Selecting data: options shared by the query commands
 //!
 //! `analyze`, `list`, `prune`, and `examine` share one selection model, organized
@@ -272,14 +287,19 @@
 //! (the default `https://<account>.blob.core.windows.net`). The account may — and
 //! should — have shared-key access disabled entirely.
 //!
-//! To stand up an Entra-ID-backed store:
+//! Use [`setup-azure`](#setup-azure) to provision an Entra-ID-backed store or export
+//! its standalone deployment bundle.
+//!
+//! For a manually managed alternative:
 //!
 //! 1. **Deploy a Storage account** reachable over HTTPS. Entra-only accounts
 //!    (shared-key access disabled) are supported and preferred — there is then no
 //!    account key to leak. The `bench-history` container does not need to pre-exist;
 //!    `collect` creates it on first use.
-//! 2. **Grant the identity that runs the tool the `Storage Blob Data Contributor`
-//!    role** on the account. This data-plane role covers both the blob read/write
+//! 2. **Grant collection and administration identities the `Storage Blob Data Contributor`
+//!    role** on the account. Read-only queries need only `Storage Blob Data Reader`
+//!    scoped to the existing history container.
+//!    The contributor role covers both the blob read/write
 //!    the tool performs and the container creation `collect` does on first use; the
 //!    broader `Storage Blob Data Owner` is not needed for a flat blob container.
 //!    Locally, that identity is your `az login` user; in CI it is the federated
@@ -293,9 +313,9 @@
 //!    `repo:<owner>/<repo>:ref:refs/heads/main`, while a pull-request-triggered run
 //!    (for example a workflow that benchmarks a PR) presents
 //!    `repo:<owner>/<repo>:pull_request` and needs its own credential with that
-//!    subject. Only **same-repo** pull requests can federate — a fork's run cannot
-//!    mint a token whose subject names your repository, so fork PRs cannot reach the
-//!    store and such workflows must skip them. Run the tool from a job that has
+//!    subject. The PR subject cannot distinguish fork heads: workflow policy must
+//!    restrict privileged identity use to **same-repository** pull requests.
+//!    Run the tool from a job that has
 //!    `permissions: { id-token: write }`, with the managed identity's client ID and
 //!    your Entra tenant ID exported as the `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
 //!    environment variables. The tool then mints a fresh OIDC assertion straight from
@@ -305,9 +325,7 @@
 //!    those variables are absent — locally, or in a short job that runs `azure/login`
 //!    — the tool instead picks up the ambient Azure CLI session.)
 //!
-//! Worked, runnable examples of all of the above live in the folo repository as Bicep
-//! templates with PowerShell deploy wrappers: the long-lived store with its own
-//! dedicated managed identity at
+//! The Folo-specific wrapper for the same standalone deployment bundle lives at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
 //! separate test account/identity at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
@@ -323,13 +341,14 @@ mod dispatch;
 mod errors;
 mod outcome;
 mod output;
+mod output_destination;
 
-pub use cbh_analyze::AutoDiscriminants;
+pub use cbh_analyze::{AnalysisOutcome, AutoDiscriminants};
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    MachineKeyOptions, PruneOptions, UnblessOptions,
+    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalPrincipalType,
+    LocalStorageSelection, MachineKeyOptions, PruneOptions, SetupAzureOptions, UnblessOptions,
 };
 pub use cbh_config::default_template;
 pub(crate) use cbh_model as model;

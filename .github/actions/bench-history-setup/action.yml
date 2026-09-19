@@ -1,0 +1,11 @@
+name: Benchmark setup
+description: Prepare Folo benchmark prerequisites through the fixed repository-local hook
+
+runs:
+  using: composite
+  steps:
+    # Benchmark jobs share this repository-owned configuration rather than accepting a
+    # setup action path/ref as an input. Ref: ../../workflows/design.md#benchmark-setup-hook.
+    - uses: ./.github/actions/setup-environment
+      with:
+        install-valgrind: "true"

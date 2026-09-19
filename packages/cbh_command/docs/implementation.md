@@ -10,3 +10,6 @@ The crate owns the dependency-light command and option representation shared by 
 command implementations. It contains command inputs but owns neither argument parsing nor command
 execution. This boundary lets those layers agree on one vocabulary without coupling execution to
 `clap` or coupling parsing to storage and analysis dependencies.
+
+Standalone Azure provisioning options carry partial values for export without introducing
+benchmark repository or storage-resolution state into that command.

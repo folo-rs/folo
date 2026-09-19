@@ -29,10 +29,9 @@ The cloud backend is configured in `.cargo/bench_history.toml` — run
 [`install`](commands/install.md) to generate a fully commented starter file. Authentication
 is via Microsoft Entra ID (OAuth); there are no static credentials in the config.
 
-> **Note**
-> The specifics of provisioning an Azure Blob container and the exact config schema are
-> documented in the generated config file's comments. This page describes the selection
-> model; follow the starter file for the concrete fields.
+Use [`setup-azure`](commands/setup-azure.md) to provision storage and a shared Azure managed
+identity with GitHub federation, or export its self-contained deployment bundle for review.
+It requires no benchmark checkout. Follow the generated starter configuration for the storage fields.
 
 ## Read-through cache (cloud backend, CI)
 
@@ -41,14 +40,14 @@ The read commands ([`analyze`](commands/analyze.md), [`examine`](commands/examin
 history before reconstructing a series. Against the cloud backend that is one download per
 object, so CI would re-fetch everything on every run.
 
-A `--cache <dir>` flag (with an environment fallback) enables an on-disk read-through cache
+A `--cache=<dir>` flag (with an environment fallback) enables an on-disk read-through cache
 that mirrors fetched object bodies. Because stored records are immutable per key, a cached
 body is trusted indefinitely; a small per-project marker invalidates the cache after the
 rare delete or overwrite. The cache is meaningful only with the cloud backend, so it
 **conflicts with `--local`**. In GitHub Actions, persist the cache directory with the
 standard Actions cache so each run pays the network cost only for objects it has never seen.
 
-## Continuous integration notes
+## GitHub automation notes
 
 - [`analyze`](commands/analyze.md) needs a resolvable git repository with enough history to
   find the merge-base with the base branch. On a shallow clone, deepen it
@@ -57,3 +56,6 @@ standard Actions cache so each run pays the network cost only for objects it has
 - Run CI collection with `--skip-existing` for append-only behavior: a same-commit re-run
   still benchmarks every engine (so a broken benchmark is caught) but writes nothing,
   keeping caches valid across runs.
+- PR and trunk collection use the same store so branch analysis can read both the head and
+  its baseline. Git topology keeps unrelated PR commits out of trunk analysis; storing a
+  branch measurement does not add it to the trunk series.

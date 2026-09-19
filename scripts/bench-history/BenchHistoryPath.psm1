@@ -1,10 +1,8 @@
 #requires -Version 7
 
 # Output-directory preparation shared by the benchmark-history automation recipes in
-# justfiles/just_bench_history.just. Both analyze recipes (gh-analyze-bench-history,
-# gh-analyze-pr-bench-history) must ensure their scratch report directory exists before writing the
-# four report artefacts into it, and gh-write-bench-history-machine-key must ensure the parent
-# directory of the key file exists before writing the key.
+# justfiles/just_bench_history.just. The shared analysis recipe ensures its scratch directory
+# exists before writing reports, and machine-key capture ensures its output parent exists.
 #
 # Ensuring a directory exists looks trivial, but the exact cmdlet invocation is a footgun: New-Item's
 # directory-creation parameter is -Path, NOT -LiteralPath (unlike Get-/Set-/Remove-Item, New-Item has

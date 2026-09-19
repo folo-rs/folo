@@ -6,21 +6,11 @@
 # gap-filling workflow (.github/workflows/bench-history-backfill.yml, via
 # gh-backfill-bench-history).
 #
-# The step has two modes and the choice between them is real logic - a branch, input validation and
-# error handling - so it lives here behind a seam the Pester suite (BenchHistoryCollect.Tests.ps1)
-# exercises, and the recipe is a thin import + call. The recollect commit id arrives from an
-# untrusted workflow_dispatch input, so validating it here (rather than splicing it into a shell
-# command line) is also what keeps it injection-safe.
+# Collection appends the pushed commit with `collect --skip-existing`, so a re-triggered run
+# leaves stored objects unchanged. Manual pruning and ordinary backfill cover data maintenance;
+# no targeted repair workflow is needed. Ref: .github/workflows/design.md#benchmark-history.
 #
-# Normal mode (no recollect id): append the pushed commit with `collect --skip-existing`, so a
-# re-triggered run of an already-collected commit is a no-op rather than a rewrite. Recollect mode
-# (a commit id set): re-measure just that one historical commit and OVERWRITE its stored point with
-# `backfill <id> <id> --overwrite`, which benchmarks the code AT that commit in a throwaway worktree,
-# built with the toolchain that commit pins, while running THIS (HEAD) build of the tool - repairing
-# a point corrupted by a bad benchmark day without adopting the tool version that shipped at that
-# commit.
-#
-# Collection scope is orthogonal to the mode: with no explicit package list the whole workspace is
+# With no explicit package list the whole workspace is
 # benched except the excluded packages (the push-to-main default); the PR workflow
 # instead passes the delta-affected packages so it benches only what the PR impacts. Every selected
 # package is benched with all Cargo features enabled, so Cargo includes targets guarded by
@@ -50,11 +40,9 @@ $PSNativeCommandUseErrorActionPreference = $true
 # Ref: .github/workflows/design.md#benchmark-history.
 $script:ExcludedPackages = @('benchmarks', 'infinity_pool')
 
-# The shape of a plausible commit SHA: hex, 7-40 characters. Every commit id this module accepts
-# from a workflow_dispatch input is matched against it, so a typo fails loudly before an expensive
-# benchmark run and an untrusted value can carry no shell metacharacters. It is also what the git
-# queries' output is checked against, so a garbled `rev-list` result can never be spliced into a
-# tool invocation as a range endpoint.
+# Backfill accepts full or abbreviated hexadecimal commit IDs, not arbitrary revision expressions.
+# Validate explicit range inputs before an expensive benchmark run. The same constraint rejects
+# garbled `rev-list` output before it reaches the tool as a range endpoint.
 $script:CommitIdPattern = '^[0-9a-fA-F]{7,40}$'
 
 # The nightly backfill's rolling date window, as git approxidate expressions.
@@ -142,10 +130,8 @@ function Get-BenchHistoryScopeArgument {
 }
 
 function Get-BenchHistoryCollectCommand {
-    # Builds the argument vector passed to the tool after `--` (a `collect ...` or `backfill ...`
-    # invocation), choosing the mode from $RecollectCommitId. Returns a string[]; throws when a
-    # non-empty id is not a plausible commit SHA. Emits an explanatory verbose note describing which
-    # mode was chosen and why, for the workflow log.
+    # Builds the append-only collection argument vector passed to the tool after `--`.
+    # Native argument passing preserves repository/configuration paths as data.
     #
     # $Package selects the collection scope and is handed to Get-BenchHistoryScopeArgument. An empty
     # scope is not an error here: the PR workflow structurally never reaches collection with an empty
@@ -157,41 +143,43 @@ function Get-BenchHistoryCollectCommand {
     param(
         [Parameter()]
         [AllowNull()]
-        [AllowEmptyString()]
-        [string] $RecollectCommitId,
-
-        [Parameter()]
-        [AllowNull()]
         [AllowEmptyCollection()]
-        [string[]] $Package
+        [string[]] $Package,
+
+        [AllowNull()][AllowEmptyString()][string] $Repository,
+        [AllowNull()][AllowEmptyString()][string] $ConfigPath
     )
 
     $scope = Get-BenchHistoryScopeArgument -Package $Package
-
-    $recollect = if ($null -eq $RecollectCommitId) { '' } else { $RecollectCommitId.Trim() }
-
-    if ($recollect -eq '') {
-        Write-Verbose ('No recollect commit id: appending the pushed commit with `collect ' +
-            '--skip-existing`, so an already-stored object is left untouched rather than rewritten.')
-        return @('collect') + $scope + @('--skip-existing')
+    foreach ($binding in @(
+            @{ Parameter = 'Repository'; Flag = '--repo'; Value = $Repository }
+            @{ Parameter = 'ConfigPath'; Flag = '--config'; Value = $ConfigPath }
+        )) {
+        if ($PSBoundParameters.ContainsKey($binding.Parameter)) {
+            if ([string]::IsNullOrWhiteSpace($binding.Value)) {
+                throw "An explicit $($binding.Parameter) must not be empty."
+            }
+            $scope += @($binding.Flag, $binding.Value)
+        }
     }
 
-    # A commit SHA only - hex, 7-40 chars. Rejecting anything else fails a typo'd dispatch loudly
-    # (before an expensive benchmark run) and, because the value is an untrusted dispatch input,
-    # also guarantees it can carry no shell metacharacters.
-    if ($recollect -notmatch $script:CommitIdPattern) {
-        throw ("Recollect commit id must be a 7-40 character hex commit SHA, got '$recollect'. " +
-            "This validates the format only; that the id resolves to a real commit is enforced " +
-            "later by the backfill step (which fails if the ref cannot be resolved), while whether " +
-            "that commit is actually on main's history is the operator's responsibility - a " +
-            'resolvable off-main commit is not rejected.')
-    }
+    Write-Verbose ('Appending with `collect --skip-existing`, so an already-stored object ' +
+        'is left untouched rather than rewritten.')
+    return @('collect') + $scope + @('--skip-existing')
+}
 
-    Write-Verbose ("Recollect commit ${recollect}: re-measuring that single commit in a throwaway " +
-        'worktree and overwriting its stored point with `backfill --overwrite`. The benchmark code ' +
-        'and the toolchain that builds it come from that commit; the collection logic, the ' +
-        'RUSTFLAGS and the scope flags come from this checkout.')
-    return @('backfill', $recollect, $recollect) + $scope + @('--overwrite')
+function Get-BenchHistoryRustFlag {
+    # Every collection recipe uses the same alignment policy without dropping unrelated flags.
+    # The stability value comes from constants.env; this function only replaces prior spellings
+    # of that setting so source/toolchain selection does not alter benchmark comparability.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [AllowNull()][AllowEmptyString()][string] $Existing,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Stability
+    )
+    $kept = ("$Existing" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+    return (@($kept, $Stability) | Where-Object { $_ }) -join ' '
 }
 
 function Invoke-GitCapture {
@@ -261,8 +249,7 @@ function Get-BenchHistoryBackfillWindow {
             "'$script:BackfillQuarantine', so the push-triggered collection of it has long since " +
             'finished and this run cannot race it.')
     } else {
-        # An untrusted workflow_dispatch input: validate the SHA format before it becomes a range
-        # endpoint, exactly as the recollect id is validated.
+        # Validate the explicit commit ID before using it as a range endpoint.
         if ($override -notmatch $script:CommitIdPattern) {
             throw ("Backfill range end must be a 7-40 character hex commit SHA, got '$override'. " +
                 'This validates the format only; that the id resolves to a real commit is enforced ' +
@@ -340,4 +327,4 @@ function Get-BenchHistoryBackfillCommand {
         @('--ignore-errors')
 }
 
-Export-ModuleMember -Function Get-BenchHistoryCollectCommand, Get-BenchHistoryBackfillCommand, Select-BenchmarkablePackage
+Export-ModuleMember -Function Get-BenchHistoryCollectCommand, Get-BenchHistoryBackfillCommand, Select-BenchmarkablePackage, Get-BenchHistoryRustFlag

@@ -1,16 +1,19 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for BenchHistoryMachineKey.psm1. Proves the machine-key threading the bench-history
-# `analyze` step depends on - reading the collect matrix's uploaded fingerprint files into the
+# `analyze` step depends on - reading reconciled collection fingerprints into the
 # repeated `--machine-key` argument vector, with dedupe, ordering, validation and the empty-directory
 # edge case a total collect failure produces - without a workflow run. Key files are real temp files
 # so the on-disk read and the missing/empty guards are asserted, not faked.
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'BenchHistoryMachineKey.psm1') -Force
 
-    # A fresh, isolated key directory per test; helpers create the per-artifact files inside it the
-    # same way `actions/download-artifact` would (one file per collect leg).
+    # A fresh key directory per test, matching the companion's per-platform reconciliation output.
     function Get-KeyDirectory {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-mk-$([guid]::NewGuid().ToString('n'))")
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -23,11 +26,47 @@ BeforeAll {
             [Parameter(Mandatory)] [string] $Name,
             [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content
         )
-        # Each collect leg's artifact typically arrives in its own subdirectory (download without
-        # merge), so nest the file to prove the recursive scan finds it.
+        # Reconciliation keeps platform subdirectories; the argument builder scans them recursively.
         $sub = Join-Path $Directory $Name
         New-Item -ItemType Directory -Path $sub -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $sub 'machine-key.txt') -Value $Content -Encoding utf8
+    }
+}
+
+Describe 'Get-BenchHistoryAnalysisCommand' {
+    It 'returns a clean-only argument vector with frozen topology, measured repository and cache' {
+        $keys = Join-Path $TestDrive 'keys'
+        Write-KeyFile -Directory $keys -Name 'first' -Content 'abcdef0123456789'
+        Write-KeyFile -Directory $keys -Name 'second' -Content '0123456789abcdef'
+        $report = Join-Path $TestDrive 'report output'
+        $result = Get-BenchHistoryAnalysisCommand -KeyDirectory $keys -ReportDirectory $report `
+            -Context ('a' * 40) -Base ('b' * 40) -Repository 'measured repo'
+        , $result | Should -BeOfType [string[]]
+        $result | Should -Be @(
+            'analyze', '--engine', 'all', '--target-triple', 'all'
+            '--machine-key', '0123456789abcdef', '--machine-key', 'abcdef0123456789'
+            '--context', ('a' * 40), '--base', ('b' * 40), '--no-dirty', '--verbose'
+            "--cache=$(Join-Path $report 'cache')"
+            '--no-text', '--markdown', (Join-Path $report 'report.md')
+            '--json', (Join-Path $report 'report.json')
+            '--markdown-summary', (Join-Path $report 'summary.md')
+            '--repo', 'measured repo'
+        )
+    }
+
+    It 'uses the current checkout for ordinary history analysis' {
+        $keys = Join-Path $TestDrive 'history keys'
+        Write-KeyFile -Directory $keys -Name 'first' -Content 'abcdef0123456789'
+        $result = Get-BenchHistoryAnalysisCommand -KeyDirectory $keys -ReportDirectory $TestDrive `
+            -Context ('a' * 40) -Base ('a' * 40)
+        $result | Should -Not -Contain '--repo'
+        $result | Should -Contain '--no-dirty'
+    }
+
+    It 'fails instead of fabricating a report when collection supplied no keys' {
+        { Get-BenchHistoryAnalysisCommand -KeyDirectory (Join-Path $TestDrive 'absent') `
+            -ReportDirectory $TestDrive -Context ('a' * 40) -Base ('a' * 40) } | Should -Throw
+        Test-Path -LiteralPath (Join-Path $TestDrive 'report.json') | Should -BeFalse
     }
 }
 
@@ -46,6 +85,7 @@ Describe 'Get-MachineKeyArgument' {
             } finally {
                 Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
             }
+
         }
 
         It 'collapses duplicate fingerprints from identically-specced runners' {

@@ -21,8 +21,9 @@ use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use colored::Colorize;
 use rasciigraph::{Config, plot};
 use serde::Serialize;
+use serde_json::to_string_pretty;
 
-use crate::Coverage;
+use crate::{AnalysisOutcome, Coverage};
 
 /// Height, in rows, of a finding chart.
 const CHART_HEIGHT: u32 = 4;
@@ -141,9 +142,6 @@ pub struct ReportInput<'a> {
     pub tip_dirty: bool,
     /// The analysis mode the report was produced in.
     pub mode: AnalysisMode,
-    /// Whether any finding survived — the at-a-glance signal a downstream
-    /// automation reads to decide whether the report is worth surfacing.
-    pub notable: bool,
     /// Total stored runs loaded across every set.
     pub runs: usize,
     /// Total distinct series compared across every set. Carried for the JSON report;
@@ -423,6 +421,8 @@ struct JsonReport<'a> {
     /// The analysis mode. Serializes to its stable lowercase wire name
     /// (`history`/`branch`).
     mode: AnalysisMode,
+    /// The primary verdict of the successful analysis.
+    outcome: &'static str,
     /// Whether any finding survived — the downstream automation signal.
     notable: bool,
     /// Total stored runs loaded.
@@ -1458,6 +1458,9 @@ fn branch_relation(kind: MetricKind, direction: Direction) -> &'static str {
 // cargo-mutants timeout on the slower Windows shards.
 #[cfg_attr(test, mutants::skip)]
 fn render_json(input: &ReportInput<'_>) -> String {
+    let coverage = Coverage::from_census(&input.census);
+    let notable = !input.findings.is_empty();
+    let outcome = AnalysisOutcome::from_analysis(notable, &coverage);
     let sets = input
         .sets
         .iter()
@@ -1481,7 +1484,8 @@ fn render_json(input: &ReportInput<'_>) -> String {
         tip_commit: input.tip_commit,
         tip_dirty: input.tip_dirty,
         mode: input.mode,
-        notable: input.notable,
+        outcome: outcome.as_str(),
+        notable,
         runs: input.runs,
         series: input.series,
         regressions: count_top(input.findings, Direction::Regression),
@@ -1489,7 +1493,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
             .report_improvements
             .then(|| count_top(input.findings, Direction::Improvement)),
         ghosts_excluded: input.ghosts_excluded,
-        census: JsonCensus::from_coverage(&Coverage::from_census(&input.census)),
+        census: JsonCensus::from_coverage(&coverage),
         hint: input.hint,
         warning: input.warning,
         findings: input
@@ -1501,7 +1505,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
     };
     // The report is built from plain structs whose only numbers are finite (or
     // serialized as `null` by serde_json), so serialization cannot fail.
-    serde_json::to_string_pretty(&report).expect("report structures always serialize to JSON")
+    to_string_pretty(&report).expect("report structures always serialize to JSON")
 }
 
 /// The lowercase label for a change direction.
@@ -1600,6 +1604,7 @@ mod tests {
     use cbh_detect::{SeriesValue, Testability, UnjudgedReason};
     use cbh_model::{Engine, MetricKind};
     use nonempty::nonempty;
+    use serde_json::{Value, from_str};
 
     use super::*;
 
@@ -1687,7 +1692,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
             commit_span: None,
@@ -1710,7 +1714,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
             commit_span: None,
@@ -1942,7 +1945,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 3,
             series: 1,
             commit_span: None,
@@ -2274,8 +2276,7 @@ mod tests {
             "{text}"
         );
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        let parsed: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(parsed["census"]["total"], 3);
         assert_eq!(parsed["census"]["in_scope"], 1);
         assert_eq!(parsed["census"]["coverage"], "full");
@@ -2310,8 +2311,7 @@ mod tests {
             "{markdown}"
         );
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        let parsed: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(parsed["census"]["in_scope"], 0);
         assert_eq!(parsed["census"]["coverage"], "nothing_in_scope");
     }
@@ -2321,10 +2321,17 @@ mod tests {
         // Automation gates on `coverage`, so every distinct situation must reach the
         // JSON with its own state and an in-scope denominator that excludes ghosts.
         let cases = [
-            ("absent census", SeriesCensus::default(), "no_series", 0),
+            (
+                "absent census",
+                SeriesCensus::default(),
+                "no_series",
+                "nothing_in_scope",
+                0,
+            ),
             (
                 "every series a ghost",
                 census_of(0, &[(UnjudgedReason::Ghost, 4)]),
+                "nothing_in_scope",
                 "nothing_in_scope",
                 0,
             ),
@@ -2332,27 +2339,47 @@ mod tests {
                 "nothing judged",
                 census_of(0, &[(UnjudgedReason::NotMeasuredOnBranch, 2)]),
                 "nothing_judged",
+                "insufficient_baseline",
                 2,
             ),
             (
                 "partial",
                 census_of(2, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
                 "partial",
+                "partial",
                 3,
             ),
-            ("full", census_of(2, &[]), "full", 2),
+            ("full", census_of(2, &[]), "full", "clean", 2),
         ];
 
-        for (name, census, state, in_scope) in cases {
+        for (name, census, state, outcome, in_scope) in cases {
             let input = ReportInput {
                 census,
                 ..flat_input(&[])
             };
             let json = render(&input, ReportFormat::Json, false);
-            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let parsed: Value = from_str(&json).unwrap();
             assert_eq!(parsed["census"]["coverage"], state, "{name}: {json}");
+            assert_eq!(parsed["outcome"], outcome, "{name}: {json}");
+            assert_eq!(parsed["notable"], false, "{name}: {json}");
             assert_eq!(parsed["census"]["in_scope"], in_scope, "{name}: {json}");
         }
+    }
+
+    #[test]
+    fn json_outcome_prioritizes_findings_over_partial_coverage() {
+        let findings = [regression()];
+        let input = ReportInput {
+            findings: &findings,
+            census: census_of(1, &[(UnjudgedReason::TooFewPoints, 1)]),
+            ..flat_input(&findings)
+        };
+        let json = render(&input, ReportFormat::Json, false);
+        let parsed: Value = from_str(&json).unwrap();
+
+        assert_eq!(parsed["outcome"], "findings", "{json}");
+        assert_eq!(parsed["notable"], true, "{json}");
+        assert_eq!(parsed["census"]["coverage"], "partial", "{json}");
     }
 
     #[test]
@@ -2371,7 +2398,7 @@ mod tests {
         };
 
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         let census = &parsed["census"];
         assert_eq!(census["total"], 7, "{json}");
         assert_eq!(census["judged"], 4, "{json}");
@@ -2391,14 +2418,10 @@ mod tests {
             census: judged_census(4),
             ..flat_input(&[])
         };
-        let parsed: serde_json::Value =
-            serde_json::from_str(&render(&judged, ReportFormat::Json, false)).unwrap();
+        let parsed: Value = from_str(&render(&judged, ReportFormat::Json, false)).unwrap();
         assert_eq!(parsed["census"]["judged"], 4);
         assert_eq!(parsed["census"]["unjudged"], 0);
-        assert_eq!(
-            parsed["census"]["reasons"],
-            serde_json::Value::Array(Vec::new())
-        );
+        assert_eq!(parsed["census"]["reasons"], Value::Array(Vec::new()));
     }
 
     #[test]
@@ -2408,7 +2431,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 0,
             series: 0,
             commit_span: None,
@@ -2482,7 +2504,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: true,
             runs: 99,
             series: 88,
             commit_span: None,
@@ -2527,7 +2548,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: true,
             runs: 21,
             series: 1,
             commit_span: None,
@@ -2558,8 +2578,7 @@ mod tests {
         );
         assert!(!text.contains("change point"), "{text}");
 
-        let json: serde_json::Value =
-            serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        let json: Value = from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(json["findings"][0]["method"], "branch_excursion");
         assert_eq!(json["findings"][0]["branch"]["reference_min"], 99.0);
         assert_eq!(json["sets"][0]["branch_comparison"]["at_least_as_much"], 3);
@@ -2609,7 +2628,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: false,
             runs: 21,
             series: 2,
             commit_span: None,
@@ -2681,7 +2699,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: false,
             runs: 21,
             series: 1,
             commit_span: None,
@@ -2725,7 +2742,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: false,
             runs: 21,
             series: 1,
             commit_span: None,
@@ -2773,7 +2789,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: true,
             runs: 21,
             series: 4,
             commit_span: None,
@@ -2851,7 +2866,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: true,
             runs: 21,
             series: 1,
             commit_span: None,
@@ -2957,7 +2971,7 @@ mod tests {
         // The per-set JSON tallies count each direction independently: this set
         // holds one regression and one improvement.
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["regressions"], 1, "{json}");
         assert_eq!(set_json["improvements"], 1, "{json}");
@@ -2994,7 +3008,7 @@ mod tests {
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         let set_json = &parsed["sets"][0];
         assert_eq!(set_json["regressions"], 2, "{json}");
         assert_eq!(set_json["improvements"], 0, "{json}");
@@ -3080,7 +3094,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 0,
             series: 0,
             commit_span: None,
@@ -3107,7 +3120,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 0,
             series: 0,
             commit_span: None,
@@ -3120,7 +3132,7 @@ mod tests {
             census: judged_census(0),
         };
         let report = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = from_str(&report).unwrap();
         assert_eq!(
             parsed["hint"], "dirty snapshots on base-ref commits",
             "{report}"
@@ -3142,7 +3154,7 @@ mod tests {
         assert!(markdown.trim_end().ends_with("(ephemeral)."), "{markdown}");
 
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         assert_eq!(
             parsed["warning"], "Warning: analysis included dirty runs (ephemeral).",
             "{json}"
@@ -3156,7 +3168,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 1,
             series: 1,
             commit_span: None,
@@ -3183,7 +3194,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 0,
             series: 0,
             commit_span: None,
@@ -3196,7 +3206,7 @@ mod tests {
             census: judged_census(0),
         };
         let report = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = from_str(&report).unwrap();
         assert!(parsed.get("warning").is_none(), "{report}");
     }
 
@@ -3207,7 +3217,7 @@ mod tests {
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
         let report = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let parsed: Value = from_str(&report).unwrap();
         assert_eq!(parsed["project"], "folo");
         assert_eq!(parsed["tip_commit"], "1234567890abcdef1234");
         assert_eq!(parsed["tip_dirty"], false);
@@ -3260,7 +3270,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: true,
             mode: AnalysisMode::History,
-            notable: false,
             runs: 1,
             series: 1,
             commit_span: None,
@@ -3284,7 +3293,7 @@ mod tests {
             "{markdown}"
         );
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         assert_eq!(parsed["tip_commit"], "1234567890abcdef1234");
         assert_eq!(parsed["tip_dirty"], true);
     }
@@ -3993,7 +4002,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: true,
             runs: 10,
             series: 2,
             commit_span: None,
@@ -4042,7 +4050,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::History,
-            notable: true,
             runs: 10,
             series: 2,
             commit_span: None,
@@ -4092,7 +4099,6 @@ mod tests {
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
             mode: AnalysisMode::Branch,
-            notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
             commit_span: None,
@@ -4163,7 +4169,7 @@ mod tests {
             &mut summaries,
         );
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         let lags = &parsed["sets"][0]["comparison_base_lags"];
         assert_eq!(lags[0]["commits_behind"], 5);
         assert_eq!(lags[0]["reason"], "discriminant_set_mismatch");
@@ -4178,7 +4184,7 @@ mod tests {
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         assert!(
             parsed["sets"][0].get("comparison_base_lags").is_none(),
             "unaffected sets carry no comparison_base_lags: {json}"
@@ -4298,7 +4304,7 @@ mod tests {
 
         // JSON keeps the series count for machine consumers (e.g. the stress harness).
         let json = render(&input, ReportFormat::Json, false);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: Value = from_str(&json).unwrap();
         assert!(parsed["series"].is_number(), "{json}");
         assert!(parsed["sets"][0]["series"].is_number(), "{json}");
     }
