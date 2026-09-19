@@ -224,17 +224,18 @@ Merge queue validation has its own queue-ref-specific group. Standard validation
 run-specific groups when called by scheduled/manual validation, so neither main pushes nor
 other scheduled runs cancel that full-scope backstop. The close companion stays
 pull-request-only. The exception
-is history collection on `main`, whose workflow-level group is keyed on the commit **SHA**:
-each commit is a distinct measurement, so only a redundant re-trigger of the *same* commit
-is deduplicated. The trigger is also part of that group, so a manual dispatch cannot cancel
-the push-triggered run for the same commit.
+is history collection on `main`, whose workflow-level group is keyed on the event type and
+commit **SHA**. Each commit is a distinct measurement, while redundant same-event runs at
+the same commit supersede one another. This includes repeated manual dispatches at the same
+tip; starting another replaces the earlier manual run. The event type keeps manual and
+push-triggered runs for that commit separate.
 
 Push-to-main history collection runs at most one job per platform across workflow runs.
 Linux and Windows have separate queues, so one platform does not wait for the other.
 Distinct commits wait without occupying runners or cancelling running or pending collection,
-up to GitHub's queue capacity. The limit covers only push-triggered collection: manual runs
-use run-specific collection groups, and downstream analysis does not hold a collection slot.
-Workflow-level deduplication still applies to redundant runs of the same history point.
+up to GitHub's queue capacity. The limit covers only push-triggered collection: surviving
+manual runs use run-specific collection groups, and downstream analysis does not hold a
+collection slot. Independent collection lanes do not bypass workflow-level deduplication.
 
 A schedule-driven workflow carries a concurrency block only when a duplicate run would be
 expensive: the nightly history backfill groups on itself with

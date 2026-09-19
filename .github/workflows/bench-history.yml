@@ -5,8 +5,9 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Per-platform collection queues retain pushed tips without occupying runners while waiting.
-# Manual runs have independent collection lanes. Ref: design.md#concurrency.
+# Same-event runs at one commit deduplicate; push and manual runs stay separate.
+# Platform queues retain pushed tips. Surviving manual runs have independent collection lanes.
+# Ref: design.md#concurrency.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: true
