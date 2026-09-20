@@ -6,7 +6,9 @@ use crate::github::fake::FakeGitHub;
 use crate::lifecycle::tests::harness::{
     clock, context, failure, findings, only_issue, owner, publish, report, sha,
 };
-use crate::lifecycle::{NoData, issue_failed, issue_no_data, issue_preflight, issue_report};
+use crate::lifecycle::{
+    Inconclusive, issue_failed, issue_inconclusive, issue_preflight, issue_report,
+};
 use crate::marker;
 use crate::result::{AnalysisMode, Coverage, Outcome, PublicationState, WrongPublicationState};
 
@@ -34,11 +36,11 @@ fn only_findings_create_issues_and_explicit_states_cannot_misrepresent_evidence(
         &owner(1, 1, 'a'),
     ))
     .unwrap();
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(1),
-        &NoData::Empty(owner(1, 1, 'a')),
+        &Inconclusive::Empty(owner(1, 1, 'a')),
     ))
     .unwrap();
     block_on(issue_failed(
@@ -60,11 +62,11 @@ fn only_findings_create_issues_and_explicit_states_cannot_misrepresent_evidence(
             block_on(issue_report(&github, &context(), &clock(1), &report, state)).unwrap_err();
         assert!(error.find_source::<WrongPublicationState>().is_some());
     }
-    let error = block_on(issue_no_data(
+    let error = block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(1),
-        &NoData::Report(findings('a')),
+        &Inconclusive::Report(findings('a')),
     ))
     .unwrap_err();
     assert!(error.find_source::<WrongPublicationState>().is_some());
@@ -114,6 +116,10 @@ fn clean_replaces_report_leaves_issue_open_and_date_follows_body_updates_only() 
     assert_ne!(after.title, before.title);
     assert!(after.open);
     assert!(after.body.contains("No notable changes detected"));
+    assert_eq!(
+        marker::find_state(&after.body, &context().instance),
+        Some("clean")
+    );
     assert_eq!(
         marker::find_analyzed_sha(&after.body, &context().instance),
         Some(sha('b'))

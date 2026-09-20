@@ -4,7 +4,8 @@ use crate::cli::{FailedArgs, PendingArgs};
 use crate::github::GitHub;
 use crate::identity::validate_run_url;
 use crate::lifecycle::{
-    InvalidPublication, NoData, Report, compare_or_unknown, find_comment, superseded, write_comment,
+    Inconclusive, InvalidPublication, Report, compare_or_unknown, find_comment, superseded,
+    write_comment,
 };
 use crate::operations::{Context, note};
 use crate::result::{AnalysisMode, PublicationState};
@@ -71,7 +72,7 @@ pub(crate) async fn comment_preflight(
 
 /// Publishes a validated branch result after checking the comment's owner and live PR head.
 ///
-/// Findings, clean and report-bearing no-data share this finish-side freshness policy.
+/// Findings, clean and report-bearing inconclusive share this finish-side freshness policy.
 /// Distinct runs use commit relationships, not numeric run-ID or attempt ordering.
 pub(crate) async fn comment_report(
     github: &impl GitHub,
@@ -82,7 +83,7 @@ pub(crate) async fn comment_report(
     state: PublicationState,
 ) -> Result<(), AppError> {
     require_packages(packages)?;
-    report.validate(AnalysisMode::Branch, state)?;
+    let state = report.validate(AnalysisMode::Branch, state)?;
     let existing = find_comment(github, context, pull_request).await?;
     let previous = existing
         .as_ref()
@@ -101,6 +102,7 @@ pub(crate) async fn comment_report(
         &context.instance,
         &report.owner,
         &report.evidence,
+        state,
         packages,
         &report.summary,
         report.artifact_url.as_deref(),
@@ -160,28 +162,28 @@ pub(crate) async fn comment_report(
 ///
 /// A report retains its limited result and freshness qualification. Empty scope instead names
 /// the live frozen head and carries no report whose absence could be mistaken for a verdict.
-pub(crate) async fn comment_no_data(
+pub(crate) async fn comment_inconclusive(
     github: &impl GitHub,
     context: &Context,
     pull_request: u64,
     packages: Option<&str>,
-    data: &NoData,
+    data: &Inconclusive,
 ) -> Result<(), AppError> {
-    data.validate(AnalysisMode::Branch)?;
     match data {
-        NoData::Report(report) => {
+        Inconclusive::Report(report) => {
             let packages = packages.ok_or_else(InvalidPublication::new)?;
+            // The shared report path performs the consistency assertion exactly once.
             comment_report(
                 github,
                 context,
                 pull_request,
                 packages,
                 report,
-                PublicationState::NoData,
+                PublicationState::Inconclusive,
             )
             .await
         }
-        NoData::Empty(owner) => {
+        Inconclusive::Empty(owner) => {
             if packages.is_some() {
                 return Err(InvalidPublication::new().into());
             }

@@ -225,7 +225,7 @@ fn pr_uses_explicit_base_or_core_default_without_fabricating_a_branch_name() {
                 .as_ref()
         );
         let outputs = host.outputs.borrow().first().unwrap().1.clone();
-        assert!(outputs.contains("publication-state=no-data\n"));
+        assert!(outputs.contains("publication-state=inconclusive\n"));
         assert!(outputs.contains("can-clear=false\n"));
     }
 }
@@ -251,17 +251,23 @@ fn clean_history_uses_shared_evidence_projection() {
 
 #[test]
 fn partial_history_uses_shared_evidence_projection() {
-    assert_outcome("partial", "partial", 1, 2, "no-data");
+    assert_outcome("partial", "partial", 1, 2, "inconclusive");
 }
 
 #[test]
 fn insufficient_history_uses_shared_evidence_projection() {
-    assert_outcome("insufficient_baseline", "nothing_judged", 0, 1, "no-data");
+    assert_outcome(
+        "insufficient_baseline",
+        "nothing_judged",
+        0,
+        1,
+        "inconclusive",
+    );
 }
 
 #[test]
 fn empty_history_uses_shared_evidence_projection() {
-    assert_outcome("nothing_in_scope", "no_series", 0, 0, "no-data");
+    assert_outcome("nothing_in_scope", "no_series", 0, 0, "inconclusive");
 }
 
 #[test]

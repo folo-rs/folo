@@ -28,16 +28,16 @@ impl Report {
         &self,
         mode: AnalysisMode,
         state: PublicationState,
-    ) -> Result<(), AppError> {
+    ) -> Result<PublicationState, AppError> {
         if self.summary.trim().is_empty() {
             return Err(EmptySummary::new().into());
         }
         self.evidence.report.require_mode(mode)?;
-        self.evidence.require_state(state)?;
+        let state = self.evidence.require_state(state)?;
         if self.owner.head != self.evidence.report.commit {
             return Err(InvalidPublication::new().into());
         }
-        Ok(())
+        Ok(state)
     }
 }
 
@@ -46,13 +46,13 @@ impl Report {
 /// This keeps absent benchmark scope distinct from an inconclusive completed analysis so
 /// comments and retained-issue annotations can choose the appropriate explanation.
 #[derive(Debug)]
-pub(crate) enum NoData {
+pub(crate) enum Inconclusive {
     Empty(PendingArgs),
     Report(Report),
 }
 
-impl NoData {
-    /// Supplies ownership uniformly for explicit empty scope and report-backed no-data.
+impl Inconclusive {
+    /// Supplies ownership uniformly for explicit empty scope and report-backed inconclusive.
     pub(crate) fn owner(&self) -> &PendingArgs {
         match self {
             Self::Empty(owner) => owner,
@@ -60,11 +60,11 @@ impl NoData {
         }
     }
 
-    /// Requires inconclusive evidence for report-backed no-data while retaining explicit scope.
-    pub(crate) fn validate(&self, mode: AnalysisMode) -> Result<(), AppError> {
+    /// Returns the checked inconclusive state, retaining explicit scope as a separate input form.
+    pub(crate) fn validate(&self, mode: AnalysisMode) -> Result<PublicationState, AppError> {
         match self {
-            Self::Empty(_) => Ok(()),
-            Self::Report(report) => report.validate(mode, PublicationState::NoData),
+            Self::Empty(_) => Ok(PublicationState::Inconclusive),
+            Self::Report(report) => report.validate(mode, PublicationState::Inconclusive),
         }
     }
 
@@ -75,7 +75,7 @@ impl NoData {
                 "No benchmarkable packages were selected; this run cannot establish recovery."
                     .to_owned()
             }
-            Self::Report(report) => message::no_data_details(
+            Self::Report(report) => message::inconclusive_details(
                 &report.evidence,
                 &report.summary,
                 report.artifact_url.as_deref(),
@@ -120,7 +120,7 @@ impl<'a> IssueBody<'a> {
             .map(|body| {
                 let state = match marker::find_state(body, instance) {
                     Some("preflight") => AnnotationState::Preflight,
-                    Some("no-data") => AnnotationState::NoData,
+                    Some("no-data") => AnnotationState::Inconclusive,
                     Some("failed") => AnnotationState::Failed,
                     _ => return Err(UninterpretableIssue::new()),
                 };
@@ -155,7 +155,7 @@ pub(crate) struct Annotation {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum AnnotationState {
     Preflight,
-    NoData,
+    Inconclusive,
     Failed,
 }
 

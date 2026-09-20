@@ -5,7 +5,7 @@ use crate::github::fake::FakeGitHub;
 use crate::lifecycle::tests::harness::{
     clock, context, findings, only_issue, owner, publish, report, seed_retained_findings, sha,
 };
-use crate::lifecycle::{IssueBody, NoData, issue_no_data, issue_preflight, superseded};
+use crate::lifecycle::{Inconclusive, IssueBody, issue_inconclusive, issue_preflight, superseded};
 use crate::marker;
 use crate::result::{AnalysisMode, Outcome};
 
@@ -40,11 +40,11 @@ fn older_or_unorderable_reports_do_not_replace_findings_or_annotations() {
     ))
     .unwrap();
     assert_eq!(only_issue(&github), before);
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(2),
-        &NoData::Empty(owner(2, 1, 'a')),
+        &Inconclusive::Empty(owner(2, 1, 'a')),
     ))
     .unwrap();
     assert_eq!(only_issue(&github), before);

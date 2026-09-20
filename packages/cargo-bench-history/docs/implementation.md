@@ -109,18 +109,21 @@ script and its PowerShell module dependencies. The binary embeds these files at 
 They live in `src/azure_bundle/` so the ordinary package allow-list includes them; a
 registry source install must not rely on repository-root `infra/` or `scripts/` files.
 The export is self-contained, with bundle-relative imports and no dependency on `constants.env`.
-Folo's infrastructure entry point supplies Folo-specific parameters to this same implementation;
-it does not maintain another copy of the Bicep or deployment policy.
+Folo's production and test infrastructure wrappers supply their separate placement and
+identity parameters to the source-built command. Neither wrapper owns a separate Bicep
+template or deployment path; both exercise the same embedded bundle and preservation policy.
 
 Bicep owns resource definitions. The single PowerShell driver owns Azure CLI discovery,
-state-preserving bootstrap decisions and deployment of one production identity with branch
+state-preserving bootstrap decisions and deployment of the selected identity with branch
 and PR federation.
 Rust owns parameter validation, the PowerShell prerequisite, bundle materialization, process
 invocation and output/error handling, not a second implementation of those Azure decisions.
 The standalone driver verifies Azure CLI, installed Bicep and an authenticated enabled
-subscription (including token acquisition) before any resource mutation. Its shared preflight
-also serves Folo's throwaway test deployment, which retains separate Bicep resource definitions
-and storage lifecycle. Current-user resolution checks that the active Azure CLI subscription
+subscription (including token acquisition) before any resource mutation. `AzureDeployment.psm1`
+owns this shared boundary; wrappers do not call its internal prerequisite helpers.
+Both production and test deployments preserve existing storage settings. Test execution creates
+and cleans its isolated containers independently of provisioning.
+Current-user resolution checks that the active Azure CLI subscription
 and tenant match the explicit target before calling `az ad signed-in-user show`, whose
 directory lookup uses the active context. A mismatch reports how to select that subscription;
 the driver does not change persisted CLI defaults or handle raw secret tokens.
@@ -144,11 +147,11 @@ starting tools. Native integration tests cover temporary-directory ownership, ex
 and execution of an extracted bundle; deployment policy retains its mocked-Azure coverage.
 
 The workspace tests exercise export and standalone-driver behavior through the workspace-built
-binary and mocked Azure. They do not establish a packaged-source build or Bicep compilation.
-Fresh and repeated deployments share the same policy tests through both entry points.
+binary and mocked Azure. Wrapper tests verify that both Folo parameter sets reach the same
+command, and fresh/repeated deployment behavior shares one policy suite. These runtime tests
+do not establish a packaged-source build or Bicep compilation.
 
-Maintainers separately invoke packaged-source build/export checks and offline Bicep compilation
-to verify distribution and bundle imports. Registry-source installation checks run after their
-required dependencies are published. These explicit checks are separate from the workspace suite,
-not an implicit CI gate. They do not deploy live resources; provisioning remains an explicit
-maintainer action.
+Offline Bicep validation checks the shared templates and bundle imports. Packaged-source
+build/export checks validate distribution separately; registry-source installation checks
+run after their required dependencies are published. None of these checks deploys live
+resources; provisioning remains an explicit maintainer action.

@@ -1,30 +1,61 @@
 #Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Executes the production wrapper with a mocked Cargo boundary, guarding its public CLI handoff.
-# Deployment defaults and optional additional grants reach setup-azure without invoking Azure.
+# Executes both deployment wrappers with a mocked Cargo boundary. Their distinct
+# placement defaults and optional grants must use the same source-built setup-azure
+# command, without separate Azure calls or deployment-template paths.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
-BeforeAll {
-    $script:Wrapper = Join-Path $PSScriptRoot '..' '..' 'infra' 'azure-bench-history-prod' 'deploy.ps1'
-    function cargo { throw 'Cargo calls must be mocked.' }
-}
+Describe '<Name> deployment CLI handoff' -ForEach @(
+    @{
+        Name = 'Production'
+        Directory = 'azure-bench-history-prod'
+        ResourceGroup = 'folohistory'
+        Account = 'folohistory'
+        Identity = 'id-folo-bench-history-prod'
+        RequiredParameters = @{ SubscriptionId = 'subscription-canary' }
+    }
+    @{
+        Name = 'Test'
+        Directory = 'azure-bench-history-test'
+        ResourceGroup = 'rg-folo-bench-history'
+        Account = 'testhistory'
+        Identity = 'id-folo-bench-history-ci'
+        RequiredParameters = @{
+            SubscriptionId = 'subscription-canary'
+            StorageAccountName = 'testhistory'
+        }
+    }
+) {
+    BeforeAll {
+        $script:Wrapper = Join-Path $PSScriptRoot '..' '..' 'infra' $Directory 'deploy.ps1'
+        function cargo { throw 'Cargo calls must be mocked.' }
+        function az { throw 'Deployment wrappers must not invoke Azure directly.' }
+    }
 
-Describe 'Production deployment CLI handoff' {
     BeforeEach {
         $script:State = @{ CargoArgs = @() }
         $state = $script:State
         Mock cargo ({ $state.CargoArgs = @($args) }.GetNewClosure())
+        Mock az { throw 'Deployment wrappers must not invoke Azure directly.' }
+    }
+
+    AfterEach {
+        Should -Invoke az -Times 0 -Exactly
     }
 
     It 'runs setup-azure from the workspace with Folo defaults' {
-        & $script:Wrapper -SubscriptionId 'subscription-canary'
+        & $script:Wrapper @RequiredParameters
 
         $script:State.CargoArgs[0] | Should -Be 'run'
         $script:State.CargoArgs | Should -Contain '--locked'
+        $manifest = $script:State.CargoArgs[[array]::IndexOf($script:State.CargoArgs, '--manifest-path') + 1]
+        [IO.Path]::GetFullPath($manifest) | Should -Be (
+            [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..' '..' 'Cargo.toml'))
+        )
         $script:State.CargoArgs[[array]::IndexOf($script:State.CargoArgs, '--package') + 1] |
             Should -Be 'cargo-bench-history'
         $script:State.CargoArgs[[array]::IndexOf($script:State.CargoArgs, '--bin') + 1] |
@@ -32,8 +63,8 @@ Describe 'Production deployment CLI handoff' {
         $separator = [array]::IndexOf($script:State.CargoArgs, '--')
         $script:State.CargoArgs[($separator + 1)..($script:State.CargoArgs.Count - 1)] | Should -Be @(
             'setup-azure', '--subscription-id', 'subscription-canary',
-            '--resource-group', 'folohistory', '--location', 'swedencentral',
-            '--storage-account', 'folohistory', '--managed-identity', 'id-folo-bench-history-prod',
+            '--resource-group', $ResourceGroup, '--location', 'swedencentral',
+            '--storage-account', $Account, '--managed-identity', $Identity,
             '--container', 'bench-history', '--github-owner', 'folo-rs',
             '--github-repository', 'folo', '--history-branch', 'main', '--verbose'
         )
@@ -70,14 +101,14 @@ Describe 'Production deployment CLI handoff' {
     }
 
     It 'preserves an incomplete custom-grant request for CLI validation' {
-        & $script:Wrapper -SubscriptionId 'subscription-canary' -CustomPrincipalType User
+        & $script:Wrapper @RequiredParameters -CustomPrincipalType User
 
         $script:State.CargoArgs | Should -Contain '--custom-principal-type'
         $script:State.CargoArgs | Should -Not -Contain '--custom-principal-id'
     }
 
     It 'forwards the current-user shortcut without performing identity lookup itself' {
-        & $script:Wrapper -SubscriptionId 'subscription-canary' -CurrentUser
+        & $script:Wrapper @RequiredParameters -CurrentUser
 
         $script:State.CargoArgs | Should -Contain '--current-user'
         $script:State.CargoArgs | Should -Not -Contain '--custom-principal-id'
@@ -87,7 +118,7 @@ Describe 'Production deployment CLI handoff' {
     It 'propagates CLI failures' {
         Mock cargo { throw [InvalidOperationException]::new('cli-canary') }
 
-        { & $script:Wrapper -SubscriptionId 'subscription-canary' } |
+        { & $script:Wrapper @RequiredParameters } |
             Should -Throw -ExceptionType ([InvalidOperationException])
     }
 }

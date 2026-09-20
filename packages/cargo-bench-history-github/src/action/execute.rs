@@ -147,7 +147,7 @@ async fn analyze(
 }
 
 /// Captures dedicated Git machine output without mixing it with long-running benchmark logs.
-async fn git(host: &impl Host, cwd: &Path, args: &[&str]) -> Result<String, AppError> {
+pub(crate) async fn git(host: &impl Host, cwd: &Path, args: &[&str]) -> Result<String, AppError> {
     host.process(&Process {
         program: "git".into(),
         args: args.iter().map(OsString::from).collect(),

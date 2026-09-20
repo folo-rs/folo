@@ -14,12 +14,25 @@ const RECEIPT_FILE: &str = "receipt.json";
 
 // These adapters touch the real filesystem. Offline commands have native CLI integration
 // coverage; in-memory receipt decoding, reconciliation and projection remain mutation targets.
-/// Loads receipt-only artifact directories for subsequent in-memory reconciliation.
+/// Loads either downloader layout for subsequent in-memory receipt reconciliation.
+///
+/// A single selected artifact can be extracted directly at the download root; multiple
+/// artifacts occupy individual subdirectories. Both forms remain receipt-only.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn read_receipts(root: &Path) -> Result<Vec<Receipt>, AppError> {
     require_kind(root, true)?;
+    let contents = entries(root)?;
+    let single_file = match contents.as_slice() {
+        [entry] => checked_metadata(entry)?.is_some_and(|metadata| metadata.is_file()),
+        _ => false,
+    };
+    let directories = if single_file {
+        vec![root.to_path_buf()]
+    } else {
+        contents
+    };
     let mut receipts = Vec::new();
-    for directory in entries(root)? {
+    for directory in directories {
         require_kind(&directory, true)?;
         for entry in entries(&directory)? {
             match entry.file_name().and_then(|value| value.to_str()) {

@@ -4,6 +4,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use cargo_detect_package::query_package;
 use cbh_config::{Config, load_config, resolve_config_path, resolve_project_id};
 use cbh_model::sanitize_segment;
 use ohno::AppError;
@@ -48,6 +49,10 @@ impl Host for NativeHost {
     /// Loads input and report artifacts while retaining the failing filesystem path.
     fn read(&self, path: &Path) -> Result<Vec<u8>, AppError> {
         fs::read(path).map_err(|error| ActionIo::caused_by("read file", path, error).into())
+    }
+
+    fn package(&self, workspace: &Path, target: &Path) -> Result<Option<String>, AppError> {
+        query_package(workspace, target)
     }
 
     /// Resolves an existing physical directory before measured-checkout and containment use.

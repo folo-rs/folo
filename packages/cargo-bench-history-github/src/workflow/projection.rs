@@ -5,7 +5,7 @@ use ohno::AppError;
 use serde_json::json;
 
 use crate::model::Instance;
-use crate::result::{AnalysisMode, Evidence, Outcome, platform_list};
+use crate::result::{AnalysisMode, Evidence, Outcome, PublicationState, platform_list};
 use crate::workflow::receipt::Receipt;
 use crate::workflow::reconcile::{Selection, collection_job_prefix};
 
@@ -123,8 +123,10 @@ pub(crate) fn report_outputs(evidence: &Evidence) -> String {
     let outcome = evidence.report.outcome.as_str();
     // Use the publication gates themselves: their validated parser owns census semantics.
     let notable = evidence.report.outcome == Outcome::Findings;
-    let can_clear = evidence.report.mode == AnalysisMode::History && evidence.is_all_clear();
-    let state = evidence.publication_state().as_str();
+    let state = evidence.publication_state();
+    let can_clear =
+        evidence.report.mode == AnalysisMode::History && state == PublicationState::Clean;
+    let state = state.as_str();
     format!(
         "outcome={outcome}\nnotable={notable}\ncan-clear={can_clear}\npublication-state={state}\n"
     )
@@ -264,21 +266,24 @@ mod tests {
 
     #[test]
     fn output_projection_uses_report_and_platform_evidence() {
-        for (outcome, wire) in [
-            (Outcome::Findings, "findings"),
-            (Outcome::Clean, "clean"),
-            (Outcome::Partial, "partial"),
-            (Outcome::InsufficientBaseline, "insufficient_baseline"),
-            (Outcome::NothingInScope, "nothing_in_scope"),
+        for (outcome, wire, state) in [
+            (Outcome::Findings, "findings", "findings"),
+            (Outcome::Clean, "clean", "clean"),
+            (Outcome::Partial, "partial", "inconclusive"),
+            (
+                Outcome::InsufficientBaseline,
+                "insufficient_baseline",
+                "inconclusive",
+            ),
+            (Outcome::NothingInScope, "nothing_in_scope", "inconclusive"),
         ] {
             let evidence = evidence(AnalysisMode::History, outcome, true);
             assert_eq!(
                 report_outputs(&evidence),
                 format!(
-                    "outcome={wire}\nnotable={}\ncan-clear={}\npublication-state={}\n",
+                    "outcome={wire}\nnotable={}\ncan-clear={}\npublication-state={state}\n",
                     outcome == Outcome::Findings,
-                    outcome == Outcome::Clean,
-                    evidence.publication_state().as_str()
+                    outcome == Outcome::Clean
                 )
             );
         }
@@ -286,17 +291,31 @@ mod tests {
 
     #[test]
     fn branch_and_incomplete_collection_never_clear_issues() {
-        for evidence in [
-            evidence(AnalysisMode::Branch, Outcome::Clean, true),
-            evidence(AnalysisMode::History, Outcome::Clean, false),
+        for (evidence, state) in [
+            (
+                evidence(AnalysisMode::Branch, Outcome::Clean, true),
+                "clean",
+            ),
+            (
+                evidence(AnalysisMode::History, Outcome::Clean, false),
+                "inconclusive",
+            ),
         ] {
             assert_eq!(
                 report_outputs(&evidence),
                 format!(
-                    "outcome=clean\nnotable=false\ncan-clear=false\npublication-state={}\n",
-                    evidence.publication_state().as_str()
+                    "outcome=clean\nnotable=false\ncan-clear=false\npublication-state={state}\n"
                 )
             );
         }
+    }
+
+    #[test]
+    fn incomplete_collection_does_not_replace_the_findings_state() {
+        let evidence = evidence(AnalysisMode::History, Outcome::Findings, false);
+        assert_eq!(
+            report_outputs(&evidence),
+            "outcome=findings\nnotable=true\ncan-clear=false\npublication-state=findings\n"
+        );
     }
 }

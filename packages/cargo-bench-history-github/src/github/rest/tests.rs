@@ -607,6 +607,7 @@ fn ambiguous_create_reconciles_lagging_search_then_direct_content() {
         &context.instance,
         &report.owner,
         &report.evidence,
+        report.evidence.publication_state(),
         &report.summary,
         None,
     );
@@ -877,6 +878,7 @@ fn a_closed_rolling_issue_from_a_stale_search_is_not_an_open_candidate() {
         &context.instance,
         &report.owner,
         &report.evidence,
+        report.evidence.publication_state(),
         &report.summary,
         None,
     );

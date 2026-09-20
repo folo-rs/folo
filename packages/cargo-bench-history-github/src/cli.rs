@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::action::ActionArgs;
+use crate::action::{ActionArgs, PrepareWorkflowArgs};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::workflow::{CollectionArgs, InspectArgs, MatrixArgs, PrepareArgs};
 
@@ -54,6 +54,8 @@ struct CommonArgs {
 pub(crate) enum Command {
     /// Execute a root-action invocation after binary installation.
     Action(ActionArgs),
+    /// Freeze configuration, platform matrix and benchmark scope without GitHub access.
+    PrepareWorkflow(PrepareWorkflowArgs),
     /// Prepare matrix and collection-job identities without GitHub access.
     WorkflowMatrix(MatrixArgs),
     /// Record successful collection and its actual machine key.
@@ -76,14 +78,14 @@ pub(crate) enum Command {
         pending: PendingArgs,
     },
     /// Explain empty scope or a successful analysis without a complete verdict.
-    PublishCommentNoData {
+    PublishCommentInconclusive {
         #[arg(long)]
         pull_request: NonZero<u64>,
         #[arg(long, required_unless_present = "empty_scope", conflicts_with = "empty_scope",
             value_parser = package_list)]
         packages: Option<String>,
         #[command(flatten)]
-        data: NoDataArgs,
+        data: InconclusiveArgs,
     },
     /// Retire only this run's unfinished placeholder.
     PublishCommentFailed {
@@ -99,7 +101,7 @@ pub(crate) enum Command {
     /// Mark an existing issue stale and record the pending run.
     PublishIssuePreflight(PendingArgs),
     /// Annotate an existing issue without replacing its previous report.
-    PublishIssueNoData(NoDataArgs),
+    PublishIssueInconclusive(InconclusiveArgs),
     /// Retire only this run's pending annotation.
     PublishIssueFailed(FailedArgs),
     /// File a one-off issue for a failed workflow run.
@@ -157,7 +159,7 @@ pub(crate) struct CommentReportArgs {
 
 /// Explicit empty scope and report evidence are mutually exclusive input groups.
 #[derive(Args, Debug)]
-pub(crate) struct NoDataArgs {
+pub(crate) struct InconclusiveArgs {
     #[command(flatten)]
     pub(crate) run: RunArgs,
     #[arg(long, requires = "head")]
@@ -290,10 +292,10 @@ mod tests {
         for command in [
             "publish-comment-findings",
             "publish-comment-clean",
-            "publish-comment-no-data",
+            "publish-comment-inconclusive",
             "publish-issue-findings",
             "publish-issue-clean",
-            "publish-issue-no-data",
+            "publish-issue-inconclusive",
         ] {
             let mut arguments = args(command);
             arguments.extend(report());
@@ -324,10 +326,10 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "Exhaustive command/flag cross-product; focused no-data arguments retain interpreter coverage."
+        ignore = "Exhaustive command/flag cross-product; focused inconclusive arguments retain interpreter coverage."
     )]
     fn empty_scope_is_explicit_and_rejects_every_report_input() {
-        for command in ["publish-comment-no-data", "publish-issue-no-data"] {
+        for command in ["publish-comment-inconclusive", "publish-issue-inconclusive"] {
             let mut arguments = args(command);
             arguments.extend(["--empty-scope", "--head", SHA]);
             if command.contains("comment") {
@@ -406,6 +408,8 @@ mod tests {
         for command in [
             "publish-issue",
             "publish-pr-comment",
+            "publish-comment-no-data",
+            "publish-issue-no-data",
             "resolve-alert",
             "issue-cleanup",
             "pr-comment-finalize",
@@ -489,9 +493,9 @@ mod tests {
     }
 
     #[test]
-    fn no_data_argument_group_distinguishes_empty_scope_from_missing_report() {
+    fn inconclusive_argument_group_distinguishes_empty_scope_from_missing_report() {
         let arguments = [
-            "no-data",
+            "inconclusive",
             "--run-id",
             "42",
             "--run-attempt",
@@ -500,11 +504,11 @@ mod tests {
             "--head",
             SHA,
         ];
-        NoDataArgs::augment_args(ClapCommand::new("no-data"))
+        InconclusiveArgs::augment_args(ClapCommand::new("inconclusive"))
             .try_get_matches_from(arguments)
             .unwrap();
         assert_eq!(
-            NoDataArgs::augment_args(ClapCommand::new("no-data"))
+            InconclusiveArgs::augment_args(ClapCommand::new("inconclusive"))
                 .try_get_matches_from(arguments.into_iter().chain(["--body-file", "summary.md"]))
                 .unwrap_err()
                 .kind(),

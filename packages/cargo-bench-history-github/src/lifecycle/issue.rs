@@ -7,7 +7,7 @@ use crate::cli::{FailedArgs, PendingArgs};
 use crate::github::{GitHub, Issue};
 use crate::identity::{IssueIdentity, validate_run_url};
 use crate::lifecycle::{
-    AnnotationState, IssueBody, NoData, Report, annotate, compare_or_unknown, create_issue,
+    AnnotationState, Inconclusive, IssueBody, Report, annotate, compare_or_unknown, create_issue,
     find_issue, superseded,
 };
 use crate::message;
@@ -25,7 +25,7 @@ pub(crate) async fn issue_report(
     report: &Report,
     state: PublicationState,
 ) -> Result<(), AppError> {
-    report.validate(AnalysisMode::History, state)?;
+    let state = report.validate(AnalysisMode::History, state)?;
     let identity = IssueIdentity::Rolling(context.instance.clone());
     let existing = find_issue(github, context, &identity).await?;
     if let Some(issue) = &existing {
@@ -44,6 +44,7 @@ pub(crate) async fn issue_report(
         &context.instance,
         &report.owner,
         &report.evidence,
+        state,
         &report.summary,
         report.artifact_url.as_deref(),
     );
@@ -129,18 +130,18 @@ pub(crate) async fn issue_preflight(
 ///
 /// Explicit empty scope and inconclusive analysis share annotation ownership, not report
 /// replacement. Work at an already-pending head can retire that pending status.
-pub(crate) async fn issue_no_data(
+pub(crate) async fn issue_inconclusive(
     github: &impl GitHub,
     context: &Context,
     clock: &Clock,
-    data: &NoData,
+    data: &Inconclusive,
 ) -> Result<(), AppError> {
-    data.validate(AnalysisMode::History)?;
+    let state = data.validate(AnalysisMode::History)?;
     let identity = IssueIdentity::Rolling(context.instance.clone());
     let Some(issue) = find_issue(github, context, &identity).await? else {
         note(
             context,
-            "no open rolling issue exists; validated no-data publication is a no-op",
+            "no open rolling issue exists; validated inconclusive publication is a no-op",
         );
         return Ok(());
     };
@@ -177,7 +178,7 @@ pub(crate) async fn issue_no_data(
         &report,
         &context.instance,
         data.owner(),
-        "no-data",
+        state.marker_value(),
         &data.details(),
     );
     update(github, context, clock, &issue, &body).await

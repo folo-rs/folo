@@ -12,7 +12,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 # deploy.ps1 calls this policy boundary for both CLI-driven and exported deployments.
 # It discovers missing storage before invoking Bicep and returns validated non-secret
 # outputs for the driver's configuration handoff; Bicep remains the resource authority.
-function Invoke-ProductionIdentityDeployment {
+function Invoke-AzureDeployment {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][ValidateNotNullOrWhiteSpace()][string] $SubscriptionId,
@@ -65,21 +65,21 @@ function Invoke-ProductionIdentityDeployment {
     }
 
     Write-Verbose "Ensuring resource group '$ResourceGroup' in explicitly selected subscription '$SubscriptionId'; all tooling and authentication probes succeeded."
-    Invoke-ProductionIdentityAz -Arguments @(
+    Invoke-AzureCli -Arguments @(
         'group', 'create', '--subscription', $SubscriptionId,
         '--name', $ResourceGroup, '--location', $Location, '--output', 'none'
     ) | Out-Null
 
     # Failed listing is never interpreted as absence: doing so could PUT existing
     # storage with fresh defaults. Only successful management-plane lists decide.
-    $accounts = @(Invoke-ProductionIdentityAz -Arguments @(
+    $accounts = @(Invoke-AzureCli -Arguments @(
             'storage', 'account', 'list', '--subscription', $SubscriptionId,
             '--resource-group', $ResourceGroup, '--output', 'json'
         ) | ConvertFrom-Json)
     $createStorageAccount = @($accounts | Where-Object name -EQ $StorageAccountName).Count -eq 0
     $createHistoryContainer = $true
     if (-not $createStorageAccount) {
-        $containers = @(Invoke-ProductionIdentityAz -Arguments @(
+        $containers = @(Invoke-AzureCli -Arguments @(
                 'storage', 'container-rm', 'list', '--subscription', $SubscriptionId,
                 '--resource-group', $ResourceGroup, '--storage-account', $StorageAccountName,
                 '--output', 'json'
@@ -89,7 +89,7 @@ function Invoke-ProductionIdentityDeployment {
 
     Write-Verbose "Account '$StorageAccountName' needs bootstrap: $createStorageAccount; container '$HistoryContainerName' needs bootstrap: $createHistoryContainer. Existing storage is reference-only to preserve properties and history."
     Write-Verbose "Identity '$ManagedIdentityName' receives account-scoped Storage Blob Data Contributor and repository '$GithubOrg/$GithubRepo' branch '$HistoryBranch' plus PR federation. Optional custom principal access uses the same role independently."
-    $outputs = Invoke-ProductionIdentityAz -Arguments @(
+    $outputs = Invoke-AzureCli -Arguments @(
         'deployment', 'group', 'create', '--subscription', $SubscriptionId,
         '--resource-group', $ResourceGroup,
         '--name', "bench-history-$([guid]::NewGuid().ToString('N'))",
@@ -119,9 +119,8 @@ function Invoke-ProductionIdentityDeployment {
     return $outputs
 }
 
-# Production provisioning and the throwaway test driver call this before any Azure
-# mutation. It verifies tooling and the target login, returning a resolved user ID
-# only when requested. Sharing preflight does not share storage or federation policy.
+# The shared deployment operation calls this before any Azure mutation. It verifies
+# tooling and the target login, returning a resolved user ID only when requested.
 function Get-AzureDeploymentContext {
     [CmdletBinding()]
     param(
@@ -130,9 +129,9 @@ function Get-AzureDeploymentContext {
     )
 
     # `bicep version` fails when Bicep is absent instead of implicitly installing it.
-    Invoke-ProductionIdentityAz -Arguments @('version', '--output', 'json') | Out-Null
-    Invoke-ProductionIdentityAz -Arguments @('bicep', 'version') | Out-Null
-    $account = Invoke-ProductionIdentityAz -Arguments @(
+    Invoke-AzureCli -Arguments @('version', '--output', 'json') | Out-Null
+    Invoke-AzureCli -Arguments @('bicep', 'version') | Out-Null
+    $account = Invoke-AzureCli -Arguments @(
         'account', 'show', '--subscription', $SubscriptionId, '--output', 'json'
     ) | ConvertFrom-Json
     if ($account.id -ne $SubscriptionId -or $account.state -ne 'Enabled' -or
@@ -141,7 +140,7 @@ function Get-AzureDeploymentContext {
     }
     # A cached subscription entry alone does not demonstrate a usable credential.
     # Suppress the token completely: none of the command's outputs contain secrets.
-    Invoke-ProductionIdentityAz -Arguments @(
+    Invoke-AzureCli -Arguments @(
         'account', 'get-access-token', '--subscription', $SubscriptionId,
         '--query', 'expires_on', '--output', 'tsv'
     ) | Out-Null
@@ -155,14 +154,14 @@ function Get-AzureDeploymentContext {
         # subscription selector. Check it instead of changing the user's default
         # or handling a raw access token. This also selects the correct guest object.
         # Ref: README.md, "Deploy".
-        $activeAccount = Invoke-ProductionIdentityAz -Arguments @(
+        $activeAccount = Invoke-AzureCli -Arguments @(
             'account', 'show', '--output', 'json'
         ) | ConvertFrom-Json
         if ($activeAccount.id -ne $SubscriptionId -or $activeAccount.tenantId -ne $account.tenantId) {
             throw "CurrentUser requires the selected subscription to be active for directory lookup. Run az account set --subscription $SubscriptionId, then retry. No Azure resources were changed."
         }
         Write-Verbose "Resolving the signed-in user in tenant '$($account.tenantId)' through subscription '$SubscriptionId' before any Azure changes."
-        $principalId = Invoke-ProductionIdentityAz -Arguments @(
+        $principalId = Invoke-AzureCli -Arguments @(
             'ad', 'signed-in-user', 'show', '--query', 'id', '--output', 'tsv'
         )
         $principalGuid = [guid]::Empty
@@ -177,7 +176,7 @@ function Get-AzureDeploymentContext {
 # Shared native-call boundary for provisioning and preflight. Keeping Azure stdout
 # separate from stderr lets callers parse JSON/IDs while retaining operation and
 # exit diagnostics on failure, without interpreting a failed probe as absence.
-function Invoke-ProductionIdentityAz {
+function Invoke-AzureCli {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]] $Arguments)
 
@@ -198,4 +197,4 @@ function Invoke-ProductionIdentityAz {
     }
 }
 
-Export-ModuleMember -Function Invoke-ProductionIdentityDeployment, Get-AzureDeploymentContext
+Export-ModuleMember -Function Invoke-AzureDeployment

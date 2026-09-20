@@ -24,9 +24,15 @@ repo:folo-rs/folo:pull_request
 
 `-GithubOrg`, `-GithubRepo` and `-HistoryBranch` select the repository and branch.
 The Folo wrapper defaults to `main`. The `pull_request` subject does **not**
-distinguish same-repository and fork heads. Workflow policy must restrict identity use to
-same-repository PRs and must not expose privileged credentials to fork code.
-The absence of stored secrets is not itself an OIDC authorization boundary.
+distinguish same-repository and fork heads. Under GitHub's default permissions,
+fork PR jobs cannot obtain effective `id-token: write`, even by editing the
+workflow YAML; maintainer approval does not elevate it. That platform restriction
+prevents OIDC issuance. Keep the same-repository job gate to skip unsupported fork
+work explicitly. Fork-owned workflows name the fork repository and do not match
+the upstream subjects.
+
+`-HistoryBranch` authorizes a workflow execution context; it does not limit the
+branches whose benchmark results can be stored or analyzed.
 
 Analysis and GitHub publication may run in one job. Azure access uses this identity;
 issue/comment access uses the job's built-in GitHub token. PR and trunk measurements use
@@ -117,7 +123,7 @@ client and tenant IDs, not the subscription ID.
 CLI, including its prerequisite checks and embedded
 [canonical deployment bundle](../../packages/cargo-bench-history/src/azure_bundle/).
 The exported bundle remains usable without a Rust toolchain; its driver calls the
-Pester-tested `ProductionIdentityDeployment.psm1` module. Bicep remains the resource
+Pester-tested `AzureDeployment.psm1` module. Bicep remains the resource
 definition authority.
 
 - **Existing storage:** successful management-plane listings select
@@ -133,15 +139,15 @@ definition authority.
   grants remain. Granting another principal access does not remove earlier grants.
   Omission is not revocation and existing storage/history is not destroyed.
 - **Federation configuration:** changing the repository or branch updates the
-  selected identity's existing credentials. The `github-branch-main` resource key
-  is fixed even when `-HistoryBranch` selects a different branch; its subject is
-  replaced rather than adding another branch credential.
+  selected identity's `bench-history-branch` and `bench-history-pull-request`
+  credentials. The branch value changes the subject, not the resource name.
+  The test identity may use the same child names because it is a separate parent.
 
-The [test stack](../azure-bench-history-test/) shares tooling/authentication and
-current-user preflight with this stack, and uses the same custom-principal vocabulary.
-Its Bicep deliberately remains separate: it owns disposable test storage, enforces
-test retention settings on updates and keeps its own CI identity and trust controls.
-Deploying it does not grant access to production history.
+The [test stack](../azure-bench-history-test/) also invokes the source-built
+`setup-azure` command with its own account, resource group and identity. Both use
+the same embedded templates and preserve existing storage settings. Test execution
+creates and deletes isolated containers on the test account; it does not acquire
+production history access.
 
 Always use the wrapper for routine deployments. Direct Bicep/ARM callers bypass
 its state discovery. They must explicitly select `createStorageAccount` and

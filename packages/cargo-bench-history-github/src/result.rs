@@ -16,20 +16,21 @@ pub(crate) struct Evidence {
 }
 
 impl Evidence {
-    /// Checks that a named publication command agrees with the shared evidence projection.
-    pub(crate) fn require_state(&self, state: PublicationState) -> Result<(), AppError> {
+    /// Returns the requested state after asserting that it agrees with the evidence.
+    ///
+    /// Publication passes this checked value onward; a mismatched command is an error,
+    /// not permission to silently select another publication operation.
+    pub(crate) fn require_state(
+        &self,
+        state: PublicationState,
+    ) -> Result<PublicationState, AppError> {
         if self.publication_state() != state {
             return Err(WrongPublicationState::new().into());
         }
-        Ok(())
+        Ok(state)
     }
 
-    /// Determines whether outcome and coverage together authorize clean publication.
-    pub(crate) fn is_all_clear(&self) -> bool {
-        self.publication_state() == PublicationState::Clean
-    }
-
-    /// Chooses findings first, then fully covered clean, otherwise the no-data explanation.
+    /// Chooses findings first, then fully covered clean, otherwise the inconclusive explanation.
     ///
     /// Inspection and both report sinks use this same decision; platform incompleteness
     /// qualifies findings rather than suppressing them.
@@ -41,7 +42,7 @@ impl Evidence {
             {
                 PublicationState::Clean
             }
-            _ => PublicationState::NoData,
+            _ => PublicationState::Inconclusive,
         }
     }
 }
@@ -51,15 +52,28 @@ impl Evidence {
 pub(crate) enum PublicationState {
     Findings,
     Clean,
-    NoData,
+    Inconclusive,
 }
 
 impl PublicationState {
+    /// Public command/output vocabulary used by workflow dispatch.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Findings => "findings",
             Self::Clean => "clean",
-            Self::NoData => "no-data",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+
+    /// Encodes the opaque body-marker state independently of public command names.
+    ///
+    /// The inconclusive operation retains its established encoding so coherent existing
+    /// comments and annotations remain readable without accepting alternate marker formats.
+    pub(crate) fn marker_value(self) -> &'static str {
+        match self {
+            Self::Findings => "findings",
+            Self::Clean => "clean",
+            Self::Inconclusive => "no-data",
         }
     }
 }
@@ -369,9 +383,12 @@ pub(crate) mod tests {
         for (outcome, expected) in [
             (Outcome::Findings, PublicationState::Findings),
             (Outcome::Clean, PublicationState::Clean),
-            (Outcome::Partial, PublicationState::NoData),
-            (Outcome::InsufficientBaseline, PublicationState::NoData),
-            (Outcome::NothingInScope, PublicationState::NoData),
+            (Outcome::Partial, PublicationState::Inconclusive),
+            (
+                Outcome::InsufficientBaseline,
+                PublicationState::Inconclusive,
+            ),
+            (Outcome::NothingInScope, PublicationState::Inconclusive),
         ] {
             let complete = evidence(AnalysisMode::Branch, outcome, true);
             assert_eq!(complete.publication_state(), expected);
@@ -381,9 +398,37 @@ pub(crate) mod tests {
                 if outcome == Outcome::Findings {
                     PublicationState::Findings
                 } else {
-                    PublicationState::NoData
+                    PublicationState::Inconclusive
                 }
             );
+        }
+    }
+
+    #[test]
+    fn requested_publication_state_is_checked_not_reclassified() {
+        for (outcome, expected) in [
+            (Outcome::Findings, PublicationState::Findings),
+            (Outcome::Clean, PublicationState::Clean),
+            (Outcome::Partial, PublicationState::Inconclusive),
+        ] {
+            let evidence = evidence(AnalysisMode::Branch, outcome, true);
+            for requested in [
+                PublicationState::Findings,
+                PublicationState::Clean,
+                PublicationState::Inconclusive,
+            ] {
+                let checked = evidence.require_state(requested);
+                if requested == expected {
+                    assert_eq!(checked.unwrap(), requested);
+                } else {
+                    assert!(
+                        checked
+                            .unwrap_err()
+                            .find_source::<WrongPublicationState>()
+                            .is_some()
+                    );
+                }
+            }
         }
     }
 

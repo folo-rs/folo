@@ -420,7 +420,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
           tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose publish-comment-no-data --pull-request $env:PR_NUMBER --head $env:HEAD_SHA --empty-scope --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT
+          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose publish-comment-inconclusive --pull-request $env:PR_NUMBER --head $env:HEAD_SHA --empty-scope --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT
 
   failed:
     needs: [prepare, delta, preflight, collect, analyze]

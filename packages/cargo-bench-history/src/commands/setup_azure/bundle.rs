@@ -14,7 +14,7 @@ pub(crate) struct BundleFile {
 }
 
 // All compile-time inputs live under src, so registry-source builds use exactly
-// the same deployment policy as exports and Folo's standalone wrapper.
+// the same deployment policy as exports and Folo's deployment wrappers.
 const ASSETS: &[(&str, &str)] = &[
     ("main.bicep", include_str!("../../azure_bundle/main.bicep")),
     (
@@ -27,8 +27,8 @@ const ASSETS: &[(&str, &str)] = &[
     ),
     ("deploy.ps1", include_str!("../../azure_bundle/deploy.ps1")),
     (
-        "ProductionIdentityDeployment.psm1",
-        include_str!("../../azure_bundle/ProductionIdentityDeployment.psm1"),
+        "AzureDeployment.psm1",
+        include_str!("../../azure_bundle/AzureDeployment.psm1"),
     ),
     ("README.md", include_str!("../../azure_bundle/README.md")),
 ];

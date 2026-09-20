@@ -90,9 +90,13 @@ the freshness-unverified warning used when the live PR head itself cannot be rea
 ## Publication states
 
 Commands use `publish-<sink>-<state>`, with `comment` or `issue` as the sink and `findings`,
-`clean`, `preflight`, `no-data` or `failed` as the state. The action uses the same names.
-The successful report and its platform evidence select findings, clean or no-data; callers
-cannot use a command name to bypass the corresponding evidence requirement.
+`clean`, `preflight`, `inconclusive` or `failed` as the state. The action uses the same names.
+The successful report and its platform evidence select findings, clean or inconclusive.
+Analysis and report inspection emit this selection as `publication-state`; the workflow forwards
+it as the publication command suffix without classifying the report again.
+Publication asserts that the supplied evidence agrees with that command, then uses the checked
+state for the operation and its status metadata. A mismatch is an error, not silent rerouting
+to another command. The core analysis outcome remains unchanged.
 
 Findings and coverage answer different questions: whether the tool found a notable change,
 and how much of the intended benchmark scope it could judge. Findings take precedence.
@@ -101,17 +105,17 @@ and how much of the intended benchmark scope it could judge. Findings take prece
 | --- | --- |
 | Any notable findings, including improvements in branch mode | `findings`, retaining any missing-platform or unjudged-series qualification |
 | No findings, a fully judged nonempty analysis, and every intended platform completed | `clean` |
-| No findings, but insufficient baseline, empty analysis scope, unjudged series or missing platforms | `no-data`, retaining the useful limited result and its explanation |
-| Scope preflight explicitly selected no benchmarkable packages, so analysis did not run | `no-data`, explaining the empty scope |
+| No findings, but insufficient baseline, empty analysis scope, unjudged series or missing platforms | `inconclusive`, retaining the useful limited result and its explanation |
+| Scope preflight explicitly selected no benchmarkable packages, so analysis did not run | `inconclusive`, explaining the empty scope |
 
 For example, findings from a successful Linux collection still use `findings` when the Windows
 collection failed. If the Linux analysis instead reports no findings, that missing Windows
-coverage prevents a complete clean verdict and selects `no-data`.
-Thus the partial result in `no-data` is not a set of hidden findings: it describes the judged
+coverage prevents a complete clean verdict and selects `inconclusive`.
+Thus the partial result in `inconclusive` is not a set of hidden findings: it describes the judged
 portion and why a complete verdict is unavailable. An omitted report is never an empty-scope
 signal. `failed` records execution failure or cancellation, not a successful analysis outcome.
 
-Comment findings, clean and no-data publication create or update the rolling comment.
+Comment findings, clean and inconclusive publication create or update the rolling comment.
 Comment preflight seeds an owned placeholder or marks existing results stale; failed
 publication changes only its own unfinished placeholder and never creates a comment.
 
@@ -122,7 +126,7 @@ Issue commands have distinct creation and update roles:
 | `publish-issue-findings` | When no matching open rolling issue exists | Publishes eligible findings | Never | Never |
 | `publish-issue-clean` | No | Publishes eligible all-clear, leaving the investigation open | Never | Never |
 | `publish-issue-preflight` | No | Marks retained results stale and records pending work | Never | Never |
-| `publish-issue-no-data` | No | Explains why recovery is unproven while retaining the previous report | Never | Never |
+| `publish-issue-inconclusive` | No | Explains why recovery is unproven while retaining the previous report | Never | Never |
 | `publish-issue-failed` | No | Retires only its own pending annotation, retaining the previous report | Never | Never |
 | `alert` | When that project's run has no existing alert, open or closed | No | Never | Never |
 
@@ -132,7 +136,7 @@ considers closed issues, so retrying an alert preserves a human-closed alert ins
 recreating it.
 Non-creating rolling commands are logged no-ops when no open issue exists, but still validate
 their inputs. Freshness and ownership guards can also preserve an existing issue unchanged.
-No-data and failed annotations retain the report's measured commit and staleness.
+Inconclusive and failed annotations retain the report's measured commit and staleness.
 
 ## Publication evidence
 
@@ -162,7 +166,7 @@ against an older frozen head. Unorderable commits retain the unknown-distance wa
 
 Report-bearing publication uses `--report-file`, the rendered `--body-file`, `--analyzed-sha`,
 and `--expected-platforms` / `--completed-platforms`, identically for findings, clean and
-no-data. The no-report no-data form requires an explicit empty-scope result and rejects
+inconclusive. The no-report inconclusive form requires an explicit empty-scope result and rejects
 report-bearing inputs.
 Report interpretation uses the existing JSON metadata rather than depending on the tool's
 report types or adding a versioned report schema. Namespace resolution separately reuses
@@ -183,6 +187,35 @@ unfinished placeholder or pending annotation. It cannot retire another run's wor
 both runs analyze the same commit.
 
 ## Workflow evidence
+
+### Workflow preparation
+
+Offline preparation resolves the core configuration namespace, validates the platform matrix
+and freezes the real checkout head and the PR event's base commit. PR attribution uses the
+event's real head, not its synthetic merge SHA; the checkout must match that head. History uses
+its measured head as base. Preparation requires full Git history and never fetches or reads
+GitHub credentials.
+
+History collects the workspace with configured exclusions. The PR workflow selects affected scope:
+the merge-base diff identifies changed files, the shared package detector finds owners, and
+reverse workspace path dependencies expand the affected set. All dependency kinds and target
+conditions participate so development/build dependencies and another platform's dependencies
+are not missed. Filtering retains explicit benchmark targets and then applies exact
+package-name exclusions. Excluded or non-benchmark packages still participate in expansion.
+Unknown exclusions or owners are errors, not silently ignored names.
+
+Root-workspace and repository-wide changes select the whole workspace conservatively.
+Deleted and renamed paths remain part of ownership discovery; removed package manifests can
+therefore select the whole workspace. Empty affected scope is an explicit skip-all result,
+never an empty package argument accidentally interpreted as workspace collection.
+Fork skips remain distinct from empty benchmark scope and do not authorize publication.
+
+Preparation outputs concrete benchmark package names for either flow. PR collection consumes
+that list without applying exclusions a second time; history collection retains workspace
+selection and passes its exclusions to Cargo. There is no consumer scope switch.
+Jobs, receipts and analysis reuse the prepared namespace, frozen commits and expected-platform set.
+
+### Collection and analysis evidence
 
 Workflow setup passes the action instance's project namespace to collection and analysis helpers.
 
@@ -233,7 +266,7 @@ that ownership so failed publication from an older workflow or attempt cannot re
 placeholder. Terminal failure and empty-scope notes become new placeholders when benchmarking
 is requested again.
 
-Empty-scope no-data publication writes the explanatory note even when no comment exists.
+Empty-scope inconclusive publication writes the explanatory note even when no comment exists.
 Preflight and empty-scope publication require their frozen head to match the live head before
 modifying the comment.
 
@@ -267,6 +300,9 @@ error, not permission to overwrite it or create another.
 Matching comments also require a recognized lifecycle state and coherent ownership/report
 metadata. Missing, duplicated or contradictory state markers are errors that preserve the
 existing comment, not permission to seed a new placeholder over it.
+Public command vocabulary is separate from opaque body metadata. Coherent owned reports and
+annotations remain readable with their established encoding; a public name does not introduce
+an alternate marker spelling.
 
 Multiple exact matches, incomplete searches and search failures are errors. Search indexing can
 lag writes: issue creation is not an atomic upsert or an exactly-once guarantee. Ambiguous creates

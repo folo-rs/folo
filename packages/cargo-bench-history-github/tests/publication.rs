@@ -61,7 +61,7 @@ impl Fixture {
         let (outcome, coverage, in_scope) = match state {
             "findings" => ("findings", "full", 1),
             "clean" => ("clean", "full", 1),
-            "no-data" => ("partial", "partial", 2),
+            "inconclusive" => ("partial", "partial", 2),
             _ => panic!(),
         };
         let report = self.0.join(format!("{sink}-{state}.json"));
@@ -113,7 +113,7 @@ impl Fixture {
             }
         }
         match state {
-            "no-data" => args.push("--empty-scope"),
+            "inconclusive" => args.push("--empty-scope"),
             "failed" => args.extend([
                 "--run-url",
                 "https://github.com/folo-rs/folo/actions/runs/42",
@@ -181,8 +181,8 @@ fn issue_commands_dispatch_their_actual_report_and_terminal_inputs() {
             fixture.report("issue", "findings"),
             fixture.report("issue", "clean"),
             Fixture::status("issue", "preflight"),
-            fixture.report("issue", "no-data"),
-            Fixture::status("issue", "no-data"),
+            fixture.report("issue", "inconclusive"),
+            Fixture::status("issue", "inconclusive"),
             Fixture::status("issue", "preflight"),
             Fixture::status("issue", "failed"),
             Fixture::cli(
@@ -203,7 +203,7 @@ fn issue_commands_dispatch_their_actual_report_and_terminal_inputs() {
     assert!(body(&snapshots, 1, "issues").contains("Tool summary: clean"));
     assert!(body(&snapshots, 2, "issues").contains(":state:preflight"));
     let partial = body(&snapshots, 3, "issues");
-    assert!(partial.contains("Tool summary: no-data"));
+    assert!(partial.contains("Tool summary: inconclusive"));
     assert!(partial.contains("https://example.test/report-bundle"));
     assert!(partial.contains("Tool summary: clean"));
     assert!(body(&snapshots, 4, "issues").contains("No benchmarkable packages"));
@@ -249,8 +249,8 @@ fn comment_commands_dispatch_scope_reports_and_owned_failure() {
             Fixture::status("comment", "preflight"),
             fixture.report("comment", "findings"),
             fixture.report("comment", "clean"),
-            fixture.report("comment", "no-data"),
-            Fixture::status("comment", "no-data"),
+            fixture.report("comment", "inconclusive"),
+            Fixture::status("comment", "inconclusive"),
             Fixture::status("comment", "preflight"),
             Fixture::status("comment", "failed"),
         ],
@@ -261,7 +261,7 @@ fn comment_commands_dispatch_scope_reports_and_owned_failure() {
     assert!(body(&snapshots, 0, "comments").contains("measured-package"));
     assert!(body(&snapshots, 1, "comments").contains("Tool summary: findings"));
     assert!(body(&snapshots, 2, "comments").contains("Tool summary: clean"));
-    assert!(body(&snapshots, 3, "comments").contains("Tool summary: no-data"));
+    assert!(body(&snapshots, 3, "comments").contains("Tool summary: inconclusive"));
     assert!(body(&snapshots, 4, "comments").contains("No benchmarkable package"));
     assert!(body(&snapshots, 5, "comments").contains(":in-progress"));
     assert!(body(&snapshots, 6, "comments").contains("was cancelled"));
@@ -289,8 +289,8 @@ fn report_file_failures_and_evidence_mismatches_propagate_from_dispatch() {
     let command = fixture.report("comment", "clean");
     fs::remove_file(fixture.0.join("comment-clean.json")).unwrap();
     Fixture::run(vec![command], "[]").unwrap_err();
-    let command = fixture.report("issue", "no-data");
-    fs::write(fixture.0.join("issue-no-data.json"), "{}").unwrap();
+    let command = fixture.report("issue", "inconclusive");
+    fs::write(fixture.0.join("issue-inconclusive.json"), "{}").unwrap();
     Fixture::run(vec![command], "[]").unwrap_err();
     let command = fixture.report("issue", "clean");
     let file = fixture.0.join("issue-clean.json");
@@ -305,7 +305,7 @@ fn report_file_failures_and_evidence_mismatches_propagate_from_dispatch() {
 fn blank_summary_files_are_rejected_for_each_report_publication_form() {
     let fixture = Fixture::new();
     for sink in ["issue", "comment"] {
-        for state in ["findings", "clean", "no-data"] {
+        for state in ["findings", "clean", "inconclusive"] {
             for summary in ["", " \r\n\t "] {
                 let command = fixture.report(sink, state);
                 fs::write(fixture.0.join(format!("{sink}-{state}.md")), summary).unwrap();

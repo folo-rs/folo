@@ -167,7 +167,7 @@ fn no_execution_ids_or_conclusions_are_invented() {
 
 fn lifecycle_command(sink: &str, state: &str) -> Command {
     let command = format!("publish-{sink}-{state}");
-    let mut input = if matches!(state, "findings" | "clean" | "no-data") {
+    let mut input = if matches!(state, "findings" | "clean" | "inconclusive") {
         report_input(&command)
     } else {
         json!({"command":command, "head":SHA, "run-id":"42", "run-attempt":"2"})
@@ -221,10 +221,10 @@ fn comment_preflight_dispatch() {
 }
 
 #[test]
-fn comment_no_data_dispatch() {
+fn comment_inconclusive_dispatch() {
     assert!(matches!(
-        lifecycle_command("comment", "no-data"),
-        Command::PublishCommentNoData { .. }
+        lifecycle_command("comment", "inconclusive"),
+        Command::PublishCommentInconclusive { .. }
     ));
 }
 
@@ -261,10 +261,10 @@ fn issue_preflight_dispatch() {
 }
 
 #[test]
-fn issue_no_data_dispatch() {
+fn issue_inconclusive_dispatch() {
     assert!(matches!(
-        lifecycle_command("issue", "no-data"),
-        Command::PublishIssueNoData(_)
+        lifecycle_command("issue", "inconclusive"),
+        Command::PublishIssueInconclusive(_)
     ));
 }
 
@@ -278,9 +278,9 @@ fn issue_failed_dispatch() {
 
 #[test]
 fn empty_comment_scope_needs_no_report() {
-    let command = dispatch_input(&json!({"command":"publish-comment-no-data",
+    let command = dispatch_input(&json!({"command":"publish-comment-inconclusive",
         "run-id":"42", "run-attempt":"2", "empty-scope":"true", "head":SHA, "pr-number":"7"}));
-    let Command::PublishCommentNoData { data, packages, .. } = command else {
+    let Command::PublishCommentInconclusive { data, packages, .. } = command else {
         panic!()
     };
     assert!(data.empty_scope);
@@ -290,9 +290,9 @@ fn empty_comment_scope_needs_no_report() {
 
 #[test]
 fn empty_issue_scope_needs_no_report() {
-    let command = dispatch_input(&json!({"command":"publish-issue-no-data",
+    let command = dispatch_input(&json!({"command":"publish-issue-inconclusive",
         "run-id":"42", "run-attempt":"2", "empty-scope":"true", "head":SHA}));
-    let Command::PublishIssueNoData(data) = command else {
+    let Command::PublishIssueInconclusive(data) = command else {
         panic!()
     };
     assert!(data.empty_scope);

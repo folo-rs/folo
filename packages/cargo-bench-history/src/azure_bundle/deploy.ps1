@@ -5,7 +5,7 @@
     Provisions storage and one GitHub-federated identity for benchmark history.
 .DESCRIPTION
     Standalone entry point shared by setup-azure, its exported bundle, and Folo's
-    maintainer wrapper. JSON parameters are data, never PowerShell expressions.
+    maintainer wrappers. JSON parameters are data, never PowerShell expressions.
     Explicit flags override the parameter file. Missing required values fail
     before tool probes, without prompting or choosing an active subscription.
     See README.md for prerequisites and non-secret configuration handoff.
@@ -84,7 +84,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = if ($PSBoundParameters.ContainsKey('Verbose')) { 'Continue' } else { 'SilentlyContinue' }
 
-Import-Module (Join-Path $PSScriptRoot 'ProductionIdentityDeployment.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'AzureDeployment.psm1') -Force
 $parameters = @{}
 $known = @('SubscriptionId', 'ResourceGroup', 'Location', 'StorageAccountName',
     'GithubOrg', 'GithubRepo', 'HistoryBranch', 'HistoryContainerName',
@@ -114,7 +114,7 @@ foreach ($key in @('SubscriptionId', 'ResourceGroup', 'Location', 'StorageAccoun
     }
 }
 
-$outputs = Invoke-ProductionIdentityDeployment @parameters -CurrentUser:$CurrentUser
+$outputs = Invoke-AzureDeployment @parameters -CurrentUser:$CurrentUser
 Write-Output 'Deployment complete. These identifiers are non-secret; no repository or GitHub settings were changed.'
 Write-Output '[storage.azure]'
 Write-Output "account = `"$($outputs.storageAccountName.value)`""
@@ -126,8 +126,9 @@ Write-Output "Managed identity client ID: $($outputs.managedIdentityClientId.val
 Write-Output "Managed identity principal ID: $($outputs.managedIdentityPrincipalId.value)"
 Write-Output 'Copy [storage.azure] into .cargo/bench_history.toml and commit it.'
 Write-Output 'Create GitHub Actions repository variables AZURE_CLIENT_ID and AZURE_TENANT_ID with the managed identity client ID and tenant ID.'
-Write-Output 'Set job environment variables AZURE_CLIENT_ID and AZURE_TENANT_ID from vars.AZURE_CLIENT_ID and vars.AZURE_TENANT_ID before running the root benchmark action or direct commands.'
-Write-Output 'Grant that job id-token: write. The root composite action inherits the job environment, and the benchmark tool obtains its own OIDC token without an azure/login step.'
-Write-Output 'The subscription ID selects management operations, or subscription-id in an optional azure/login step; direct benchmark OIDC does not need it.'
+Write-Output 'Pass vars.AZURE_CLIENT_ID and vars.AZURE_TENANT_ID as azure-client-id and azure-tenant-id when calling the prebuilt history.yml@v1 and pr.yml@v1 workflows.'
+Write-Output 'Grant each caller job id-token: write. The prebuilt workflows obtain OIDC tokens without a separate azure/login step. Caller examples: https://folo-rs.github.io/folo/cargo-bench-history/github-automation.html'
+Write-Output 'The subscription ID is for future deployments and Azure administration; the prebuilt benchmark workflows do not need it.'
 Write-Output 'The managed identity principal ID identifies RBAC assignments; do not substitute it for the client ID. The blob endpoint is for connectivity diagnostics, not an extra configuration field.'
-Write-Output 'Keep the same-repository PR gate before credentialed work. The PR federated subject does not distinguish fork heads.'
+Write-Output 'Advanced CI jobs invoking the CLI or root action directly use job environment variables AZURE_CLIENT_ID and AZURE_TENANT_ID instead.'
+Write-Output 'GitHub default fork-PR permissions prevent OIDC token issuance. Keep the same-repository job gate to skip unsupported fork work; the Azure PR subject itself is not a fork filter.'

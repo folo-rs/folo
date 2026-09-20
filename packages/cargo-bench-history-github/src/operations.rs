@@ -3,10 +3,10 @@ use std::env;
 use ohno::AppError;
 use tick::Clock;
 
-use crate::cli::{Cli, Command, NoDataArgs, PendingArgs, ReportArgs, ResultArgs};
+use crate::cli::{Cli, Command, InconclusiveArgs, PendingArgs, ReportArgs, ResultArgs};
 use crate::errors::{MissingRepositoryError, read_body_error};
 use crate::github::{GitHub, RestGitHub};
-use crate::lifecycle::{self, NoData, Report};
+use crate::lifecycle::{self, Inconclusive, Report};
 use crate::model::{CommitSha, Instance, Repository};
 use crate::result::{AnalysisReport, Evidence, PlatformCoverage, PublicationState};
 use crate::{action, workflow};
@@ -36,6 +36,7 @@ pub async fn run(cli: Cli) -> Result<(), AppError> {
     let verbose = cli.verbose();
     let command = match cli.into_command() {
         Command::Action(args) => return action::run(args).await,
+        Command::PrepareWorkflow(args) => return action::prepare_workflow(args).await,
         Command::WorkflowMatrix(args) => {
             return workflow::workflow_matrix(&instance, &args, verbose);
         }
@@ -78,6 +79,7 @@ pub(crate) async fn dispatch(
     match command {
         Command::PrepareAnalysis(args) => workflow::prepare_analysis(github, context, args).await,
         Command::Action(_)
+        | Command::PrepareWorkflow(_)
         | Command::WorkflowMatrix(_)
         | Command::InspectReport(_)
         | Command::CollectionReceipt(_) => {
@@ -95,9 +97,9 @@ pub(crate) async fn dispatch(
         Command::PublishIssuePreflight(args) => {
             lifecycle::issue_preflight(github, context, clock, &args).await
         }
-        Command::PublishIssueNoData(args) => {
-            let data = load_no_data(args).await?;
-            lifecycle::issue_no_data(github, context, clock, &data).await
+        Command::PublishIssueInconclusive(args) => {
+            let data = load_inconclusive(args).await?;
+            lifecycle::issue_inconclusive(github, context, clock, &data).await
         }
         Command::PublishIssueFailed(args) => {
             lifecycle::issue_failed(github, context, clock, &args).await
@@ -134,13 +136,13 @@ pub(crate) async fn dispatch(
             lifecycle::comment_preflight(github, context, pull_request.get(), &packages, &pending)
                 .await
         }
-        Command::PublishCommentNoData {
+        Command::PublishCommentInconclusive {
             pull_request,
             packages,
             data,
         } => {
-            let data = load_no_data(data).await?;
-            lifecycle::comment_no_data(
+            let data = load_inconclusive(data).await?;
+            lifecycle::comment_inconclusive(
                 github,
                 context,
                 pull_request.get(),
@@ -192,11 +194,11 @@ async fn load_report(args: ReportArgs) -> Result<Report, AppError> {
 
 // CLI and action validation guarantee the selected group's required fields; integration tests
 // exercise this adapter without teaching the unit harness to perform real I/O.
-/// Materializes the validated empty-scope or report-backed form of no-data publication.
+/// Materializes the validated empty-scope or report-backed form of inconclusive publication.
 #[cfg_attr(test, mutants::skip)]
-async fn load_no_data(args: NoDataArgs) -> Result<NoData, AppError> {
+async fn load_inconclusive(args: InconclusiveArgs) -> Result<Inconclusive, AppError> {
     if args.empty_scope {
-        return Ok(NoData::Empty(PendingArgs {
+        return Ok(Inconclusive::Empty(PendingArgs {
             run: args.run,
             head: args
                 .head
@@ -225,7 +227,7 @@ async fn load_no_data(args: NoDataArgs) -> Result<NoData, AppError> {
         artifact_url: args.artifact_url,
     })
     .await?;
-    Ok(NoData::Report(report))
+    Ok(Inconclusive::Report(report))
 }
 
 // Diagnostic output has no policy effect; capturing global stderr would cross the unit boundary.

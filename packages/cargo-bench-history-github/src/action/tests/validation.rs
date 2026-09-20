@@ -47,9 +47,9 @@ fn core_and_alert_commands_have_independent_input_groups() {
 }
 
 fn publication_input_groups(sink: &str) {
-    for state in ["findings", "clean", "no-data", "preflight", "failed"] {
+    for state in ["findings", "clean", "inconclusive", "preflight", "failed"] {
         let command = format!("publish-{sink}-{state}");
-        let mut input = if matches!(state, "findings" | "clean" | "no-data") {
+        let mut input = if matches!(state, "findings" | "clean" | "inconclusive") {
             report_input(&command)
         } else {
             json!({"command":command, "head":SHA, "run-id":"42", "run-attempt":"2"})
@@ -112,8 +112,8 @@ fn comment_preflight_requires_package_scope() {
 }
 
 #[test]
-fn comment_report_no_data_requires_package_scope() {
-    require_comment_package_scope("no-data");
+fn comment_report_inconclusive_requires_package_scope() {
+    require_comment_package_scope("inconclusive");
 }
 
 #[test]
@@ -124,6 +124,8 @@ fn command_names_and_misplaced_inputs_fail_instead_of_being_ignored() {
         "publish-comment",
         "publish-something-clean",
         "publish-issue-other",
+        "publish-comment-no-data",
+        "publish-issue-no-data",
         "resolve-alert",
     ] {
         Inputs::parse(&serde_json::to_vec(&json!({"command":command})).unwrap()).unwrap_err();
@@ -145,7 +147,7 @@ fn command_names_and_misplaced_inputs_fail_instead_of_being_ignored() {
         ("publish-comment-preflight", "body-file"),
         ("publish-issue-findings", "empty-scope"),
         ("publish-issue-findings", "head"),
-        ("publish-issue-no-data", "conclusion"),
+        ("publish-issue-inconclusive", "conclusion"),
     ] {
         let mut input = json!({"command":command});
         input[key] = json!("unexpected");
@@ -219,7 +221,7 @@ fn analysis_requires_real_keys_and_independent_platform_evidence() {
 
 #[test]
 fn empty_scope_is_explicit_and_rejects_report_and_package_inputs() {
-    let input = json!({"command":"publish-comment-no-data", "empty-scope":"true"});
+    let input = json!({"command":"publish-comment-inconclusive", "empty-scope":"true"});
     Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap();
     for key in [
         "body-file",
@@ -241,11 +243,11 @@ fn empty_scope_is_explicit_and_rejects_report_and_package_inputs() {
         "expected-platforms",
         "completed-platforms",
     ] {
-        let mut input = report_input("publish-issue-no-data");
+        let mut input = report_input("publish-issue-inconclusive");
         input.as_object_mut().unwrap().remove(key).unwrap();
         Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap_err();
     }
-    let mut input = report_input("publish-issue-no-data");
+    let mut input = report_input("publish-issue-inconclusive");
     input["head"] = json!(SHA);
     let error = Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap_err();
     assert_eq!(error.find_source::<InvalidInput>().unwrap().input, "head");

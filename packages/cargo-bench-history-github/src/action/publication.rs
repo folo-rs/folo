@@ -8,7 +8,7 @@ use crate::action::environment::Environment;
 use crate::action::errors::InvalidInput;
 use crate::action::inputs::{ActionCommand, Inputs, PublishState, Sink};
 use crate::cli::{
-    Command, CommentReportArgs, Conclusion, FailedArgs, NoDataArgs, PendingArgs, ReportArgs,
+    Command, CommentReportArgs, Conclusion, FailedArgs, InconclusiveArgs, PendingArgs, ReportArgs,
     ResultArgs, RunArgs,
 };
 use crate::identity::validate_run_url;
@@ -81,10 +81,10 @@ pub(crate) fn publication(
                     packages: inputs.required("packages")?.to_owned(),
                     pending: pending(inputs, environment, run)?,
                 },
-                PublishState::NoData => Command::PublishCommentNoData {
+                PublishState::Inconclusive => Command::PublishCommentInconclusive {
                     pull_request,
                     packages: inputs.get("packages").map(str::to_owned),
-                    data: no_data(inputs, cwd, environment, run)?,
+                    data: inconclusive(inputs, cwd, environment, run)?,
                 },
                 PublishState::Failed => Command::PublishCommentFailed {
                     pull_request,
@@ -98,8 +98,8 @@ pub(crate) fn publication(
             PublishState::Preflight => {
                 Command::PublishIssuePreflight(pending(inputs, environment, run)?)
             }
-            PublishState::NoData => {
-                Command::PublishIssueNoData(no_data(inputs, cwd, environment, run)?)
+            PublishState::Inconclusive => {
+                Command::PublishIssueInconclusive(inconclusive(inputs, cwd, environment, run)?)
             }
             PublishState::Failed => {
                 Command::PublishIssueFailed(failed(inputs, environment, &context.repository, run)?)
@@ -150,14 +150,14 @@ fn pending(
 }
 
 /// Preserves the validated distinction between explicit empty scope and incomplete analysis.
-fn no_data(
+fn inconclusive(
     inputs: &Inputs,
     cwd: &Path,
     environment: &Environment,
     run: RunArgs,
-) -> Result<NoDataArgs, AppError> {
+) -> Result<InconclusiveArgs, AppError> {
     if inputs.boolean("empty-scope", false)? {
-        return Ok(NoDataArgs {
+        return Ok(InconclusiveArgs {
             run,
             empty_scope: true,
             head: Some(pending(inputs, environment, run)?.head),
@@ -170,7 +170,7 @@ fn no_data(
         });
     }
     let report = report(inputs, cwd, run)?;
-    Ok(NoDataArgs {
+    Ok(InconclusiveArgs {
         run,
         empty_scope: false,
         head: None,

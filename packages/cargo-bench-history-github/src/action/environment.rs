@@ -111,6 +111,14 @@ impl Environment {
             .number
             .or(self.event.number)
     }
+
+    /// Freezes the PR's own target commit without assuming a default branch name.
+    pub(crate) fn base(&self) -> Option<&str> {
+        self.event
+            .pull_request
+            .as_ref()
+            .map(|pr| pr.base.sha.as_str())
+    }
 }
 
 /// Only execution identity is decoded; unrelated GitHub event fields remain GitHub-owned.

@@ -30,6 +30,8 @@ pub(crate) struct FakeHost {
     pub(crate) notes: RefCell<Vec<String>>,
     pub(crate) environment_reads: RefCell<Vec<String>>,
     pub(crate) scratches: RefCell<Vec<PathBuf>>,
+    pub(crate) packages: BTreeMap<PathBuf, Option<String>>,
+    pub(crate) package_queries: RefCell<Vec<(PathBuf, PathBuf)>>,
 }
 
 impl FakeHost {
@@ -56,6 +58,8 @@ impl FakeHost {
             notes: RefCell::new(Vec::new()),
             environment_reads: RefCell::new(Vec::new()),
             scratches: RefCell::new(Vec::new()),
+            packages: BTreeMap::new(),
+            package_queries: RefCell::new(Vec::new()),
         }
     }
 
@@ -137,6 +141,12 @@ impl Host for FakeHost {
         self.files.get(path).cloned().ok_or_else(|| {
             InvalidOutput::new(format!("missing fake file {}", path.display())).into()
         })
+    }
+    fn package(&self, workspace: &Path, target: &Path) -> Result<Option<String>, AppError> {
+        self.package_queries
+            .borrow_mut()
+            .push((workspace.to_owned(), target.to_owned()));
+        Ok(self.packages.get(target).unwrap().clone())
     }
     fn directory(&self, path: &Path) -> Result<PathBuf, AppError> {
         Ok(path.to_owned())

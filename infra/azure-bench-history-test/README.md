@@ -1,53 +1,62 @@
 # Azure infrastructure for cargo-bench-history real-Azure tests
 
 This directory provisions the Azure resources that back the `cargo-bench-history`
-real-Azure storage tests (the `test-azure` CI job and local runs). Everything is
-described in Bicep and driven by idempotent PowerShell scripts, so the environment
-can be deleted and re-created with one command.
+real-Azure storage tests (the `test-azure` CI job and local runs).
+`deploy.ps1` is a thin wrapper around the source-built
+`cargo-bench-history setup-azure` command, supplying test-specific parameters.
+Production and test deployment use the same
+[package-owned templates](../../packages/cargo-bench-history/src/azure_bundle/).
 
 ## What gets created
 
-`main.bicep` (deployed at resource-group scope) creates:
+The shared deployment creates or reuses:
 
-- A **Storage account** — `StorageV2`, HTTPS-only, TLS 1.2, **shared-key access
-  disabled** (Entra ID only, so there is no account key to leak). Container and blob
-  soft-delete are disabled so a deleted test container is gone immediately.
+- A **Storage account**. New accounts use `StorageV2`, HTTPS-only, TLS 1.2 and
+  **disabled shared-key access** (Entra ID only, so there is no account key to leak).
+  Container and blob soft-delete are initially disabled for immediate cleanup.
 - A **user-assigned managed identity** — the CI principal — with **GitHub OIDC
-  federated credentials** (one per trusted branch, plus an optional repository
-  pull-request subject). Workflow policy gates out forks before identity use;
+  federated credentials** for the selected branch and repository pull-request
+  subject. GitHub's default fork-PR permissions prevent OIDC issuance;
   the PR subject itself does not distinguish fork heads.
   GitHub Actions signs in with no stored secret.
+- A **named container**, `bench-history` by default. The test scenarios use their own
+  fresh `bh-it-*` containers instead, which the cleanup script removes independently.
 - **`Storage Blob Data Contributor`** role assignments on the account for the managed
   identity and (optionally) an additional user or group. That single role covers
   container create/delete and blob read/write/delete via the data plane, which is all
-  the tool's `run` and the tests' container cleanup need.
+  the tool's collection and the tests' container cleanup need.
 
 ## Prerequisites
 
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
+- The repository's Rust development environment, plus
+  [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli),
   [PowerShell 7.6 or later](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)
   and [installed Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/install#azure-cli).
 - `az login` as an account allowed to create these resources and assign roles
   (Owner, or Contributor combined with User Access Administrator on the target
   scope). User Access Administrator alone cannot provision resources.
 
-The script shares read-only prerequisite and current-user checks with the
-production bundle. These run before resource-group creation and never install
-tools, initiate login or change the active CLI subscription.
+The command checks software, authentication and optional current-user lookup before
+resource-group creation. The wrapper performs no separate Azure operations.
+Provisioning never installs tools, initiates login or changes the active CLI subscription.
 
 ## Deploy
 
 ```powershell
+az login
+az account set --subscription '<subscription-guid>'
 ./deploy.ps1 `
-    -SubscriptionId <subscription-guid> `
-    -StorageAccountName <globally-unique-name> `
+    -SubscriptionId '<subscription-guid>' `
+    -StorageAccountName '<globally-unique-name>' `
     -CurrentUser
 ```
 
 Key parameters (see `deploy.ps1 -?` for all): `-ResourceGroup` (default
 `rg-folo-bench-history`), `-Location` (default `swedencentral`), `-StorageAccountName`
 (3-24 lowercase alphanumerics, globally unique), `-CustomPrincipalId` /
-`-CustomPrincipalType` (`User` or `Group`).
+`-CustomPrincipalType` (`User` or `Group`). `-ManagedIdentityName` defaults to
+`id-folo-bench-history-ci`, separately from the production identity.
+`-HistoryBranch` defaults to `main`; `-HistoryContainerName` defaults to `bench-history`.
 
 `-CurrentUser` resolves your signed-in user in the explicitly selected
 subscription's tenant, including a guest user's object in that tenant. It requires
@@ -56,7 +65,9 @@ and conflicts with either custom-principal
 flag. Alternatively, supply both custom flags with an existing user/group object
 ID from the target tenant. Neither path creates an Entra principal.
 
-On success the script prints the identifiers to record in `constants.env`.
+On success the command prints non-secret deployment outputs and the wrapper explains
+their test-specific mapping to `constants.env`. Do not replace the production storage
+configuration in `.cargo/bench_history.toml` with the test account.
 
 ## Configure the repository
 
@@ -76,25 +87,25 @@ These are identifiers, not credentials — authentication is via Microsoft Entra
 (local `az login` / CI OIDC federation), so there is nothing to leak by committing
 them. They do not by themselves run the real-Azure tests: those run only when
 `ENABLE_AZURE` is set, which the `just test-azure` recipe does. Pull requests from
-forks are skipped by an explicit same-repository workflow gate. The Azure
-`repo:<owner>/<repository>:pull_request` subject is not itself a fork boundary.
+forks cannot obtain effective `id-token: write` under GitHub's default permissions,
+even when they edit YAML to request it. Maintainer approval does not elevate that
+permission. The job also skips forks explicitly through its same-repository gate.
+The Azure `repo:<owner>/<repository>:pull_request` subject is not itself a fork
+boundary. Fork-owned workflows identify the fork repository and do not match it.
 
 ## Relationship to production storage
 
-Tooling/authentication checks, current-user resolution and custom-principal naming
-are shared with production. Both identities use account-scoped Storage Blob Data
-Contributor and serialize federated-credential creation on each identity.
+Both deployment wrappers use the same `setup-azure` command. Account, group and
+managed-identity parameters provide isolation; separate templates or test modes are
+not needed. Each identity receives contributor access only to its selected account.
+Their credential children can both use `bench-history-branch` and
+`bench-history-pull-request` because the parent identities are separate.
 
-Their resource lifecycles are intentionally different. Test Bicep owns disposable
-account properties and reapplies disabled soft-delete settings on deployment; tests
-create and delete their own containers. Production provisioning preserves existing
-account/container properties and durable history. Test deployment retains its
-separate identity, configurable trusted-branch list and optional PR trust; it does
-not acquire the production identity or access to production history.
-
-Test deployment is incremental: additional custom-principal grants do not remove
-earlier grants. This is not a promise to preserve manually changed test account
-settings. The explicit teardown below is destructive.
+Fresh and repeated deployments share the production preservation policy: existing
+account/container settings and data remain untouched, and additional custom-principal
+grants do not remove earlier grants. Repeating setup does not reset manually changed
+test retention settings. Test scenarios create and delete their own containers;
+the explicit teardown below is destructive.
 
 ## Run the tests locally
 

@@ -23,16 +23,16 @@ See the [bootstrap-facing contract](docs/action.md) for inputs, paths and output
 
 The companion embeds the tool-rendered summary and validates the accompanying JSON
 report and collection-platform evidence. It publishes through
-`publish-comment-{findings,clean,preflight,no-data,failed}` and
-`publish-issue-{findings,clean,preflight,no-data,failed}`.
+`publish-comment-{findings,clean,preflight,inconclusive,failed}` and
+`publish-issue-{findings,clean,preflight,inconclusive,failed}`.
 
 Any notable findings select findings publication, even when coverage is partial.
 Clean publication requires a fully judged, nonempty analysis and every intended platform.
-No-data explains why a successful analysis without findings cannot establish a complete verdict,
+Inconclusive explains why a successful analysis without findings cannot establish a complete verdict,
 preserving the judged portion and explaining missing coverage. An explicit `--empty-scope` form
 covers runs with no benchmarkable packages; execution failures are not analysis verdicts.
 
-Only findings create rolling issues. Clean leaves an existing issue open. No-data
+Only findings create rolling issues. Clean leaves an existing issue open. Inconclusive
 and failure annotations preserve its previous report. Comment preflight and failure
 publication track the workflow run, attempt and frozen head so older terminal steps
 cannot retire newer placeholders.
@@ -48,10 +48,17 @@ from the configured project ID, not an additional action setting.
 
 ## Workflow evidence
 
+`prepare-workflow` resolves configuration identity, frozen commits, the platform matrix and
+concrete benchmark scope without GitHub access. History collects the workspace; PR preparation
+selects affected benchmark packages automatically. Its explicit `skip-all` output prevents
+an empty selection from becoming accidental whole-workspace collection.
+
 `workflow-matrix`, `collection-receipt`, `prepare-analysis` and `inspect-report`
 provide matrix, collection-attempt and report evidence for workflow orchestration.
-Inspection emits `publication-state=findings|clean|no-data` from the same validation
+Inspection emits `publication-state=findings|clean|inconclusive` from the same validation
 used by publication; `can-clear` applies only to history issues.
+Workflows forward that state as the publication command suffix. The publisher checks that
+the paired report and platform evidence agree, rather than silently selecting another command.
 
 The HTTP adapter prefers a nonblank `GITHUB_TOKEN` from workflow environments and otherwise
 accepts `GH_TOKEN` from environments prepared for GitHub CLI use. It does not read the CLI's

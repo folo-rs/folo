@@ -5,9 +5,9 @@ use crate::github::GitHub;
 use crate::github::fake::FakeGitHub;
 use crate::lifecycle::tests::harness::{context, failure, only_comment, owner, report, sha};
 use crate::lifecycle::{
-    NoData, comment_failed, comment_no_data, comment_preflight, comment_report,
+    Inconclusive, comment_failed, comment_inconclusive, comment_preflight, comment_report,
 };
-use crate::result::{AnalysisMode, Outcome, PublicationState};
+use crate::result::{AnalysisMode, Outcome, PublicationState, WrongPublicationState};
 use crate::{marker, message};
 
 #[test]
@@ -89,14 +89,25 @@ fn comment_failure_only_retires_its_exact_placeholder_and_can_be_restarted() {
 
 #[test]
 fn completed_comment_states_survive_failure_and_empty_scope_can_restart() {
-    for (outcome, complete, state) in [
-        (Outcome::Findings, false, PublicationState::Findings),
-        (Outcome::Clean, true, PublicationState::Clean),
-        (Outcome::Partial, true, PublicationState::NoData),
+    for (outcome, complete, state, marker_state) in [
+        (
+            Outcome::Findings,
+            false,
+            PublicationState::Findings,
+            "findings",
+        ),
+        (Outcome::Clean, true, PublicationState::Clean, "clean"),
+        (
+            Outcome::Partial,
+            true,
+            PublicationState::Inconclusive,
+            "no-data",
+        ),
         (
             Outcome::InsufficientBaseline,
             true,
-            PublicationState::NoData,
+            PublicationState::Inconclusive,
+            "no-data",
         ),
     ] {
         let github = FakeGitHub::new();
@@ -112,6 +123,10 @@ fn completed_comment_states_survive_failure_and_empty_scope_can_restart() {
         ))
         .unwrap();
         let before = only_comment(&github);
+        assert_eq!(
+            marker::find_state(&before.body, &context().instance),
+            Some(marker_state)
+        );
         assert!(before.body.contains(&report.summary));
         assert!(
             !before
@@ -129,12 +144,12 @@ fn completed_comment_states_survive_failure_and_empty_scope_can_restart() {
     }
     let github = FakeGitHub::new();
     github.set_pull_head(7, sha('a'));
-    block_on(comment_no_data(
+    block_on(comment_inconclusive(
         &github,
         &context(),
         7,
         None,
-        &NoData::Empty(owner(1, 1, 'a')),
+        &Inconclusive::Empty(owner(1, 1, 'a')),
     ))
     .unwrap();
     assert!(
@@ -174,20 +189,20 @@ fn comment_state_mismatch_and_empty_scope_misuse_fail_before_lookup() {
         PublicationState::Clean,
     ))
     .unwrap_err();
-    block_on(comment_no_data(
+    block_on(comment_inconclusive(
         &github,
         &context(),
         7,
         None,
-        &NoData::Report(report),
+        &Inconclusive::Report(report),
     ))
     .unwrap_err();
-    block_on(comment_no_data(
+    block_on(comment_inconclusive(
         &github,
         &context(),
         7,
         Some("foo"),
-        &NoData::Empty(owner(1, 1, 'a')),
+        &Inconclusive::Empty(owner(1, 1, 'a')),
     ))
     .unwrap_err();
     block_on(comment_preflight(
@@ -233,7 +248,7 @@ fn distinct_run_failure_cannot_retire_a_same_commit_placeholder() {
 }
 
 #[test]
-fn successful_partial_analysis_uses_comment_no_data_publication() {
+fn successful_partial_analysis_uses_comment_inconclusive_publication() {
     let github = FakeGitHub::new();
     github.set_pull_head(7, sha('a'));
     let partial = report(
@@ -242,12 +257,12 @@ fn successful_partial_analysis_uses_comment_no_data_publication() {
         false,
         owner(1, 1, 'a'),
     );
-    block_on(comment_no_data(
+    block_on(comment_inconclusive(
         &github,
         &context(),
         7,
         Some("foo"),
-        &NoData::Report(partial),
+        &Inconclusive::Report(partial),
     ))
     .unwrap();
     let body = only_comment(&github).body;
@@ -256,4 +271,31 @@ fn successful_partial_analysis_uses_comment_no_data_publication() {
         marker::find_state(&body, &context().instance),
         Some("no-data")
     );
+}
+
+#[test]
+fn inconclusive_comment_rejects_clean_evidence_without_replacing_existing_state() {
+    let github = FakeGitHub::new();
+    let context = context();
+    github.set_pull_head(7, sha('a'));
+    block_on(comment_preflight(
+        &github,
+        &context,
+        7,
+        "foo",
+        &owner(1, 1, 'a'),
+    ))
+    .unwrap();
+    let before = only_comment(&github);
+    let report = report(AnalysisMode::Branch, Outcome::Clean, true, owner(1, 1, 'a'));
+    let error = block_on(comment_inconclusive(
+        &github,
+        &context,
+        7,
+        Some("foo"),
+        &Inconclusive::Report(report),
+    ))
+    .unwrap_err();
+    assert!(error.find_source::<WrongPublicationState>().is_some());
+    assert_eq!(only_comment(&github), before);
 }

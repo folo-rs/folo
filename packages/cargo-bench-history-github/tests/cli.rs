@@ -19,15 +19,16 @@ fn every_subcommand_is_present_in_help() {
     let help = String::from_utf8(output.stdout).unwrap();
     for name in [
         "action",
+        "prepare-workflow",
         "publish-issue-findings",
         "publish-issue-clean",
-        "publish-issue-no-data",
+        "publish-issue-inconclusive",
         "publish-issue-preflight",
         "publish-issue-failed",
         "alert",
         "publish-comment-findings",
         "publish-comment-clean",
-        "publish-comment-no-data",
+        "publish-comment-inconclusive",
         "publish-comment-preflight",
         "publish-comment-failed",
         "collection-receipt",

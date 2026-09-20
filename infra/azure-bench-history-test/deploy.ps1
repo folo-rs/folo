@@ -2,93 +2,61 @@
 
 <#
 .SYNOPSIS
-    Deploys (or updates) the Azure resources backing the cargo-bench-history
-    real-Azure storage tests.
-
+    Deploys the Folo Azure resources used by real-Azure storage tests.
 .DESCRIPTION
-    Idempotently provisions a resource group, an Entra-only Storage account, a
-    user-assigned managed identity with GitHub OIDC federated credentials, and the
-    `Storage Blob Data Contributor` role assignments needed by CI and (optionally) an
-    additional user or group. Re-running it converges to the same state, so the
-    paired `teardown.ps1` + this script let you delete and re-create everything at
-    will.
-
-    Uses the canonical bundle's prerequisite and current-user checks, but keeps
-    the throwaway test storage lifecycle and CI identity separate from production.
-    Requires Azure CLI, installed Bicep and an authenticated session with rights
-    to create resources and role assignments. See README.md for that boundary.
-
+    Supplies test-specific parameters to the source-built cargo-bench-history
+    setup-azure command. The command owns prerequisite checks and the shared
+    deployment bundle; this wrapper performs no separate Azure operations.
+    Existing storage settings and data are preserved. See README.md for the
+    test account's isolation and non-secret constants.env handoff.
 .PARAMETER SubscriptionId
     Required ID of an existing subscription, for example
     00000000-0000-0000-0000-000000000001.
-
 .PARAMETER ResourceGroup
-    Optional resource group to create/reuse, for example rg-team-tests.
-    Defaults to rg-folo-bench-history.
-
+    Optional group to create or reuse; defaults to rg-folo-bench-history.
 .PARAMETER Location
-    Optional Azure region name for deployed resources, for example westeurope.
+    Optional region for deployed resources, for example westeurope.
     Defaults to swedencentral; match existing resources on updates.
-
 .PARAMETER StorageAccountName
-    Required globally unique account name (3-24 lowercase alphanumerics), for
-    example teamhistorytests. Created or updated with the test storage policy.
-
+    Required globally unique account name, for example folovalidate.
+    Created if absent; existing account properties and data are preserved.
 .PARAMETER ManagedIdentityName
-    Optional identity name, for example id-team-history-ci. Created or updated
-    in the selected resource group; defaults to id-folo-bench-history-ci.
-
+    Optional identity to create or reuse; defaults to id-folo-bench-history-ci.
+    Keep this separate from the production history identity.
+.PARAMETER HistoryContainerName
+    Optional named container, created if absent; defaults to bench-history.
+    Real-Azure tests use their own isolated containers rather than this container.
 .PARAMETER GithubOrg
-    Optional existing GitHub owner, for example example-org. Defaults to folo-rs.
-    Selects the OIDC repository subject; does not create GitHub resources.
-
+    Optional existing GitHub owner; defaults to folo-rs.
 .PARAMETER GithubRepo
-    Optional existing repository name without owner, for example project.
-    Defaults to folo; selects OIDC trust without modifying GitHub.
-
+    Optional existing repository name without owner; defaults to folo.
+.PARAMETER HistoryBranch
+    Optional literal GitHub branch permitted to federate; defaults to main.
 .PARAMETER CustomPrincipalId
-    Optional existing Entra user/group object ID in the subscription's tenant,
-    for example 00000000-0000-0000-0000-000000000002. Supply CustomPrincipalType too.
-    Grants account-scoped blob contributor access, without creating a principal.
-
+    Optional existing Entra user/group object ID in the subscription's tenant.
+    Supply CustomPrincipalType too. Grants additional account-scoped blob access.
 .PARAMETER CustomPrincipalType
-    Required with CustomPrincipalId: User or Group. Conflicts with CurrentUser.
-
+    Required with CustomPrincipalId: User or Group.
 .PARAMETER CurrentUser
-    Optional switch resolving the Azure CLI signed-in user in the explicit
-    subscription's tenant before any Azure changes. Grants additional access;
-    requires that subscription to be active in Azure CLI and conflicts with either
-    custom principal flag.
-
+    Optional switch granting the Azure CLI signed-in user additional access.
+    Conflicts with either custom principal flag.
 .EXAMPLE
-    ./deploy.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 `
-        -StorageAccountName stfolobenchhist `
-        -CurrentUser
+    ./deploy.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000001 `
+        -StorageAccountName folovalidate -CurrentUser
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
-    [string] $SubscriptionId,
-
+    [Parameter(Mandatory)][string] $SubscriptionId,
     [string] $ResourceGroup = 'rg-folo-bench-history',
-
     [string] $Location = 'swedencentral',
-
-    [Parameter(Mandatory)]
-    [ValidatePattern('^[a-z0-9]{3,24}$')]
-    [string] $StorageAccountName,
-
+    [Parameter(Mandatory)][string] $StorageAccountName,
     [string] $ManagedIdentityName = 'id-folo-bench-history-ci',
-
+    [string] $HistoryContainerName = 'bench-history',
     [string] $GithubOrg = 'folo-rs',
-
     [string] $GithubRepo = 'folo',
-
+    [string] $HistoryBranch = 'main',
     [string] $CustomPrincipalId = '',
-
-    [ValidateSet('', 'User', 'Group')]
-    [string] $CustomPrincipalType = '',
-
+    [ValidateSet('', 'User', 'Group')][string] $CustomPrincipalType = '',
     [switch] $CurrentUser
 )
 
@@ -97,67 +65,31 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-if ($CurrentUser -and ($CustomPrincipalId -or $CustomPrincipalType)) {
-    throw 'CurrentUser cannot be combined with CustomPrincipalId or CustomPrincipalType.'
+$cargoArgs = @(
+    'run', '--manifest-path', (Join-Path $PSScriptRoot '..' '..' 'Cargo.toml'),
+    '--package', 'cargo-bench-history', '--bin', 'cargo-bench-history', '--locked', '--',
+    'setup-azure',
+    '--subscription-id', $SubscriptionId,
+    '--resource-group', $ResourceGroup,
+    '--location', $Location,
+    '--storage-account', $StorageAccountName,
+    '--managed-identity', $ManagedIdentityName,
+    '--container', $HistoryContainerName,
+    '--github-owner', $GithubOrg,
+    '--github-repository', $GithubRepo,
+    '--history-branch', $HistoryBranch,
+    '--verbose'
+)
+if (-not [string]::IsNullOrEmpty($CustomPrincipalId)) {
+    $cargoArgs += @('--custom-principal-id', $CustomPrincipalId)
 }
-if ([string]::IsNullOrEmpty($CustomPrincipalId) -ne [string]::IsNullOrEmpty($CustomPrincipalType)) {
-    throw 'CustomPrincipalId and CustomPrincipalType must be supplied together.'
+if (-not [string]::IsNullOrEmpty($CustomPrincipalType)) {
+    $cargoArgs += @('--custom-principal-type', $CustomPrincipalType.ToLowerInvariant())
 }
-Import-Module (Join-Path $PSScriptRoot '..' '..' 'packages' 'cargo-bench-history' 'src' 'azure_bundle' 'ProductionIdentityDeployment.psm1') -Force
-$context = Get-AzureDeploymentContext -SubscriptionId $SubscriptionId -CurrentUser:$CurrentUser
 if ($CurrentUser) {
-    $CustomPrincipalId = $context.CurrentUserPrincipalId
-    $CustomPrincipalType = 'User'
+    $cargoArgs += '--current-user'
 }
+cargo @cargoArgs
 
-Write-Verbose "Ensuring resource group '$ResourceGroup' in '$Location' only after shared tooling, subscription and optional user checks succeeded."
-az group create --subscription $SubscriptionId --name $ResourceGroup --location $Location --output none
-
-Write-Verbose 'Exporting parameters for main.bicepparam (readEnvironmentVariable).'
-$env:AZURE_STORAGE_ACCOUNT_NAME = $StorageAccountName
-$env:AZURE_LOCATION = $Location
-$env:AZURE_MANAGED_IDENTITY_NAME = $ManagedIdentityName
-$env:GITHUB_ORG = $GithubOrg
-$env:GITHUB_REPO = $GithubRepo
-$env:AZURE_CUSTOM_PRINCIPAL_ID = $CustomPrincipalId
-$env:AZURE_CUSTOM_PRINCIPAL_TYPE = if ($CustomPrincipalType) { $CustomPrincipalType } else { 'User' }
-
-if ([string]::IsNullOrEmpty($CustomPrincipalId)) {
-    Write-Verbose 'No additional principal supplied; granting data access to the CI identity only.'
-}
-else {
-    Write-Verbose "Granting account-scoped data access to additional $CustomPrincipalType '$CustomPrincipalId'."
-}
-
-$bicepFile = Join-Path $scriptDir 'main.bicep'
-$paramFile = Join-Path $scriptDir 'main.bicepparam'
-$deploymentName = "bench-history-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-
-Write-Verbose "Deploying '$bicepFile' as '$deploymentName'."
-$outputJson = az deployment group create `
-    --subscription $SubscriptionId `
-    --resource-group $ResourceGroup `
-    --name $deploymentName `
-    --mode Incremental `
-    --template-file $bicepFile `
-    --parameters $paramFile `
-    --query properties.outputs `
-    --output json
-$outputs = $outputJson | ConvertFrom-Json
-
-Write-Host ''
-Write-Host 'Deployment complete.' -ForegroundColor Green
-Write-Host ''
-Write-Host 'These identifiers are committed (non-secret) in constants.env, shared by' -ForegroundColor Cyan
-Write-Host 'local `just test-azure` runs and the CI `test-azure` job. If you re-created' -ForegroundColor Cyan
-Write-Host 'the resources, update constants.env to match:' -ForegroundColor Cyan
-Write-Host "  BENCH_HISTORY_TEST_AZURE_ACCOUNT=$($outputs.storageAccountName.value)"
-Write-Host "  AZURE_TEST_CLIENT_ID=$($outputs.managedIdentityClientId.value)"
-Write-Host "  AZURE_TENANT_ID=$($outputs.tenantId.value)"
-Write-Host "  AZURE_SUBSCRIPTION_ID=$($outputs.subscriptionId.value)"
-Write-Host ''
-Write-Host 'Then run the tests with `az login` followed by `just test-azure`.' -ForegroundColor Cyan
-Write-Host ''
-Write-Host "Blob endpoint: $($outputs.blobEndpoint.value)"
+Write-Output 'For this test deployment, record the printed account as BENCH_HISTORY_TEST_AZURE_ACCOUNT and client ID as AZURE_TEST_CLIENT_ID in constants.env.'
+Write-Output 'Record the printed tenant and subscription IDs as AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID. Do not replace the production storage configuration in .cargo/bench_history.toml with this test account.'

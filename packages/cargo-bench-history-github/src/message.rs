@@ -1,7 +1,7 @@
 use crate::cli::{Conclusion, PendingArgs};
 use crate::marker;
 use crate::model::{Instance, IssueKind};
-use crate::result::{Coverage, Evidence, Outcome};
+use crate::result::{Coverage, Evidence, Outcome, PublicationState};
 
 const REGRESSION_HEADING: &str = "# Benchmark history";
 const PR_HEADING: &str = "## Benchmark history";
@@ -11,10 +11,13 @@ const DOCUMENTATION_URL: &str = "https://folo-rs.github.io/folo/cargo-bench-hist
 const ADVISORY: &str = "Benchmark results are advisory and do not block merging.";
 
 /// Wraps validated history evidence and the caller-paired summary in the rolling issue body.
+///
+/// The lifecycle supplies its checked state; composition does not classify the evidence again.
 pub(crate) fn regression_issue(
     instance: &Instance,
     owner: &PendingArgs,
     evidence: &Evidence,
+    state: PublicationState,
     summary: &str,
     artifact_url: Option<&str>,
 ) -> String {
@@ -22,7 +25,7 @@ pub(crate) fn regression_issue(
         marker::issue(instance, IssueKind::Regression),
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
-        marker::state(instance, evidence.publication_state().as_str()),
+        marker::state(instance, state.marker_value()),
         REGRESSION_HEADING.to_owned(),
         ADVISORY.to_owned(),
     ];
@@ -53,10 +56,12 @@ pub(crate) fn failure_issue(instance: &Instance, run_id: u64, run_url: &str) -> 
 /// Composes a PR result with ownership, measured commit and disclosed collection scope.
 ///
 /// The summary remains tool-owned prose; finish-side freshness is applied by the lifecycle.
+/// The checked state is supplied by that lifecycle rather than reselected while rendering.
 pub(crate) fn pr_result(
     instance: &Instance,
     owner: &PendingArgs,
     evidence: &Evidence,
+    state: PublicationState,
     packages: &str,
     summary: &str,
     artifact_url: Option<&str>,
@@ -65,7 +70,7 @@ pub(crate) fn pr_result(
         marker::pr_comment(instance),
         marker::analyzed_sha(instance, &evidence.report.commit),
         marker::run_owner(instance, owner),
-        marker::state(instance, evidence.publication_state().as_str()),
+        marker::state(instance, state.marker_value()),
         PR_HEADING.to_owned(),
         ADVISORY.to_owned(),
     ];
@@ -131,7 +136,7 @@ pub(crate) fn failure_notice(conclusion: Conclusion) -> &'static str {
 }
 
 /// Explains an inconclusive history analysis while its previous issue report remains intact.
-pub(crate) fn no_data_details(
+pub(crate) fn inconclusive_details(
     evidence: &Evidence,
     summary: &str,
     artifact_url: Option<&str>,
@@ -318,6 +323,7 @@ mod tests {
             &instance(),
             &owner(),
             &evidence(AnalysisMode::History, Outcome::Findings, true),
+            PublicationState::Findings,
             "DOMAIN SUMMARY",
             Some("https://example.test/artifact"),
         );
@@ -339,11 +345,20 @@ mod tests {
                 &instance(),
                 &owner(),
                 &evidence(AnalysisMode::History, Outcome::Clean, true),
+                PublicationState::Clean,
                 "Clean summary",
                 None,
             ),
             failure_issue(&instance(), 1, "https://example.test/run"),
-            pr_result(&instance(), &owner(), &result, "foo", "Tool summary", None),
+            pr_result(
+                &instance(),
+                &owner(),
+                &result,
+                PublicationState::Findings,
+                "foo",
+                "Tool summary",
+                None,
+            ),
         ] {
             assert!(body.contains(
                 "[How to read this report](https://folo-rs.github.io/folo/cargo-bench-history/)"
@@ -358,6 +373,7 @@ mod tests {
             &instance(),
             &owner(),
             &evidence(AnalysisMode::Branch, Outcome::Findings, true),
+            PublicationState::Findings,
             "foo",
             "Tool summary\n\n| Metric | Value |\n| --- | --- |\n| Time | +10% |",
             Some("https://example.test/artifact"),
@@ -377,6 +393,7 @@ mod tests {
             &instance,
             &owner(),
             &evidence(AnalysisMode::Branch, Outcome::Findings, true),
+            PublicationState::Findings,
             "foo, bar",
             "summary",
             None,
@@ -458,6 +475,7 @@ mod tests {
             &instance(),
             &owner(),
             &result,
+            PublicationState::Findings,
             "foo",
             "exact tool summary",
             None,
@@ -484,12 +502,32 @@ mod tests {
         ];
         for (outcome, expected) in cases {
             let result = evidence(AnalysisMode::Branch, outcome, true);
-            let body = pr_result(&instance(), &owner(), &result, "foo", "tool summary", None);
+            let state = result.require_state(result.publication_state()).unwrap();
+            let body = pr_result(
+                &instance(),
+                &owner(),
+                &result,
+                state,
+                "foo",
+                "tool summary",
+                None,
+            );
             assert!(body.contains(expected), "{body}");
             assert!(!body.contains("Missing:"));
         }
         let result = evidence(AnalysisMode::Branch, Outcome::Clean, false);
-        let body = pr_result(&instance(), &owner(), &result, "foo", "tool summary", None);
+        let state = result
+            .require_state(PublicationState::Inconclusive)
+            .unwrap();
+        let body = pr_result(
+            &instance(),
+            &owner(),
+            &result,
+            state,
+            "foo",
+            "tool summary",
+            None,
+        );
         assert!(body.contains("completed platforms only"));
         assert!(!body.contains("across the completed collection"));
     }

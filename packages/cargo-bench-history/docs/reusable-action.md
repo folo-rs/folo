@@ -287,12 +287,12 @@ and lifecycle operations are independently schedulable:
 | `publish-comment-findings` | Publish PR findings, retaining any incomplete-coverage qualification. |
 | `publish-comment-clean` | Publish a fully covered clean PR result. |
 | `publish-comment-preflight` | Mark prior PR results stale or seed an in-progress placeholder. |
-| `publish-comment-no-data` | Explain empty scope or a successful analysis without a complete verdict. |
+| `publish-comment-inconclusive` | Explain empty scope or a successful analysis without a complete verdict. |
 | `publish-comment-failed` | Replace this run's unfinished PR placeholder with a failure/cancellation notice. |
 | `publish-issue-findings` | Create or update the rolling regression issue from history findings. |
 | `publish-issue-clean` | Move an existing regression issue to all-clear, leaving it open. |
 | `publish-issue-preflight` | Mark an existing regression issue stale while another run is in progress. |
-| `publish-issue-no-data` | Annotate an existing regression issue when this run cannot establish recovery. |
+| `publish-issue-inconclusive` | Annotate an existing regression issue when this run cannot establish recovery. |
 | `publish-issue-failed` | Annotate an existing regression issue when its pending run fails. |
 | `alert` | File a one-off workflow-failure issue, separate from the rolling regression issue. |
 
@@ -475,7 +475,7 @@ recollection and other hole-filling automation are outside the action's scope.
    with the tool-composed summary, any missing-platform qualification, and the artifact link.
    The job has Azure access and `issues: write`; no cross-job report handoff is required.
    A fully covered clean run routes to `publish-issue-clean`, leaving the issue open.
-   Other successful verdicts route to `publish-issue-no-data`, preserving existing findings
+   Other successful verdicts route to `publish-issue-inconclusive`, preserving existing findings
    with an explanation rather than implying recovery (§4.4).
 
 **Empty-run degeneracy.** When every collect leg failed there are no successful machine-key
@@ -527,7 +527,7 @@ its reports and invokes comment publication:
   baseline warm without accumulating per-PR cache entries (safe against the append-only store
   even when slightly stale).
 * **Sink: a rolling PR comment.** After report upload, the appropriate
-  `publish-comment-findings`, `publish-comment-clean` or `publish-comment-no-data` command posts
+  `publish-comment-findings`, `publish-comment-clean` or `publish-comment-inconclusive` command posts
   the condensed summary as a single comment on the
   PR, deduped by a hidden marker and updated in place on every push, by the companion
   transport binary (§5.1). The
@@ -541,7 +541,7 @@ its reports and invokes comment publication:
   deciding whether a change is safe to merge must be able to see that a platform went
   unmeasured. Missing platforms qualify the comment without replacing the analysis outcome:
   `findings` still reports findings. A tool verdict of `clean` with missing platforms routes
-  to `publish-comment-no-data`, retaining that limited clean result and its qualification
+  to `publish-comment-inconclusive`, retaining that limited clean result and its qualification
   rather than presenting a complete all-clear.
   The tool's `partial` outcome instead means some in-scope series went unjudged with no findings.
   It records **which commit it measured** (a bare full SHA
@@ -569,22 +569,30 @@ Each rolling sink uses **`publish-<sink>-<state>`**, with `comment` or `issue` a
 The action and companion use the same names. Commands describe the state being published,
 not a vague maintenance operation. Their scheduling remains the workflow's responsibility.
 
-**Publication state is derived from evidence, not a caller's preferred wording.** The
-companion validates the successful report and platform coverage once and projects the state:
+**Publication state is derived from evidence, not a caller's preferred wording.** Analysis
+and report inspection project one publication state from the successful report and platform
+coverage. The workflow forwards the `publication-state` output as the sink command suffix:
 
 | Evidence | State |
 | --- | --- |
 | Findings, even with missing platforms or unjudged series | `findings`, with coverage qualifications |
 | Clean analysis, every in-scope series judged, every expected platform completed | `clean` |
-| Successful analysis without findings but with insufficient baseline, empty scope, unjudged series or missing platforms | `no-data`, with the actual limited result and reason |
-| Scope preflight selected no benchmarkable packages, so analysis did not run | `no-data`, explicitly saying nothing benchmarkable changed |
+| Successful analysis without findings but with insufficient baseline, empty scope, unjudged series or missing platforms | `inconclusive`, with the actual limited result and reason |
+| Scope preflight selected no benchmarkable packages, so analysis did not run | `inconclusive`, explicitly saying nothing benchmarkable changed |
 | Collection, analysis or publication failed or was cancelled | `failed`, never an analysis verdict |
 
-`no-data` means **no complete analysis verdict is available**, not necessarily zero samples.
+`inconclusive` means **no complete clean verdict is available**, not necessarily zero samples.
 Its message states the actual reason and preserves any useful partial report; it never says
 that no measurements exist merely because some could not be judged. Failed execution cannot
-be presented as `no-data`. Each report-bearing publication command revalidates that its named
-state agrees with the evidence; the workflow does not infer this from Markdown.
+be presented as `inconclusive`. Findings take precedence over incomplete coverage.
+The core analysis outcome is unchanged; publication state chooses the sink operation rather
+than replacing the analysis explanation.
+
+Each report-bearing publication command asserts that its named state agrees with the supplied
+evidence, then passes that checked state to publication and message composition. This assertion
+does not silently reroute a mismatched command. The workflow does not repeat the state-selection
+policy or infer it from Markdown. Explicit empty scope retains its separate flag and no-report
+input form rather than inferring scope from missing evidence.
 
 **PR-comment sink (branch flow).**
 
@@ -597,7 +605,7 @@ state agrees with the evidence; the workflow does not infer this from Markdown.
   comment with the corresponding validated report. Findings include improvements in branch
   mode and remain visible when coverage is incomplete. A clean comment requires complete
   evidence; absence of findings alone is insufficient.
-* **`publish-comment-no-data`** creates or updates the comment with the applicable explanation.
+* **`publish-comment-inconclusive`** creates or updates the comment with the applicable explanation.
   Empty package scope produces the short nothing-benchmarkable-changed note, including when
   no comment exists. A successful but inconclusive analysis retains its tool-rendered summary
   and coverage explanation. A missing comment would make either case indistinguishable from
@@ -625,7 +633,7 @@ commit follow serialized publication order, not a comparison of their attempt nu
 * **`publish-issue-preflight`** marks an existing report stale and records the pending run,
   attempt and head. It creates no placeholder issue: an issue merely announcing a benchmark
   run would be tracker noise rather than useful context on an existing finding.
-* **`publish-issue-no-data`** preserves the existing report and annotates why this run could
+* **`publish-issue-inconclusive`** preserves the existing report and annotates why this run could
   not establish recovery, linking the available report. The retained report's analyzed commit
   and any preflight staleness qualification remain visible. Freshness qualification does not
   depend on preflight having run. Missing evidence never becomes all-clear.
@@ -827,7 +835,7 @@ therefore computes it as follows:
    a changed excluded package can still affect a maintained dependent.
 
 The result is the `packages` scope that drives collect (§4.1), and an empty result routes to
-`publish-comment-no-data` instead of an analysis that would find nothing. It must never reach
+`publish-comment-inconclusive` instead of an analysis that would find nothing. It must never reach
 `collect` as an empty list, because the lower-level command interprets that as the whole
 workspace. The workflow owns this policy; a Rust helper performs its files-to-packages,
 dependency-closure and metadata computations, rather than duplicating them in shell.
@@ -1140,7 +1148,7 @@ The division preserves these implementation rules:
   Any value the action needs for a decision comes from the JSON report or a dedicated output,
   never from scraping text. In particular `--outcome` supplies the named verdict; `notable` is only
   a convenience for findings gating, never a substitute for the verdict when choosing a
-  clean or no-data message or deciding whether all-clear is justified.
+  clean or inconclusive message or deciding whether all-clear is justified.
 * **Retry is per operation, not per direction.** **Reads** retry with backoff behind a
   transient-fault classifier (a non-transient client or auth failure still surfaces at once);
   **updating a known issue or comment is idempotent** and retries too;
@@ -1194,7 +1202,7 @@ single PR, where issue-title search does not apply.
 
 **The date means last report-body update, not last measurement.** Each body-changing operation
 updates the title's UTC calendar date in the same issue update, including preflight, all-clear,
-no-data and failed annotations. A no-op does not refresh the date. The body continues to name
+inconclusive and failed annotations. A no-op does not refresh the date. The body continues to name
 the measured commit and any stale/incomplete state, so a recent title date cannot imply that
 old findings were remeasured.
 
@@ -1216,7 +1224,7 @@ is exactly
 one implementation of each message, so every consuming repo posts recognisably the same
 report. That is the default and it requires no configuration. A consumer who sets nothing
 gets the full standard set — the in-progress placeholder, the results comment, the staleness
-banner, the terminal failure notice, the clean and no-data messages, the coverage qualification, and the
+banner, the terminal failure notice, the clean and inconclusive messages, the coverage qualification, and the
 failure-alert issue — all worded identically to every other consumer's.
 
 **One rule binds the whole catalogue: a report never claims more coverage than it measured.**
@@ -1364,7 +1372,7 @@ cannot establish which collection jobs succeeded. The reusable workflow passes i
 collection projection rather than asking the composite to rediscover the job matrix.
 
 **Report-publication inputs:** `publish-<sink>-findings`, `publish-<sink>-clean` and the
-report-bearing form of `publish-<sink>-no-data` receive the rendered summary, JSON report,
+report-bearing form of `publish-<sink>-inconclusive` receive the rendered summary, JSON report,
 analyzed commit, artifact URL and expected/completed platforms. Comment commands additionally
 take `pr-number` and `packages`. Titles and markers are standardized; these commands hold no
 storage inputs. The companion's `--body-file` supplies the summary and `--report-file` the same
@@ -1379,7 +1387,7 @@ Preflight, failed and empty-scope commands use the frozen `head`; report command
 `analyzed-sha`. Comment commands take `pr-number`; preflight also takes its nonempty package
 scope. Failed commands take `run-url` and the terminal workflow conclusion (`failure` or
 `cancelled`) so the notice does not call a cancellation a failed analysis.
-The no-report form of `publish-<sink>-no-data` requires the explicit `empty-scope` preflight
+The no-report form of `publish-<sink>-inconclusive` requires the explicit `empty-scope` preflight
 result and rejects report evidence; omission of a report alone never means empty scope.
 This is execution data, not configurable reporting policy. The predefined workflows derive
 it from events, scope selection and validated artifacts.
@@ -1450,7 +1458,7 @@ test their tool/action selection; the action does not add a `report-schema` or t
     restore-only cache), then report upload and comment publication selecting
     findings, clean or no-data in that same job.
     Analysis and publication use `!cancelled()` so a superseded run never posts.
-    The empty-scope `publish-comment-no-data` and terminal `publish-comment-failed` paths
+    The empty-scope `publish-comment-inconclusive` and terminal `publish-comment-failed` paths
     sit alongside them — all behind the same-repo check (§6).
   * A **nightly densification** workflow (§4.8) — a matrix `backfill` job over the same
     platforms and window, with no analyze job and no sink.
@@ -1578,7 +1586,7 @@ so both the install branching and the actual installs are exercised, not just mo
    The canaries deliberately include the ugly cases — a **partially failed** matrix that
    preserves findings while marking missing platforms in both sinks, a **fully failed**
    matrix, a malformed `platforms` list, an **empty package scope** (which must route
-   to `publish-comment-no-data`, not analyze or workspace collection), and a cancelled run —
+   to `publish-comment-inconclusive`, not analyze or workspace collection), and a cancelled run —
    paths where the graph, not the binaries, decides the outcome.
    The two layers' input lists are contract-tested against
    each other so a new composite input cannot silently go unexposed by the workflows.

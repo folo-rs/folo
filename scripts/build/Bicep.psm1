@@ -21,8 +21,7 @@ function Invoke-BicepProcess {
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)][string] $Executable,
-        [Parameter(Mandatory)][string[]] $Arguments,
-        [hashtable] $Environment = @{}
+        [Parameter(Mandatory)][string[]] $Arguments
     )
 
     $start = [Diagnostics.ProcessStartInfo]::new($Executable)
@@ -30,7 +29,6 @@ function Invoke-BicepProcess {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
-    foreach ($name in $Environment.Keys) { $start.Environment[$name] = $Environment[$name] }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     try {
@@ -169,11 +167,7 @@ function Invoke-BicepValidation {
         Write-Host "Checking Bicep input $relative"
         $result = Invoke-BicepProcess -Executable $executable -Arguments @(
             $command, $file.FullName, '--no-restore', '--diagnostics-format', 'sarif', '--outfile', $output
-        ) -Environment @{
-            # Parameter-file compilation uses a valid non-secret placeholder, not operator state.
-            # These child-process values never reach Azure because the gate only compiles.
-            AZURE_STORAGE_ACCOUNT_NAME = 'bicepvalidation'
-        }
+        )
         Set-Content -LiteralPath "$output.sarif" -Value $result.Stderr -Encoding utf8
         Set-Content -LiteralPath "$output.stdout" -Value $result.Stdout -Encoding utf8
         $diagnostics = @(Get-BicepDiagnosticFailure -Diagnostics $result.Stderr)

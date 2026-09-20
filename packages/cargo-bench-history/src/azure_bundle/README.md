@@ -67,27 +67,29 @@ GitHub settings or credentials.
 | Output | Destination or purpose |
 | --- | --- |
 | `[storage.azure]` account and container | Copy the section into `.cargo/bench_history.toml` and commit it. |
-| Managed identity client ID | GitHub Actions repository variable `AZURE_CLIENT_ID`; use it to set job environment variable `AZURE_CLIENT_ID`. |
-| Azure tenant ID | Repository variable `AZURE_TENANT_ID`; use it to set job environment variable `AZURE_TENANT_ID`. |
-| Azure subscription ID | Future deployments/administration, or `subscription-id` in an optional `azure/login` step. Direct benchmark OIDC does not need it. |
+| Managed identity client ID | GitHub Actions repository variable `AZURE_CLIENT_ID`; pass it as the prebuilt workflows' `azure-client-id` input. |
+| Azure tenant ID | Repository variable `AZURE_TENANT_ID`; pass it as `azure-tenant-id`. |
+| Azure subscription ID | Future deployments and Azure administration. The prebuilt benchmark workflows do not need it. |
 | Managed identity principal ID | Inspect Azure role assignments for access diagnostics. Do not use this as the client ID. |
 | Blob endpoint | Connectivity diagnostics or Azure tools; no extra benchmark configuration field. |
 
 Create the repository variables under **Settings → Secrets and variables → Actions
-→ Variables**, not Secrets. In the job running the root composite action or direct
-benchmark commands, configure:
+→ Variables**, not Secrets. Pass them to the prebuilt `history.yml@v1` and `pr.yml@v1`
+workflows in your caller jobs:
 
 ```yaml
-env:
-  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+with:
+  azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+  azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
-Grant that job `id-token: write` alongside its other benchmark-flow permissions.
-The root action inherits the job environment. The tool exchanges OIDC tokens
-itself without a separate login action.
+Grant each caller job `id-token: write` alongside its other benchmark-flow permissions.
+The prebuilt workflows exchange OIDC tokens without a separate login action.
 The [automation guide](https://folo-rs.github.io/folo/cargo-bench-history/github-automation.html)
 provides complete caller examples.
+
+Advanced CI jobs that invoke the CLI or root action directly set `AZURE_CLIENT_ID`
+and `AZURE_TENANT_ID` in their job environment instead.
 
 ## Security model
 
@@ -107,14 +109,21 @@ The issuer is `https://token.actions.githubusercontent.com`; the audience is
 `api://AzureADTokenExchange`. Branch trust is limited to the selected branch;
 PR trust uses the repository's PR event context and is not limited to that target
 branch. These subjects do not limit access to a particular workflow file or action.
-Environment jobs or customized GitHub subject formats need matching trust settings.
+`HistoryBranch` controls which workflow runs may authenticate, not which branches'
+benchmark results may be stored or analyzed.
 See [GitHub's OIDC subject reference](https://docs.github.com/en/actions/reference/security/oidc#example-subject-claims).
 
-The PR workflow in the automation guide skips forks before credentialed work. Keep its
-same-repository gate: the PR subject itself does not distinguish fork heads.
-Custom PR jobs must check
-`github.event.pull_request.head.repo.full_name == github.repository` before using
-the identity. Only grant `id-token: write` where needed. Code and actions running
+Under GitHub's default permissions, fork PR jobs cannot obtain `id-token: write`,
+including when the PR edits workflow YAML to request it. GitHub applies the
+restriction after YAML permissions, and maintainer approval does not elevate it.
+Without that permission, no OIDC token can be issued for Azure exchange.
+An upstream PR subject, if issued, still names the upstream repository; that
+subject is not a fork filter. A workflow in the fork's own repository has that
+fork's subject and does not match the upstream subjects.
+
+Keep the automation guide's same-repository job gate to skip unsupported fork work
+explicitly, not as a substitute for the platform's token-issuance restriction.
+Only grant `id-token: write` where needed. Code and actions running
 with the identity are trusted with its storage rights; GitHub issue/comment rights
 come separately from the job's `GITHUB_TOKEN`.
 Fork benchmarking remains unsupported without secure federated access to the base
@@ -130,8 +139,10 @@ Deployment is incremental. Changing the custom principal adds a grant without
 removing earlier grants; omission does not revoke access. Unmentioned resources
 remain. Federation is configurable, not append-only: changing repository or
 history-branch inputs updates the selected identity's existing credentials.
-The stable `github-branch-main` resource key uses the selected `HistoryBranch`
-even when it is not `main`; changing the branch replaces that credential's subject.
+The child resources are named `bench-history-branch` and `bench-history-pull-request`;
+their names do not depend on the branch value. Different parent identities can use
+the same child names. Use `ManagedIdentityName` and separate storage accounts to
+distinguish production and test deployments, rather than a credential-name suffix.
 Serialize invocations targeting the same storage account or managed identity
 in the selected subscription and resource group.
 

@@ -16,6 +16,8 @@ pub(crate) trait Host {
     fn environment(&self, name: &str) -> Result<Option<String>, AppError>;
     /// Supplies local input or report bytes to the shared parsing and validation logic.
     fn read(&self, path: &Path) -> Result<Vec<u8>, AppError>;
+    /// Queries package ownership without executing a command or changing process CWD.
+    fn package(&self, workspace: &Path, target: &Path) -> Result<Option<String>, AppError>;
     /// Resolves an existing directory for measured-checkout and physical-path checks.
     fn directory(&self, path: &Path) -> Result<PathBuf, AppError>;
     /// Validates an output destination without appending success records yet.

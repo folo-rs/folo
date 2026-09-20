@@ -158,7 +158,7 @@ impl Inputs {
             }
             ActionCommand::Publish(_, state) => {
                 let empty = self.boolean("empty-scope", false)?;
-                if state == PublishState::NoData && empty {
+                if state == PublishState::Inconclusive && empty {
                     for key in REPORT_INPUTS.iter().copied().chain(["packages"]) {
                         if self.get(key).is_some() {
                             return Err(InvalidInput::new(key, "conflicts with empty-scope").into());
@@ -249,10 +249,10 @@ impl ActionCommand {
                     || (sink == Sink::Comment && key == "pr-number")
                     || (sink == Sink::Comment && state != PublishState::Failed && key == "packages")
                     || (state.is_report() && REPORT_INPUTS.contains(&key))
-                    || (state == PublishState::NoData && key == "empty-scope")
+                    || (state == PublishState::Inconclusive && key == "empty-scope")
                     || (matches!(
                         state,
-                        PublishState::Preflight | PublishState::Failed | PublishState::NoData
+                        PublishState::Preflight | PublishState::Failed | PublishState::Inconclusive
                     ) && key == "head")
                     || (state == PublishState::Failed && matches!(key, "run-url" | "conclusion"))
             }
@@ -290,7 +290,7 @@ impl FromStr for ActionCommand {
                     "findings" => PublishState::Findings,
                     "clean" => PublishState::Clean,
                     "preflight" => PublishState::Preflight,
-                    "no-data" => PublishState::NoData,
+                    "inconclusive" => PublishState::Inconclusive,
                     "failed" => PublishState::Failed,
                     _ => {
                         return Err(
@@ -317,14 +317,14 @@ pub(crate) enum PublishState {
     Findings,
     Clean,
     Preflight,
-    NoData,
+    Inconclusive,
     Failed,
 }
 
 impl PublishState {
     /// Identifies states that may require analysis evidence rather than only execution ownership.
     fn is_report(self) -> bool {
-        matches!(self, Self::Findings | Self::Clean | Self::NoData)
+        matches!(self, Self::Findings | Self::Clean | Self::Inconclusive)
     }
 }
 
@@ -383,7 +383,7 @@ const ALL_INPUTS: &[&str] = &[
 ];
 
 /// Unlike an ordinary map decoder, this preserves strict rejection of duplicate JSON keys.
-struct InputObject(BTreeMap<String, String>);
+pub(crate) struct InputObject(pub(crate) BTreeMap<String, String>);
 
 impl<'de> Deserialize<'de> for InputObject {
     /// Selects object decoding so scalar and array inputs cannot bypass string-field validation.

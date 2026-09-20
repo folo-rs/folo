@@ -5,7 +5,9 @@ use crate::github::fake::FakeGitHub;
 use crate::lifecycle::tests::harness::{
     clock, context, findings, only_issue, owner, publish, report, seed_retained_findings, sha,
 };
-use crate::lifecycle::{AnnotationState, IssueBody, NoData, issue_no_data, issue_preflight};
+use crate::lifecycle::{
+    AnnotationState, Inconclusive, IssueBody, issue_inconclusive, issue_preflight,
+};
 use crate::marker;
 use crate::result::{AnalysisMode, Outcome};
 
@@ -45,7 +47,7 @@ fn preflight_marks_clean_results_stale_without_changing_the_retained_verdict() {
 }
 
 #[test]
-fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
+fn inconclusive_retains_report_commit_and_staleness_and_replaces_one_annotation() {
     let github = FakeGitHub::new();
     seed_retained_findings(&github, &owner(1, 1, 'a'));
     github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(2) });
@@ -59,11 +61,11 @@ fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
     // A later unavailable comparison must not degrade this pending head's retained warning.
     github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: None });
     let partial = report(AnalysisMode::History, Outcome::Clean, false, pending);
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(3),
-        &NoData::Report(partial),
+        &Inconclusive::Report(partial),
     ))
     .unwrap();
     let after = only_issue(&github);
@@ -80,11 +82,12 @@ fn no_data_retains_report_commit_and_staleness_and_replaces_one_annotation() {
             .count(),
         1
     );
+    assert!(parsed.annotation.unwrap().state == AnnotationState::Inconclusive);
     assert_ne!(after.title, pending_body.title);
 }
 
 #[test]
-fn no_data_without_preflight_qualifies_the_retained_report() {
+fn inconclusive_without_preflight_qualifies_the_retained_report() {
     let github = FakeGitHub::new();
     publish(&github, &findings('a'), 1);
     github.set_comparison(&sha('a'), &sha('b'), Comparison { ahead_by: Some(2) });
@@ -94,11 +97,11 @@ fn no_data_without_preflight_qualifies_the_retained_report() {
         true,
         owner(2, 1, 'b'),
     );
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(2),
-        &NoData::Report(incoming),
+        &Inconclusive::Report(incoming),
     ))
     .unwrap();
     let issue = only_issue(&github);
@@ -108,7 +111,7 @@ fn no_data_without_preflight_qualifies_the_retained_report() {
     assert!(parsed.report.contains(&findings('a').summary));
     let annotation = parsed.annotation.unwrap();
     assert_eq!(annotation.owner, owner(2, 1, 'b'));
-    assert!(matches!(annotation.state, AnnotationState::NoData));
+    assert!(matches!(annotation.state, AnnotationState::Inconclusive));
 }
 
 #[test]
@@ -146,11 +149,11 @@ fn empty_issue_scope_annotates_without_replacing_the_report() {
     let github = FakeGitHub::new();
     publish(&github, &findings('a'), 1);
     let before = only_issue(&github);
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(2),
-        &NoData::Empty(owner(2, 1, 'a')),
+        &Inconclusive::Empty(owner(2, 1, 'a')),
     ))
     .unwrap();
     let after = only_issue(&github);
@@ -168,7 +171,7 @@ fn empty_issue_scope_annotates_without_replacing_the_report() {
 }
 
 #[test]
-fn no_data_retires_the_pending_head_when_the_retained_report_distance_is_unknown() {
+fn inconclusive_retires_the_pending_head_when_the_retained_report_distance_is_unknown() {
     let github = FakeGitHub::new();
     seed_retained_findings(&github, &owner(1, 1, 'a'));
     block_on(issue_preflight(
@@ -185,11 +188,11 @@ fn no_data_retires_the_pending_head_when_the_retained_report_distance_is_unknown
         true,
         owner(2, 2, 'b'),
     );
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(3),
-        &NoData::Report(partial),
+        &Inconclusive::Report(partial),
     ))
     .unwrap();
     let after = only_issue(&github);
@@ -203,13 +206,13 @@ fn no_data_retires_the_pending_head_when_the_retained_report_distance_is_unknown
     assert!(
         parsed
             .annotation
-            .is_some_and(|annotation| annotation.state == AnnotationState::NoData)
+            .is_some_and(|annotation| annotation.state == AnnotationState::Inconclusive)
     );
     assert!(after.body.contains("distance is unavailable"));
 }
 
 #[test]
-fn no_data_cannot_retire_a_newer_attempt_at_the_same_pending_head() {
+fn inconclusive_cannot_retire_a_newer_attempt_at_the_same_pending_head() {
     let github = FakeGitHub::new();
     publish(&github, &findings('a'), 1);
     block_on(issue_preflight(
@@ -220,11 +223,11 @@ fn no_data_cannot_retire_a_newer_attempt_at_the_same_pending_head() {
     ))
     .unwrap();
     let before = only_issue(&github);
-    block_on(issue_no_data(
+    block_on(issue_inconclusive(
         &github,
         &context(),
         &clock(3),
-        &NoData::Empty(owner(2, 1, 'b')),
+        &Inconclusive::Empty(owner(2, 1, 'b')),
     ))
     .unwrap();
     assert_eq!(only_issue(&github), before);

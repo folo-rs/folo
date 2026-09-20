@@ -877,9 +877,13 @@ identity credentials for the selected history branch and the repository's PR sub
 supporting collection, backfill and analysis.
 Additional user or group access to the same role is independent. The role permits blob
 read/write/delete and container creation/deletion across the account, not only the configured
-history container. The PR federated subject does not distinguish same-repository and fork heads;
-the documented caller workflows supply that gate before credentialed work. Custom workflows must do
-the same. Callers grant `id-token: write` to obtain OIDC tokens. The trusted subjects name the
+history container. With default GitHub permissions, fork PR jobs cannot obtain effective
+`id-token: write`, including through changes to workflow YAML; maintainer approval does not
+elevate that permission. This platform restriction prevents OIDC issuance for fork PRs.
+The upstream PR subject, if issued, does not distinguish same-repository and fork heads.
+Fork-owned workflows name the fork repository and do not match the upstream subjects.
+The documented caller workflows additionally skip unsupported fork work explicitly.
+Callers grant `id-token: write` to obtain OIDC tokens for eligible jobs. The trusted subjects name the
 repository and event/branch, not a particular workflow file or action. Provisioning
 OIDC trust requires no GitHub API access or stored credential.
 
@@ -890,6 +894,11 @@ is configuration rather than an append-only grant list: changing the repository 
 branch reconfigures the existing branch/PR credentials on the selected identity.
 Serialize invocations targeting the same storage account
 or managed identity in the selected subscription and resource group.
+
+The credential resource names identify benchmark authentication contexts, not a particular
+branch name. Separate managed identities and accounts distinguish test and production
+deployments without another naming suffix. The selected history branch is a workflow
+authorization scope, not a constraint on the Git commits whose measurements are stored.
 
 Successful execution reports the storage account, container, endpoint, tenant and subscription
 IDs, and the managed identity's client and principal IDs. It explains which non-secret values

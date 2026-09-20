@@ -4,7 +4,7 @@ use crate::cli::Conclusion;
 use crate::github::fake::FakeGitHub;
 use crate::github::{Comparison, GitHub};
 use crate::lifecycle::tests::harness::{context, failure, only_comment, owner, report, sha};
-use crate::lifecycle::{NoData, comment_no_data, comment_preflight, comment_report};
+use crate::lifecycle::{Inconclusive, comment_inconclusive, comment_preflight, comment_report};
 use crate::result::{AnalysisMode, Outcome, PublicationState};
 use crate::{marker, message};
 
@@ -58,12 +58,12 @@ fn stale_comment_publication_warns_and_never_replaces_live_head_results() {
         &owner(2, 1, 'a'),
     ))
     .unwrap();
-    block_on(comment_no_data(
+    block_on(comment_inconclusive(
         &github,
         &context(),
         7,
         None,
-        &NoData::Empty(owner(2, 1, 'a')),
+        &Inconclusive::Empty(owner(2, 1, 'a')),
     ))
     .unwrap();
     assert_eq!(only_comment(&github), before);
@@ -135,6 +135,7 @@ fn distinct_run_comment_reports_at_the_same_live_head_follow_publication_order()
         &context.instance,
         &previous.owner,
         &previous.evidence,
+        previous.evidence.publication_state(),
         "foo",
         &previous.summary,
         None,
@@ -176,6 +177,7 @@ fn distinct_run_stale_comment_preserves_the_live_head_report() {
         &context.instance,
         &current.owner,
         &current.evidence,
+        current.evidence.publication_state(),
         "foo",
         &current.summary,
         None,

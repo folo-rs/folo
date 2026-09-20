@@ -56,17 +56,17 @@ var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var githubIssuer = 'https://token.actions.githubusercontent.com'
 var federationAudience = 'api://AzureADTokenExchange'
 
-// GitHub workflow policy must restrict PR use to same-repository heads: the PR
-// subject alone does not distinguish a fork head from a same-repository head.
+// GitHub's default fork-PR permissions prevent OIDC issuance. Workflow gates also
+// skip unsupported fork work; the PR subject itself does not identify the head repository.
 var credentials = [
   {
     // This stable resource key is independent of the configured history branch.
     // Branch selection changes only the credential subject.
-    name: 'github-branch-main'
+    name: 'bench-history-branch'
     subject: 'repo:${githubOrg}/${githubRepo}:ref:refs/heads/${historyBranch}'
   }
   {
-    name: 'github-pull-request'
+    name: 'bench-history-pull-request'
     subject: 'repo:${githubOrg}/${githubRepo}:pull_request'
   }
 ]

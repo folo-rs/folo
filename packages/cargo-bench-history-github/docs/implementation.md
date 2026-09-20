@@ -19,6 +19,11 @@ process setup. Native integration scenarios use the same dispatcher with ordinar
 an in-memory GitHub port and a frozen clock. They observe publication snapshots after each command,
 so argument wiring and terminal transitions are covered without credentials or network writes.
 
+Collection receipt loading accepts the artifact downloader's direct single-artifact layout
+as well as its per-artifact directories. Each selected layout remains receipt-only; platform,
+run, attempt and commit identity come from validated receipt contents and job reconciliation,
+not directory names.
+
 ## Root action boundary
 
 The `action` entry point separates strict string-object parsing and command planning from
@@ -85,9 +90,11 @@ unjudged-reason vocabulary.
 
 All-clear validation happens before issue lookup or mutation. This makes a contradictory report
 or a missing platform an error even when the rolling issue happens not to exist. The CLI
-supplies the same evidence to findings, clean and no-data publication, avoiding independent
-definitions of clean. Shared validation projects a publication state for workflow dispatch and
-rechecks it at the named command boundary. An explicit empty-scope variant carries no report;
+supplies the same evidence to findings, clean and inconclusive publication, avoiding independent
+definitions of clean. Output projection selects the publication state once for workflow dispatch.
+The named publication command asserts consistency with its evidence and passes that checked state
+to lifecycle and rendering operations; those operations do not select the state again.
+An explicit empty-scope variant carries no report;
 it cannot be confused with a missing or malformed artifact.
 
 Pending ownership combines workflow run ID, attempt and frozen head. Failed-state publication
@@ -110,15 +117,20 @@ Serialized writers can still arrive with out-of-order frozen heads. Preflight pr
 proven newer by a reverse commit comparison; without a proved relationship it retains the
 unknown-distance warning.
 
-Issue no-data and failed states share the bounded annotation mechanism rather than replacing
+Issue inconclusive and failed states share the bounded annotation mechanism rather than replacing
 the previous report. They retain its analyzed-commit identity and freshness qualification.
 Preflight records ownership so delayed terminal work cannot retire a newer pending annotation.
-No-data at the pending head can retire that annotation despite an unknown distance to the
-retained report, including when a successful preflight is reused by a later run attempt.
-When no-data is the first successful publication for a newer head, it qualifies the retained
-report as stale rather than depending on preflight to have done so. An existing annotation at
+Inconclusive publication at the pending head can retire that annotation despite an unknown
+distance to the retained report, including when a successful preflight is reused by a later
+run attempt. When inconclusive publication is the first successful publication for a newer
+head, it qualifies the retained report as stale rather than depending on preflight to have
+done so. An existing annotation at
 that head preserves the retained report and its staleness unchanged.
 Absence of an issue is diagnosed after input validation; only findings can create one.
+
+The opaque comment/annotation codec uses `no-data` for the inconclusive disposition.
+Public command names and outputs use `inconclusive`. The stored codec has one accepted spelling,
+not alternate metadata formats; unknown or inconsistent metadata is rejected.
 
 An ambiguous create is reconciled against both the artifact identity and the desired body.
 Finding the same identity with different content is not proof that this publication committed;
@@ -191,6 +203,29 @@ adapter's operation-specific policy. Creates have no blind retry; lifecycle reco
 uses the same REST decoding as ordinary lookup. Credentials are redacted from diagnostic
 representations. Only the actual network and timer primitives are outside in-process tests;
 the request and response policy is not excluded with them.
+
+## Workflow preparation
+
+`prepare-workflow --flow history|pr --inputs-file PATH --github-output PATH` prepares
+configuration-derived identity, frozen Git revisions, collection platforms and benchmark scope
+before a reusable workflow starts collection. Its JSON contains only string-valued
+`working-directory`, `config`, `platforms` and `exclude` inputs. Preparation is offline:
+it uses the action host's Git/Cargo/filesystem operations, without constructing a GitHub client
+or reading storage credentials.
+
+History selects workspace collection. PR preparation freezes the event's real head/base,
+checks the checkout head and computes the merge-base diff. The detector's read-only query
+resolves package ownership, including deleted paths through surviving ancestors; workspace-wide
+changes select workspace. The companion expands reverse path dependents across dependency kinds
+and conditions, then filters explicit benchmark targets and exclusions. Visited membership
+bounds cyclic dependency traversal. The native adapters and in-memory action host execute the
+same orchestration.
+
+The command emits canonical instance, matrix, expected platforms and collection-job prefix,
+plus head/base, concrete package CSV, `skip-all` and `skipped`. An empty PR scope does not reach
+collection as an empty package input, which would otherwise select workspace. A fork policy skip
+is separate from empty scope and does not authorize publication. History invoked from a
+same-repository PR also uses the real PR head, not a synthetic merge commit.
 
 ## Workflow evidence adapters
 
@@ -274,12 +309,12 @@ Lifecycle commands use the same common options and repository fallback. Rolling 
 | `publish-comment-findings` | Report evidence, `--pull-request N --packages CSV` |
 | `publish-comment-clean` | Report evidence, `--pull-request N --packages CSV` |
 | `publish-comment-preflight` | `--pull-request N --packages CSV --head SHA` |
-| `publish-comment-no-data` | `--pull-request N`, plus either report evidence and `--packages CSV`, or `--empty-scope --head SHA` |
+| `publish-comment-inconclusive` | `--pull-request N`, plus either report evidence and `--packages CSV`, or `--empty-scope --head SHA` |
 | `publish-comment-failed` | `--pull-request N --head SHA --run-url URL --conclusion failure\|cancelled` |
 | `publish-issue-findings` | Report evidence |
 | `publish-issue-clean` | Report evidence |
 | `publish-issue-preflight` | `--head SHA` |
-| `publish-issue-no-data` | Either report evidence, or `--empty-scope --head SHA` |
+| `publish-issue-inconclusive` | Either report evidence, or `--empty-scope --head SHA` |
 | `publish-issue-failed` | `--head SHA --run-url URL --conclusion failure\|cancelled` |
 
 `alert --run-id N --run-url URL` uses no report or attempt ownership. Its validated run
@@ -328,7 +363,7 @@ Platform and deduplicated key lists are sorted. `complete` measures platform cov
 The machine-key destination must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
 file with an existing parent directory; output appending preserves earlier workflow values.
 Inspection appends `outcome=<wire value>`, `notable=<bool>`, `can-clear=<bool>` and
-`publication-state=findings|clean|no-data`, using lowercase booleans and the tool's existing
+`publication-state=findings|clean|inconclusive`, using lowercase booleans and the tool's existing
 outcome spelling. `can-clear` retains its history-only meaning; `publication-state` also
 serves comment publication. The latter is a projection of existing report/platform evidence,
 not another tool verdict or a caller override.

@@ -11,6 +11,48 @@ Every root command uses this companion. `collect`, `backfill`, `analyze-history`
 `analyze-pr` additionally use the main executable selected by `--tool`, or
 `cargo-bench-history` on `PATH` when omitted. Publication does not launch the main executable.
 
+## Reusable-workflow preparation
+
+The workflow's offline preparation is a separate companion invocation, not a root-action
+command:
+
+```text
+cargo-bench-history-github prepare-workflow --flow history|pr --inputs-file PATH --github-output PATH
+```
+
+Its strict string-only JSON inputs are `working-directory`, `config`, required `platforms`
+and optional `exclude`. Path resolution and empty-string handling match the root
+boundary below. The flow selects history workspace or PR affected scope; there is no scope input.
+Exclusions are exact workspace package names. Both flows select concrete packages with
+explicit benchmark targets. PR affected selection expands changed ownership through
+workspace path dependents before filtering benchmarks and exclusions.
+
+Preparation appends `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
+`head`, `base`, `packages`, `skip-all` and `skipped`. Package CSV and platform identifiers are
+sorted and deduplicated; booleans are lowercase. Head/base are frozen full commit SHAs.
+History uses head as base; PR preparation uses the event's real head and base, requiring
+the checkout to match its real head. Full Git history and locally available Cargo metadata
+are required; preparation never fetches or constructs GitHub credentials.
+History preparation also uses the real PR head when invoked on a same-repository PR,
+so caller canaries do not measure the synthetic merge SHA. PR flow requires an ordinary
+`pull_request` event.
+
+`skip-all=true` is an explicit empty benchmark selection. Collection must not run in that
+case: passing an empty package list to the root action would mean the whole workspace.
+PR collection receives the prepared `packages` and no `exclude`, since exclusions have
+already been applied. History collection omits `packages` and retains its configured
+`exclude` values, preserving Cargo workspace collection.
+
+A fork event instead emits the matrix/namespace outputs, `skipped=true`,
+`skip-reason=fork-pull-request`, `skip-all=true` and an empty `packages`; it emits no
+head/base outputs and starts no Git/Cargo/detector work. This policy skip does not authorize
+empty-scope publication. Successful non-skipped preparation emits `skipped=false`.
+The workflow retains its same-repository selection independently.
+
+There is no detector executable argument or installation role for this helper: the companion
+uses the detector's read-only in-workspace library query. Existing receipt and analysis
+preparation commands remain unchanged.
+
 ## Input file and paths
 
 The input file is a JSON object with unique keys and string values. Empty strings mean
@@ -53,8 +95,8 @@ there is no success default.
 | `publish-issue-findings`, `publish-issue-clean` | Report inputs and run ownership |
 | `publish-comment-preflight` | Run ownership, `head`, `pr-number`, required `packages` |
 | `publish-issue-preflight` | Run ownership and `head` |
-| `publish-comment-no-data` | Run ownership and `pr-number`; either report inputs and required `packages`, or `empty-scope=true` and `head` |
-| `publish-issue-no-data` | Run ownership; either report inputs, or `empty-scope=true` and `head` |
+| `publish-comment-inconclusive` | Run ownership and `pr-number`; either report inputs and required `packages`, or `empty-scope=true` and `head` |
+| `publish-issue-inconclusive` | Run ownership; either report inputs, or `empty-scope=true` and `head` |
 | `publish-comment-failed` | Run ownership, `pr-number`, `head`, `run-url`, required `conclusion` |
 | `publish-issue-failed` | Run ownership, `head`, `run-url`, required `conclusion` |
 | `alert` | `run-id`, `run-url` |
@@ -121,6 +163,12 @@ Analysis appends the shared evidence projection `outcome`, `notable`, `can-clear
 `publication-state`, plus `partial-platform-coverage`, `regressions`, `report-markdown`,
 `report-json` and `report-summary`. Booleans are lowercase; report paths are absolute
 and local to this job. `outcome` exposes the verdict value, not a file path.
+`publication-state` is `findings`, `clean` or `inconclusive`. The workflow passes that
+value as the suffix in `publish-comment-<state>` or `publish-issue-<state>` without
+interpreting `outcome` or coverage itself. Publication checks the selected state against
+the supplied report and platform evidence. `inconclusive` covers successful analysis that
+found no notable changes but cannot establish a complete clean verdict; explicit empty
+scope uses the same command with `empty-scope=true` instead of report inputs.
 The internal outcome file must agree with the validated JSON, and rendered
 reports must be nonblank. No success outputs are appended on work or evidence failure.
 

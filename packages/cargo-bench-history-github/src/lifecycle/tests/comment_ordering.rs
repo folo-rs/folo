@@ -4,7 +4,7 @@ use crate::cli::{Conclusion, PendingArgs};
 use crate::github::fake::FakeGitHub;
 use crate::github::{Comparison, GitHub};
 use crate::lifecycle::tests::harness::{context, failure, only_comment, owner, report, sha};
-use crate::lifecycle::{NoData, comment_no_data, comment_report};
+use crate::lifecycle::{Inconclusive, comment_inconclusive, comment_report};
 use crate::result::{AnalysisMode, Outcome, PublicationState};
 use crate::{marker, message};
 
@@ -14,6 +14,7 @@ fn branch_result_body(owner: PendingArgs, outcome: Outcome) -> String {
         &context().instance,
         &report.owner,
         &report.evidence,
+        report.evidence.publication_state(),
         "foo",
         &report.summary,
         None,
@@ -69,7 +70,7 @@ fn stale_report_preserves_newer_non_live_report() {
 }
 
 #[test]
-fn stale_report_preserves_newer_non_live_no_data_report() {
+fn stale_report_preserves_newer_non_live_inconclusive_report() {
     let body = branch_result_body(owner(42, 1, 'b'), Outcome::Partial);
     assert_stale_report_preserves_non_live_state(&body, None, Some(1));
 }
@@ -171,7 +172,7 @@ fn live_head_report_replaces_unrelated_previous_state() {
 }
 
 #[test]
-fn stale_no_data_report_preserves_newer_non_live_state() {
+fn stale_inconclusive_report_preserves_newer_non_live_state() {
     let github = FakeGitHub::new();
     let context = context();
     github.set_pull_head(7, sha('c'));
@@ -184,12 +185,12 @@ fn stale_no_data_report_preserves_newer_non_live_state() {
         true,
         owner(43, 3, 'a'),
     );
-    block_on(comment_no_data(
+    block_on(comment_inconclusive(
         &github,
         &context,
         7,
         Some("foo"),
-        &NoData::Report(incoming),
+        &Inconclusive::Report(incoming),
     ))
     .unwrap();
     assert_eq!(only_comment(&github), before);

@@ -318,7 +318,7 @@ fn inspected_outputs_append_offline_and_retain_existing_workflow_values() {
         fs::read_to_string(fixture.path("github-output"))
             .unwrap()
             .ends_with(
-                "outcome=clean\nnotable=false\ncan-clear=false\npublication-state=no-data\n"
+                "outcome=clean\nnotable=false\ncan-clear=false\npublication-state=inconclusive\n"
             )
     );
 }
@@ -337,6 +337,61 @@ fn malformed_or_mismatched_reports_never_append_success_outputs() {
     .unwrap();
     assert!(!fixture.inspect(&"b".repeat(40), "linux").status.success());
     assert!(!fixture.inspect(&head(), "unknown").status.success());
+    assert!(!fixture.path("github-output").exists());
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
+fn preparation_accepts_a_single_downloaded_receipt_at_the_artifact_root() {
+    let fixture = Fixture::new();
+    let artifact = fixture.artifact("linux", "0123456789abcdef");
+    fs::rename(
+        artifact.join("receipt.json"),
+        fixture.path("receipts").join("receipt.json"),
+    )
+    .unwrap();
+    fs::remove_dir(artifact).unwrap();
+
+    fixture
+        .prepare(&json!([
+            job(1, "linux", 2, "success"),
+            job(2, "windows", 2, "failure")
+        ]))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(fixture.path("keys").join("linux").join("machine-key.txt")).unwrap(),
+        "0123456789abcdef\n"
+    );
+    assert!(!fixture.path("keys").join("windows").exists());
+    assert!(
+        fs::read_to_string(fixture.path("github-output"))
+            .unwrap()
+            .contains("completed-platforms=linux\n")
+    );
+    assert!(
+        fs::read_to_string(fixture.path("github-output"))
+            .unwrap()
+            .ends_with("complete=false\n")
+    );
+}
+
+#[cfg(feature = "private-test-util")]
+#[test]
+#[cfg_attr(miri, ignore = "Native collection artifact adapter coverage.")]
+fn preparation_rejects_unexpected_content_beside_a_flat_receipt() {
+    let fixture = Fixture::new();
+    let artifact = fixture.artifact("linux", "0123456789abcdef");
+    fs::rename(
+        artifact.join("receipt.json"),
+        fixture.path("receipts").join("receipt.json"),
+    )
+    .unwrap();
+    fs::remove_dir(artifact).unwrap();
+    fs::write(fixture.path("receipts").join("unexpected.json"), "{}").unwrap();
+
+    fixture.prepare(&successful_jobs()).unwrap_err();
+    assert!(!fixture.path("keys").exists());
     assert!(!fixture.path("github-output").exists());
 }
 
