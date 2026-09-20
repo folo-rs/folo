@@ -14,9 +14,9 @@ on:
 permissions: {}
 
 jobs:
-  storage:
-    # This is a real data-plane canary using the separate test identity, never production
-    # history or Azure management provisioning. Ref: implementation.md#reusable-workflow-canary.
+  configuration:
+    # Export identifiers without Azure login: its masking prevents cross-job client-ID outputs.
+    # Ref: implementation.md#reusable-workflow-canary.
     if: >-
       github.repository == 'folo-rs/folo'
       && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
@@ -25,10 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     outputs:
       client-id: ${{ steps.values.outputs.AZURE_TEST_CLIENT_ID }}
       tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
+      subscription-id: ${{ steps.values.outputs.AZURE_SUBSCRIPTION_ID }}
+      account: ${{ steps.values.outputs.BENCH_HISTORY_TEST_AZURE_ACCOUNT }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -44,17 +45,27 @@ jobs:
           $values = Read-DotEnvFile -Path constants.env
           foreach ($name in @('AZURE_TEST_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'BENCH_HISTORY_TEST_AZURE_ACCOUNT')) {
             $value = Get-RequiredConstant -Values $values -Name $name
-            "$name=$value" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
             "$name=$value" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           }
+
+  storage:
+    # This is a real data-plane canary using the separate test identity, never production
+    # history or Azure management provisioning. Ref: implementation.md#reusable-workflow-canary.
+    needs: configuration
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
       - name: Sign in with the test identity
         uses: azure/login@v3
         with:
-          client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ needs.configuration.outputs.client-id }}
+          tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+          subscription-id: ${{ needs.configuration.outputs.subscription-id }}
       - name: Ensure the dedicated synthetic-data container exists
         shell: pwsh
+        env:
+          BENCH_HISTORY_TEST_AZURE_ACCOUNT: ${{ needs.configuration.outputs.account }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -67,7 +78,7 @@ jobs:
           az storage container create --auth-mode login --account-name $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT --name bench-history-caller-canary --only-show-errors --output none
 
   exercise:
-    needs: storage
+    needs: [configuration, storage]
     uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@4e75ecdaf18aa30327382462de6a3f72abffac37
     permissions:
       contents: read
@@ -75,8 +86,8 @@ jobs:
       id-token: write
       issues: write
     with:
-      azure-client-id: ${{ needs.storage.outputs.client-id }}
-      azure-tenant-id: ${{ needs.storage.outputs.tenant-id }}
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
       install-method: path
       source-path: .
       working-directory: .github/fixtures/bench-history-caller

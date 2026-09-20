@@ -123,24 +123,21 @@ Manual pruning and ordinary backfill cover the supported data-maintenance path. 
 workflows expose no targeted historical recollection. Their triggers exclude `merge_group`
 and enqueue/dequeue activity because the workflows are advisory.
 
-### Shared action migration
+### Reusable workflow ownership
 
-The job graphs and CI-only `gh-*` recipes are intermediate wiring for issue #284.
-Their migration targets in `folo-rs/cargo-bench-history-action` are:
+Folo delegates ordinary benchmark automation to `folo-rs/cargo-bench-history-action`:
 
 | Folo workflow | Shared reusable workflow |
 | --- | --- |
 | `bench-history.yml` | `.github/workflows/history.yml` |
 | `pr-bench-history.yml` | `.github/workflows/pr.yml` |
-| `bench-history-backfill.yml` | `.github/workflows/backfill.yml` |
 
-Once those reusable workflows are published, they own installation, collection and analysis
+These reusable workflows own installation, collection and analysis
 orchestration, receipt/artifact handoff, publication lifecycles and job coordination.
 Their root composite action supplies the individual tool commands. Folo retains its triggers,
 repository configuration, caller permissions/inputs and the fixed `bench-history-setup` hook,
 using source installation to exercise the monorepo tools.
-The CI-only recipes, companion-archive builder and helpers without other callers can then be
-removed. The initial root-action release alone does not provide the reusable-workflow layer.
+`bench-history-backfill.yml` remains repository-owned and consumes the shared collection policy.
 Manual Azure provisioning remains a separate maintainer operation through `setup-azure`.
 
 ## Reusable workflow canary
@@ -150,7 +147,13 @@ PR context, with publication disabled. Its standalone fixture writes determinist
 artifacts through the existing faker library, so the check exercises real Cargo collection
 without measuring wall-clock performance.
 
-The caller uses the existing test identity and storage account. Its preparation job creates
+The caller uses the existing test identity and storage account. A read-only configuration job
+exports their non-secret identifiers without signing in: Azure login masks the client ID,
+which prevents GitHub from exporting it as a job output. The separate storage job consumes
+those identifiers but exports none. Collection depends on both jobs and receives identifiers
+directly from configuration.
+
+The storage job creates
 the fixture's dedicated container through data-plane access; it does not provision Azure
 management resources or use production history. The shared Linux/Windows matrix stores
 measurements, transports receipts, reconciles platform evidence, analyzes the real frozen head
