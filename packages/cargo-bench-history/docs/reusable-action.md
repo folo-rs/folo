@@ -166,6 +166,13 @@ Every published release also carries **prebuilt, `cargo-binstall`-consumable bin
 [`../../../docs/release-automation.md`](../../../docs/release-automation.md)), so the action
 has both a from-source path and a download-a-binary fast path.
 
+The supported native collection targets are x64 Linux, x64 Windows and Apple Silicon macOS.
+The reusable workflows select Linux and Windows by default; callers add `macos-latest` through
+`platforms` when their benchmarks support it. The action manifest declares the supported
+runner/target pairs, each covered by source canaries and the required published-installation
+gate. The monorepo release process supplies their prebuilt archives. This support policy is
+independent of which platforms Folo selects for its own performance measurements.
+
 The action exposes an **`install-method`** input. **The chosen method applies
 to every binary the action needs**, not just the tool: the companion (§5.1), and any other
 `folo-rs/folo` binary a command depends on, are obtained the same way. A consumer who chose

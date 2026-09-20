@@ -23,7 +23,9 @@ private-api = true
 doc = false
 
 [dependencies]
-flate2 = { workspace = true, features = ["rust_backend"] }
+# Own checksum CPU dispatch independently of workspace feature unification.
+# Ref: docs/implementation.md.
+flate2 = { workspace = true, features = ["runtime_detection", "rust_backend"] }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }

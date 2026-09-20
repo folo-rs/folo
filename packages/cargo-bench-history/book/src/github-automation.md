@@ -10,9 +10,11 @@ to turn your workspace's benchmarks into GitHub reports:
   selects the benchmarks affected by a PR. It compares their results against the
   PR's base and maintains a report comment.
 
-Both workflows run on Linux and Windows and handle checkout, tool installation,
-collection, analysis and report publication. You add their caller files and connect
-shared storage.
+Both workflows handle checkout, tool installation, collection, analysis and report
+publication. Their default collection platforms are Linux and Windows. Apple Silicon
+macOS is also supported: add `platforms: ubuntu-latest,windows-latest,macos-latest` to
+each caller's `with:` block to include it. Your benchmarks and their dependencies
+must support the selected platforms. You add the caller files and connect shared storage.
 
 First, run `cargo bench --workspace --all-features` to check your benchmarks. If you
 are adding benchmarks, start with a [supported benchmark engine](concepts/engines.md).

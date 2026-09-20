@@ -144,8 +144,8 @@ The [automation guide](../github-automation.md) also gates PR jobs to
 fork work is skipped explicitly. Keep that gate, but do not treat an editable
 workflow condition as the authorization boundary.
 
-Fork benchmarking is unsupported until it can securely obtain federated access to
-the base repository's history. Stored credentials are not a substitute.
+Fork PRs therefore have no access to this Azure store. The reusable workflows
+provided by the GitHub automation do no work for fork PRs.
 
 ## Repeat deployments safely
 

@@ -37,21 +37,39 @@ target are exactly `required-checks`.
 
 ## Benchmark workflow artifacts
 
-Folo's history and PR workflows are thin callers of the reusable workflows in
-`folo-rs/cargo-bench-history-action`. A small read-only configuration job supplies the existing
-identity values and `Get-BenchHistoryCollectionPolicy` settings. The shared graph owns
-preparation, collection, combined analysis/publication and lifecycle work. Folo source mode
-builds the tools from one invocation snapshot rather than overriding individual tool versions.
+Folo delegates its ordinary benchmark job graphs to
+[`folo-rs/cargo-bench-history-action`](https://github.com/folo-rs/cargo-bench-history-action).
+A **reusable workflow** is a GitHub Actions workflow invoked by another workflow through
+a job-level `uses:` reference. The action repository provides the following shared workflows:
+
+| Folo caller | Reusable workflow in the action repository |
+| --- | --- |
+| `bench-history.yml` | `.github/workflows/history.yml` |
+| `pr-bench-history.yml` | `.github/workflows/pr.yml` |
+
+These shared workflows own preparation, collection, analysis, report artifacts and GitHub
+publication. Their jobs invoke the repository's root **composite action**, a bundle of steps
+used through a step-level `uses:` reference. It installs and invokes `cargo-bench-history`
+for measurements and analysis, and `cargo-bench-history-github` (the **companion**) for
+workflow evidence and GitHub issue/comment management.
+
+Folo's caller files retain triggers, permissions and repository configuration. A read-only
+configuration job supplies identity values and `Get-BenchHistoryCollectionPolicy` settings.
+Folo selects source installation, building the tools from the checkout that started the run
+rather than selecting individual tool versions.
 
 The fixed `bench-history-setup` hook selects Folo's ordinary cached setup environment with
 Valgrind enabled and exports its benchmark-stability compiler flags. Backfill consumes the
 same collection policy and flag helper. This keeps repository-specific setup and measurement
 choices outside the reusable workflow implementation.
 
-The reusable workflow's private adapter reuses its root action's installer and supplies the
-Rust preparation/evidence commands. `$/` action references resolve implementation code at the
-called workflow's own commit, independently of the measured checkout. Notification requires
-the companion; installation/bootstrap failure remains visible and has no second publisher.
+The shared workflows also use an internal composite action at
+`.github/actions/workflow-tools` in the action repository. It prepares the caller's checkouts,
+runs the fixed setup hook when needed, and installs the companion through the same installer
+as the root action. Consumers do not call or configure this internal action directly.
+The workflows' `$/` action references resolve both composites at the called workflow's own
+commit, independently of the measured checkout. Notification requires the companion;
+installation/bootstrap failure remains visible and has no second publisher.
 
 The companion turns the configured platform CSV into the matrix and collection job prefix.
 Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
@@ -123,29 +141,23 @@ Manual pruning and ordinary backfill cover the supported data-maintenance path. 
 workflows expose no targeted historical recollection. Their triggers exclude `merge_group`
 and enqueue/dequeue activity because the workflows are advisory.
 
-### Reusable workflow ownership
-
-Folo delegates ordinary benchmark automation to `folo-rs/cargo-bench-history-action`:
-
-| Folo workflow | Shared reusable workflow |
-| --- | --- |
-| `bench-history.yml` | `.github/workflows/history.yml` |
-| `pr-bench-history.yml` | `.github/workflows/pr.yml` |
-
-These reusable workflows own installation, collection and analysis
-orchestration, receipt/artifact handoff, publication lifecycles and job coordination.
-Their root composite action supplies the individual tool commands. Folo retains its triggers,
-repository configuration, caller permissions/inputs and the fixed `bench-history-setup` hook,
-using source installation to exercise the monorepo tools.
 `bench-history-backfill.yml` remains repository-owned and consumes the shared collection policy.
 Manual Azure provisioning remains a separate maintainer operation through `setup-azure`.
 
 ## Reusable workflow canary
 
-`benchmark-action-canary.yml` calls the candidate history workflow from the same-repository
-PR context, with publication disabled. Its standalone fixture writes deterministic Criterion
-artifacts through the existing faker library, so the check exercises real Cargo collection
-without measuring wall-clock performance.
+The reusable-workflow canary is a small end-to-end integration check. Its purpose is to catch
+failures at the boundaries that local tests cannot execute: calling a workflow in another
+repository, obtaining Azure credentials on hosted runners, passing receipts between jobs,
+and downloading the report exposed to the caller. It checks that the workflow and monorepo
+tools work together without requiring published tool versions or a full performance run.
+
+`benchmark-action-canary.yml` calls the action repository's `history.yml` at the immutable
+commit specified in its `uses:` reference, with tools built from the Folo checkout under test.
+On a pull request, it runs only when the source branch belongs to `folo-rs/folo`, not a fork.
+GitHub publication is disabled so the synthetic run does not create findings issues.
+Its standalone fixture writes deterministic Criterion artifacts through the existing faker
+library instead of measuring elapsed time.
 
 The caller uses the existing test identity and storage account. A read-only configuration job
 exports their non-secret identifiers without signing in: Azure login masks the client ID,
@@ -153,11 +165,11 @@ which prevents GitHub from exporting it as a job output. The separate storage jo
 those identifiers but exports none. Collection depends on both jobs and receives identifiers
 directly from configuration.
 
-The storage job creates
-the fixture's dedicated container through data-plane access; it does not provision Azure
-management resources or use production history. The shared Linux/Windows matrix stores
-measurements, transports receipts, reconciles platform evidence, analyzes the real frozen head
-and uploads reports. The final job downloads that artifact and checks the expected synthetic
+The storage job creates the fixture's dedicated container through data-plane access; it does
+not provision Azure management resources or use production history. The Linux, Windows and
+Apple Silicon macOS collection jobs store measurements and transport receipts. The analysis
+job reconciles platform evidence, analyzes the real frozen head and uploads reports.
+The final job downloads that artifact and checks the expected synthetic
 series and honest outcome/coverage outputs. Lack of a baseline is not mistaken for failure or
 asserted to be clean.
 

@@ -79,7 +79,7 @@ jobs:
 
   exercise:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@4e75ecdaf18aa30327382462de6a3f72abffac37
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@f0b1c5feda0bbabd31fa03b239967da39502140c
     permissions:
       contents: read
       actions: read
@@ -88,6 +88,9 @@ jobs:
     with:
       azure-client-id: ${{ needs.configuration.outputs.client-id }}
       azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # Cover the action's supported native runners independently of Folo's benchmark policy.
+      # Ref: implementation.md#reusable-workflow-canary.
+      platforms: ubuntu-latest,windows-latest,macos-latest
       install-method: path
       source-path: .
       working-directory: .github/fixtures/bench-history-caller
@@ -149,7 +152,10 @@ jobs:
           if ($report.mode -cne 'history' -or $report.outcome -cne $env:EXPECTED_OUTCOME) {
             throw 'The downloaded report does not match the reusable workflow outputs.'
           }
-          # Each maintained platform contributes the fixture's sole Criterion series.
-          if ($report.census.in_scope -ne 2) {
-            throw 'The report did not contain the synthetic measurements from both platforms.'
+          # Each supported native target contributes the fixture's sole Criterion series.
+          $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
+          $actualTargets = @($report.sets.target_triple | Sort-Object -Unique)
+          if ($report.census.in_scope -ne $expectedTargets.Count -or
+              ($actualTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
+            throw 'The report did not contain the synthetic measurements from every supported target.'
           }
