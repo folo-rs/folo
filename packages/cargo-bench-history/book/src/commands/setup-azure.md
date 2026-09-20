@@ -7,7 +7,8 @@ shared by collection, backfill and analysis. No checkout or benchmark configurat
 is needed to run the command.
 
 A **managed identity** is an Azure principal that receives access through role
-assignments. GitHub Actions authenticates as it using short-lived OpenID Connect
+assignments. A **federated credential** is a trust rule attached to that identity.
+It lets GitHub Actions authenticate as the identity using short-lived OpenID Connect
 (OIDC) tokens, without stored credentials. Azure checks the token's **subject**,
 which identifies the repository and branch or pull-request context.
 
@@ -119,6 +120,14 @@ a workflow running on `main` can backfill other commits. The PR subject
 authorizes the repository's pull-request event context, not just PRs targeting that
 branch. Neither subject restricts access to a particular workflow file or action.
 
+The credential named `bench-history-default` serves default-branch history
+collection; `--history-branch` explicitly selects its trusted branch. The credential
+named `bench-history-pull-request` trusts the PR context on the same managed identity.
+These names describe the credentials' roles, not additional OIDC restrictions.
+The identity is provisioned for benchmark storage, but Azure does not restrict it
+to bench-history code: any job in a trusted context with effective `id-token: write`
+can authenticate as it.
+
 The identity and any additional principal receive **Storage Blob Data Contributor
 on the entire storage account**, not just the configured history container. This
 permits reading, writing and deleting blobs and creating/deleting containers. Treat
@@ -155,6 +164,10 @@ remain. Omitting a principal does not revoke access.
 
 Federation is configuration, not an append-only list. Changing the repository or
 history branch updates the existing trust on the selected identity.
+If an existing identity has a matching issuer/subject under a different credential
+name, inspect and replace only that conflicting child before deployment. Preserve
+the identity, its role assignments and storage; setup does not remove unmentioned
+credential children.
 
 Serialize invocations targeting the same storage account or managed identity.
 Failures retain diagnostics, and completed Azure changes are not rolled back.

@@ -139,7 +139,7 @@ definition authority.
   grants remain. Granting another principal access does not remove earlier grants.
   Omission is not revocation and existing storage/history is not destroyed.
 - **Federation configuration:** changing the repository or branch updates the
-  selected identity's `bench-history-branch` and `bench-history-pull-request`
+  selected identity's `bench-history-default` and `bench-history-pull-request`
   credentials. The branch value changes the subject, not the resource name.
   The test identity may use the same child names because it is a separate parent.
 

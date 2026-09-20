@@ -98,7 +98,7 @@ boundary. Fork-owned workflows identify the fork repository and do not match it.
 Both deployment wrappers use the same `setup-azure` command. Account, group and
 managed-identity parameters provide isolation; separate templates or test modes are
 not needed. Each identity receives contributor access only to its selected account.
-Their credential children can both use `bench-history-branch` and
+Their credential children can both use `bench-history-default` and
 `bench-history-pull-request` because the parent identities are separate.
 
 Fresh and repeated deployments share the production preservation policy: existing

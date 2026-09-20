@@ -98,6 +98,12 @@ read/write/delete blobs and create/delete containers across the account, not onl
 the configured history container. An optional custom principal or current user
 receives the same role independently.
 
+A managed identity is an Azure principal, not a bench-history-specific identity type.
+This deployment provisions it for the history account. A **federated credential** is
+a trust rule attached to that identity: it allows a matching GitHub OIDC token to
+authenticate as the identity. Its resource name describes its purpose, not an
+additional access restriction.
+
 `GithubOrg`, `GithubRepo` and `HistoryBranch` configure:
 
 ```text
@@ -111,6 +117,11 @@ PR trust uses the repository's PR event context and is not limited to that targe
 branch. These subjects do not limit access to a particular workflow file or action.
 `HistoryBranch` controls which workflow runs may authenticate, not which branches'
 benchmark results may be stored or analyzed.
+The `bench-history-default` credential serves default-branch collection, while
+`HistoryBranch` explicitly selects the trusted branch. The
+`bench-history-pull-request` credential trusts the PR context on the same identity.
+Any job in a trusted context with effective `id-token: write` can use the identity;
+neither credential checks that the job runs bench-history code.
 See [GitHub's OIDC subject reference](https://docs.github.com/en/actions/reference/security/oidc#example-subject-claims).
 
 Under GitHub's default permissions, fork PR jobs cannot obtain `id-token: write`,
@@ -126,8 +137,7 @@ explicitly, not as a substitute for the platform's token-issuance restriction.
 Only grant `id-token: write` where needed. Code and actions running
 with the identity are trusted with its storage rights; GitHub issue/comment rights
 come separately from the job's `GITHUB_TOKEN`.
-Fork benchmarking remains unsupported without secure federated access to the base
-repository's history; stored credentials are not a substitute.
+Fork PRs have no access to this history store; the reusable workflows skip them.
 
 ## Deployment behavior
 
@@ -139,10 +149,13 @@ Deployment is incremental. Changing the custom principal adds a grant without
 removing earlier grants; omission does not revoke access. Unmentioned resources
 remain. Federation is configurable, not append-only: changing repository or
 history-branch inputs updates the selected identity's existing credentials.
-The child resources are named `bench-history-branch` and `bench-history-pull-request`;
+The child resources are named `bench-history-default` and `bench-history-pull-request`;
 their names do not depend on the branch value. Different parent identities can use
 the same child names. Use `ManagedIdentityName` and separate storage accounts to
 distinguish production and test deployments, rather than a credential-name suffix.
+Before deploying to an identity with differently named credentials, inspect any
+matching issuer/subject and replace only the conflicting credential child. Preserve
+the identity, role assignments and storage. Setup does not remove unmentioned children.
 Serialize invocations targeting the same storage account or managed identity
 in the selected subscription and resource group.
 

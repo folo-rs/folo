@@ -60,9 +60,9 @@ var federationAudience = 'api://AzureADTokenExchange'
 // skip unsupported fork work; the PR subject itself does not identify the head repository.
 var credentials = [
   {
-    // This stable resource key is independent of the configured history branch.
-    // Branch selection changes only the credential subject.
-    name: 'bench-history-branch'
+    // This credential serves default-branch history collection; historyBranch selects
+    // the actual trusted ref. Ref: README.md, "Security model".
+    name: 'bench-history-default'
     subject: 'repo:${githubOrg}/${githubRepo}:ref:refs/heads/${historyBranch}'
   }
   {

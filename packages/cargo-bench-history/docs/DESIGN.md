@@ -875,6 +875,10 @@ Newly created history storage is private and Entra-only. The deployment supplies
 identity with an account-scoped Storage Blob Data Contributor role assignment and federated
 identity credentials for the selected history branch and the repository's PR subject,
 supporting collection, backfill and analysis.
+A managed identity is a general Azure principal; this deployment dedicates one to the
+history account. Its federated credentials are trust rules on that principal, not separate
+identities. Their names identify the default-branch and PR roles. The branch credential
+still uses the explicitly configured history branch rather than discovering GitHub's default.
 Additional user or group access to the same role is independent. The role permits blob
 read/write/delete and container creation/deletion across the account, not only the configured
 history container. With default GitHub permissions, fork PR jobs cannot obtain effective
@@ -886,6 +890,8 @@ The documented caller workflows additionally skip unsupported fork work explicit
 Callers grant `id-token: write` to obtain OIDC tokens for eligible jobs. The trusted subjects name the
 repository and event/branch, not a particular workflow file or action. Provisioning
 OIDC trust requires no GitHub API access or stored credential.
+Any job in a trusted context with effective OIDC permission can use the identity; neither
+the credential names nor the subjects establish a bench-history-only software boundary.
 
 Repeated deployments preserve existing storage properties, history and previous additional grants.
 Changing the custom principal adds its grant without removing earlier grants; omission does
