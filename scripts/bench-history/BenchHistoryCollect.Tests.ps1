@@ -1,7 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Pester suite for BenchHistoryCollect.psm1. Proves append-only collection, scope selection
-# and native argument forwarding without a workflow run.
+# Proves Folo's shared collection policy, stability flags and retained backfill argument
+# selection without a workflow run.
 #
 # The nightly backfill's rolling date window is proven the same way: `git` is isolated behind the
 # module's Invoke-GitCapture boundary and mocked here in the module's scope, so the window resolution
@@ -76,92 +76,15 @@ Describe 'Get-BenchHistoryRustFlag' {
     }
 }
 
-Describe 'Get-BenchHistoryCollectCommand' {
-    Context 'separate automation and measured checkouts' {
-        It 'uses the automation configuration with the measured repository and preserves existing results' {
-            $result = Get-BenchHistoryCollectCommand -Package @('measured') `
-                -Repository "measured checkout's code" -ConfigPath 'automation config.toml'
-            $result | Should -Be @(
-                'collect', '--package', 'measured', '--all-features', '--best-of', '3', '--verbose'
-                '--repo', "measured checkout's code", '--config', 'automation config.toml'
-                '--skip-existing'
-            )
-        }
-
-        It 'rejects an explicitly empty measured repository' {
-            { Get-BenchHistoryCollectCommand -Package @('measured') -Repository ' ' } | Should -Throw
-        }
-    }
-
-    Context 'append-only collection' {
-        It 'collects the pushed commit without replacing stored objects' {
-            $result = Get-BenchHistoryCollectCommand
-            $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
-        }
-
-        It 'never overwrites or switches to historical collection' {
-            $result = Get-BenchHistoryCollectCommand
-            $result | Should -Not -Contain '--overwrite'
-            $result | Should -Not -Contain 'backfill'
-        }
-    }
-
-    Context 'package scoping (PR workflow)' {
-        It 'collects only retained packages after the PR delta filter' {
-            $packages = @(Select-BenchmarkablePackage -Package @(
-                    'excluded-m', 'retained-z', 'excluded-z', 'retained-a', 'excluded-a'))
-            $result = Get-BenchHistoryCollectCommand -Package $packages
-            $result | Should -Be @(
-                'collect',
-                '--package', 'retained-z',
-                '--package', 'retained-a',
-                '--all-features',
-                '--best-of', '3',
-                '--verbose',
-                '--skip-existing'
-            )
-        }
-
-        It 'scopes to the given packages with repeated --package instead of --workspace' {
-            $result = Get-BenchHistoryCollectCommand -Package @('nm', 'many_cpus')
-            $result | Should -Be @(
-                'collect',
-                '--package', 'nm',
-                '--package', 'many_cpus',
-                '--all-features',
-                '--best-of', '3',
-                '--verbose',
-                '--skip-existing'
-            )
-        }
-
-        It 'does not fall back to a whole-workspace scope when packages are given' {
-            $result = Get-BenchHistoryCollectCommand -Package @('nm')
-            $result | Should -Not -Contain '--workspace'
-            $result | Should -Not -Contain '--exclude'
-        }
-
-        It 'ignores blank entries in the package list' {
-            $result = Get-BenchHistoryCollectCommand -Package @('nm', '', '  ')
-            $result | Should -Be @(
-                'collect',
-                '--package', 'nm',
-                '--all-features',
-                '--best-of', '3',
-                '--verbose',
-                '--skip-existing'
-            )
-        }
-
-        It 'treats an all-blank package list as no scope (whole workspace)' {
-            $result = Get-BenchHistoryCollectCommand -Package @('', '  ')
-            $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
-        }
-
-        It 'enables all features so Cargo runs required-feature benchmark targets' {
-            $result = Get-BenchHistoryCollectCommand -Package 'nm_otel_impl'
-            $result | Should -Contain '--all-features'
-        }
+Describe 'Get-BenchHistoryCollectionPolicy' {
+    It 'returns isolated policy values for reusable callers' {
+        $policy = Get-BenchHistoryCollectionPolicy
+        $policy.ExcludedPackages | Should -Be @('excluded-z', 'excluded-a', 'excluded-m')
+        $policy.ExcludedPackages[0] = 'caller-modification'
+        $policy.BestOf = 99
+        $fresh = Get-BenchHistoryCollectionPolicy
+        $fresh.ExcludedPackages | Should -Be @('excluded-z', 'excluded-a', 'excluded-m')
+        $fresh.BestOf | Should -Not -Be $policy.BestOf
     }
 }
 
@@ -192,15 +115,15 @@ Describe 'Get-BenchHistoryBackfillCommand' {
             $result | Should -Not -Contain '--overwrite'
         }
 
-        It 'measures with exactly the scope the push-to-main collect uses' {
-            # A partially-scoped or lower-best-of commit would still count as recorded and never be
-            # revisited, so the two builders must emit an identical scope slice. Both are compared
-            # between their leading positionals and their distinct trailing flag.
-            $collect = Get-BenchHistoryCollectCommand
+        It 'measures with the policy supplied to the reusable callers' {
+            $policy = Get-BenchHistoryCollectionPolicy
+            $expected = @('--workspace')
+            foreach ($excluded in $policy.ExcludedPackages) { $expected += @('--exclude', $excluded) }
+            if ($policy.AllFeatures) { $expected += '--all-features' }
+            $expected += @('--best-of', [string] $policy.BestOf, '--verbose')
             $backfill = Get-BenchHistoryBackfillCommand
-            $collectScope = $collect[1..($collect.Count - 2)]
             $backfillScope = $backfill[3..($backfill.Count - 2)]
-            $backfillScope | Should -Be $collectScope
+            $backfillScope | Should -Be $expected
         }
 
         It 'quarantines the range end from the push-triggered collection' {
@@ -326,67 +249,30 @@ Describe 'Get-BenchHistoryBackfillCommand' {
     }
 }
 
-Describe 'Select-BenchmarkablePackage' {
-    It 'drops configured packages wherever they occur' {
-        Select-BenchmarkablePackage -Package @(
-            'excluded-a', 'retained-z', 'excluded-m', 'retained-a', 'excluded-z') |
-            Should -Be @('retained-z', 'retained-a')
-    }
-
-    It 'leaves no PR collection scope when only excluded packages changed' -ForEach @(
-        @{ Packages = @('excluded-z') }
-        @{ Packages = @('excluded-m') }
-        @{ Packages = @('excluded-a', 'excluded-z', 'excluded-m') }
-    ) {
-        @(Select-BenchmarkablePackage -Package $Packages).Count | Should -Be 0
-    }
-
-    It 'returns an empty array for an empty input' {
-        @(Select-BenchmarkablePackage -Package @()).Count | Should -Be 0
-    }
-
-    It 'preserves retained order and duplicates' {
-        Select-BenchmarkablePackage -Package @(
-            'retained-z', 'excluded-a', 'retained-a', 'retained-z') |
-            Should -Be @('retained-z', 'retained-a', 'retained-z')
-    }
-
-    It 'matches excluded names exactly and case-sensitively' {
-        Select-BenchmarkablePackage -Package @(
-            'Excluded-z', 'excluded-z-extra', 'prefix-excluded-z', 'excluded-z', 'retained') |
-            Should -BeExactly @('Excluded-z', 'excluded-z-extra', 'prefix-excluded-z', 'retained')
-    }
-}
-
 Describe 'Exclusion configuration' {
-    It 'honors <Name> exclusions in workspace and PR selection' -ForEach @(
+    It 'honors <Name> exclusions in shared policy and backfill' -ForEach @(
         @{
             Name = 'empty'
             Exclusions = @()
             WorkspaceArguments = @('--workspace')
-            Retained = @('alternate', 'excluded-z', 'retained')
         }
         @{
             Name = 'replacement'
             Exclusions = @('alternate')
             WorkspaceArguments = @('--workspace', '--exclude', 'alternate')
-            Retained = @('excluded-z', 'retained')
         }
     ) {
         InModuleScope BenchHistoryCollect -Parameters @{
             Exclusions = $Exclusions
             WorkspaceArguments = $WorkspaceArguments
-            Retained = $Retained
         } {
-            param($Exclusions, $WorkspaceArguments, $Retained)
+            param($Exclusions, $WorkspaceArguments)
             $previous = $script:ExcludedPackages
             try {
                 $script:ExcludedPackages = $Exclusions
-                Get-BenchHistoryCollectCommand | Should -Be (
-                    @('collect') + $WorkspaceArguments +
-                    @('--all-features', '--best-of', '3', '--verbose', '--skip-existing'))
-                Select-BenchmarkablePackage -Package @('alternate', 'excluded-z', 'retained') |
-                    Should -Be $Retained
+                (Get-BenchHistoryCollectionPolicy).ExcludedPackages | Should -Be $Exclusions
+                Get-BenchHistoryScopeArgument | Should -Be (
+                    $WorkspaceArguments + @('--all-features', '--best-of', '3', '--verbose'))
             } finally {
                 $script:ExcludedPackages = $previous
             }

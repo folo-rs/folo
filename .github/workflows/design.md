@@ -418,9 +418,12 @@ identity's client id and the tenant id — live in `constants.env` and are remap
 standard `AZURE_*` names by the shared federation helper. All production-history consumers
 select `AZURE_PROD_CLIENT_ID`; analysis does not need another identity.
 
-Azure-touching work is restricted to **same-repo** PRs by an explicit head-repository check.
-The `pull_request` subject does not encode whether the head comes from a fork, so subject
-matching and the absence of stored secrets do not replace that workflow gate.
+Azure-touching work selects **same-repo** PRs. Under GitHub's default fork permissions,
+GitHub removes the capability to request an OIDC token after evaluating workflow YAML;
+a fork cannot restore it by editing its permissions or selection predicates, and approving
+execution does not elevate that capability. The PR subject names the upstream repository
+when issued, so Azure subject matching is not itself a fork-head filter. Workflows running
+in the fork repository have a different repository identity and do not match this trust.
 
 One production identity serves history; disposable backend tests retain their own test identity:
 
@@ -500,7 +503,7 @@ minutes producing series no one reads.
 Every selected package is benchmarked with all Cargo features enabled. This makes Cargo include
 benchmark targets guarded by `required-features` and builds each selected package in its
 all-features configuration. The push, PR and nightly-backfill paths all obtain this
-feature selection from the same command builder, so a stored point is never made incomparable by
+feature selection from the same collection policy, so a stored point is never made incomparable by
 one path using narrower feature coverage.
 
 Unsuitable measurements are removed by a maintainer's manual `prune` invocation. A gap after
@@ -539,8 +542,9 @@ fits while complete results, including quiet or partial reports, remain accessib
 
 Benchmark preparation uses the fixed repository-local
 `.github/actions/bench-history-setup/action.yml` convention. Folo's hook wraps its ordinary
-setup action with the Valgrind requirement enabled, and collection/backfill jobs share that
-configuration. The combined analysis/publication job prepares its own environment.
+setup action with the Valgrind requirement enabled and exports the configured stability flags.
+Collection/backfill share those settings. The reusable workflows own tool installation and
+their remaining job preparation.
 
 Requirements for reusable workflows and their composite-action building blocks in the external
 `cargo-bench-history-action` repository, including optional setup-hook behavior, belong to the
@@ -605,8 +609,9 @@ to older PR heads. Benchmark execution and topology use a separate full checkout
 head; no measurement is stamped with the synthetic merge commit. The event's frozen head and
 base frame the comparison.
 
-Collection is **delta-scoped**: cargo-delta compares the measured head with its merge base,
-expands impacted packages to dependents, and the shared collection exclusions remove packages
+Collection is **impact-scoped**: the shared preparation command compares the measured head
+with its merge base, resolves package ownership and expands impacted packages to dependents.
+Every workspace package is a candidate. The shared collection exclusions remove packages
 that this workflow does not maintain. An empty scope routes directly to an explanatory
 comment, without collecting or requiring Azure configuration.
 
@@ -643,7 +648,7 @@ unverified freshness is qualified, and already-current newer results are preserv
 writers share one per-instance/per-PR concurrency group.
 
 Publication uses the companion's `publish-comment-<state>` family. Empty scope and successful
-but inconclusive reports use `no-data`, with the actual reason rather than a claim of zero
+but inconclusive reports use `inconclusive`, with the actual reason rather than a claim of zero
 measurements. Only complete clean evidence uses `clean`; partial findings remain `findings`.
 `publish-comment-failed` may run after failure or cancellation, but changes only the placeholder
 owned by that exact run, attempt and head; it never replaces real results or a newer placeholder.

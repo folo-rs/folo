@@ -5,366 +5,58 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Same-event runs at one commit deduplicate; push and manual runs stay separate.
-# Platform queues retain pushed tips. Surviving manual runs have independent collection lanes.
-# Ref: design.md#concurrency.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
-  cancel-in-progress: true
-
 permissions: {}
 
-env:
-  # Match the configured Folo project and its maintained benchmark platforms.
-  # Ref: design.md#benchmark-history.
-  CBH_INSTANCE: folo
-  CBH_PLATFORMS: ubuntu-latest,windows-latest
-
-# TODO(#284): Migrate this job graph to
-# folo-rs/cargo-bench-history-action/.github/workflows/history.yml when that reusable workflow
-# is published. Folo keeps its triggers, configuration and bench-history-setup hook.
 jobs:
-  prepare:
+  configuration:
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Includes a cold standard development-environment setup as well as the companion build.
-    timeout-minutes: 150
     permissions:
       contents: read
     outputs:
-      instance: ${{ steps.matrix.outputs.instance }}
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      expected-platforms: ${{ steps.matrix.outputs.expected-platforms }}
-      collection-job-prefix: ${{ steps.matrix.outputs.collection-job-prefix }}
+      client-id: ${{ steps.values.outputs.AZURE_CLIENT_ID }}
+      tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
+      exclude: ${{ steps.values.outputs.exclude }}
+      all-features: ${{ steps.values.outputs.all-features }}
+      best-of: ${{ steps.values.outputs.best-of }}
     steps:
-      - name: Checkout automation
-        uses: actions/checkout@v7
-      - name: Build companion
-        id: companion
-        uses: ./.github/actions/build-bench-history-companion
-      - name: Resolve collection matrix
-        id: matrix
-        shell: pwsh
-        env:
-          COMPANION: ${{ steps.companion.outputs.binary }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          & $env:COMPANION --instance $env:CBH_INSTANCE workflow-matrix --platforms $env:CBH_PLATFORMS --github-output $env:GITHUB_OUTPUT
-      - name: Upload companion
-        uses: actions/upload-artifact@v7
+      - uses: actions/checkout@v7
         with:
-          name: bench-history-companion-${{ env.CBH_INSTANCE }}
-          path: ${{ steps.companion.outputs.archive }}
-          if-no-files-found: error
-          overwrite: true
-      # No id-token permission: this validates non-secret configuration, not Azure access.
-      # Keep the executable available for failure notification even when configuration is missing.
-      # Ref: design.md#federated-identity; implementation.md#benchmark-workflow-artifacts.
-      - name: Validate production identity configuration
+          persist-credentials: false
+      # Folo owns its non-secret identity and measurement settings; the called workflow
+      # owns collection, receipts and publication. Ref: implementation.md#benchmark-workflow-artifacts.
+      - name: Read Folo configuration
+        id: values
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+          Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_OUTPUT | Out-Null
+          $policy = Get-BenchHistoryCollectionPolicy
+          @(
+            "exclude=$($policy.ExcludedPackages -join ',')"
+            "all-features=$($policy.AllFeatures.ToString().ToLowerInvariant())"
+            "best-of=$($policy.BestOf)"
+          ) | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
-  preflight:
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Every issue writer shares this instance group, including failure reporting below.
-    # Commit-order guards in the companion protect against out-of-order completed runs.
-    concurrency:
-      group: bench-history-issues-folo
-      cancel-in-progress: false
-      queue: max
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    outputs:
-      run-attempt: ${{ steps.preflight.outputs.run-attempt }}
-    steps:
-      - name: Download companion
-        uses: actions/download-artifact@v8
-        with:
-          name: bench-history-companion-${{ env.CBH_INSTANCE }}
-          path: ${{ runner.temp }}/cbh-tools
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-      - name: Mark previous history findings stale
-        id: preflight
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
-          tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          "run-attempt=$env:GITHUB_RUN_ATTEMPT" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
-          & (Join-Path $tools 'cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose publish-issue-preflight --head $env:HEAD_SHA --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT
-
-  collect:
-    needs: prepare
-    name: ${{ needs.prepare.outputs.collection-job-prefix }}:${{ matrix.platform }}
-    concurrency:
-      group: bench-history-collect-${{ github.event_name == 'push' && 'push-main' || github.run_id }}-${{ matrix.platform }}
-      cancel-in-progress: false
-      queue: max
-    strategy:
-      # Each platform is an independent partition; surviving legs remain useful.
-      # The receipt/job reconciliation below discloses exactly which legs contributed.
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
-    runs-on: ${{ matrix.platform }}
-    # Hosted-runner maximum: the shared best-of policy repeats a long benchmark suite.
-    timeout-minutes: 360
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout measured commit and automation
-        uses: actions/checkout@v7
-      - name: Prepare benchmark environment
-        uses: ./.github/actions/bench-history-setup
-      - name: Configure production Azure identity
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
-      - name: Collect benchmark history
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just gh-collect-bench-history
-      # A receipt exists only after collection and actual hardware-key capture succeed.
-      # Ref: implementation.md#benchmark-workflow-artifacts.
-      - name: Record successful collection
-        shell: pwsh
-        env:
-          HEAD_SHA: ${{ github.sha }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $directory = Join-Path $env:RUNNER_TEMP 'cbh-collection'
-          # Keep intermediate key files outside the collection artifact root.
-          $key = Join-Path $env:RUNNER_TEMP 'cbh-machine-key.txt'
-          just gh-write-bench-history-machine-key $key
-          cargo run -p cargo-bench-history-github --locked -- --instance $env:CBH_INSTANCE collection-receipt --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT --head $env:HEAD_SHA --platform $env:PLATFORM --machine-key-file $key --file (Join-Path $directory 'receipt.json')
-      - name: Upload collection receipt
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-history-collection-${{ env.CBH_INSTANCE }}-${{ matrix.platform }}
-          path: ${{ runner.temp }}/cbh-collection/receipt.json
-          if-no-files-found: error
-          overwrite: true
-
-  analyze:
-    name: Analyze and publish history
-    needs: [prepare, preflight, collect]
-    if: >-
-      !cancelled()
-      && needs.prepare.result == 'success'
-      && (needs.collect.result == 'success' || needs.collect.result == 'failure')
-    runs-on: ubuntu-latest
-    # Allows the full development environment's cold setup as well as history loading.
-    timeout-minutes: 150
-    # Publication shares the analysis job and its production identity. The issue lock also
-    # orders preflight and terminal annotations. Ref: design.md#benchmark-history.
-    concurrency:
-      group: bench-history-issues-folo
-      cancel-in-progress: false
-      queue: max
+  benchmark:
+    needs: configuration
+    # The reviewed implementation owns deduplication/queues; source mode tests the
+    # monorepo's pending tool implementation. Ref: implementation.md#benchmark-workflow-artifacts.
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@4e75ecdaf18aa30327382462de6a3f72abffac37
     permissions:
       contents: read
       actions: read
       id-token: write
       issues: write
-    steps:
-      - name: Checkout analysis context
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-      - name: Download companion
-        uses: actions/download-artifact@v8
-        with:
-          name: bench-history-companion-${{ env.CBH_INSTANCE }}
-          path: ${{ runner.temp }}/cbh-tools
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-      - name: Extract companion
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
-          tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-          "CBH_COMPANION=$(Join-Path $tools 'cargo-bench-history-github')" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
-      - name: Configure production Azure identity
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
-      - name: Restore benchmark history cache
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}/bench-history/cache
-          key: bench-history-cache-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            bench-history-cache-
-      # The REST artifact endpoint sees all attempts. Rust selects each platform's latest
-      # successful job/receipt pair, not an arbitrary old artifact after a failed retry.
-      - name: Download collection receipts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: bench-history-collection-${{ env.CBH_INSTANCE }}-*
-          path: ${{ runner.temp }}/bench-history/collections
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-      - name: Validate collection evidence
-        id: collection
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
-          EXPECTED_PLATFORMS: ${{ needs.prepare.outputs.expected-platforms }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $scratch = Join-Path $env:RUNNER_TEMP 'bench-history'
-          & $env:CBH_COMPANION --instance $env:CBH_INSTANCE --verbose prepare-analysis --run-id $env:GITHUB_RUN_ID --head $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --receipts-dir (Join-Path $scratch 'collections') --machine-key-dir (Join-Path $scratch 'keys') --github-output $env:GITHUB_OUTPUT
-      - name: Analyze history
-        shell: pwsh
-        env:
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $scratch = Join-Path $env:RUNNER_TEMP 'bench-history'
-          just gh-analyze-bench-history $scratch (Join-Path $scratch 'keys') $env:HEAD_SHA $env:HEAD_SHA
-      - name: Project validated publication decision
-        id: verdict
-        shell: pwsh
-        env:
-          HEAD_SHA: ${{ github.sha }}
-          EXPECTED_PLATFORMS: ${{ needs.prepare.outputs.expected-platforms }}
-          COMPLETED_PLATFORMS: ${{ steps.collection.outputs.completed-platforms }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $report = Join-Path $env:RUNNER_TEMP 'bench-history/report.json'
-          & $env:CBH_COMPANION --instance $env:CBH_INSTANCE inspect-report --report-file $report --analyzed-sha $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --github-output $env:GITHUB_OUTPUT
-      - name: Upload analysis bundle
-        id: reports
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-history-report-${{ env.CBH_INSTANCE }}
-          path: |
-            ${{ runner.temp }}/bench-history/report.md
-            ${{ runner.temp }}/bench-history/report.json
-            ${{ runner.temp }}/bench-history/summary.md
-          if-no-files-found: error
-          overwrite: true
-
-      # The companion projects and revalidates the state; the workflow only dispatches it.
-      # Reports stay local to this job, while their uploaded copy supplies the public link.
-      - name: Publish qualified history state
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
-          EXPECTED_PLATFORMS: ${{ needs.prepare.outputs.expected-platforms }}
-          COMPLETED_PLATFORMS: ${{ steps.collection.outputs.completed-platforms }}
-          REPORT_URL: ${{ steps.reports.outputs.artifact-url }}
-          PUBLICATION_STATE: ${{ steps.verdict.outputs.publication-state }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $report = Join-Path $env:RUNNER_TEMP 'bench-history'
-          & $env:CBH_COMPANION --instance $env:CBH_INSTANCE --verbose "publish-issue-$env:PUBLICATION_STATE" --run-id $env:GITHUB_RUN_ID --run-attempt $env:GITHUB_RUN_ATTEMPT --body-file (Join-Path $report 'summary.md') --report-file (Join-Path $report 'report.json') --analyzed-sha $env:HEAD_SHA --expected-platforms $env:EXPECTED_PLATFORMS --completed-platforms $env:COMPLETED_PLATFORMS --artifact-url $env:REPORT_URL
-
-  notify:
-    needs: [prepare, preflight, collect, analyze]
-    if: >-
-      always()
-      && github.repository == 'folo-rs/folo'
-      && github.ref == 'refs/heads/main'
-      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    concurrency:
-      group: bench-history-issues-folo
-      cancel-in-progress: false
-      queue: max
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      HEAD_SHA: ${{ github.sha }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      # Partial reruns can reuse a preflight from an earlier attempt; retire its exact owner.
-      OWNER_ATTEMPT: ${{ needs.preflight.outputs.run-attempt || github.run_attempt }}
-      CONCLUSION: ${{ contains(needs.*.result, 'failure') && 'failure' || 'cancelled' }}
-    steps:
-      - name: Download companion
-        uses: actions/download-artifact@v8
-        with:
-          name: bench-history-companion-${{ env.CBH_INSTANCE }}
-          path: ${{ runner.temp }}/cbh-tools
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-      - name: Extract companion
-        id: extract
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $tools = Join-Path $env:RUNNER_TEMP 'cbh-tools'
-          tar -xzf (Join-Path $tools 'bench-history-companion.tar.gz') -C $tools
-      - name: Publish automation failure
-        if: contains(needs.*.result, 'failure')
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose alert --run-id $env:GITHUB_RUN_ID --run-url $env:RUN_URL
-      - name: Retire this run's unfinished issue annotation
-        # A partially failed collect can still publish a useful report; do not mark it failed.
-        if: "always() && needs.analyze.result != 'success' && steps.extract.outcome == 'success'"
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          & (Join-Path $env:RUNNER_TEMP 'cbh-tools/cargo-bench-history-github') --instance $env:CBH_INSTANCE --verbose publish-issue-failed --head $env:HEAD_SHA --run-id $env:GITHUB_RUN_ID --run-attempt $env:OWNER_ATTEMPT --run-url $env:RUN_URL --conclusion $env:CONCLUSION
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      exclude: ${{ needs.configuration.outputs.exclude }}
+      all-features: ${{ fromJSON(needs.configuration.outputs.all-features) }}
+      best-of: ${{ fromJSON(needs.configuration.outputs.best-of) }}
+      install-method: path
+      source-path: .

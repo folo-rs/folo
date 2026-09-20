@@ -37,19 +37,21 @@ target are exactly `required-checks`.
 
 ## Benchmark workflow artifacts
 
-Collection and backfill use the fixed `bench-history-setup` local action. Folo's wrapper
-selects the shared setup environment with Valgrind enabled; it contains only that configuration.
-This keeps repository-specific preparation separate from tool installation and GitHub posting.
+Folo's history and PR workflows are thin callers of the reusable workflows in
+`folo-rs/cargo-bench-history-action`. A small read-only configuration job supplies the existing
+identity values and `Get-BenchHistoryCollectionPolicy` settings. The shared graph owns
+preparation, collection, combined analysis/publication and lifecycle work. Folo source mode
+builds the tools from one invocation snapshot rather than overriding individual tool versions.
 
-Benchmark automation has preparation, collection, combined analysis/publication and
-independently scheduled lifecycle work.
-Preparation uses the standard `setup-environment` action and its shared development-tool caches.
-It builds the Linux companion in Cargo's ordinary target directory, resolves the executable
-from Cargo's build output and archives its executable permissions. The combined job and
-lifecycle jobs reuse that run-scoped archive rather than independently rebuilding the companion.
-Notification depends on this executable and has no independent publisher. A failure to
-prepare or obtain the companion keeps the workflow visibly failed rather than claiming
-notification success; issue alerting is not guaranteed while the executable is unavailable.
+The fixed `bench-history-setup` hook selects Folo's ordinary cached setup environment with
+Valgrind enabled and exports its benchmark-stability compiler flags. Backfill consumes the
+same collection policy and flag helper. This keeps repository-specific setup and measurement
+choices outside the reusable workflow implementation.
+
+The reusable workflow's private adapter reuses its root action's installer and supplies the
+Rust preparation/evidence commands. `$/` action references resolve implementation code at the
+called workflow's own commit, independently of the measured checkout. Notification requires
+the companion; installation/bootstrap failure remains visible and has no second publisher.
 
 The companion turns the configured platform CSV into the matrix and collection job prefix.
 Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
@@ -69,9 +71,9 @@ of artifact reads; the same-repository workflow gate is independent of that capa
 The temporary machine-key file stays outside the uploaded collection root: its value is
 captured in the receipt rather than uploaded as a separate file.
 
-Automation and measured source are separate for PR runs. The workflow's merge checkout
-supplies current helpers, tool builds and configuration. The full real-head checkout under
-`benchmark-source` supplies Cargo scope, benchmark execution and git topology. Collection
+Automation and measured source are separate for PR runs. The invocation checkout supplies
+helpers, tool builds and configuration. A full real-head checkout supplies Cargo scope,
+benchmark execution and git topology. Collection
 passes its repository and the automation configuration explicitly; analysis passes that
 repository and the frozen event head/base. This preserves real commit attribution without
 requiring every open PR head to contain new automation files.
@@ -96,9 +98,9 @@ the companion's defined formats are not adopted. Titles, advisory wording and bo
 come from the companion's message catalogue rather than workflow parameters.
 
 Both sinks use `publish-<sink>-<state>` commands. A successful report selects findings, clean
-or no-data from validated evidence; scope preflight supplies explicit empty scope when no
+or inconclusive from validated evidence; scope preflight supplies explicit empty scope when no
 analysis is needed. Preflight and failed-state commands share run/attempt/head ownership,
-and failed publication never replaces a completed report. Issue no-data/failed annotations
+and failed publication never replaces a completed report. Issue inconclusive/failed annotations
 preserve the existing investigation rather than creating a status-only issue. The separate
 `alert` uses project/run identity, includes closed issues in deduplication and has no
 successful-run resolution job. Partial collection can publish qualified findings and alert
@@ -140,6 +142,25 @@ using source installation to exercise the monorepo tools.
 The CI-only recipes, companion-archive builder and helpers without other callers can then be
 removed. The initial root-action release alone does not provide the reusable-workflow layer.
 Manual Azure provisioning remains a separate maintainer operation through `setup-azure`.
+
+## Reusable workflow canary
+
+`benchmark-action-canary.yml` calls the candidate history workflow from the same-repository
+PR context, with publication disabled. Its standalone fixture writes deterministic Criterion
+artifacts through the existing faker library, so the check exercises real Cargo collection
+without measuring wall-clock performance.
+
+The caller uses the existing test identity and storage account. Its preparation job creates
+the fixture's dedicated container through data-plane access; it does not provision Azure
+management resources or use production history. The shared Linux/Windows matrix stores
+measurements, transports receipts, reconciles platform evidence, analyzes the real frozen head
+and uploads reports. The final job downloads that artifact and checks the expected synthetic
+series and honest outcome/coverage outputs. Lack of a baseline is not mistaken for failure or
+asserted to be clean.
+
+Invalid input, failed collection, stale attempts and lifecycle mutation cases remain covered
+by the companion's mock/native suites and the action adapter tests. A successful synthetic
+source caller does not satisfy the action repository's exact published-installation gate.
 
 ## Standard validation structure
 

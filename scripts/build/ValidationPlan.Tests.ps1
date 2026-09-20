@@ -43,7 +43,6 @@ Describe 'Non-Cargo change domains' {
         @{ Path = 'packages/cargo-bench-history/src/azure_bundle/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/src/azure_bundle/AzureDeployment.psm1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
         @{ Path = 'packages/cargo-bench-history/tests/fixtures/setup-azure.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
-        @{ Path = '.github/actions/build-bench-history-companion/action.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/actions/bench-history-setup/action.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/workflows/bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/workflows/pr-bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },

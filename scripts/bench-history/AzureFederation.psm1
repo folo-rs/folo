@@ -51,7 +51,7 @@ function Get-RequiredConstant {
 
     $value = $Values[$Name]
     if ([string]::IsNullOrWhiteSpace($value)) {
-        throw "constants.env is missing a non-empty '$Name' (required for Azure federation)."
+        throw "constants.env is missing a non-empty '$Name'."
     }
     return $value
 }

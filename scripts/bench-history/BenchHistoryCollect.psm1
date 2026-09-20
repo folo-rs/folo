@@ -1,22 +1,9 @@
 #requires -Version 7
 
-# Argument selection for the benchmark-history collection steps: the push-to-main workflow
-# (.github/workflows/bench-history.yml, via the gh-collect-bench-history recipe), the per-PR
-# workflow (.github/workflows/pr-bench-history.yml, via gh-collect-pr-bench-history) and the nightly
-# gap-filling workflow (.github/workflows/bench-history-backfill.yml, via
-# gh-backfill-bench-history).
-#
-# Collection appends the pushed commit with `collect --skip-existing`, so a re-triggered run
-# leaves stored objects unchanged. Manual pruning and ordinary backfill cover data maintenance;
-# no targeted repair workflow is needed. Ref: .github/workflows/design.md#benchmark-history.
-#
-# With no explicit package list the whole workspace is
-# benched except the excluded packages (the push-to-main default); the PR workflow
-# instead passes the delta-affected packages so it benches only what the PR impacts. Every selected
-# package is benched with all Cargo features enabled, so Cargo includes targets guarded by
-# `required-features` and builds each package in its all-features configuration.
-# Select-BenchmarkablePackage is the shared helper that drops exclusions from a delta-affected set
-# before both the scope decision and the "is there anything to bench at all" gate.
+# Folo's collection policy feeds the reusable history/PR callers and the repository's nightly
+# backfill recipe. This module also owns Folo's stable compiler flags and backfill date window;
+# generic affected-package, artifact and publication decisions belong to the shared Rust tool.
+# Ref: .github/workflows/design.md#benchmark-history.
 #
 # The nightly backfill (Get-BenchHistoryBackfillCommand) fills gaps in the series belonging to
 # whichever machine key the nightly runner draws: the GitHub-hosted runner pool is heterogeneous, so
@@ -24,7 +11,7 @@
 # a rolling date window - from the newest first-parent commit at least 24 hours old back to the
 # oldest first-parent commit newer than 14 days - and relies on the tool's default skip-existing
 # behaviour to measure only the commits this runner's partition is missing. Its scope flags come
-# from the same helper the collect builders use, because a backfilled point must be measured exactly
+# from the same policy the reusable callers use, because a backfilled point must be measured exactly
 # like a pushed one to be comparable to it.
 
 Set-StrictMode -Version Latest
@@ -39,6 +26,20 @@ $PSNativeCommandUseErrorActionPreference = $true
 # series when absent at the context commit; no stored measurements need to be deleted or blessed.
 # Ref: .github/workflows/design.md#benchmark-history.
 $script:ExcludedPackages = @('benchmarks', 'infinity_pool')
+
+function Get-BenchHistoryCollectionPolicy {
+    # Shared caller/backfill settings keep measurements comparable across workflow entry points.
+    # Repetitions retain per-metric minima to reduce one-sided hosted-runner noise.
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    return @{
+        ExcludedPackages = @($script:ExcludedPackages)
+        AllFeatures = $true
+        BestOf = 3
+    }
+}
 
 # Backfill accepts full or abbreviated hexadecimal commit IDs, not arbitrary revision expressions.
 # Validate explicit range inputs before an expensive benchmark run. The same constraint rejects
@@ -59,43 +60,18 @@ $script:CommitIdPattern = '^[0-9a-fA-F]{7,40}$'
 $script:BackfillQuarantine = '24 hours ago'
 $script:BackfillHorizon = '14 days ago'
 
-function Select-BenchmarkablePackage {
-    # Filters a delta-affected package list down to the ones the benchmark-history workflow actually
-    # collects, i.e. everything except the excluded packages. The PR workflow's `delta`
-    # job feeds the result into Get-DeltaOutput, so an empty result is what makes the workflow treat
-    # "only non-benchmarkable packages changed" as "nothing to bench" (skip collection, clean up any
-    # stale comment). Order-preserving; a case-sensitive match, matching how `cargo`/the tool treat
-    # package names. Pure, so the filtering is unit-tested independently of the delta orchestration.
-    [CmdletBinding()]
-    [OutputType([string[]])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        [string[]] $Package
-    )
-
-    return @($Package | Where-Object { $_ -cnotin $script:ExcludedPackages })
-}
-
 function Get-BenchHistoryScopeArgument {
-    # Builds the scope + feature-selection + noise-reduction flags EVERY benchmark-history run
-    # shares, so a `collect` and a `backfill` can never measure the same commit differently.
-    # `collect` and `backfill` flatten the same clap arg groups, so this array applies verbatim to
-    # either subcommand.
-    #
-    # $Package selects the collection scope. When empty (the push-to-main and nightly-backfill
-    # default), the whole workspace is benched except the excluded packages (`--workspace` with
-    # repeated `--exclude`). When non-empty (the PR workflow, which passes the delta-affected
-    # packages), the run is scoped to exactly those packages (`--package <name>` each); the caller is
-    # expected to have already applied Select-BenchmarkablePackage.
+    # Encodes backfill's scope and measurement flags from the policy supplied to reusable callers.
+    # An optional explicit package list narrows this invocation; otherwise it uses workspace
+    # collection with the shared exclusions.
     #
     # `--all-features` ensures Cargo runs benchmark targets guarded by `required-features` and
     # compiles feature-gated code paths into every selected package's benchmarks.
     #
     # Each runner stamps its results with its OWN real hardware fingerprint, so a heterogeneous
     # GitHub runner pool splits into one clean wall-clock series per hardware type instead of one
-    # jittery series mixing incomparable machines. `--best-of 3` keeps each metric's minimum across
-    # three runs to shed one-sided runner jitter - a point taken at a lower best-of would sit
+    # jittery series mixing incomparable machines. The shared repetition policy retains minima
+    # to shed one-sided runner jitter - a point taken at a lower best-of would sit
     # systematically higher than its neighbours and manufacture a step change in the series.
     # `--verbose` makes the log spell out the resolved machine key and the fingerprint components
     # behind it, so a key change is debuggable from the log alone.
@@ -108,64 +84,26 @@ function Get-BenchHistoryScopeArgument {
         [string[]] $Package
     )
 
+    $policy = Get-BenchHistoryCollectionPolicy
     $packages = @($Package | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($packages.Count -gt 0) {
-        # Explicit package scoping (PR workflow): one `--package <name>` per impacted crate.
+        # Explicit backfill scoping retains the caller's selected package order.
         $selection = @()
         foreach ($name in $packages) { $selection += @('--package', $name) }
-        Write-Verbose ("Scoping collection to the delta-affected packages: " +
+        Write-Verbose ("Scoping backfill to the explicitly selected packages: " +
             ($packages -join ', ') + '.')
     } else {
         $selection = @('--workspace')
-        foreach ($name in $script:ExcludedPackages) { $selection += @('--exclude', $name) }
+        foreach ($name in $policy.ExcludedPackages) { $selection += @('--exclude', $name) }
         Write-Verbose ("No explicit package scope: benching the whole workspace except the " +
             'excluded packages: ' + ($script:ExcludedPackages -join ', ') + '.')
     }
 
+    if ($policy.AllFeatures) { $selection += '--all-features' }
     return $selection + @(
-        '--all-features',
-        '--best-of', '3',
+        '--best-of', [string] $policy.BestOf,
         '--verbose'
     )
-}
-
-function Get-BenchHistoryCollectCommand {
-    # Builds the append-only collection argument vector passed to the tool after `--`.
-    # Native argument passing preserves repository/configuration paths as data.
-    #
-    # $Package selects the collection scope and is handed to Get-BenchHistoryScopeArgument. An empty
-    # scope is not an error here: the PR workflow structurally never reaches collection with an empty
-    # benchmarkable set (its `delta` job gates that case out to the cleanup path), so the only caller
-    # that passes no packages is the push-to-main path, which wants exactly the whole-workspace
-    # default.
-    [CmdletBinding()]
-    [OutputType([string[]])]
-    param(
-        [Parameter()]
-        [AllowNull()]
-        [AllowEmptyCollection()]
-        [string[]] $Package,
-
-        [AllowNull()][AllowEmptyString()][string] $Repository,
-        [AllowNull()][AllowEmptyString()][string] $ConfigPath
-    )
-
-    $scope = Get-BenchHistoryScopeArgument -Package $Package
-    foreach ($binding in @(
-            @{ Parameter = 'Repository'; Flag = '--repo'; Value = $Repository }
-            @{ Parameter = 'ConfigPath'; Flag = '--config'; Value = $ConfigPath }
-        )) {
-        if ($PSBoundParameters.ContainsKey($binding.Parameter)) {
-            if ([string]::IsNullOrWhiteSpace($binding.Value)) {
-                throw "An explicit $($binding.Parameter) must not be empty."
-            }
-            $scope += @($binding.Flag, $binding.Value)
-        }
-    }
-
-    Write-Verbose ('Appending with `collect --skip-existing`, so an already-stored object ' +
-        'is left untouched rather than rewritten.')
-    return @('collect') + $scope + @('--skip-existing')
 }
 
 function Get-BenchHistoryRustFlag {
@@ -327,4 +265,4 @@ function Get-BenchHistoryBackfillCommand {
         @('--ignore-errors')
 }
 
-Export-ModuleMember -Function Get-BenchHistoryCollectCommand, Get-BenchHistoryBackfillCommand, Select-BenchmarkablePackage, Get-BenchHistoryRustFlag
+Export-ModuleMember -Function Get-BenchHistoryCollectionPolicy, Get-BenchHistoryBackfillCommand, Get-BenchHistoryRustFlag
