@@ -216,3 +216,17 @@ install-tools:
     # validation job runs it), so it is installed on every platform with no CI skip. No-op when the
     # pinned actionlint is already present.
     & "{{justfile_directory()}}/scripts/setup/install-actionlint.ps1"
+
+    # Use the same pinned compiler/type catalog as the offline Bicep validation gate.
+    # Ref: docs/build-and-tooling.md#bicep-validation.
+    just install-bicep
+
+[group('setup')]
+[script]
+install-bicep:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/build/Bicep.psm1 -Force
+    Install-FoloBicep -Version $env:BICEP_VERSION

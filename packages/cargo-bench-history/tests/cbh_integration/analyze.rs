@@ -1,3 +1,5 @@
+use cargo_bench_history::AnalysisOutcome;
+
 use crate::harness::*;
 
 /// An empty history analyzes cleanly and states that it tested nothing.
@@ -291,10 +293,10 @@ async fn analyze_markdown_output_renders_blocks() {
     assert!(report.contains("via change point"), "{report}");
 }
 
-/// Markdown and JSON files can be rendered from one analysis pass while text is suppressed.
+/// Every requested file can be rendered from one analysis pass while text is suppressed.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_writes_markdown_and_json_from_one_suppressed_text_pass() {
+async fn analyze_writes_reports_and_outcome_from_one_suppressed_text_pass() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
 
@@ -306,18 +308,26 @@ async fn analyze_writes_markdown_and_json_from_one_suppressed_text_pass() {
             "report.md",
             "--json",
             "report.json",
+            "--outcome",
+            "outcome.txt",
         ])
         .await
         .unwrap();
-    let RunOutcome::Analyzed { report, .. } = outcome else {
+    let RunOutcome::Analyzed {
+        report, outcome, ..
+    } = outcome
+    else {
         panic!("expected an analyzed outcome, got {outcome:?}");
     };
     assert!(report.is_empty(), "{report}");
+    assert_eq!(outcome, AnalysisOutcome::Findings);
 
     let markdown = workspace.read("report.md");
     let json = workspace.read("report.json");
+    let outcome = workspace.read("outcome.txt");
     assert!(markdown.is_some(), "the Markdown report should be written");
     assert!(json.is_some(), "the JSON report should be written");
+    assert_eq!(outcome.as_deref(), Some("findings"));
 
     let markdown = markdown.unwrap();
     assert!(
@@ -327,6 +337,7 @@ async fn analyze_writes_markdown_and_json_from_one_suppressed_text_pass() {
     let json = json.unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["project"], "testproj");
+    assert_eq!(parsed["outcome"], "findings");
 }
 
 /// `--markdown-summary <path>` renders a flat, ungrouped condensed report that omits
@@ -1546,9 +1557,11 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let workspace = Workspace::repo(&storage_only_config());
     // Master carries a clean sustained regression.
     workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 130.0);
-    // A feature branch with an unrelated dirty improvement that master must ignore.
+    // The same store holds clean PR measurements and dirty snapshots; neither may
+    // enter the trunk's comparison merely because it shares the storage backend.
     workspace.checkout_new_branch("feature");
     workspace.commit_dated("2024-02-01", "f1");
+    workspace.seed_callgrind("f1", 10.0);
     workspace.seed_dirty_callgrind("2024-02-01", "f1", 10.0);
 
     let report = workspace
@@ -1557,8 +1570,9 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
-        "the master regression is selected, the feature snapshot ignored: {report}"
+        "the master regression is selected, the feature measurements ignored: {report}"
     );
+    assert_eq!(parsed["runs"], u64::try_from(MIN_SERIES_POINTS).unwrap());
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 

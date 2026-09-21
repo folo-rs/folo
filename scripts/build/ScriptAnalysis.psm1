@@ -1,6 +1,7 @@
 #requires -Version 7
 # Runs the native PowerShell analyzer for validate-scripts without changing its rule set or exit
 # semantics. Native error/verbose streams retain the file/rule context of hosted engine failures.
+# Includes the shipped Azure deployment driver as well as repository automation.
 # Ref: ../../docs/build-and-tooling.md#powershell-linting.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -17,6 +18,18 @@ function Invoke-WorkspaceScriptAnalysis {
     $directory = Join-Path $DiagnosticsDirectory ([guid]::NewGuid().ToString('N'))
     $null = New-Item -ItemType Directory -Path $directory -Force
     $trace = Join-Path $directory analyzer-verbose.log
+    $paths = @((Join-Path $RepositoryRoot scripts))
+    # The source wrapper, canonical driver and native fixture are executable PowerShell too;
+    # none loses analysis by living outside scripts/.
+    foreach ($relativePath in @(
+            'infra\azure-bench-history-prod',
+            'infra\azure-bench-history-test',
+            'packages\cargo-bench-history\src\azure_bundle',
+            'packages\cargo-bench-history\tests\fixtures'
+        )) {
+        $candidate = Join-Path $RepositoryRoot $relativePath
+        if (Test-Path -LiteralPath $candidate -PathType Container) { $paths += $candidate }
+    }
     @{
         powershell = $PSVersionTable.PSVersion.ToString()
         edition = $PSVersionTable.PSEdition; platform = [Environment]::OSVersion.ToString()
@@ -24,6 +37,7 @@ function Invoke-WorkspaceScriptAnalysis {
         analyzer = @((Get-Module PSScriptAnalyzer) | Select-Object Name, Version, Path)
         pester = @((Get-Module Pester -ListAvailable) | Select-Object Name, Version, Path)
         module_path = $env:PSModulePath; repository = $RepositoryRoot
+        script_paths = $paths
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $directory environment.json)
     try {
         $customRules = Join-Path $RepositoryRoot 'scripts\analyzer\FoloAnalyzerRules.psm1'
@@ -47,9 +61,11 @@ function Invoke-WorkspaceScriptAnalysis {
             # they are all excluded. Load the custom module only for its own passes.
             $customArguments = @{}
             if ($name -in $customNames) { $customArguments.CustomRulePath = $customRules }
-            Invoke-ScriptAnalyzer -Path (Join-Path $RepositoryRoot scripts) -Recurse `
-                -Settings (Join-Path $RepositoryRoot PSScriptAnalyzerSettings.psd1) `
-                -IncludeDefaultRules -ExcludeRule $peers @customArguments -Verbose 4>> $trace
+            foreach ($path in $paths) {
+                Invoke-ScriptAnalyzer -Path $path -Recurse `
+                    -Settings (Join-Path $RepositoryRoot PSScriptAnalyzerSettings.psd1) `
+                    -IncludeDefaultRules -ExcludeRule $peers @customArguments -Verbose 4>> $trace
+            }
         })
     } catch [System.Management.Automation.RuntimeException], [System.NullReferenceException] {
         # Preserve the original failure. The normal formatter omits managed/inner stacks,
@@ -75,7 +91,7 @@ function Invoke-WorkspaceScriptAnalysis {
         $noun = if ($results.Count -eq 1) { 'issue' } else { 'issues' }
         throw "PSScriptAnalyzer reported $($results.Count) $noun. Fix the findings; no rule was skipped."
     }
-    Write-Host "PSScriptAnalyzer: no issues in scripts/. Diagnostics: $directory"
+    Write-Host "PSScriptAnalyzer: no issues in the configured script inputs. Diagnostics: $directory"
 }
 
 Export-ModuleMember -Function Invoke-WorkspaceScriptAnalysis

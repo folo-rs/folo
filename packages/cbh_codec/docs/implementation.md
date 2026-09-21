@@ -10,6 +10,12 @@ The crate owns deterministic gzip encoding and validation of encoded object byte
 storage backend or object-key policy; `cbh_storage` applies the codec at its persistence boundary,
 and non-production data producers use the same encoding implementation.
 
+The codec explicitly enables the pure-Rust backend and runtime CPU-feature detection in
+`flate2`. Runtime detection lets checksum verification use the running processor's accelerated
+CRC implementation while keeping builds portable. These capabilities belong to the codec's
+own dependency declaration so isolated builds and package-selected benchmarks do not depend on
+feature unification with HTTP or storage consumers.
+
 Malformed encoded bytes produce `io::Error`. The storage adapter that knows the object and
 operation adds semantic context under the workspace
 [error-handling guide](../../../docs/error-handling.md).

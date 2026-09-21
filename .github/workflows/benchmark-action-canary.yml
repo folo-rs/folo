@@ -1,0 +1,161 @@
+name: Benchmark action caller canary
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/benchmark-action-canary.yml
+      - .github/fixtures/bench-history-caller/**
+      - packages/cargo-bench-history-github/**
+      - packages/cargo-detect-package/**
+      - packages/cargo-bench-history-faker/**
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  configuration:
+    # Export identifiers without Azure login: its masking prevents cross-job client-ID outputs.
+    # Ref: implementation.md#reusable-workflow-canary.
+    if: >-
+      github.repository == 'folo-rs/folo'
+      && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+          || (github.event_name == 'pull_request'
+              && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      client-id: ${{ steps.values.outputs.AZURE_TEST_CLIENT_ID }}
+      tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
+      subscription-id: ${{ steps.values.outputs.AZURE_SUBSCRIPTION_ID }}
+      account: ${{ steps.values.outputs.BENCH_HISTORY_TEST_AZURE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Load test identity and account
+        id: values
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          $values = Read-DotEnvFile -Path constants.env
+          foreach ($name in @('AZURE_TEST_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'BENCH_HISTORY_TEST_AZURE_ACCOUNT')) {
+            $value = Get-RequiredConstant -Values $values -Name $name
+            "$name=$value" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          }
+
+  storage:
+    # This is a real data-plane canary using the separate test identity, never production
+    # history or Azure management provisioning. Ref: implementation.md#reusable-workflow-canary.
+    needs: configuration
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Sign in with the test identity
+        uses: azure/login@v3
+        with:
+          client-id: ${{ needs.configuration.outputs.client-id }}
+          tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+          subscription-id: ${{ needs.configuration.outputs.subscription-id }}
+      - name: Ensure the dedicated synthetic-data container exists
+        shell: pwsh
+        env:
+          BENCH_HISTORY_TEST_AZURE_ACCOUNT: ${{ needs.configuration.outputs.account }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # The fixture configuration owns this isolated test-data destination. Fail on
+          # configuration drift rather than creating a container in the wrong account.
+          if ($env:BENCH_HISTORY_TEST_AZURE_ACCOUNT -cne 'folovalidate') {
+            throw 'Update the caller fixture storage configuration to match the test account.'
+          }
+          az storage container create --auth-mode login --account-name $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT --name bench-history-caller-canary --only-show-errors --output none
+
+  exercise:
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@f0b1c5feda0bbabd31fa03b239967da39502140c
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      issues: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # Cover the action's supported native runners independently of Folo's benchmark policy.
+      # Ref: implementation.md#reusable-workflow-canary.
+      platforms: ubuntu-latest,windows-latest,macos-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      bench: synthetic
+      best-of: 1
+      publish: false
+
+  verify:
+    needs: exercise
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Verify the completed caller contract
+        shell: pwsh
+        env:
+          OUTCOME: ${{ needs.exercise.outputs.outcome }}
+          STATE: ${{ needs.exercise.outputs.publication-state }}
+          NOTABLE: ${{ needs.exercise.outputs.notable }}
+          REGRESSIONS: ${{ needs.exercise.outputs.regressions }}
+          PARTIAL: ${{ needs.exercise.outputs.partial-platform-coverage }}
+          ARTIFACT_ID: ${{ needs.exercise.outputs.report-artifact-id }}
+          ARTIFACT_URL: ${{ needs.exercise.outputs.report-artifact-url }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:OUTCOME -cnotin @('clean', 'insufficient_baseline', 'partial')) {
+            throw "Unexpected synthetic analysis outcome '$env:OUTCOME'."
+          }
+          if ($env:STATE -cnotin @('clean', 'inconclusive') -or
+              $env:NOTABLE -cne 'false' -or $env:REGRESSIONS -cne '0' -or $env:PARTIAL -cne 'false') {
+            throw 'The deterministic matrix did not produce a complete, non-regressing report.'
+          }
+          if ($env:ARTIFACT_ID -notmatch '^[1-9][0-9]*$' -or
+              [string]::IsNullOrWhiteSpace($env:ARTIFACT_URL)) {
+            throw 'The reusable workflow did not expose its uploaded report artifact.'
+          }
+      - name: Download the emitted report bundle
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.exercise.outputs.report-artifact-id }}
+          path: ${{ runner.temp }}/caller-report
+          github-token: ${{ github.token }}
+      - name: Verify actual report files
+        shell: pwsh
+        env:
+          REPORT_DIRECTORY: ${{ runner.temp }}/caller-report
+          EXPECTED_OUTCOME: ${{ needs.exercise.outputs.outcome }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($name in @('report.md', 'report.json', 'summary.md')) {
+            $content = Get-Content -LiteralPath (Join-Path $env:REPORT_DIRECTORY $name) -Raw
+            if ([string]::IsNullOrWhiteSpace($content)) { throw "Empty report file '$name'." }
+          }
+          $report = Get-Content -LiteralPath (Join-Path $env:REPORT_DIRECTORY 'report.json') -Raw | ConvertFrom-Json
+          if ($report.mode -cne 'history' -or $report.outcome -cne $env:EXPECTED_OUTCOME) {
+            throw 'The downloaded report does not match the reusable workflow outputs.'
+          }
+          # Each supported native target contributes the fixture's sole Criterion series.
+          $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
+          $actualTargets = @($report.sets.target_triple | Sort-Object -Unique)
+          if ($report.census.in_scope -ne $expectedTargets.Count -or
+              ($actualTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
+            throw 'The report did not contain the synthetic measurements from every supported target.'
+          }

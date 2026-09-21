@@ -2,6 +2,9 @@
 
 This chapter covers conventions for working with git and GitHub pull requests.
 
+For repository-specific benchmark-action coordination, see
+[paired PR presentation](benchmark-action-releases.md#paired-pr-presentation).
+
 ## Creating GitHub pull requests
 
 When creating PRs with `gh pr create`, do not pass the `--body` flag with an
@@ -59,8 +62,7 @@ See [release-versioning.md](release-versioning.md).
 ### Version/release plan section
 
 Every pull request description must contain a clearly identified
-**Version/release plan** section. Keep `[Copilot speaking]` first in an
-agent-authored body, before any section.
+**Version/release plan** section.
 
 Base the section on the final expanded plan and current release evidence, not
 just the packages directly edited. Use one row per version group and per

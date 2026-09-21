@@ -29,20 +29,20 @@ azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.13", path = "packages/cargo-freeze-deps", default-features = false }
 cargo-release-plan = { version = "0.3.17", path = "packages/cargo-release-plan", default-features = false }
-cbh_analyze = { version = "=0.2.13", path = "packages/cbh_analyze", default-features = false }
-cbh_cli = { version = "=0.2.13", path = "packages/cbh_cli", default-features = false }
-cbh_codec = { version = "=0.2.13", path = "packages/cbh_codec", default-features = false }
-cbh_command = { version = "=0.2.13", path = "packages/cbh_command", default-features = false }
-cbh_config = { version = "=0.2.13", path = "packages/cbh_config", default-features = false }
-cbh_detect = { version = "=0.2.13", path = "packages/cbh_detect", default-features = false }
-cbh_diag = { version = "=0.2.13", path = "packages/cbh_diag", default-features = false }
-cbh_engines = { version = "=0.2.13", path = "packages/cbh_engines", default-features = false }
-cbh_git = { version = "=0.2.13", path = "packages/cbh_git", default-features = false }
-cbh_model = { version = "=0.2.13", path = "packages/cbh_model", default-features = false }
-cbh_probe = { version = "=0.2.13", path = "packages/cbh_probe", default-features = false }
-cbh_render = { version = "=0.2.13", path = "packages/cbh_render", default-features = false }
-cbh_stats = { version = "=0.2.13", path = "packages/cbh_stats", default-features = false }
-cbh_storage = { version = "=0.2.13", path = "packages/cbh_storage", default-features = false }
+cbh_analyze = { version = "=0.2.14", path = "packages/cbh_analyze", default-features = false }
+cbh_cli = { version = "=0.2.14", path = "packages/cbh_cli", default-features = false }
+cbh_codec = { version = "=0.2.14", path = "packages/cbh_codec", default-features = false }
+cbh_command = { version = "=0.2.14", path = "packages/cbh_command", default-features = false }
+cbh_config = { version = "=0.2.14", path = "packages/cbh_config", default-features = false }
+cbh_detect = { version = "=0.2.14", path = "packages/cbh_detect", default-features = false }
+cbh_diag = { version = "=0.2.14", path = "packages/cbh_diag", default-features = false }
+cbh_engines = { version = "=0.2.14", path = "packages/cbh_engines", default-features = false }
+cbh_git = { version = "=0.2.14", path = "packages/cbh_git", default-features = false }
+cbh_model = { version = "=0.2.14", path = "packages/cbh_model", default-features = false }
+cbh_probe = { version = "=0.2.14", path = "packages/cbh_probe", default-features = false }
+cbh_render = { version = "=0.2.14", path = "packages/cbh_render", default-features = false }
+cbh_stats = { version = "=0.2.14", path = "packages/cbh_stats", default-features = false }
+cbh_storage = { version = "=0.2.14", path = "packages/cbh_storage", default-features = false }
 clap = { version = "4.6.1", default-features = false, features = ["default"] }
 colored = { version = "3.1.1", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
@@ -50,6 +50,7 @@ cpulist = { version = "1.1.9", path = "packages/cpulist", default-features = fal
 criterion = { version = "0.8.2", default-features = false }
 deranged = { version = "0.5.2", default-features = false }
 derive_more = { version = "2.0.0", default-features = false }
+dunce = { version = "1.0.5", default-features = false }
 event-listener = { version = "5.4.0", default-features = false, features = [
     "std",
 ] }
@@ -57,7 +58,7 @@ events = { version = "0.7.18", path = "packages/events", default-features = fals
 events_once = { version = "0.5.39", path = "packages/events_once", default-features = false }
 fake_headers = { version = "0.0.5", default-features = false }
 fast_time = { version = "0.1.32", path = "packages/fast_time", default-features = false }
-flate2 = { version = "1.1.9", default-features = false }
+flate2 = { version = "1.1.10", default-features = false }
 foldhash = { version = "0.2.0", default-features = false, features = ["std"] }
 folo_ffi = { version = "0.1.17", path = "packages/folo_ffi", default-features = false }
 folo_utils = { version = "0.1.13", path = "packages/folo_utils", default-features = false }
@@ -124,6 +125,7 @@ rand = { version = "0.10.1", default-features = false, features = ["std"] }
 rasciigraph = { version = "0.3.0", default-features = false }
 reqwest = { version = "0.13.4", default-features = false }
 rsevents = { version = "0.3.1", default-features = false }
+same-file = { version = "1.0.6", default-features = false }
 scc = { version = "3.0.2", default-features = false }
 scopeguard = { version = "1.2.0", default-features = false }
 semver = { version = "1.0.28", default-features = false, features = ["std"] }

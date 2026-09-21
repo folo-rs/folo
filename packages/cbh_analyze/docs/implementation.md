@@ -12,11 +12,21 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
+Analysis carries the renderer-owned outcome with the rendered report bundle so the shell can
+expose it in process or write the requested outcome file. It uses the
+[shared projection](../../cbh_render/docs/implementation.md), not an orchestration-specific
+mapping from findings and series coverage.
+
 The public command entry points own production wiring: they resolve and construct the configured
 storage, repository, diagnostics, environment, time, and task-execution capabilities before
 delegating. Their inner `*_with` orchestrators receive generic ports and explicit runtime values,
 which keeps policy deterministic and same-crate tests in memory. The component crates own the
 adapter implementations; `cbh_analyze` selects and coordinates them.
+
+Every command selects the ordinary storage facade. Read-only queries synchronize its optional
+cloud cache before the shared selection pipeline and report cache activity afterward.
+Git-topology selection separates the target branch's measurements from the base-ref history
+within that store; unrelated branch commits do not enter the comparison.
 
 Operations cross the crate boundary through a transparent aggregate. Concrete conditions remain
 private to the responsibility that owns their context, while component failures remain attached

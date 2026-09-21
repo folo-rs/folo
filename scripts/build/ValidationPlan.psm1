@@ -13,6 +13,7 @@ $script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release
 $script:RecipeDomains = @{
     'just_basics.just' = @('build', 'scheduled')
     'just_bench_history.just' = @('bench-history')
+    'just_benchmark_action.just' = @('release')
     'just_book.just' = @('book')
     'just_delta.just' = @('build')
     'just_quality.just' = @('build', 'scheduled')
@@ -31,6 +32,7 @@ function Get-ValidationPlan {
     $domains = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $workflows = $Full.IsPresent
     $analysis = $Full.IsPresent
+    $bicep = $Full.IsPresent
     if ($Full) { $domains.UnionWith([string[]] $script:ScriptDomains) }
 
     foreach ($path in $ChangedPath) {
@@ -43,6 +45,7 @@ function Get-ValidationPlan {
         if ($shared) {
             $workflows = $true
             $analysis = $true
+            $bicep = $true
             $domains.UnionWith([string[]] $script:ScriptDomains)
             Write-Verbose "'$path' changes shared validation machinery; selecting all tooling checks."
             continue
@@ -60,6 +63,22 @@ function Get-ValidationPlan {
             $path -cin @('.github/prompts/setup-scheduled-remediation.prompt.md', 'docs/scheduled-validation.md')) {
             $null = $domains.Add('scheduled')
             Write-Verbose "'$path' is an input to documentation-link tests; selecting the scheduled test domain."
+        }
+        if ($path -cmatch '^infra/azure-bench-history-(prod|test)/' -or
+            $path -cmatch '^packages/cargo-bench-history/src/azure_bundle/' -or
+            $path -cmatch '^packages/cargo-bench-history/tests/fixtures/.+\.ps(m1|d1|1)$' -or
+            $path -cmatch '^\.github/actions/bench-history-setup/' -or
+            $path -cin @('.github/workflows/bench-history.yml', '.github/workflows/pr-bench-history.yml', '.github/workflows/bench-history-backfill.yml')) {
+            $null = $domains.Add('bench-history')
+            if ($path -cmatch '\.ps(m1|d1|1)$') { $analysis = $true }
+            Write-Verbose "'$path' owns benchmark deployment or invocation wiring; selecting benchmark helper tests."
+        }
+        if ($path -ceq 'bicepconfig.json' -or
+            $path -cmatch '^(infra/|packages/cargo-bench-history/src/azure_bundle/).+\.bicep(param)?$' -or
+            $path -cmatch '^scripts/build/Bicep(\.[^.]+)*\.(psm1|ps1)$') {
+            $bicep = $true
+            $domains.UnionWith([string[]] @('build', 'scheduled'))
+            Write-Verbose "'$path' affects Bicep inputs or their compiler invocation; selecting offline Bicep validation."
         }
 
         if ($path -ceq 'PSScriptAnalyzerSettings.psd1') {
@@ -87,7 +106,7 @@ function Get-ValidationPlan {
                 Write-Verbose "'$path' has no registered recipe owner; conservatively selecting every script suite."
             }
             # The quality recipe owns both lint commands, including their arguments/settings.
-            if ($recipe -ceq 'just_quality.just') { $workflows = $true; $analysis = $true }
+            if ($recipe -ceq 'just_quality.just') { $workflows = $true; $analysis = $true; $bicep = $true }
         }
         if ($path -cin @('delta.toml', '.cargo/mutants.toml', '.config/nextest.toml')) {
             $null = $domains.Add('build')
@@ -120,10 +139,11 @@ function Get-ValidationPlan {
         $null = $domains.Add('scheduled')
         Write-Verbose 'Scheduled tests consume build helpers; including that dependent domain.'
     }
-    Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
+    Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, Bicep=$bicep, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
     return @{
         workflows = $workflows
         script_analysis = $analysis
+        bicep = $bicep
         script_domains = @($domains | Sort-Object)
     }
 }
@@ -135,7 +155,7 @@ function Read-ValidationPlan {
 
     $plan = ConvertFrom-Json -InputObject $Json -AsHashtable
     if ($plan -isnot [hashtable] -or $plan.workflows -isnot [bool] -or
-        $plan.script_analysis -isnot [bool]) {
+        $plan.script_analysis -isnot [bool] -or $plan.bicep -isnot [bool]) {
         throw 'Validation plan must contain explicit workflow and script-analysis decisions.'
     }
     $null = Read-ScriptDomain -Value $plan.script_domains

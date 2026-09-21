@@ -97,7 +97,7 @@ function Get-RequiredCheckFailure {
             throw 'The script execution selection does not match the validation plan and Cargo delta.'
         }
         $selection = @{
-            'test-scripts' = $expectedDomains.Count -gt 0 -or $plan.script_analysis
+            'test-scripts' = $expectedDomains.Count -gt 0 -or $plan.script_analysis -or $plan.bicep
             'validate-workflows' = $plan.workflows
         }
         foreach ($name in $selection.Keys) {

@@ -18,6 +18,7 @@ Describe 'Non-Cargo change domains' {
             'docs/testing.md', '.github/workflows/design.md', 'Cargo.lock')
         $plan.workflows | Should -BeFalse
         $plan.script_analysis | Should -BeFalse
+        $plan.bicep | Should -BeFalse
         $plan.script_domains | Should -BeNullOrEmpty
         ConvertTo-PlanJson $plan | Should -Match '"script_domains":\[\]'
     }
@@ -34,6 +35,18 @@ Describe 'Non-Cargo change domains' {
         @{ Path = '.github/actionlint.yaml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/actions/setup-workflow-lint/action.yml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = 'justfiles/just_bench_history.just'; Domains = @('bench-history'); Analysis = $false; Workflows = $false },
+        @{ Path = 'infra/azure-bench-history-prod/main.bicep'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'infra/azure-bench-history-prod/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
+        @{ Path = 'infra/azure-bench-history-test/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
+        @{ Path = 'infra/azure-bench-history-test/main.bicepparam'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/main.bicep'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $false },
+        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/deploy.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
+        @{ Path = 'packages/cargo-bench-history/src/azure_bundle/AzureDeployment.psm1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
+        @{ Path = 'packages/cargo-bench-history/tests/fixtures/setup-azure.ps1'; Domains = @('bench-history'); Analysis = $true; Workflows = $false },
+        @{ Path = '.github/actions/bench-history-setup/action.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/pr-bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
+        @{ Path = '.github/workflows/bench-history-backfill.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = 'justfiles/just_release.just'; Domains = @('release'); Analysis = $false; Workflows = $false },
         @{ Path = 'justfiles/just_quality.just'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $true },
         @{ Path = '.cargo/mutants.toml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $false },
@@ -63,6 +76,7 @@ Describe 'Non-Cargo change domains' {
         $plan = Get-ValidationPlan -ChangedPath @($_)
         $plan.workflows | Should -BeTrue
         $plan.script_analysis | Should -BeTrue
+        $plan.bicep | Should -BeTrue
         $plan.script_domains | Should -Be $allDomains
     }
 
@@ -70,6 +84,22 @@ Describe 'Non-Cargo change domains' {
         'scripts/new-domain/New.Tests.ps1', 'scripts/standalone.ps1', 'justfiles/new.just'
     ) {
         (Get-ValidationPlan -ChangedPath @($_)).script_domains | Should -Be $allDomains
+    }
+
+    It 'selects offline compilation for maintained Bicep input <_>' -ForEach @(
+        'infra/azure-bench-history-test/main.bicep',
+        'infra/azure-bench-history-test/main.bicepparam',
+        'packages/cargo-bench-history/src/azure_bundle/container-bootstrap.bicep',
+        'bicepconfig.json', 'scripts/build/Bicep.psm1', 'scripts/build/Bicep.Tests.ps1',
+        'justfiles/just_quality.just'
+    ) {
+        (Get-ValidationPlan -ChangedPath @($_)).bicep | Should -BeTrue
+    }
+
+    It 'keeps the pairing recipe in the release test domain' {
+        $plan = Get-ValidationPlan -ChangedPath @('justfiles/just_benchmark_action.just')
+        $plan.script_domains | Should -Be @('release')
+        $plan.bicep | Should -BeFalse
     }
 
     It 'unions and deduplicates domains' {
@@ -84,6 +114,7 @@ Describe 'Non-Cargo change domains' {
         $plan = Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main'
         $plan.workflows | Should -BeTrue
         $plan.script_analysis | Should -BeTrue
+        $plan.bicep | Should -BeTrue
         $plan.script_domains | Should -Be $allDomains
     }
 

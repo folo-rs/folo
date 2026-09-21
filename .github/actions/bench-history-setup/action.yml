@@ -1,0 +1,27 @@
+name: Benchmark setup
+description: Prepare Folo benchmark prerequisites through the fixed repository-local hook
+
+runs:
+  using: composite
+  steps:
+    # Benchmark jobs share this repository-owned configuration rather than accepting a
+    # setup action path/ref as an input. Ref: ../../workflows/design.md#benchmark-setup-hook.
+    - uses: ./.github/actions/setup-environment
+      with:
+        install-valgrind: "true"
+
+    # Reusable collection invokes the core tool directly, so the fixed Folo hook owns
+    # the same alignment policy used by local collection/backfill recipes.
+    # Ref: ../../workflows/implementation.md#benchmark-workflow-artifacts.
+    - name: Apply Folo benchmark stability flags
+      shell: pwsh
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+        Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+        $constants = Read-DotEnvFile -Path constants.env
+        $stability = Get-RequiredConstant -Values $constants -Name BENCH_STABILITY_RUSTFLAGS
+        $flags = Get-BenchHistoryRustFlag -Existing $env:RUSTFLAGS -Stability $stability
+        "RUSTFLAGS=$flags" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8

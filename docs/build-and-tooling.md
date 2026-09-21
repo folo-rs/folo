@@ -172,6 +172,28 @@ samples or performing statistical analysis. The watchdog is a last-chance
 safeguard, not the expected execution budget. If it fires, the runner retains and
 prints partial child output to identify the last completed phase.
 
+## Bicep validation
+
+`just validate-bicep` compiles maintained `.bicep` and `.bicepparam` inputs under `infra/`
+and the embedded `cargo-bench-history` Azure bundle. It uses the compiler pinned by
+`BICEP_VERSION`, installed through `just install-bicep` (also part of `just install-tools`).
+The check neither signs in to Azure nor deploys or queries resources.
+
+Compilation validates syntax and resource types against that compiler's API catalog.
+The root `bicepconfig.json` also enables `use-recent-api-versions`. Compiler and linter
+warnings fail the check alongside errors; SARIF diagnostics and generated ARM JSON stay
+under `target/bicep-validation`, not beside source files.
+
+The API catalog is an offline check, not proof that an API is available in a particular
+subscription/region or that deployment permissions and policy allow it. Real deployment
+still performs Azure's own validation. Update the compiler pin deliberately when its
+catalog needs newer resource definitions.
+
+Standard validation selects this check for changed Bicep inputs, compiler configuration
+or invocation code and runs it inside the existing script-validation job. Main and deep
+validation retain full scope. See
+[workflow implementation](../.github/workflows/implementation.md#bicep-validation).
+
 ## Multiplatform codebase
 
 This is a multiplatform codebase. In some packages you will find folders named
@@ -276,7 +298,11 @@ strict mode once at the top rather than per function.)
 ### PowerShell linting
 
 `just validate-scripts` runs [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
-over everything under `scripts/`, gating on Error/Warning findings. The rule set lives in
+over everything under `scripts/`, `infra/azure-bench-history-prod/`, and the embedded deployment bundle under
+`packages/cargo-bench-history/src/azure_bundle/`, together with that package's native
+PowerShell fixtures, gating on Error/Warning findings. The bundle is shipped application
+code even though its driver executes in PowerShell.
+The rule set lives in
 `PSScriptAnalyzerSettings.psd1`, supplemented by repo-local custom rules in
 `scripts/analyzer/FoloAnalyzerRules.psm1` - which catch classes the built-in rules (and strict
 mode) miss, such as a `foreach` whose loop variable case-insensitively collides with the

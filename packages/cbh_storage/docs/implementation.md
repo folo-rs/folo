@@ -24,6 +24,11 @@ while conditional creates persist an opaque request identity so a collision caus
 retry after a committed upload is recognized as success. Read-through caching uses per-project
 invalidation markers after remote overwrites and deletions.
 
+Collection, queries and administrative commands select the same storage facade.
+Cloud queries may use the read-through cache; synchronization and hit/miss accounting
+belong to that facade. The analysis layer selects applicable stored commits by Git topology,
+so branch measurements and the shared baseline need no separate storage view.
+
 Azure and Azurite tests share a container-name generator behind `private-test-util`. Each
 container gets a fresh random UUID, retaining its full identity in Azure's lowercase naming
 format. Isolation therefore does not depend on clock precision, process-local counters, or

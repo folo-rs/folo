@@ -41,6 +41,9 @@ concurrency:
   group: bench-history-backfill
   cancel-in-progress: false
 
+# TODO(#284): Migrate this job graph to
+# folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml when that reusable workflow
+# is published. Folo keeps its schedule, configuration and bench-history-setup hook.
 jobs:
   backfill:
     # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's identity can
@@ -88,11 +91,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup environment
-        # Backfill runs the Callgrind measurement engine, which drives Valgrind.
-        uses: ./.github/actions/setup-environment
-        with:
-          install-valgrind: "true"
+      - name: Prepare benchmark environment
+        uses: ./.github/actions/bench-history-setup
 
       # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's client id
       # and tenant - plus the ACTIONS_ID_TOKEN_* values GitHub injects because of id-token: write -
@@ -120,8 +120,13 @@ jobs:
       # fingerprint (no fixed machine key). BACKFILL_TO_COMMIT is empty on a scheduled run; it is
       # passed through the environment so an untrusted dispatch input is never spliced into a shell
       # command line here.
+      # The shared workflow will invoke the root action's backfill command instead of this recipe.
       - name: Backfill benchmark history
         shell: pwsh
         env:
           BACKFILL_TO_COMMIT: ${{ inputs.to_commit }}
-        run: just gh-backfill-bench-history
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just gh-backfill-bench-history

@@ -16,7 +16,10 @@ use cbh_command::{
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
+use clap::error::ErrorKind;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
+
+use crate::setup_azure::SetupAzureCommand;
 
 const HEADING_ENV: &str = "Environment and execution";
 const HEADING_OUTPUT: &str = "Output";
@@ -56,7 +59,6 @@ pub struct EarlyExit {
 impl EarlyExit {
     /// Classifies a `clap` parse error into the success/failure early-exit shape.
     fn from_clap(error: &clap::Error) -> Self {
-        use clap::error::ErrorKind;
         let success = matches!(
             error.kind(),
             ErrorKind::DisplayHelp
@@ -94,6 +96,7 @@ impl Cli {
             Subcommand::Examine(command) => Command::Examine(command.into_options()),
             Subcommand::Import(command) => Command::Import(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
+            Subcommand::SetupAzure(command) => Command::SetupAzure(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
@@ -135,6 +138,8 @@ enum Subcommand {
     Import(ImportCommand),
     /// Generate a starter configuration file.
     Install(InstallCommand),
+    /// Provision Azure history resources, or export a standalone deployment bundle.
+    SetupAzure(SetupAzureCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
     /// Print this machine's hardware fingerprint (the machine key).
@@ -298,12 +303,11 @@ struct TimelineArgs {
 /// The text report prints to standard output by default; `--no-text` suppresses
 /// it, while `--markdown` and `--json` each write that format to a file. A single
 /// analysis pass backs every requested format. At least one output must remain
-/// selected, so `--no-text` requires at least one of `--markdown`/`--json`.
+/// selected; individual commands can provide additional file outputs.
 #[derive(Args, Debug)]
 #[command(next_help_heading = HEADING_OUTPUT)]
 struct OutputArgs {
-    /// Suppress the text report on standard output. Pair with `--markdown` and/or
-    /// `--json` to direct the report to files instead.
+    /// Suppress the text report on standard output. Select a file output instead.
     #[arg(long)]
     no_text: bool,
 
@@ -547,6 +551,13 @@ struct AnalyzeCommand {
     /// large analysis still fits within a GitHub issue body.
     #[arg(long, value_name = "PATH", help_heading = HEADING_OUTPUT)]
     markdown_summary: Option<PathBuf>,
+
+    /// Write the stable analysis outcome wire name to a file.
+    ///
+    /// Relative paths resolve against the working directory. May be the sole output
+    /// with `--no-text`.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_OUTPUT)]
+    outcome: Option<PathBuf>,
 }
 
 impl AnalyzeCommand {
@@ -568,6 +579,7 @@ impl AnalyzeCommand {
             markdown: self.output.markdown,
             json: self.output.json,
             markdown_summary: self.markdown_summary,
+            outcome: self.outcome,
             verbose: self.env.verbose,
             timing: false,
         }
@@ -1031,7 +1043,7 @@ fn resolve_packages(workspace: bool, package: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
+pub(crate) mod tests {
     #[cfg(miri)]
     use clap::FromArgMatches;
     use clap::{Command as ClapCommand, CommandFactory};
@@ -1051,13 +1063,14 @@ mod tests {
             "list" => ListCommand::augment_args(ClapCommand::new("list")),
             "machine-key" => MachineKeyCommand::augment_args(ClapCommand::new("machine-key")),
             "prune" => PruneCommand::augment_args(ClapCommand::new("prune")),
+            "setup-azure" => SetupAzureCommand::augment_args(ClapCommand::new("setup-azure")),
             "unbless" => UnblessCommand::augment_args(ClapCommand::new("unbless")),
             _ => return None,
         };
         Some(command)
     }
 
-    fn from_args(command_name: &[&str], args: &[&str]) -> Result<Cli, EarlyExit> {
+    pub(crate) fn from_args(command_name: &[&str], args: &[&str]) -> Result<Cli, EarlyExit> {
         #[cfg(not(miri))]
         {
             Cli::from_args(command_name, args)
@@ -1124,8 +1137,16 @@ mod tests {
         let help = Cli::help("cargo-bench-history");
         assert!(!help.is_empty(), "help text is non-empty");
         for command in [
-            "analyze", "backfill", "bless", "collect", "examine", "install", "list", "prune",
+            "analyze",
+            "backfill",
+            "bless",
+            "collect",
+            "examine",
+            "install",
+            "list",
+            "prune",
             "unbless",
+            "setup-azure",
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }
@@ -1758,6 +1779,7 @@ mod tests {
         assert!(!options.no_text);
         assert!(options.markdown.is_none());
         assert!(options.json.is_none());
+        assert!(options.outcome.is_none());
     }
 
     #[test]
@@ -1769,12 +1791,15 @@ mod tests {
             "out/report.md",
             "--json",
             "out/report.json",
+            "--outcome",
+            "out/outcome.txt",
         ]) else {
             panic!("expected analyze command");
         };
         assert!(options.no_text);
         assert_eq!(options.markdown, Some(PathBuf::from("out/report.md")));
         assert_eq!(options.json, Some(PathBuf::from("out/report.json")));
+        assert_eq!(options.outcome, Some(PathBuf::from("out/outcome.txt")));
     }
 
     #[test]

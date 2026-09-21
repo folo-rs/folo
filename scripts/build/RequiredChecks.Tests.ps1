@@ -143,7 +143,7 @@ Describe 'Get-RequiredCheckFailure' {
 
 Describe 'Planned tooling results' {
     BeforeEach {
-        $script:plan = @{ workflows = $false; script_analysis = $false; script_domains = @() }
+        $script:plan = @{ workflows = $false; script_analysis = $false; bicep = $false; script_domains = @() }
         $script:needs = @{
             prepare = @{ result = 'success'; outputs = @{ packages_json = '[]'; script_domains = '[]' } }
             'test-scripts' = @{ result = 'skipped' }
@@ -168,6 +168,13 @@ Describe 'Planned tooling results' {
         $plan.script_domains = @('book')
         { Assert-PlannedResult } | Should -Throw
         $needs.prepare.outputs.script_domains = '["book"]'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'requires successful offline Bicep validation when selected without script tests' {
+        $plan.bicep = $true
         { Assert-PlannedResult } | Should -Throw
         $needs['test-scripts'].result = 'success'
         { Assert-PlannedResult } | Should -Not -Throw

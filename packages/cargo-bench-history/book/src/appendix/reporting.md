@@ -36,15 +36,34 @@ Where a series has more commits than the chart has columns, commits are grouped 
 plotting. Grouping first is deliberate — the alternative attenuates an isolated observation
 surrounded by gaps into nothing.
 
+## Analysis outcomes
+
+The **analysis outcome** is the result of a successful analysis, combining findings with the
+[series coverage state](coverage.md#reading-a-silent-report). Findings take precedence: an
+analysis with any findings has outcome `findings`, even when some series could not be judged.
+
+Without findings, a fully judged in-scope suite is `clean`. An in-scope suite with no judged
+series is `insufficient_baseline`; a suite with some judged and some unjudged series is
+`partial`. When no series entered analysis, or every accounted series was absent at the
+analyzed context commit, the outcome is `nothing_in_scope`.
+
+These outcomes describe the series available to analysis, not an inventory of collection jobs.
+**Platform coverage** is separate: matrix automation must verify which expected platforms
+completed collection before presenting a complete all-clear. A missing collection leg can
+coexist with a `clean` analysis of the available series. Analysis failure is an execution
+error, not an outcome.
+
 ## The formats
 
-The tool emits its findings in four forms, each requested independently:
+The tool emits reports and their derived outputs in these forms, each requested independently:
 
 - **Text** — the default terminal report.
 - **Markdown** (`--markdown <path>`) — the same content, for a pull request or an issue.
 - **JSON** (`--json <path>`) — the complete machine-readable result.
 - **Condensed summary** (`--markdown-summary <path>`, `analyze` only) — a short, capped Markdown
   digest for a size-limited destination such as a pull request comment.
+- **Outcome** (`--outcome <path>`, `analyze` only) — the stable [analysis outcome](#analysis-outcomes)
+  for selecting a message without parsing the full JSON report.
 
 Text and Markdown carry every finding but omit the per-reason census when findings exist. **JSON
 always carries the complete census**, which makes it the machine-readable signal: each finding
@@ -52,7 +71,8 @@ self-describing, plus every unjudged reason the human formats print only on a si
 deliberately omits the per-commit chart series — that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
 summary** is lossy by design — capped, and flattened so the per-set grouping is dropped — so it is
-the one output you must not automate against. The full table is under
+the one output you must not automate against. The outcome file repeats only the JSON report's
+top-level `outcome` field; it carries no report details. The full table is under
 [Where output goes](#where-output-goes).
 
 Here is the same analysis in each form. The JSON excerpt is illustrative of the shape
@@ -70,10 +90,11 @@ successfully; a report that could not reach its storage backend does not.
 *Why:* a benchmark tool that breaks builds on a measurement gets disabled, and a disabled tool
 detects nothing. Findings are advisory by design.
 
-*What this means for automation:* write the JSON report to a file with `--json`. And gate on
-**coverage as well as findings** — a run that judged nothing produces an empty findings list,
-which a naive check reads as success. See
-[Multiplicity and coverage](coverage.md#reading-a-silent-report).
+*What this means for automation:* write the JSON report to a file with `--json`. Its top-level
+`outcome` field carries the [analysis outcome](#analysis-outcomes); the `notable` boolean is
+`true` exactly for `findings`. Use `--outcome <path>` when this value is all the caller needs,
+and retain separate collection evidence for matrix-wide claims. The full JSON remains
+necessary for counts, reasons and findings.
 
 ## The coverage line is not decoration
 
@@ -138,9 +159,9 @@ a dirty run was admitted on the base tip, is rendered **into the report body** r
 stderr. Those qualify the findings printed beside them, so a reader who captured only the report
 would otherwise lose the caveat that changes how to read it.
 
-The other formats are written to files rather than to a stream — `--markdown`, `--json` and
-`--markdown-summary` each take a path, and `--no-text` suppresses the stdout report when you
-want only those.
+The other formats are written to files rather than to a stream — `--markdown`, `--json`,
+`--markdown-summary` and `--outcome` each take a path, and `--no-text` suppresses the stdout
+report when you want only those.
 
 {{#include generated/reporting-formats.md}}
 

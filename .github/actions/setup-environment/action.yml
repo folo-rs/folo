@@ -207,6 +207,15 @@ runs:
     - name: Install just
       shell: bash
       run: cargo install just --locked
+
+    # Azure CLI's managed compiler is outside cargo's cache. Share the pinned Bicep binary
+    # so offline template validation does not add a repeated install to standard setup.
+    # Ref: .github/workflows/implementation.md#bicep-validation.
+    - name: Cache Bicep compiler
+      uses: actions/cache@v6
+      with:
+        path: ~/.azure/bin/bicep*
+        key: bicep-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env') }}
     
     - name: Configure Git
       shell: bash

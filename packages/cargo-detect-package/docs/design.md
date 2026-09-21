@@ -22,6 +22,18 @@ tools to share one detection model.
 External execution happens only after scope validation succeeds, so a discovery failure
 cannot launch a command with guessed or partial scope.
 
+## Read-only automation queries
+
+In-workspace automation can query package ownership without executing a child command,
+printing diagnostics or depending on the process current directory. The caller supplies
+Cargo's absolute resolved workspace root, including a standalone package root. The same nearest
+non-root manifest rule applies; workspace-root files select workspace scope.
+
+For deleted paths, the query starts at the nearest surviving ancestor. If the package
+manifest is also gone, workspace scope conservatively represents the change rather than
+silently dropping it. Resolution and malformed-manifest failures remain errors. This
+library boundary is unsupported outside the workspace; the command-line modes are unchanged.
+
 ## Diagnostics and error boundary
 
 Successful scope decisions are reported separately from failures. The CLI reports failures on

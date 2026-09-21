@@ -21,8 +21,8 @@ use cbh_detect::{
 };
 use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, TargetTriple};
 use cbh_render::{
-    ComparisonBaseLag, ComparisonBaseLagReason, Coverage, DEFAULT_SUMMARY_LIMIT, ReportFormat,
-    ReportInput, SetSummary, render,
+    AnalysisOutcome, ComparisonBaseLag, ComparisonBaseLagReason, Coverage, DEFAULT_SUMMARY_LIMIT,
+    ReportFormat, ReportInput, SetSummary, render,
 };
 
 use crate::assets::Asset;
@@ -216,7 +216,6 @@ impl Analysis {
             tip_commit: TIP_COMMIT,
             tip_dirty: false,
             mode: self.mode,
-            notable: !self.findings.is_empty(),
             runs: RUNS_LOADED,
             series: self.coverage().in_scope(),
             commit_span: Some((FIRST_COMMIT, TIP_COMMIT)),
@@ -407,6 +406,15 @@ fn formats() -> String {
         summary_limit.get(),
     )
     .expect("writing to a String never fails");
+    let outcomes = AnalysisOutcome::ALL
+        .map(|outcome| format!("`{}`", outcome.as_str()))
+        .join(", ");
+    writeln!(
+        markdown,
+        "| Outcome | `--outcome <path>` (`analyze` only) | Selecting an automation \
+         message without parsing JSON | one stable wire name: {outcomes} |",
+    )
+    .expect("writing to a String never fails");
 
     markdown.push_str(
         "\nJSON is the complete machine-readable result: it always carries every finding and \
@@ -416,7 +424,8 @@ fn formats() -> String {
          findings to show, so only JSON always reveals the ghost count. The condensed \
          summary is lossy by design, so it is the one output that must not be automated \
          against: a check reading it cannot distinguish findings that were capped away from \
-         findings that were never made.\n",
+         findings that were never made. The outcome file repeats only JSON's top-level \
+         `outcome` field; it carries no report details.\n",
     );
     markdown
 }

@@ -61,9 +61,15 @@ directly:
   Keep a **Version/release plan** section current with every expanded-plan package/group,
   previous and proposed versions, change levels, and substantive reasons, including
   dependent/group movements; explicitly state when there are no released-content or
-  version changes. Keep `[Copilot speaking]` first in agent-authored PR bodies.
+  version changes.
   Follow [docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section) and
   [docs/release-versioning.md](docs/release-versioning.md#on-a-pull-request).
+* **Run the repository-specific extension after version planning.** After
+  `increment-versions`, including after reassessment, run
+  [`pair-benchmark-action-release`](.github/skills/pair-benchmark-action-release/SKILL.md).
+  Start with its one-line relevance check; a false result ends repo-specific action work.
+  Follow [benchmark action releases](docs/benchmark-action-releases.md) for paired PRs,
+  independent action-version decisions and publication follow-up.
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
@@ -360,6 +366,16 @@ merge, and the `increment-versions` skill applies the plan. Merge publishes.
 **Open this when**: preparing a pull request that touches a published package;
 deciding a version increment; debugging `validate-versions`, `cargo-release-plan`,
 or the `increment-versions` skill.
+
+### [docs/benchmark-action-releases.md](docs/benchmark-action-releases.md)
+
+Repository-specific coordination with `folo-rs/cargo-bench-history-action`: the
+`pair-benchmark-action-release` extension after general version planning, paired PR
+presentation, action-version decisions and the required published-installation gate.
+
+**Open this when**: completing `increment-versions`; updating a tool pinned by the
+action; preparing or refreshing a paired action PR; following package/archive
+publication and rerunning the action's required installation check.
 
 ### [docs/release-automation.md](docs/release-automation.md)
 

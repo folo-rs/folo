@@ -26,7 +26,8 @@ use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
 use cbh_render::{
-    Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render, render_markdown_summary,
+    AnalysisOutcome, Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render,
+    render_markdown_summary,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -214,6 +215,7 @@ where
         options.markdown.as_deref(),
         options.json.as_deref(),
         options.markdown_summary.as_deref(),
+        options.outcome.as_deref(),
     )?;
     let selection = Selection::from_analyze(options);
     let filter = SeriesFilter {
@@ -394,7 +396,6 @@ where
         tip_commit: &dataset.tip_commit,
         tip_dirty: dataset.tip_dirty,
         mode: dataset.mode,
-        notable,
         runs: dataset.run_index.total(),
         series: series.len(),
         commit_span: dataset.run_index.commit_span(),
@@ -406,8 +407,10 @@ where
         ghosts_excluded,
         census,
     };
+    let outcome = AnalysisOutcome::from_analysis(notable, &Coverage::from_census(&input.census));
     let render_started = Instant::now();
     let rendered = request.render_analyze(
+        outcome,
         |format| render(&input, format, color),
         || render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
     );

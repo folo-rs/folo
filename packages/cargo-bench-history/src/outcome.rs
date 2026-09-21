@@ -1,6 +1,8 @@
 //! The result of executing a `Command`: the [`RunOutcome`] a successful `run`
 //! returns.
 
+use crate::AnalysisOutcome;
+
 /// The outcome of a successful `run`.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -10,15 +12,16 @@ pub enum RunOutcome {
         /// Human-readable summary of what happened.
         message: String,
     },
-    /// The `analyze` command produced a findings report.
+    /// The `analyze` command produced an analysis report.
     Analyzed {
         /// The rendered findings report for the requested output format.
         report: String,
         /// Number of flagged regressions across all analyzed series, for
-        /// informational use. It never affects the process exit code: findings
-        /// are advisory, so the machine-readable signal lives in the report's
-        /// JSON (`notable`), not in the exit status.
+        /// informational use. Findings are advisory and never affect execution success;
+        /// in-process callers inspect `outcome` for the analysis verdict.
         regressions: usize,
+        /// The primary verdict of the successful analysis.
+        outcome: AnalysisOutcome,
     },
 }
 
@@ -26,9 +29,9 @@ impl RunOutcome {
     /// Whether the command should be considered successful (exit code zero).
     ///
     /// Every outcome is successful: a finding is never a build-failing condition.
-    /// Only an actual failure to *run* yields a non-zero exit code. Downstream
-    /// automation reads notable findings from the report JSON rather than from the
-    /// exit status.
+    /// Only an actual failure to *run* yields a non-zero exit code. In-process callers
+    /// inspect `Analyzed.outcome`; external automation reads the JSON `outcome` or
+    /// the outcome file rather than inferring the analysis verdict from the exit status.
     #[must_use]
     // Every outcome is successful, so this is effectively a constant `true`; a
     // `false` mutant is unkillable because no failing outcome exists to assert
@@ -80,6 +83,7 @@ mod tests {
             RunOutcome::Analyzed {
                 report: "r".to_owned(),
                 regressions: 3,
+                outcome: AnalysisOutcome::Findings,
             }
             .is_success()
         );
@@ -87,6 +91,7 @@ mod tests {
             RunOutcome::Analyzed {
                 report: "r".to_owned(),
                 regressions: 0,
+                outcome: AnalysisOutcome::Clean,
             }
             .is_success()
         );
@@ -105,6 +110,7 @@ mod tests {
             RunOutcome::Analyzed {
                 report: "report body".to_owned(),
                 regressions: 2,
+                outcome: AnalysisOutcome::Findings,
             }
             .stdout_text(),
             Some("report body")
@@ -126,6 +132,7 @@ mod tests {
             RunOutcome::Analyzed {
                 report: String::new(),
                 regressions: 0,
+                outcome: AnalysisOutcome::NothingInScope,
             }
             .stdout_text(),
             None

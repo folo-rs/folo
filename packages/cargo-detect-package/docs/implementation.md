@@ -9,6 +9,13 @@ child-process execution. A composition layer coordinates those responsibilities.
 passes through the package's platform abstraction so discovery logic does not depend directly on
 the host filesystem.
 
+The read-only query accepts an explicit Cargo workspace root and resolves missing targets
+through existing ancestors before calling the same package detector used by command execution.
+It does not invoke the command runner or the ambient-current-directory workspace discovery.
+Both root and target ancestry use native canonical paths, without case-folding assumptions.
+In-memory filesystem mocks cover query decisions; integration tests cover actual deleted paths
+and manifest reading.
+
 Operational conditions are private to the responsibility that can add their context and flow into
 the application's `ohno::AppError` boundary. Lower-level filesystem, manifest, and process causes
 remain attached. The package exports neither those conditions nor a package-specific aggregate, in

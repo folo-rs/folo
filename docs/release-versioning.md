@@ -11,6 +11,8 @@ publish half is [`release-automation.md`](release-automation.md).
   `increment-versions` skill.
 * **Cross-links**: [`release-automation.md`](release-automation.md) (the publish half),
   [`git-workflow.md`](git-workflow.md) (contributor pull-request conventions),
+  [`benchmark-action-releases.md`](benchmark-action-releases.md) (repository-specific
+  action release coordination),
   [`impl-crate-split.md`](impl-crate-split.md) (why version groups exist),
   [`build-and-tooling.md`](build-and-tooling.md) (`just` recipes and script conventions),
   [`RELEASING.md`](../RELEASING.md) (first publish of a new crate, emergency manual publish,

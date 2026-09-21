@@ -1,0 +1,321 @@
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use ohno::AppError;
+use serde_json::json;
+
+use crate::model::Instance;
+use crate::result::{AnalysisMode, Evidence, Outcome, PublicationState, platform_list};
+use crate::workflow::receipt::Receipt;
+use crate::workflow::reconcile::{Selection, collection_job_prefix};
+
+/// Builds setup outputs that keep matrix jobs and later evidence on one platform set.
+///
+/// `workflow_matrix` appends this block to the runner's output file. The shared normalization
+/// also supplies the collection-job prefix consumed by job reconciliation.
+pub(crate) fn matrix_outputs(platforms: &str, instance: &Instance) -> Result<String, AppError> {
+    let platforms = platform_list(platforms)?;
+    let expected = platforms
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let matrix = json!({"platform": platforms});
+    Ok(format!(
+        "matrix={matrix}\nexpected-platforms={expected}\ninstance={}\ncollection-job-prefix={}\n",
+        instance.as_str(),
+        collection_job_prefix(instance)
+    ))
+}
+
+/// Exposes reconciled collection coverage and deduplicated hardware keys to the next step.
+///
+/// The receipt slice must be the one used to create `selection`; platform completeness comes
+/// from job evidence and remains independent of the number of distinct machine keys.
+pub(crate) fn preparation_outputs(selection: &Selection, receipts: &[Receipt]) -> String {
+    let selected = selected_receipts(selection, receipts);
+    let completed = selected
+        .clone()
+        .map(|receipt| receipt.platform.as_str())
+        .collect::<Vec<_>>();
+    let keys = selected
+        .map(|receipt| receipt.machine_key.as_str())
+        .collect::<BTreeSet<_>>();
+    format!(
+        "completed-platforms={}\nmachine-keys={}\ncomplete={}\n",
+        completed.join(","),
+        keys.into_iter().collect::<Vec<_>>().join(","),
+        selection.complete
+    )
+}
+
+/// Explains which latest job attempts contributed receipts and why coverage may be partial.
+///
+/// Preparation emits these messages only in verbose mode; constructing them separately lets
+/// fake-driven tests exercise the selection explanation without capturing global stderr.
+pub(crate) fn preparation_diagnostics(
+    selection: &Selection,
+    receipts: &[Receipt],
+    expected_count: usize,
+    job_count: usize,
+) -> Vec<String> {
+    let mut messages = vec![format!(
+        "Selected {} successful platforms from {} expected platforms using {} job records across all attempts; complete={}.",
+        selection.receipt_indices.len(),
+        expected_count,
+        job_count,
+        selection.complete
+    )];
+    messages.extend(selected_receipts(selection, receipts).map(|receipt| {
+        format!(
+            "Platform {} contributes machine key {} from run {} attempt {}: its latest collection job succeeded and its receipt matches repository, instance and frozen head {}.",
+            receipt.platform,
+            receipt.machine_key,
+            receipt.run_id,
+            receipt.run_attempt,
+            receipt.head.as_str()
+        )
+    }));
+    if !selection.complete {
+        messages.push(
+            "Platforms not selected have terminal non-success conclusions on their latest collection attempts; older successful receipts do not restore their coverage."
+                .to_owned(),
+        );
+    }
+    messages
+}
+
+/// Plans the analyzer's key-file tree using only successfully reconciled receipts.
+///
+/// Preparation materializes these relative paths in a validated fresh directory. Measurement
+/// objects stay in configured storage rather than being copied into collection artifacts.
+pub(crate) fn machine_key_files(
+    selection: &Selection,
+    receipts: &[Receipt],
+) -> Vec<(PathBuf, String)> {
+    selected_receipts(selection, receipts)
+        .map(|receipt| {
+            (
+                PathBuf::from(&receipt.platform).join("machine-key.txt"),
+                format!("{}\n", receipt.machine_key),
+            )
+        })
+        .collect()
+}
+
+/// Resolves selection indices against their original receipts for output projections.
+fn selected_receipts<'a>(
+    selection: &'a Selection,
+    receipts: &'a [Receipt],
+) -> impl Iterator<Item = &'a Receipt> + Clone {
+    selection.receipt_indices.iter().map(|index| {
+        receipts
+            .get(*index)
+            .expect("selection indices come from these receipts")
+    })
+}
+
+/// Projects validated evidence into workflow decisions without interpreting report prose.
+///
+/// Inspection and root-action analysis share this projection with the publication gates.
+/// `can-clear` is history-specific; the publication state also serves PR comments.
+pub(crate) fn report_outputs(evidence: &Evidence) -> String {
+    let outcome = evidence.report.outcome.as_str();
+    // Use the publication gates themselves: their validated parser owns census semantics.
+    let notable = evidence.report.outcome == Outcome::Findings;
+    let state = evidence.publication_state();
+    let can_clear =
+        evidence.report.mode == AnalysisMode::History && state == PublicationState::Clean;
+    let state = state.as_str();
+    format!(
+        "outcome={outcome}\nnotable={notable}\ncan-clear={can_clear}\npublication-state={state}\n"
+    )
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::slice;
+
+    use super::*;
+    use crate::github::WorkflowJob;
+    use crate::result::InvalidPlatformList;
+    use crate::result::tests::evidence;
+    use crate::workflow::receipt::tests::receipt;
+    use crate::workflow::reconcile::reconcile;
+
+    #[test]
+    fn matrix_outputs_share_normalized_platforms_and_instance() {
+        let instance = "portable".parse().unwrap();
+        assert_eq!(
+            matrix_outputs(" windows,linux,windows ", &instance).unwrap(),
+            concat!(
+                "matrix={\"platform\":[\"linux\",\"windows\"]}\n",
+                "expected-platforms=linux,windows\n",
+                "instance=portable\n",
+                "collection-job-prefix=cbh-collect:portable\n"
+            )
+        );
+    }
+
+    #[test]
+    fn matrix_outputs_reuse_preparation_platform_validation() {
+        let instance = "portable".parse().unwrap();
+        let error = matrix_outputs("linux,", &instance).unwrap_err();
+        assert!(error.find_source::<InvalidPlatformList>().is_some());
+        let error = matrix_outputs("..", &instance).unwrap_err();
+        assert!(error.find_source::<InvalidPlatformList>().is_some());
+    }
+
+    #[test]
+    fn matrix_generated_collection_names_are_recognized_by_preparation() {
+        let mut receipt = receipt("linux", 1);
+        receipt.instance = "portable".parse().unwrap();
+        let outputs = matrix_outputs("linux", &receipt.instance).unwrap();
+        let prefix = outputs
+            .lines()
+            .find_map(|line| line.strip_prefix("collection-job-prefix="))
+            .unwrap();
+        let job = WorkflowJob {
+            id: receipt.run_id,
+            run_id: receipt.run_id,
+            run_attempt: receipt.run_attempt,
+            name: format!("reusable / {prefix}:linux"),
+            status: "completed".to_owned(),
+            conclusion: Some("success".to_owned()),
+        };
+        let selection = reconcile(
+            &receipt.repository,
+            &receipt.instance,
+            receipt.run_id,
+            &receipt.head,
+            &platform_list("linux").unwrap(),
+            &[job],
+            slice::from_ref(&receipt),
+        )
+        .unwrap();
+        assert!(selection.complete);
+        assert_eq!(selection.receipt_indices, [0]);
+    }
+
+    #[test]
+    fn keys_are_deduplicated_but_platforms_remain_independent() {
+        let receipts = [receipt("linux", 1), receipt("windows", 2)];
+        assert_eq!(
+            preparation_outputs(
+                &Selection {
+                    receipt_indices: vec![0, 1],
+                    complete: true
+                },
+                &receipts,
+            ),
+            "completed-platforms=linux,windows\nmachine-keys=0123456789abcdef\ncomplete=true\n"
+        );
+    }
+
+    #[test]
+    fn complete_collection_diagnostics_have_no_failure_qualification() {
+        let receipts = [receipt("linux", 1)];
+        let selection = Selection {
+            receipt_indices: vec![0],
+            complete: true,
+        };
+        let messages = preparation_diagnostics(&selection, &receipts, 1, 1);
+        assert_eq!(messages.len(), 2);
+        assert!(messages.first().unwrap().contains("complete=true"));
+        let platform = messages.get(1).unwrap();
+        assert!(platform.contains(&receipts[0].platform));
+        assert!(platform.contains(&receipts[0].machine_key));
+    }
+
+    #[test]
+    fn partial_collection_diagnostics_include_a_failure_qualification() {
+        let receipts = [receipt("linux", 1)];
+        let selection = Selection {
+            receipt_indices: vec![0],
+            complete: false,
+        };
+        let messages = preparation_diagnostics(&selection, &receipts, 2, 2);
+        assert_eq!(messages.len(), 3);
+        assert!(messages.first().unwrap().contains("complete=false"));
+        assert!(messages.get(1).unwrap().contains(&receipts[0].platform));
+        assert!(!messages.last().unwrap().is_empty());
+    }
+
+    #[test]
+    fn machine_key_tree_contains_only_selected_actual_keys() {
+        let mut windows = receipt("windows", 2);
+        windows.machine_key = "fedcba9876543210".to_owned();
+        let receipts = [receipt("linux", 1), windows];
+        let selection = Selection {
+            receipt_indices: vec![1],
+            complete: false,
+        };
+        assert_eq!(
+            machine_key_files(&selection, &receipts),
+            vec![(
+                PathBuf::from("windows").join("machine-key.txt"),
+                "fedcba9876543210\n".to_owned()
+            )]
+        );
+        assert_eq!(
+            preparation_outputs(&selection, &receipts),
+            "completed-platforms=windows\nmachine-keys=fedcba9876543210\ncomplete=false\n"
+        );
+    }
+
+    #[test]
+    fn output_projection_uses_report_and_platform_evidence() {
+        for (outcome, wire, state) in [
+            (Outcome::Findings, "findings", "findings"),
+            (Outcome::Clean, "clean", "clean"),
+            (Outcome::Partial, "partial", "inconclusive"),
+            (
+                Outcome::InsufficientBaseline,
+                "insufficient_baseline",
+                "inconclusive",
+            ),
+            (Outcome::NothingInScope, "nothing_in_scope", "inconclusive"),
+        ] {
+            let evidence = evidence(AnalysisMode::History, outcome, true);
+            assert_eq!(
+                report_outputs(&evidence),
+                format!(
+                    "outcome={wire}\nnotable={}\ncan-clear={}\npublication-state={state}\n",
+                    outcome == Outcome::Findings,
+                    outcome == Outcome::Clean
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn branch_and_incomplete_collection_never_clear_issues() {
+        for (evidence, state) in [
+            (
+                evidence(AnalysisMode::Branch, Outcome::Clean, true),
+                "clean",
+            ),
+            (
+                evidence(AnalysisMode::History, Outcome::Clean, false),
+                "inconclusive",
+            ),
+        ] {
+            assert_eq!(
+                report_outputs(&evidence),
+                format!(
+                    "outcome=clean\nnotable=false\ncan-clear=false\npublication-state={state}\n"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_collection_does_not_replace_the_findings_state() {
+        let evidence = evidence(AnalysisMode::History, Outcome::Findings, false);
+        assert_eq!(
+            report_outputs(&evidence),
+            "outcome=findings\nnotable=true\ncan-clear=false\npublication-state=findings\n"
+        );
+    }
+}

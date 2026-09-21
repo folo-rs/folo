@@ -1,527 +1,62 @@
 name: Benchmark history
 
-# Per-commit collection of the workspace's benchmark results into the long-lived Azure
-# history store (account folohistory, baked into .cargo/bench_history.toml; see also
-# infra/azure-bench-history-prod/). Each push to `main` benchmarks the workspace's maintained scope
-# (design.md#benchmark-history) with all Cargo features enabled, on the x86_64 Linux
-# and Windows runners, and appends the results keyed by the pushed commit. Over time this builds the
-# performance history that `cargo-bench-history analyze` reads to spot regressions.
-#
-# Runs per-push rather than on a nightly schedule: a nightly run re-benchmarks an unchanged
-# tip for no gain and misses intermediate same-day commits, whereas per-push collects one
-# data point per commit. The trade-off is more runner time on busy days.
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      # Optional escape hatch to REPAIR a corrupted history point. Leave empty for a normal
-      # dispatch (collects the current tip in append mode, exactly like a push). Set it to the
-      # full or short commit SHA of an already-collected `main` commit whose stored data point is
-      # bad (transient spikes, a degraded benchmark runner that day): the collect job then
-      # re-measures ONLY that commit and OVERWRITES its stored point, running the benchmark code
-      # AT that commit in a throwaway worktree while using THIS (HEAD) build of the tool. The
-      # analyze job ignores this input and always surveys the current `main` tip. See the
-      # gh-collect-bench-history recipe (RECOLLECT MODE) for the mechanics and caveats (e.g. it
-      # drops any blessings recorded at that commit).
-      recollect_commit_id:
-        description: "Commit SHA to re-collect and overwrite (leave empty for a normal run)"
-        required: false
-        type: string
-        default: ""
+  workflow_dispatch: {}
 
-# Deduplicate redundant runs of the same history point without letting a newer commit cancel
-# an older point. Cross-commit push throttling belongs to collect's per-platform queue, not
-# this workflow-level group, so platforms and downstream analysis remain independent.
-# Re-collection includes its target because github.sha identifies the dispatch tip, not the
-# historical commit being repaired: different repair targets must not cancel each other or
-# normal collection at that tip. See design.md#concurrency.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}${{ inputs.recollect_commit_id && format('-{0}', inputs.recollect_commit_id) || '' }}
-  cancel-in-progress: true
-
-# Title of the rolling failure-alert issue, defined once and shared by the two jobs that
-# reference it: the `alert` job files it under this exact title (via Publish-RollingIssue),
-# and the `resolve-alert` job matches on it to close that issue.
-# The rolling-issue filing dedups solely by exact title, so this string is the alert's
-# identity; a single definition keeps the open and close paths from drifting apart.
-env:
-  FAILURE_ISSUE_TITLE: Benchmark-history workflow failed
+permissions: {}
 
 jobs:
-  collect:
-    # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's identity can
-    # federate into Azure) and any ref other than main (the federated credential is scoped to
-    # refs/heads/main, so a workflow_dispatch from a feature branch would mint a non-matching
-    # subject and fail at azure/login). Gating here makes such manual runs skip cleanly instead
-    # of failing red.
+  configuration:
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
-
-    # Serialize main-push collection per platform without occupying runners while waiting.
-    # Retain pending commits instead of replacing them; manual runs use their own groups so
-    # repairs do not wait behind the push backlog. See design.md#concurrency.
-    concurrency:
-      group: bench-history-collect-${{ github.event_name == 'push' && 'push-main' || github.run_id }}-${{ matrix.platform }}
-      cancel-in-progress: false
-      queue: max
-
-    strategy:
-      # One platform's benchmarks failing must not abandon the others' history for this
-      # commit; each platform stores into its own partition independently.
-      fail-fast: false
-      matrix:
-        # x86_64 Linux and Windows only. ARM and macOS are only nominally supported (they must
-        # pass tests, see standard-validation.yml) but are deliberately left out of benchmarking so we do
-        # not spend runner minutes measuring platforms whose performance we do not track.
-        platform: [ubuntu-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-    # 360 minutes is GitHub's hard per-job ceiling for hosted runners, so this is as
-    # high as the cap can go. `--best-of 3` (see the gh-collect-bench-history recipe)
-    # runs the suite three times, roughly tripling the benchmark portion; a single run
-    # sits around 60-75 min, so even the ~3x worst case stays well under the ceiling.
-    # The matrix runs in parallel, so the cap only bounds a genuinely stuck run rather
-    # than the expected duration. If the suite ever grows enough that 3x approaches six
-    # hours, shard the benchmarks across jobs rather than trying to raise this further.
-    timeout-minutes: 360
-
-    # `id-token: write` lets cargo-bench-history mint short-lived GitHub OIDC tokens
-    # (each a signed JWT proving "this run is repo folo-rs/folo on ref refs/heads/main").
-    # The tool exchanges them directly with Entra, which matches each against the
-    # dedicated prod managed identity's `main`-branch federated credential (created by
-    # infra/azure-bench-history-prod/) and issues an access token - so CI authenticates
-    # with no stored secret. Minting on demand (rather than once up front via
-    # `azure/login`) is what keeps a multi-hour run authenticated past the ~1h
-    # access-token lifetime. `contents: read` is the minimum the checkout needs.
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
-
+    outputs:
+      client-id: ${{ steps.values.outputs.AZURE_CLIENT_ID }}
+      tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
+      exclude: ${{ steps.values.outputs.exclude }}
+      all-features: ${{ steps.values.outputs.all-features }}
+      best-of: ${{ steps.values.outputs.best-of }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        # A normal push/dispatch only benchmarks the tip, so a shallow clone is enough. A
-        # recollect (recollect_commit_id set) must instead re-measure a historical commit, whose
-        # objects and first-parent ancestry the `backfill` worktree needs present locally - so
-        # fetch the full history in that case only. The `&&`/`||` idiom yields '0' when the input
-        # is a non-empty string and '1' (the shallow default) when it is empty or absent.
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: ${{ inputs.recollect_commit_id && '0' || '1' }}
-
-      - name: Setup environment
-        # Collection runs the Callgrind measurement engine, which drives Valgrind.
-        uses: ./.github/actions/setup-environment
-        with:
-          install-valgrind: "true"
-
-      # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's
-      # client id and tenant - plus the ACTIONS_ID_TOKEN_* values GitHub injects because
-      # of id-token: write - it mints a fresh OIDC assertion each time Entra needs a new
-      # access token, so a long run never re-submits an expired assertion. Export those
-      # two identifiers from constants.env under the standard names the tool reads
-      # (AZURE_PROD_CLIENT_ID is the prod identity's client id). The data store account
-      # name is NOT needed here: it is baked into the committed .cargo/bench_history.toml.
-      - name: Configure Azure federation identity from constants.env
+          persist-credentials: false
+      # Folo owns its non-secret identity and measurement settings; the called workflow
+      # owns collection, receipts and publication. Ref: implementation.md#benchmark-workflow-artifacts.
+      - name: Read Folo configuration
+        id: values
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-
-          # constants.env holds the two non-secret identifiers the collect/analyze jobs federate
-          # with; the module re-exports them under the standard AZURE_* names the tool reads, failing
-          # loudly if either is missing. Shared by both jobs so the two cannot drift. See
-          # scripts/bench-history/AzureFederation.psm1.
           Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+          Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_OUTPUT | Out-Null
+          $policy = Get-BenchHistoryCollectionPolicy
+          @(
+            "exclude=$($policy.ExcludedPackages -join ',')"
+            "all-features=$($policy.AllFeatures.ToString().ToLowerInvariant())"
+            "best-of=$($policy.BestOf)"
+          ) | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
-      # Every engine — Callgrind and the allocation/time counters included — is partitioned by each
-      # runner's OWN real hardware fingerprint (see the gh-collect-bench-history recipe) so a
-      # heterogeneous runner pool splits into one clean series per hardware type rather than one
-      # jittery mixed series. RECOLLECT_COMMIT_ID (empty on a push/plain dispatch) switches the
-      # recipe from appending the pushed commit to re-measuring and OVERWRITING one historical
-      # commit; it is passed through the environment so an untrusted dispatch input is never
-      # spliced into a shell command line here.
-      - name: Collect benchmark history
-        env:
-          RECOLLECT_COMMIT_ID: ${{ inputs.recollect_commit_id }}
-        run: just gh-collect-bench-history
-
-      # Record THIS runner's real hardware fingerprint so the single analyze job can thread the exact
-      # keys collected this run into its `--machine-key` filter (collect is a matrix, analyze is not,
-      # so analyze cannot re-derive them). Runs only after a SUCCESSFUL collect - a failed leg
-      # collected nothing, so its key must not be threaded - which is the default step behavior (a
-      # prior step's failure skips this one). The write recipe logs the fingerprint components under
-      # --verbose for debugging a key change.
-      - name: Record runner machine key
-        shell: pwsh
-        env:
-          KEY_FILE: ${{ runner.temp }}/machine-key.txt
-        run: just gh-write-bench-history-machine-key "$env:KEY_FILE"
-
-      # Upload this leg's key under a per-platform artifact name so the analyze job can download every
-      # leg's key together (one file per platform). if-no-files-found: error catches a broken
-      # key-write step loudly rather than silently dropping a key from the analysis.
-      - name: Upload runner machine key
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-history-machine-key-${{ matrix.platform }}
-          path: ${{ runner.temp }}/machine-key.txt
-          if-no-files-found: error
-
-  analyze:
-    # Survey the (possibly re-collected) history for regressions and post a rolling issue when any
-    # finding survives. Runs after every platform finishes (even partially: fail-fast is off) so this
-    # commit's analysis reflects whatever did land, and only on main (where OIDC sign-in works),
-    # matching collect's gate. `always()` is what lets it run despite a partially-failed collect;
-    # the repo/ref gate then keeps it off forks and non-main refs (where collect itself skips).
-    needs: [collect]
-    if: always() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    # Analysis loads the whole store and reduces it; far faster than benchmarking, but the cap
-    # must still clear a cold-cache setup-environment (up to ~90 min) on top of the analysis.
-    timeout-minutes: 150
-
-    # id-token to self-federate with Entra (reads the history; see collect's note),
-    # contents for checkout, issues to file the rolling regression issue, and actions:read so the
-    # machine-key download below can enumerate this run's artifacts through the REST run-artifacts
-    # endpoint (see that step's note) rather than the attempt-scoped internal artifact service.
+  benchmark:
+    needs: configuration
+    # The reviewed implementation owns deduplication/queues; source mode tests the
+    # monorepo's pending tool implementation. Ref: implementation.md#benchmark-workflow-artifacts.
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@f0b1c5feda0bbabd31fa03b239967da39502140c
     permissions:
-      id-token: write
       contents: read
-      issues: write
       actions: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        # Full history: analyze walks first-parent commits to map stored runs to
-        # committer timestamps; a shallow clone would hide most commits and skew it.
-        with:
-          fetch-depth: 0
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      # Same self-federation as collect: export the prod identity's client id and tenant
-      # under the standard names cargo-bench-history reads, then let the tool mint OIDC
-      # assertions on demand (no azure/login). The account name is baked into config.
-      - name: Configure Azure federation identity from constants.env
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          # Same shared seam the collect job uses: re-export the two committed identifiers under the
-          # standard AZURE_* names the tool reads. See scripts/bench-history/AzureFederation.psm1.
-          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
-
-      # All bench-history scratch - the read-through cache and every rendered report/summary/
-      # notable/issue-body file - lives under the runner temp directory, OUTSIDE the repo
-      # checkout. Keeping it out of the working tree is what stops `analyze`'s own
-      # `git status --porcelain` dirty-check from seeing these files (the cache is even restored
-      # BELOW, before analyze runs) and wrongly annotating the analyzed tip
-      # `+ uncommitted changes` on an otherwise-clean `main`. This step is the single source of
-      # truth for that location; every step below derives its paths from `dir`. The individual
-      # filenames (cache/, report.md, report.json, summary.md, notable.txt) are the contract the
-      # `gh-analyze-bench-history` recipe writes; issue-body.md is composed here.
-      - name: Resolve scratch directory
-        id: scratch
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $dir = Join-Path $env:RUNNER_TEMP 'bench-history'
-          New-Item -ItemType Directory -Path $dir -Force | Out-Null
-          "dir=$dir" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
-
-      # Persist the read-through cache (cargo-bench-history's --cache directory) across
-      # runs so the bulk history is downloaded at most once instead of in full every
-      # run. The key is unique per run (cache entries are immutable per key), and
-      # restore-keys falls back to the most recent prior `bench-history-cache-` entry, so
-      # each run restores the latest mirror, the analyze step tops it up with this run's
-      # new objects, and this run saves a fresh entry on success. The path MUST match the
-      # `--cache` directory the `gh-analyze-bench-history` recipe passes (`<scratch>/cache`).
-      # The cloud history is append-only (collect uses --skip-existing), so a
-      # restored-but-slightly-stale mirror is always correct - a deliberate
-      # --overwrite/prune bumps the cloud marker that wipes it on the next read.
-      - name: Restore benchmark-history read-through cache
-        uses: actions/cache@v6
-        with:
-          path: ${{ steps.scratch.outputs.dir }}/cache
-          key: bench-history-cache-${{ github.run_id }}
-          restore-keys: |
-            bench-history-cache-
-
-      # Download every collect leg's machine-key file (one per-platform artifact) into a single
-      # directory so the analysis can thread the EXACT fingerprints collected this run into its
-      # `--machine-key` filter. The default (no merge-multiple) keeps one subdirectory per artifact;
-      # the recipe scans recursively. A leg whose collection failed uploaded nothing, so its key is
-      # simply absent and not analyzed. If EVERY leg failed there are no matching artifacts: a pattern
-      # download tolerates zero matches (it does not fail), and the recipe treats the empty directory
-      # as "nothing to analyze".
-      #
-      # `github-token` (with `run-id`, defaulted to this run) is what routes the download through the
-      # public REST run-artifacts endpoint instead of the attempt-bound internal artifact service.
-      # That endpoint lists a run's artifacts across ALL of its attempts, so after a PARTIAL re-run
-      # (e.g. `gh run rerun --failed` on one flaky collect leg) the surviving leg's artifact - which
-      # stays under the earlier attempt - still resolves. Without the token the action pins each
-      # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
-      # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
-      - name: Download collected machine keys
-        uses: actions/download-artifact@v8
-        with:
-          pattern: bench-history-machine-key-*
-          path: ${{ steps.scratch.outputs.dir }}/machine-keys
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-
-      # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
-      # top-findings Markdown) and notable.txt into the scratch directory. Findings never fail
-      # the recipe (the tool always exits 0); the issue is advisory, not a gate. The second argument
-      # is the downloaded machine-key directory whose fingerprints scope the analysis.
-      - name: Analyze benchmark history
-        shell: pwsh
-        env:
-          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: just gh-analyze-bench-history "$env:SCRATCH_DIR" "$env:SCRATCH_DIR/machine-keys"
-
-      - name: Read notable flag
-        id: notable
-        shell: pwsh
-        env:
-          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $value = (Get-Content (Join-Path $env:SCRATCH_DIR 'notable.txt') -Raw).Trim()
-          "value=$value" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
-
-      # Attach the full Markdown and JSON reports to the run as a single artifact, so the
-      # rolling issue can carry only the condensed summary (staying under GitHub's
-      # 65,536-character issue-body limit) while a reader can still download the complete
-      # reports. The upload keeps `archive` at its default, so it always produces a
-      # zip: both files share one artifact and one download URL; that URL stays valid
-      # while the run and artifact exist. Uploaded only when notable, matching the
-      # rolling issue.
-      - name: Upload full benchmark reports
-        id: full_reports
-        if: steps.notable.outputs.value == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-history-full-report
-          path: |
-            ${{ steps.scratch.outputs.dir }}/report.md
-            ${{ steps.scratch.outputs.dir }}/report.json
-          if-no-files-found: error
-
-      # The File step passes the title and label to the gh-file-rolling-issue recipe as `gh`
-      # flags, so this body needs NO YAML front matter - it is the pure issue body. That fixed
-      # title is the dedup key that turns findings into one rolling issue.
-      # The body carries the CONDENSED summary (not the full report) so it fits the issue
-      # limit, followed by a link to the attached full reports and a footer with two parts:
-      # a minimal "Issue lifecycle" summary (refreshed only on runs that still have findings,
-      # never auto-closed) and a "What do I do?" section pointing at `examine` to narrow a
-      # change-point estimate, then the bless-an-intentional-change vs. fix-a-defect
-      # decision - see the File step.
-      - name: Compose regression issue
-        if: steps.notable.outputs.value == 'true'
-        shell: pwsh
-        env:
-          REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
-          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
-          $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
-          # Literal Markdown: the backticks are inline code spans, kept verbatim by the
-          # single-quoted here-string.
-          $lifecycle = @'
-          **Issue lifecycle**
-
-          - Filed and refreshed automatically by the `bench-history` workflow; the body always reflects the latest `main` run that still had findings.
-          - A run that finds nothing leaves it untouched; the issue is **never** closed automatically.
-          - Closing it by hand does **not** accept the regression. A closed issue is never reopened; instead, the next run that still finds the regression files a new one.
-
-          **What do I do?**
-
-          A change-point location is an estimate: the change occurred somewhere near the named commit, not necessarily at it. Use `cargo bench-history examine` to narrow down on the specific commit where the change occurred. Copy the benchmark id, metric, and discriminant filters from the finding above and run:
-
-          `cargo bench-history examine --benchmark <id> --metric <name> --engine <engine> --target-triple <triple> --machine-key <key>`
-
-          Then decide what the change is:
-
-          - **An intentional tradeoff**: accept it by blessing the affected benchmarks at the named commit, e.g. `cargo bench-history bless <benchmark-id-prefix> --context <commit>` (or `cargo bench-history bless --all --context <commit>` to accept every benchmark at that commit), then close the issue.
-          - **A defect to fix**: fix it as usual. A fixed finding self-clears on its own several runs after the fix, even without a blessing. This is **not** immediate: clearing it needs statistical evidence from multiple post-fix runs.
-          '@
-
-          # The title and label are NOT front matter here - the File step passes them to the
-          # gh-file-rolling-issue recipe as `gh` flags - so this file is the pure issue body.
-          $parts = @(
-            $summary
-            ''
-            '---'
-            ''
-            $fullReport
-            ''
-            '---'
-            ''
-            $lifecycle
-          )
-          Set-Content -Path (Join-Path $env:SCRATCH_DIR 'issue-body.md') -Value ($parts -join "`n") -Encoding utf8
-
-      # One rolling issue, updated rather than duplicated each run (the fixed title is
-      # the dedup key), so a regression that persists does not spam new issues. Opened
-      # only when findings exist; runs with none touch nothing. Filed over `gh` via the
-      # gh-file-rolling-issue recipe (a thin wrapper over the Publish-RollingIssue seam both of
-      # this workflow's issue paths share) rather than a template action, so the body file can
-      # live in the runner temp dir, outside the repo checkout. The label is one of the
-      # repository's standing labels: it is both applied on creation and the label the dedup
-      # search narrows to. `gh issue create` fails outright on a label the repository does not
-      # define, so the step reinstates it first.
-      - name: File rolling regression issue
-        if: steps.notable.outputs.value == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          # Ensure the standing label exists (idempotent) so `gh issue create` cannot fail on a
-          # missing label. --force also rewrites an existing label, so the color and description
-          # must stay the repository's canonical ones or every run would churn them.
-          $PSNativeCommandUseErrorActionPreference = $false
-          gh label create regression --color d73a4a --description "Performance/behavior regression" --force *> $null
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          just gh-file-rolling-issue 'Benchmark regressions detected' 'regression' (Join-Path $env:SCRATCH_DIR 'issue-body.md')
-
-  alert:
-    # Open a deduplicated issue whenever collection or analysis fails, so a broken
-    # run is noticed instead of silently rotting. Same main-only gate as the others.
-    needs: [collect, analyze]
-    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    permissions:
-      contents: read
+      id-token: write
       issues: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      # Compose the failure-alert body (interpolating the failed run's URL) into the runner temp
-      # dir, then file it with the same Publish-RollingIssue seam the regression path uses - one
-      # rolling issue keyed on $FAILURE_ISSUE_TITLE, updated rather than duplicated on each failing
-      # run, and auto-closed by the `resolve-alert` job once the workflow is green again. The ci-failure
-      # label is what `resolve-alert` narrows its close search to. The module is imported directly (not
-      # via `just`) because this lightweight notifier deliberately skips the build-environment
-      # setup - the same shape (checkout + preinstalled gh CLI + module import, no build-env setup)
-      # as the sibling `resolve-alert` job's own close step.
-      - name: Open or update failure issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
-
-          # Single-quoted here-string keeps the ``main`` inline-code backticks literal; only
-          # $env:RUN_URL is interpolated, so build the body with an explicit format placeholder.
-          $template = @'
-          The **bench-history** workflow failed (collection or analysis). The
-          benchmark history may be missing the pushed `main` commit until this is fixed.
-
-          Failed run: {0}
-
-          This issue is updated, not duplicated, on each failing run, and is closed
-          automatically once the workflow runs green again.
-          '@
-          $body = $template -f $env:RUN_URL
-          $bodyFile = Join-Path $env:RUNNER_TEMP 'bench-history-failure-issue.md'
-          Set-Content -Path $bodyFile -Value $body -Encoding utf8
-
-          # Ensure the standing label exists (idempotent) so `gh issue create` cannot fail on a
-          # missing label. This label is shared with the per-run alerts that standard-validation.yml and
-          # release.yml file, so its color and description are kept identical to the guard there.
-          $PSNativeCommandUseErrorActionPreference = $false
-          gh label create ci-failure --color B60205 --description "CI workflow failure" --force *> $null
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          $url = Publish-RollingIssue `
-            -Title $env:FAILURE_ISSUE_TITLE `
-            -Label 'ci-failure' `
-            -BodyFile $bodyFile `
-            -Verbose
-          Write-Host "Failure alert issue: $url"
-
-  resolve-alert:
-    # Mirror of `alert`: when collection AND analysis are green again, auto-close the
-    # rolling failure issue (if one is open) so a fixed run does not leave a stale
-    # alert rotting open. Gated on the needs' results explicitly (rather than the implicit
-    # success() function, so a future unrelated job cannot affect this decision); if either the
-    # collect or analyze it cares about failed, alert (failure()) handles it and this stays off.
-    # Same main-only gate as the others. A no-op on runs when no failure issue is open.
-    # `always()` lets the explicit result checks below do all the deciding, independent of the
-    # default all-needs-succeeded gate.
-    needs: [collect, analyze]
-    if: >-
-      always()
-      && needs.collect.result == 'success'
-      && needs.analyze.result == 'success'
-      && github.repository == 'folo-rs/folo'
-      && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    # Minimal for the work it does: issues:write to close the alert, contents:read for the checkout
-    # that puts the shared BenchHistoryIssue module on disk (the close logic lives there so it is
-    # unit-tested against a mocked gh, mirroring how the alert job files via the same module).
-    permissions:
-      contents: read
-      issues: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      # The alert job files exactly one rolling issue carrying $FAILURE_ISSUE_TITLE and the
-      # ci-failure label; find any still-open instance and close it with an audit trail linking the
-      # green run. Close-RollingIssue lists by `--label ci-failure` (which already excludes the
-      # advisory regression issue, label `regression`, closed by hand) and closes every exact-title
-      # match - the same dedup key the alert path files under, so the two stay in lockstep.
-      - name: Close failure issue if open
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Import-Module ./scripts/bench-history/BenchHistoryIssue.psm1 -Force
-
-          $comment = "✅ The bench-history workflow is green again. Auto-closing this alert. Successful run: $env:RUN_URL"
-          $closed = @(Close-RollingIssue -Title $env:FAILURE_ISSUE_TITLE -Label 'ci-failure' -Comment $comment -Verbose)
-          if ($closed.Count -eq 0) {
-            Write-Host 'No open failure issue to close.'
-          } else {
-            $noun = if ($closed.Count -eq 1) { 'issue' } else { 'issues' }
-            Write-Host "Closed failure $noun $($closed -join ', ')"
-          }
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      exclude: ${{ needs.configuration.outputs.exclude }}
+      all-features: ${{ fromJSON(needs.configuration.outputs.all-features) }}
+      best-of: ${{ fromJSON(needs.configuration.outputs.best-of) }}
+      install-method: path
+      source-path: .

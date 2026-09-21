@@ -1,6 +1,6 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Checks relationships between validation fan-ins, dependencies and job definitions
+# Checks relationships between workflow outputs, validation fan-ins, dependencies and job definitions
 # without invoking GitHub jobs or freezing workflow settings as test literals.
 # Ref: .github/workflows/implementation.md#merge-blocking-result.
 Set-StrictMode -Version Latest
@@ -12,6 +12,11 @@ BeforeAll {
     $script:standard = Get-Content -LiteralPath (Join-Path $root '.github/workflows/standard-validation.yml') -Raw
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
+    $script:benchmarkWorkflows = @(
+        foreach ($name in @('bench-history', 'pr-bench-history', 'benchmark-action-canary')) {
+            Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
+        }
+    )
     Import-Module (Join-Path $PSScriptRoot 'RequiredChecks.psm1') -Force
 
     function Get-WorkflowJob([string] $Workflow, [string] $Name) {
@@ -80,6 +85,36 @@ Describe 'Validation job references' {
                 foreach ($dependency in @(Get-WorkflowJobDependency $job)) {
                     $jobNames | Should -Contain $dependency
                     $dependency | Should -Not -Be $name
+                }
+            }
+        }
+    }
+}
+
+Describe 'Benchmark caller identity handoff' {
+    It 'exports identity inputs from prerequisite jobs that do not mask them through Azure login' {
+        foreach ($workflow in $benchmarkWorkflows) {
+            foreach ($name in @(Get-WorkflowJobName $workflow)) {
+                $job = Get-WorkflowJob $workflow $name
+                if ($job -notmatch '(?m)^    uses: .*cargo-bench-history-action/') { continue }
+
+                $inputs = [regex]::Matches($job,
+                    '(?m)^      azure-(?:client|tenant)-id: \$\{\{ needs\.(?<job>[a-z][a-z0-9-]*)\.outputs\.(?<output>[a-z][a-z0-9-]*) \}\}')
+                $inputs.Count | Should -BeGreaterThan 0
+                foreach ($inputReference in $inputs) {
+                    $producerName = $inputReference.Groups['job'].Value
+                    $outputName = $inputReference.Groups['output'].Value
+                    @(Get-WorkflowJobDependency $job) | Should -Contain $producerName
+                    $producer = Get-WorkflowJob $workflow $producerName
+                    $producer | Should -Match ('(?m)^      ' + [regex]::Escape($outputName) + ': ')
+                    $producer | Should -Not -Match '(?m)^\s+(?:- )?uses: azure/login@'
+                }
+
+                # A reusable caller must wait for any Azure-authenticated storage preparation.
+                foreach ($candidate in @(Get-WorkflowJobName $workflow)) {
+                    if ((Get-WorkflowJob $workflow $candidate) -match '(?m)^\s+(?:- )?uses: azure/login@') {
+                        @(Get-WorkflowJobDependency $job) | Should -Contain $candidate
+                    }
                 }
             }
         }
