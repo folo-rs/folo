@@ -1,18 +1,14 @@
 #requires -Version 7
 
-# Folo's collection policy feeds the reusable history/PR callers and the repository's nightly
-# backfill recipe. This module also owns Folo's stable compiler flags and backfill date window;
+# Folo's collection policy feeds the reusable history, PR and backfill callers. This module also
+# owns Folo's stable compiler flags and backfill date window, read before Rust setup is available;
 # generic affected-package, artifact and publication decisions belong to the shared Rust tool.
 # Ref: .github/workflows/design.md#benchmark-history.
 #
-# The nightly backfill (Get-BenchHistoryBackfillCommand) fills gaps in the series belonging to
-# whichever machine key the nightly runner draws: the GitHub-hosted runner pool is heterogeneous, so
-# consecutive pushed commits land on different hardware and every per-key series is sparse. It walks
-# a rolling date window - from the newest first-parent commit at least 24 hours old back to the
-# oldest first-parent commit newer than 14 days - and relies on the tool's default skip-existing
-# behaviour to measure only the commits this runner's partition is missing. Its scope flags come
-# from the same policy the reusable callers use, because a backfilled point must be measured exactly
-# like a pushed one to be comparable to it.
+# The nightly backfill fills gaps for whichever machine key the runner draws. The heterogeneous
+# hosted pool leaves each key's series sparse. Folo selects a rolling first-parent window; the
+# shared workflow skips commits already measured in this partition. Its measurement inputs come
+# from the same policy as the reporting callers so a backfilled point is comparable to a pushed one.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -41,7 +37,7 @@ function Get-BenchHistoryCollectionPolicy {
     }
 }
 
-# Backfill accepts full or abbreviated hexadecimal commit IDs, not arbitrary revision expressions.
+# Folo's manual endpoint accepts full or abbreviated hex commit IDs, not revision expressions.
 # Validate explicit range inputs before an expensive benchmark run. The same constraint rejects
 # garbled `rev-list` output before it reaches the tool as a range endpoint.
 $script:CommitIdPattern = '^[0-9a-fA-F]{7,40}$'
@@ -60,54 +56,8 @@ $script:CommitIdPattern = '^[0-9a-fA-F]{7,40}$'
 $script:BackfillQuarantine = '24 hours ago'
 $script:BackfillHorizon = '14 days ago'
 
-function Get-BenchHistoryScopeArgument {
-    # Encodes backfill's scope and measurement flags from the policy supplied to reusable callers.
-    # An optional explicit package list narrows this invocation; otherwise it uses workspace
-    # collection with the shared exclusions.
-    #
-    # `--all-features` ensures Cargo runs benchmark targets guarded by `required-features` and
-    # compiles feature-gated code paths into every selected package's benchmarks.
-    #
-    # Each runner stamps its results with its OWN real hardware fingerprint, so a heterogeneous
-    # GitHub runner pool splits into one clean wall-clock series per hardware type instead of one
-    # jittery series mixing incomparable machines. The shared repetition policy retains minima
-    # to shed one-sided runner jitter - a point taken at a lower best-of would sit
-    # systematically higher than its neighbours and manufacture a step change in the series.
-    # `--verbose` makes the log spell out the resolved machine key and the fingerprint components
-    # behind it, so a key change is debuggable from the log alone.
-    [CmdletBinding()]
-    [OutputType([string[]])]
-    param(
-        [Parameter()]
-        [AllowNull()]
-        [AllowEmptyCollection()]
-        [string[]] $Package
-    )
-
-    $policy = Get-BenchHistoryCollectionPolicy
-    $packages = @($Package | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($packages.Count -gt 0) {
-        # Explicit backfill scoping retains the caller's selected package order.
-        $selection = @()
-        foreach ($name in $packages) { $selection += @('--package', $name) }
-        Write-Verbose ("Scoping backfill to the explicitly selected packages: " +
-            ($packages -join ', ') + '.')
-    } else {
-        $selection = @('--workspace')
-        foreach ($name in $policy.ExcludedPackages) { $selection += @('--exclude', $name) }
-        Write-Verbose ("No explicit package scope: benching the whole workspace except the " +
-            'excluded packages: ' + ($script:ExcludedPackages -join ', ') + '.')
-    }
-
-    if ($policy.AllFeatures) { $selection += '--all-features' }
-    return $selection + @(
-        '--best-of', [string] $policy.BestOf,
-        '--verbose'
-    )
-}
-
 function Get-BenchHistoryRustFlag {
-    # Every collection recipe uses the same alignment policy without dropping unrelated flags.
+    # The benchmark setup hook applies the same alignment policy without dropping unrelated flags.
     # The stability value comes from constants.env; this function only replaces prior spellings
     # of that setting so source/toolchain selection does not alter benchmark comparability.
     [CmdletBinding()]
@@ -124,7 +74,7 @@ function Invoke-GitCapture {
     # Runs `git` with the given arguments and returns its stdout as a string[] of trimmed, non-blank
     # lines. Inspecting the exit code here - rather than letting a non-zero `git` abort the pipeline -
     # is what lets the failure message name the exact query that failed, and is why the native-error
-    # toggle is off. This is the single seam the Pester suite mocks (via `Mock git`), so the window
+    # toggle is off. This is the boundary the Pester suite mocks (via `Mock git`), so the window
     # resolution below is exercised without a real repository.
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -191,7 +141,7 @@ function Get-BenchHistoryBackfillWindow {
         if ($override -notmatch $script:CommitIdPattern) {
             throw ("Backfill range end must be a 7-40 character hex commit SHA, got '$override'. " +
                 'This validates the format only; that the id resolves to a real commit is enforced ' +
-                'later by the backfill step, which fails if the ref cannot be resolved.')
+                'by git and the reusable workflow preparation.')
         }
 
         $to = $override
@@ -229,40 +179,4 @@ function Get-BenchHistoryBackfillWindow {
     }
 }
 
-function Get-BenchHistoryBackfillCommand {
-    # Builds the argument vector the nightly gap-filling run passes to the tool after `--`. Returns a
-    # string[] holding a `backfill <from> <to> ...` invocation, or an EMPTY array when no commit is
-    # eligible yet (a repository whose whole history is still inside the quarantine) - the caller
-    # then skips the tool and the run is a successful no-op.
-    #
-    # $ToCommitId overrides the computed range end (the workflow_dispatch escape hatch); leave it
-    # empty for the scheduled run. The scope flags come from Get-BenchHistoryScopeArgument, the same
-    # helper the collect builder uses, because a backfilled point is only comparable to its pushed
-    # neighbours if it was measured with the same scope and the same `--best-of`.
-    #
-    # No `--overwrite`: the tool's default skip-existing behaviour is the entire point, since only
-    # the commits this runner's own partition is missing are worth measuring. `--ignore-errors` walks
-    # past a commit that fails to build instead of abandoning the rest of the window.
-    [CmdletBinding()]
-    [OutputType([string[]])]
-    param(
-        [Parameter()]
-        [AllowNull()]
-        [AllowEmptyString()]
-        [string] $ToCommitId
-    )
-
-    $window = Get-BenchHistoryBackfillWindow -ToCommitId $ToCommitId
-    if ($null -eq $window) {
-        return @()
-    }
-
-    Write-Verbose ("Backfilling the first-parent range $($window.From)..$($window.To), measuring " +
-        'only the commits this machine partition is missing and walking past any commit that ' +
-        'fails to build.')
-    return @('backfill', $window.From, $window.To) +
-        (Get-BenchHistoryScopeArgument) +
-        @('--ignore-errors')
-}
-
-Export-ModuleMember -Function Get-BenchHistoryCollectionPolicy, Get-BenchHistoryBackfillCommand, Get-BenchHistoryRustFlag
+Export-ModuleMember -Function Get-BenchHistoryCollectionPolicy, Get-BenchHistoryBackfillWindow, Get-BenchHistoryRustFlag

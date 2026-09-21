@@ -797,10 +797,10 @@ bulk this design set out to remove.
 
 The action repo publishes these consumption layers:
 
-* **Reusable workflows** (`workflow_call`) — the default path for history and PR reporting:
-  `history.yml` and `pr.yml`. Each owns its entire job graph, and the
-  consumer's whole workflow reduces to a trigger, a `uses:` line, the permissions the flow
-  needs, and a few inputs:
+* **Reusable workflows** (`workflow_call`) — the default path for history and PR reporting
+  and historical densification: `history.yml`, `pr.yml` and `backfill.yml`. Each owns its entire
+  job graph, and the consumer's whole workflow reduces to a trigger, a `uses:` line, the
+  permissions the flow needs, and a few inputs:
 
   ```yaml
   on:
@@ -825,9 +825,31 @@ The action repo publishes these consumption layers:
   commands directly and wires the jobs themselves. Nothing is hidden from them; the reusable
   workflow is a convenience, not a privileged path.
 
-Backfill has no prebuilt reusable workflow. Its root-action command remains available to
-caller-owned job graphs. Folo owns its backfill schedule and bounded historical-window policy
-in the repository workflow and recipe (§10).
+**`backfill.yml` owns the densification job graph.** Callers supply required `azure-client-id`,
+`azure-tenant-id`, `from` and `to` inputs. The refs name an inclusive range; a caller may select
+them directly or compute a rolling window before the call. Scheduling and date-window policy
+belong to the caller, not the shared workflow. Folo's nightly policy is one such caller (§10).
+
+The workflow accepts the shared `platforms`, `working-directory`, `config`, `exclude`, `bench`,
+`best-of`, `all-features`, `no-default-features`, `features`, `install-method` and `source-path`
+inputs. Collection covers the workspace at each historical commit, subject to exclusions.
+There is no public package allowlist, scope/instance selector or setup-path input.
+`ignore-errors` and `best-effort` are independent Boolean inputs, both defaulting to false:
+the former continues past per-commit build/benchmark failures, while the latter opts into
+matrix-job `continue-on-error`, including a hosted-runner timeout. Infrastructure errors remain
+errors in the core tool even when `ignore-errors` is enabled.
+
+Preparation uses full Git history to resolve both nonblank, single-line refs safely to full
+commit SHAs. It does not filter scope against current-head Cargo metadata or benchmark inventory:
+historical commits can carry benchmarks absent from the invocation head. Execution checks out
+the resolved `to` SHA with full history; configuration, optional source-built tools and the fixed
+setup hook remain from the invocation checkout. The core tool owns first-parent range validation
+and newest-first traversal, including the selected project directory within each worktree.
+
+The shared matrix disables fail-fast, uses the hosted-job ceiling of 360 minutes, and fixes
+`on-existing: skip` for resumability. It has no analysis, receipts, report artifacts,
+publication sink or public outputs. Different write modes or a different job graph remain
+available through the lower composite layer.
 
 **`pr.yml` owns the scope preflight end to end.** Deciding *which packages a PR should
 benchmark* is a prerequisite for the PR flow, and leaving it to the consumer would leave the
@@ -904,8 +926,8 @@ around a reusable-workflow call, so a repository can supply:
 .github/actions/bench-history-setup/action.yml
 ```
 
-Shared collection jobs invoke this action after checkout/bootstrap and before benchmarking.
-Folo's repository-owned backfill invokes the same hook before its collection work.
+Shared collection and backfill jobs invoke this action after checkout/bootstrap and before
+benchmarking.
 If the file is absent, the shared workflows run no custom setup.
 The hook belongs to the repository/configuration checkout. It is not invoked by GitHub
 publication jobs, and the shared workflow's own tool installation remains its responsibility.
@@ -957,6 +979,12 @@ deduplication targets the same commit, not different commits. Manual
 history runs use their own groups rather than waiting behind the push backlog. Queueing
 belongs to GitHub, not a running worker waiting on a lock.
 
+Backfill does not deduplicate invocations by event or SHA and never cancels an earlier
+invocation. Its run and work groups use distinct prefixes, separate from caller groups and
+the reporting flows. Non-cancelling `queue: max` work queues are keyed by the canonical
+storage project identity and platform, so different config paths naming the same project
+cannot race each other.
+
 **Merge queues do not add a benchmark flow.** Benchmark feedback is advisory and is not a
 required branch-protection check. The PR workflow measures its frozen real head, not a
 `merge_group` SHA, and does not subscribe to enqueue/dequeue activity. The history workflow
@@ -986,16 +1014,18 @@ that gap.
   comparison-relevant commits rather than the oldest ones. It is **resumable by default**:
   commits already stored for this key are skipped, so a truncated run simply continues
   next time, and only an explicit overwrite re-measures.
-  The CLI takes inclusive `FROM TO` commit refs, not a duration flag; the caller-owned workflow
-  or recipe resolves its rolling window before invoking the root action or CLI. Its error
-  policy maps to `--ignore-errors` when it should continue past a commit that cannot build or
-  benchmark.
+  The CLI takes inclusive `FROM TO` commit refs, not a duration flag. A reusable-workflow
+  caller supplies `from` and `to`, optionally computing its own rolling window first; shared
+  preparation freezes them to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
+  should continue past a commit that cannot build or benchmark. It does not suppress
+  infrastructure failures; `best-effort` separately opts into tolerating matrix-job failures.
 * **It has no analysis phase and no sink.** Densification only *writes*; the next
   push-triggered `analyze-history` picks up whatever landed. This keeps the flow free of
-  report-sink concerns entirely — no issue, no comment, no staleness.
+  report-sink concerns entirely — no issue, no comment, no staleness, receipts or reports.
 * **Its natural trigger is `schedule`**, which is precisely the trigger-agnostic case §1
   calls out: a nightly densification pass and a per-push collector can target the same
-  commit, so the write mode must be caller-selected rather than assumed (§4.5).
+  commit. The predefined backfill flow always skips existing data; custom composite callers
+  may select overwrite when remeasurement is intentional (§4.5).
 
 ## 5. Configuration and the division of labour
 
@@ -1411,12 +1441,13 @@ it from events, scope selection and validated artifacts.
 Attempts share the same run identity. It has no resolution counterpart or auto-close input.
 The names and required evidence agree between the composite and companion layers.
 
-**`backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
+**Composite `backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
 `best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
-or `overwrite`; `error` is invalid here, §4.5). The reusable workflow resolves its rolling
-window to those refs.
+or `overwrite`; `error` is invalid here, §4.5). The reusable workflow requires explicit refs,
+fixes skip-existing workspace collection with configurable exclusions, and additionally exposes
+the whole-job `best-effort` opt-in (§4.7). Rolling-window selection stays with the caller.
 
-**Reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
+**History/PR reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
 GitHub writes as one policy (§5.2). It is not an input to the individual composite commands:
 analysis commands never post, while publication/lifecycle commands perform their named role.
 There are no report-wording, marker, template or label inputs.
@@ -1428,7 +1459,7 @@ There are no report-wording, marker, template or label inputs.
 as `outcome == findings`);
 `partial-platform-coverage` (`true`/`false`, orthogonal to `outcome`);
 `regressions` (count); `report-markdown` (full report path); `report-json`; `report-summary`
-(condensed top-findings Markdown). Paths are local to the analysis job. Reusable workflows
+(condensed top-findings Markdown). Paths are local to the analysis job. History/PR reusable workflows
 re-export verdict/count/coverage values and the report artifact identity/link, not paths
 that a downstream job cannot access.
 
@@ -1475,13 +1506,13 @@ test their tool/action selection; the action does not add a `report-schema` or t
     Analysis and publication use `!cancelled()` so a superseded run never posts.
     The empty-scope `publish-comment-inconclusive` and terminal `publish-comment-failed` paths
     sit alongside them — all behind the same-repo check (§6).
-  * A **caller-owned densification** workflow (§4.8) — a matrix `backfill` job with the
+  * A **densification** workflow (§4.8) — a matrix `backfill` job with the
     repository's selected platforms and historical window, with no analyze job and no sink.
   * The **concurrency** pattern: PR-driven runs
     cancel superseded runs keyed on the ref, and the close event is handled by `pr.yml` itself
     (§4.7) rather than a second workflow; the push flow deduplicates the same commit instead.
-  Folo's history and PR callers use the shared orchestration; its backfill graph and window
-  remain repository-owned.
+  Folo's history, PR and backfill callers use the shared orchestration; triggers and the
+  backfill window remain repository-owned.
 * **Marketplace publish** from the action repo's release UI (root `action.yml` + branding)
   once a `vX.Y.Z` release exists. Only the composite action is listed; the reusable workflows
   ship in the same repo under the same tags but are referenced by path (§4.7).
@@ -1604,6 +1635,16 @@ so both the install branching and the actual installs are exercised, not just mo
    policy skips and run ownership. Contract tests check supplied inputs and output references
    against the actual action metadata; they do not require every advanced composite input to
    become a reusable-workflow input.
+   The same synthetic caller invokes `backfill.yml` on Linux, Windows and Apple Silicon macOS
+   over the frozen real event head and its first parent, using the nested faker fixture rather
+   than wall-clock Criterion measurements. An isolated backfill project shares the existing
+   test container. A separate caller verification job queries the core tool across all stored
+   machines and targets and checks the actual report for nonempty series and at least two
+   historical runs per expected target. It does not fabricate a verdict or require enough
+   baseline to judge the history clean. This query and its retained report are test evidence,
+   not part of the public backfill workflow, which has no analysis, receipts or reports.
+   Installed-tool smoke tests on the same runner separately prove skip-existing resumption;
+   the hosted caller does not assume later invocations receive the same machine fingerprint.
 
 **Fork-gate validation exercises behavior.** Event fixtures cover same-repository and fork
 heads, asserting the fork skip result (§6) and that credentialed and publication jobs cannot
@@ -1613,8 +1654,9 @@ canary for the skip path; a same-repository scratch PR is not counted as fork co
 This adds neither a maintained fork repository nor fork execution support.
 
 The caller canaries run without publishing to GitHub
-(`publish: false` for reusable-workflow calls); composed-body checks use the fake transport.
-Live posting and Azure authorization are covered by their dedicated validation layers.
+(`publish: false` for history/PR calls; backfill has no publication); composed-body checks use
+the fake transport.
+The hosted callers exercise Azure authorization; live posting uses its dedicated validation layer.
 
 Publication cases assert the selected command and resulting state, not just `notable == false`.
 They cover fully clean reports, findings with missing platforms, inconclusive reports, empty
@@ -1692,13 +1734,15 @@ the gap the synthetic-history checks fill: they cover the configurations no prod
 to have, and dogfooding covers the realism no test fixture can.
 
 Root-action installation canaries use local storage. Folo's cross-job caller canary uses
-the separate Azure test account to exercise hosted authentication and report handoff.
+the separate Azure test account to exercise hosted authentication, history report handoff
+and stored historical backfill data. Its independent backfill verification query does not
+add an analysis phase to the reusable flow.
 The monorepo's Azure-backend test jobs cover the backend's authentication branches (`DESIGN.md` §6).
 
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo's history and PR workflows consume a selected published revision of the shared action.
+Folo's history, PR and backfill workflows consume a selected revision of the shared action.
 **`install-method: path`** and **`source-path: .`** build the required tools from the invocation
 checkout, so unreleased monorepo changes are exercised without waiting for tool publication.
 The selected action revision supplies orchestration independently of those tool sources.
@@ -1707,15 +1751,23 @@ External repos use the default `binstall` install. Folo dogfoods the action's in
 `packages`, receipt-based machine-key selection, the `--cache` read-through cache, the analysis
 outcome, and both report sinks with their lifecycles.
 
-Folo's history and PR entry points are reusable-workflow calls rather than parallel
+Folo's history, PR and backfill entry points are reusable-workflow calls rather than parallel
 implementations of those job graphs. Domain rendering belongs to the tool, GitHub reporting
 belongs to the companion, and configurable workflow policy belongs to the shared layer (§5.1).
 Repository choices are inputs rather than duplicated shell logic.
 
-The nightly densification workflow remains repository-owned. Its recipe invokes the
-source-built CLI with Folo's historical window and resource budget, sharing the collection
-policy and setup hook with the history and PR callers. It does not depend on a reusable
-backfill workflow.
+The nightly densification caller keeps Folo's 02:00 UTC schedule, same-repository `main` gate
+and repository-wide non-cancelling concurrency group. A read-only configuration job uses full
+history to select the newest first-parent commit outside the 24-hour quarantine and the oldest
+eligible ancestor within the 14-day horizon. An optional `to_commit` overrides the newest endpoint;
+an empty eligible window logs a no-op and skips the reusable call rather than passing empty refs.
+The job exports non-secret identity values without Azure login so masking cannot remove its outputs.
+
+The caller passes that range, shared exclusions, all features and `best-of: 3` to `backfill.yml`,
+with `install-method: path` and `source-path: .`. The invocation-owned setup hook supplies the same
+stability flags as history/PR. Folo explicitly selects `ignore-errors: true` and `best-effort: true`
+at the shared hosted-job ceiling; neither is the generic default. The shared workflow freezes refs,
+owns the matrix and skip-existing execution, and leaves first-parent traversal to the core.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
@@ -1810,7 +1862,7 @@ The tool, companion and workflow layer have separate responsibilities:
   ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
   artifact and reporting decisions belong to the shared Rust and workflow layers.
-  Folo retains its backfill window and budget in repository-owned orchestration, while the
+  Folo retains its triggers, backfill window and best-effort choice in the thin caller, while the
   source-built CLI owns measurement and storage. PowerShell handles bootstrap, repository
   workflow wiring and the independently executable Azure deployment bundle; its driver is
   shared by `setup-azure` and export, not reimplemented in Rust. PR-close cancellation belongs

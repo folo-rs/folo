@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/benchmark-action-canary.yml
       - .github/fixtures/bench-history-caller/**
+      - packages/cargo-bench-history/**
       - packages/cargo-bench-history-github/**
       - packages/cargo-detect-package/**
       - packages/cargo-bench-history-faker/**
@@ -30,9 +31,12 @@ jobs:
       tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
       subscription-id: ${{ steps.values.outputs.AZURE_SUBSCRIPTION_ID }}
       account: ${{ steps.values.outputs.BENCH_HISTORY_TEST_AZURE_ACCOUNT }}
+      from: ${{ steps.range.outputs.from }}
+      to: ${{ steps.range.outputs.to }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Load test identity and account
         id: values
@@ -47,6 +51,19 @@ jobs:
             $value = Get-RequiredConstant -Values $values -Name $name
             "$name=$value" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           }
+      - name: Freeze the synthetic backfill range
+        id: range
+        shell: pwsh
+        env:
+          CANARY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # Adjacent commits exercise real historical checkout without expanding the CI workload.
+          $to = git rev-parse --verify --end-of-options "$($env:CANARY_HEAD)^{commit}"
+          $from = git rev-parse --verify --end-of-options "$($to)^"
+          @("from=$from", "to=$to") | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
   storage:
     # This is a real data-plane canary using the separate test identity, never production
@@ -79,7 +96,7 @@ jobs:
 
   exercise:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@ca44c44315d7056472c792754b3b9009b7f6705f # v1.0.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@ac551c157b01c1657dbb07b39fb54bc466287148 # v1.1.0 candidate
     permissions:
       contents: read
       actions: read
@@ -97,6 +114,78 @@ jobs:
       bench: synthetic
       best-of: 1
       publish: false
+
+  backfill:
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@ac551c157b01c1657dbb07b39fb54bc466287148 # v1.1.0 candidate
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      from: ${{ needs.configuration.outputs.from }}
+      to: ${{ needs.configuration.outputs.to }}
+      platforms: ubuntu-latest,windows-latest,macos-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_history.toml
+      bench: synthetic
+      best-of: 1
+
+  verify-backfill:
+    needs: [configuration, backfill]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ needs.configuration.outputs.client-id }}
+      AZURE_TENANT_ID: ${{ needs.configuration.outputs.tenant-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.configuration.outputs.to }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      # Backfill itself has no analysis or report. This independent test query verifies
+      # historical data from every supported target, not a manufactured workflow verdict.
+      - name: Verify stored historical measurements
+        shell: pwsh
+        env:
+          CANARY_TO: ${{ needs.configuration.outputs.to }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $fixture = Join-Path $env:GITHUB_WORKSPACE '.github/fixtures/bench-history-caller'
+          $config = Join-Path $fixture '.cargo/backfill_history.toml'
+          $reportPath = Join-Path $env:RUNNER_TEMP 'backfill-canary-report.json'
+          cargo run --locked --package cargo-bench-history --bin cargo-bench-history -- `
+            analyze --repo $fixture --config $config --context $env:CANARY_TO --base $env:CANARY_TO `
+            --engine all --target-triple all --machine-key all --no-dirty --no-text --json $reportPath
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if ($report.project -cne 'reusable-backfill-canary' -or
+              $report.tip_commit -cne $env:CANARY_TO -or $report.tip_dirty -or
+              $report.mode -cne 'history' -or $report.regressions -ne 0) {
+            throw 'Backfill verification did not read the expected clean synthetic history.'
+          }
+          # Every active platform partition must include the inclusive adjacent-commit range.
+          # Other machine keys from repeated runs are permitted; they never substitute for a target.
+          $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
+          $completeTargets = @($report.sets | Where-Object { $_.series -gt 0 -and $_.runs -ge 2 } |
+              ForEach-Object { $_.target_triple } | Sort-Object -Unique)
+          if (($completeTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
+            throw 'Backfill did not store historical synthetic measurements for every target.'
+          }
+      - name: Retain the backfill verification report
+        uses: actions/upload-artifact@v7
+        with:
+          name: backfill-caller-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backfill-canary-report.json
+          if-no-files-found: error
 
   verify:
     needs: exercise

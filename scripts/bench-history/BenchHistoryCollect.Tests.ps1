@@ -1,14 +1,13 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Proves Folo's shared collection policy, stability flags and retained backfill argument
-# selection without a workflow run.
+# Proves Folo's shared collection policy, stability flags and exported backfill window
+# selection used by the thin reusable-workflow callers without a workflow run.
 #
 # The nightly backfill's rolling date window is proven the same way: `git` is isolated behind the
 # module's Invoke-GitCapture boundary and mocked here in the module's scope, so the window resolution
 # (including the quiet-window fallback and the nothing-eligible exit) is exercised against
 # canned `rev-list` output rather than a real repository, whose history would change under the
-# suite. The scope-identity case is what keeps a backfilled point measured exactly like a pushed
-# one.
+# suite. Policy isolation keeps one caller from changing the settings supplied to another.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -31,17 +30,6 @@ BeforeAll {
         $script:BackfillHorizon = '7 days ago'
         $original
     }
-
-    # Collection and backfill must use the same scope, feature and noise-reduction policy.
-    $script:Scope = @(
-        '--workspace',
-        '--exclude', 'excluded-z',
-        '--exclude', 'excluded-a',
-        '--exclude', 'excluded-m',
-        '--all-features',
-        '--best-of', '3',
-        '--verbose'
-    )
 
     # The canned `git rev-list` output the mocked window queries return: the range end is the newest
     # first-parent commit outside the quarantine and the range start the oldest one inside the
@@ -80,15 +68,19 @@ Describe 'Get-BenchHistoryCollectionPolicy' {
     It 'returns isolated policy values for reusable callers' {
         $policy = Get-BenchHistoryCollectionPolicy
         $policy.ExcludedPackages | Should -Be @('excluded-z', 'excluded-a', 'excluded-m')
+        $bestOf = $policy.BestOf
+        $allFeatures = $policy.AllFeatures
         $policy.ExcludedPackages[0] = 'caller-modification'
-        $policy.BestOf = 99
+        $policy.BestOf++
+        $policy.AllFeatures = -not $policy.AllFeatures
         $fresh = Get-BenchHistoryCollectionPolicy
         $fresh.ExcludedPackages | Should -Be @('excluded-z', 'excluded-a', 'excluded-m')
-        $fresh.BestOf | Should -Not -Be $policy.BestOf
+        $fresh.BestOf | Should -Be $bestOf
+        $fresh.AllFeatures | Should -Be $allFeatures
     }
 }
 
-Describe 'Get-BenchHistoryBackfillCommand' {
+Describe 'Get-BenchHistoryBackfillWindow' {
     Context 'the rolling date window (mocked git rev-list)' {
         BeforeEach {
             # The `-1` query resolves the range end (the newest first-parent commit outside the
@@ -104,30 +96,14 @@ Describe 'Get-BenchHistoryBackfillCommand' {
             }
         }
 
-        It 'backfills the whole window with skip-existing and walks past failing commits' {
-            $result = Get-BenchHistoryBackfillCommand
-            $result | Should -Be (@('backfill', $script:WindowStart, $script:WindowEnd) +
-                $script:Scope + @('--ignore-errors'))
-        }
-
-        It 'never overwrites an already-stored point' {
-            $result = Get-BenchHistoryBackfillCommand
-            $result | Should -Not -Contain '--overwrite'
-        }
-
-        It 'measures with the policy supplied to the reusable callers' {
-            $policy = Get-BenchHistoryCollectionPolicy
-            $expected = @('--workspace')
-            foreach ($excluded in $policy.ExcludedPackages) { $expected += @('--exclude', $excluded) }
-            if ($policy.AllFeatures) { $expected += '--all-features' }
-            $expected += @('--best-of', [string] $policy.BestOf, '--verbose')
-            $backfill = Get-BenchHistoryBackfillCommand
-            $backfillScope = $backfill[3..($backfill.Count - 2)]
-            $backfillScope | Should -Be $expected
+        It 'returns the inclusive endpoints for the reusable caller' {
+            $result = Get-BenchHistoryBackfillWindow
+            $result.From | Should -Be $script:WindowStart
+            $result.To | Should -Be $script:WindowEnd
         }
 
         It 'quarantines the range end from the push-triggered collection' {
-            Get-BenchHistoryBackfillCommand | Out-Null
+            Get-BenchHistoryBackfillWindow | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
                 ($args -contains '-1') -and ($args -contains '--before=2 days ago') -and
                 ($args -contains 'HEAD')
@@ -137,7 +113,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         It 'resolves the range start from the range end rather than from HEAD' {
             # `backfill` hard-errors unless the range start is a first-parent ancestor of the range
             # end, which resolving from the end is what guarantees.
-            Get-BenchHistoryBackfillCommand | Out-Null
+            Get-BenchHistoryBackfillWindow | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
                 ($args -contains '--since=7 days ago') -and ($args -contains ('a' * 40)) -and
                 ($args -notcontains 'HEAD')
@@ -145,7 +121,7 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         }
 
         It 'restricts every history query to the first-parent line' {
-            Get-BenchHistoryBackfillCommand | Out-Null
+            Get-BenchHistoryBackfillWindow | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 2 -Exactly -ParameterFilter {
                 $args -contains '--first-parent'
             }
@@ -161,9 +137,15 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         }
 
         It 'collapses the window onto the single eligible commit' {
-            $result = Get-BenchHistoryBackfillCommand
-            $result | Should -Be (@('backfill', $script:WindowEnd, $script:WindowEnd) +
-                $script:Scope + @('--ignore-errors'))
+            $result = Get-BenchHistoryBackfillWindow
+            $result.From | Should -Be $script:WindowEnd
+            $result.To | Should -Be $script:WindowEnd
+        }
+
+        It 'also collapses an override older than the horizon onto that commit' {
+            $result = Get-BenchHistoryBackfillWindow -ToCommitId 'abc1234'
+            $result.From | Should -Be 'abc1234'
+            $result.To | Should -Be 'abc1234'
         }
     }
 
@@ -175,12 +157,16 @@ Describe 'Get-BenchHistoryBackfillCommand' {
             }
         }
 
-        It 'emits no command at all' {
-            @(Get-BenchHistoryBackfillCommand).Count | Should -Be 0
+        It 'returns no window and explains the no-op' {
+            $result = @(Get-BenchHistoryBackfillWindow -Verbose 4>&1)
+            $result | Where-Object { $_ -isnot [System.Management.Automation.VerboseRecord] } |
+                Should -BeNullOrEmpty
+            @($result | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] }).Count |
+                Should -BeGreaterThan 0
         }
 
         It 'does not query the window once the range end came back empty' {
-            Get-BenchHistoryBackfillCommand | Out-Null
+            Get-BenchHistoryBackfillWindow | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly
         }
     }
@@ -194,44 +180,49 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         }
 
         It 'uses the given commit as the range end' {
-            $result = Get-BenchHistoryBackfillCommand -ToCommitId 'abc1234'
-            $result | Should -Be (@('backfill', ('e' * 40), 'abc1234') + $script:Scope +
-                @('--ignore-errors'))
+            $result = Get-BenchHistoryBackfillWindow -ToCommitId 'abc1234'
+            $result.From | Should -Be ('e' * 40)
+            $result.To | Should -Be 'abc1234'
         }
 
         It 'bypasses the quarantine computation' {
-            Get-BenchHistoryBackfillCommand -ToCommitId 'abc1234' | Out-Null
+            Get-BenchHistoryBackfillWindow -ToCommitId 'abc1234' | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 0 -Exactly -ParameterFilter {
                 $args -contains '-1'
             }
         }
 
         It 'still bounds the range start by the horizon' {
-            Get-BenchHistoryBackfillCommand -ToCommitId 'abc1234' | Out-Null
+            Get-BenchHistoryBackfillWindow -ToCommitId 'abc1234' | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
                 ($args -contains '--since=7 days ago') -and ($args -contains 'abc1234')
             }
         }
 
         It 'trims surrounding whitespace before use' {
-            $result = Get-BenchHistoryBackfillCommand -ToCommitId '  abc1234  '
-            $result[2] | Should -Be 'abc1234'
+            $result = Get-BenchHistoryBackfillWindow -ToCommitId '  abc1234  '
+            $result.To | Should -Be 'abc1234'
         }
 
-        It 'treats an empty id as no override' {
-            Get-BenchHistoryBackfillCommand -ToCommitId '' | Out-Null
+        It 'treats a blank id as no override' -ForEach @(
+            @{ Override = $null }
+            @{ Override = '' }
+            @{ Override = '  ' }
+        ) {
+            Get-BenchHistoryBackfillWindow -ToCommitId $Override | Out-Null
             Should -Invoke git -ModuleName BenchHistoryCollect -Times 1 -Exactly -ParameterFilter {
                 $args -contains '-1'
             }
         }
 
-        It 'rejects a ref expression such as HEAD~1' {
-            { Get-BenchHistoryBackfillCommand -ToCommitId 'HEAD~1' } | Should -Throw '*hex commit SHA*'
-        }
-
-        It 'rejects an id carrying shell metacharacters' {
-            { Get-BenchHistoryBackfillCommand -ToCommitId 'abc1234; rm -rf /' } |
-                Should -Throw '*hex commit SHA*'
+        It 'rejects invalid overrides before querying git' -ForEach @(
+            @{ Override = 'HEAD~1' }
+            @{ Override = '--all' }
+            @{ Override = 'abc1234; invalid-command' }
+            @{ Override = "abc1234`nabcdef0" }
+        ) {
+            { Get-BenchHistoryBackfillWindow -ToCommitId $Override } | Should -Throw
+            Should -Invoke git -ModuleName BenchHistoryCollect -Times 0 -Exactly
         }
     }
 
@@ -244,35 +235,66 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         }
 
         It 'fails loudly instead of backfilling an unresolved range' {
-            { Get-BenchHistoryBackfillCommand } | Should -Throw '*failed (exit 1)*'
+            { Get-BenchHistoryBackfillWindow } | Should -Throw
+        }
+
+        It 'rejects an unresolved override instead of treating it as a quiet window' {
+            { Get-BenchHistoryBackfillWindow -ToCommitId 'abc1234' } | Should -Throw
+        }
+    }
+
+    Context 'git output validation' {
+        It 'ignores blank lines and trims the resolved endpoints' {
+            Mock git -ModuleName BenchHistoryCollect {
+                $global:LASTEXITCODE = 0
+                if ($args -contains '-1') {
+                    @('', " $('a' * 40) ", ' ')
+                } else {
+                    @('', ('a' * 40), " $('c' * 40) ", ' ')
+                }
+            }
+            $result = Get-BenchHistoryBackfillWindow
+            $result.From | Should -Be $script:WindowStart
+            $result.To | Should -Be $script:WindowEnd
+        }
+
+        It 'rejects a malformed range end' {
+            Mock git -ModuleName BenchHistoryCollect {
+                $global:LASTEXITCODE = 0
+                if ($args -contains '-1') { 'not-a-commit' } else { @() }
+            }
+            { Get-BenchHistoryBackfillWindow } | Should -Throw
+        }
+
+        It 'rejects a malformed range start' {
+            Mock git -ModuleName BenchHistoryCollect {
+                $global:LASTEXITCODE = 0
+                if ($args -contains '-1') { 'a' * 40 } else { 'not-a-commit' }
+            }
+            { Get-BenchHistoryBackfillWindow } | Should -Throw
         }
     }
 }
 
 Describe 'Exclusion configuration' {
-    It 'honors <Name> exclusions in shared policy and backfill' -ForEach @(
+    It 'honors <Name> exclusions in the policy shared by all callers' -ForEach @(
         @{
             Name = 'empty'
             Exclusions = @()
-            WorkspaceArguments = @('--workspace')
         }
         @{
             Name = 'replacement'
             Exclusions = @('alternate')
-            WorkspaceArguments = @('--workspace', '--exclude', 'alternate')
         }
     ) {
         InModuleScope BenchHistoryCollect -Parameters @{
             Exclusions = $Exclusions
-            WorkspaceArguments = $WorkspaceArguments
         } {
-            param($Exclusions, $WorkspaceArguments)
+            param($Exclusions)
             $previous = $script:ExcludedPackages
             try {
                 $script:ExcludedPackages = $Exclusions
                 (Get-BenchHistoryCollectionPolicy).ExcludedPackages | Should -Be $Exclusions
-                Get-BenchHistoryScopeArgument | Should -Be (
-                    $WorkspaceArguments + @('--all-features', '--best-of', '3', '--verbose'))
             } finally {
                 $script:ExcludedPackages = $previous
             }

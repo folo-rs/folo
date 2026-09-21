@@ -46,7 +46,7 @@ jobs:
     needs: configuration
     # The reviewed implementation owns deduplication/queues; source mode tests the
     # monorepo's pending tool implementation. Ref: implementation.md#benchmark-workflow-artifacts.
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@ca44c44315d7056472c792754b3b9009b7f6705f # v1.0.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@ac551c157b01c1657dbb07b39fb54bc466287148 # v1.1.0 candidate
     permissions:
       contents: read
       actions: read
