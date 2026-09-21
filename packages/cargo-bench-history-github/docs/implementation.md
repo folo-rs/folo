@@ -225,10 +225,11 @@ the request and response policy is not excluded with them.
 
 ## Workflow preparation
 
-`prepare-workflow --flow history|pr --inputs-file PATH --github-output PATH` prepares
+`prepare-workflow --flow history|pr|backfill --inputs-file PATH --github-output PATH` prepares
 configuration-derived identity, frozen Git revisions, collection platforms and benchmark scope
 before a reusable workflow starts collection. Its JSON contains only string-valued
-`working-directory`, `config`, `platforms` and `exclude` inputs. Preparation is offline:
+`working-directory`, `config`, `platforms` and `exclude` inputs, with `from` and `to` required
+only for backfill. Preparation is offline:
 it uses the action host's Git/Cargo/filesystem operations, without constructing a GitHub client
 or reading storage credentials.
 
@@ -240,11 +241,19 @@ and conditions, then filters explicit benchmark targets and exclusions. Visited 
 bounds cyclic dependency traversal. The native adapters and in-memory action host execute the
 same orchestration.
 
-The command emits canonical instance, matrix, expected platforms and collection-job prefix,
+History and PR emit canonical instance, matrix, expected platforms and collection-job prefix,
 plus head/base, concrete package CSV, `skip-all` and `skipped`. An empty PR scope does not reach
 collection as an empty package input, which would otherwise select workspace. A fork policy skip
 is separate from empty scope and does not authorize publication. History invoked from a
 same-repository PR also uses the real PR head, not a synthetic merge commit.
+
+Backfill uses the shared namespace/platform normalization but does not derive work from the
+invocation head's Cargo metadata: a historical workspace can contain benchmarks absent there.
+After checking full history and the frozen event checkout, option-safe Git resolution freezes
+both endpoints. It emits the canonical namespace, matrix, expected platforms, `from`, `to`
+and policy-skip fields. The core backfill command validates first-parent membership and owns
+historical scope and traversal. The workflow uses the frozen range end for its execution
+checkout, retaining invocation-owned configuration and tool sources.
 
 ## Workflow evidence adapters
 

@@ -1,4 +1,4 @@
-//! Offline configuration, commit and package-scope preparation for reusable workflows.
+//! Offline configuration, commit, package-scope and historical-range workflow preparation.
 
 mod args;
 mod execute;

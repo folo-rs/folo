@@ -191,7 +191,7 @@ both runs analyze the same commit.
 ### Workflow preparation
 
 Offline preparation resolves the core configuration namespace, validates the platform matrix
-and freezes the real checkout head and the PR event's base commit. PR attribution uses the
+and freezes the revisions used by the selected flow. PR attribution uses the
 event's real head, not its synthetic merge SHA; the checkout must match that head. History uses
 its measured head as base. Preparation requires full Git history and never fetches or reads
 GitHub credentials.
@@ -210,10 +210,16 @@ therefore select the whole workspace. Empty affected scope is an explicit skip-a
 never an empty package argument accidentally interpreted as workspace collection.
 Fork skips remain distinct from empty benchmark scope and do not authorize publication.
 
-Preparation outputs concrete benchmark package names for either flow. PR collection consumes
+History and PR preparation output concrete benchmark package names. PR collection consumes
 that list without applying exclusions a second time; history collection retains workspace
 selection and passes its exclusions to Cargo. There is no consumer scope switch.
 Jobs, receipts and analysis reuse the prepared namespace, frozen commits and expected-platform set.
+
+Backfill preparation freezes the caller's inclusive `from` and `to` references. It does not
+select work from the invocation head's benchmark inventory: historical commits own their
+workspace scope. The core tool validates the first-parent range and traverses it, retaining
+skip-existing behavior and the caller's exclusions and measurement settings. This flow emits
+range and platform identity, not single-commit collection receipts or analysis verdicts.
 
 ### Collection and analysis evidence
 

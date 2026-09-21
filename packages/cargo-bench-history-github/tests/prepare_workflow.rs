@@ -1,4 +1,4 @@
-//! Real Git, Cargo metadata and detector queries for offline reusable-workflow preparation.
+//! Native Git, package discovery and historical-range preparation for reusable workflows.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -223,4 +223,52 @@ fn native_bad_event_head_leaves_existing_outputs_untouched() {
         fs::read_to_string(fixture.root.path().join("outputs")).unwrap(),
         "previous=value\n"
     );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Native Git and filesystem preparation boundary.")]
+fn native_backfill_freezes_symbolic_endpoints_without_current_package_scope() {
+    let fixture = Fixture::new();
+    let config = fixture.root.path().join("authority.toml");
+    fs::write(&config, "[project]\nid='Historical Project'").unwrap();
+    let outputs = fixture.prepare(
+        "backfill",
+        &json!({
+            "platforms":"windows,linux", "config":config,
+            "from":"HEAD~1", "to":"HEAD", "exclude":"historical-only",
+        }),
+    );
+    assert_eq!(outputs.get("instance").unwrap(), "historical_project");
+    assert_eq!(outputs.get("from").unwrap(), &fixture.base);
+    assert_eq!(outputs.get("to").unwrap(), &fixture.head);
+    assert_eq!(outputs.get("skipped").unwrap(), "false");
+    for field in [
+        "head",
+        "base",
+        "packages",
+        "skip-all",
+        "collection-job-prefix",
+    ] {
+        assert!(!outputs.contains_key(field));
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Native Git and historical repository contents.")]
+fn native_backfill_does_not_require_cargo_metadata_at_the_invocation_head() {
+    let fixture = Fixture::new();
+    fixture.git(&["rm", "--quiet", "Cargo.toml", "Cargo.lock"]);
+    fixture.commit();
+    let config = fixture.root.path().join("authority.toml");
+    fs::write(&config, "[project]\nid='Historical Project'").unwrap();
+    let outputs = fixture.prepare(
+        "backfill",
+        &json!({
+            "platforms":"linux", "config":config,
+            "from":fixture.base, "to":fixture.head,
+        }),
+    );
+    assert_eq!(outputs.get("from").unwrap(), &fixture.base);
+    assert_eq!(outputs.get("to").unwrap(), &fixture.head);
+    assert_eq!(outputs.get("skipped").unwrap(), "false");
 }

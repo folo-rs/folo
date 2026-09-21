@@ -17,17 +17,20 @@ The workflow's offline preparation is a separate companion invocation, not a roo
 command:
 
 ```text
-cargo-bench-history-github prepare-workflow --flow history|pr --inputs-file PATH --github-output PATH
+cargo-bench-history-github prepare-workflow --flow history|pr|backfill --inputs-file PATH --github-output PATH
 ```
 
 Its strict string-only JSON inputs are `working-directory`, `config`, required `platforms`
-and optional `exclude`. Path resolution and empty-string handling match the root
-boundary below. The flow selects history workspace or PR affected scope; there is no scope input.
-Exclusions are exact workspace package names. Both flows select concrete packages with
+and optional `exclude`. Backfill additionally requires `from` and `to`; those inputs do not
+apply to other flows. Path resolution and empty-string handling match the root boundary below.
+The flow selects history workspace, PR affected scope or a historical backfill range;
+there is no scope input.
+
+History and PR exclusions are exact workspace package names. Those flows select concrete packages with
 explicit benchmark targets. PR affected selection expands changed ownership through
 workspace path dependents before filtering benchmarks and exclusions.
 
-Preparation appends `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
+History and PR preparation append `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
 `head`, `base`, `packages`, `skip-all` and `skipped`. Package CSV and platform identifiers are
 sorted and deduplicated; booleans are lowercase. Head/base are frozen full commit SHAs.
 History uses head as base; PR preparation uses the event's real head and base, requiring
@@ -48,6 +51,18 @@ A fork event instead emits the matrix/namespace outputs, `skipped=true`,
 head/base outputs and starts no Git/Cargo/detector work. This policy skip does not authorize
 empty-scope publication. Successful non-skipped preparation emits `skipped=false`.
 The workflow retains its same-repository selection independently.
+
+Backfill freezes `from` and `to` references to full commit SHAs and emits `instance`, `matrix`,
+`expected-platforms`, `from`, `to` and `skipped=false`. It verifies the invocation checkout
+against the event head and requires full history, but does not inspect its current Cargo
+benchmark inventory. Historical commits determine their own workspace scope; exclusions
+are passed to the core backfill command, which owns first-parent range validation and traversal.
+Execution checks out the resolved range end, while configuration and source-built tools remain
+from the invocation checkout.
+
+Backfill emits no head/base, package CSV, empty-scope flag or collection-job prefix. Its fork
+skip emits only the matrix/namespace fields, `skipped=true` and the skip reason, without
+resolving Git references. It produces neither collection receipts nor analysis reports.
 
 There is no detector executable argument or installation role for this helper: the companion
 uses the detector's read-only in-workspace library query. Existing receipt and analysis

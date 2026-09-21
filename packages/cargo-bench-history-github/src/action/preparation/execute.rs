@@ -14,7 +14,7 @@ use crate::action::preparation::inputs::WorkflowInputs;
 use crate::action::preparation::scope::Workspace;
 use crate::action::preparation::{Flow, PrepareWorkflowArgs};
 use crate::model::CommitSha;
-use crate::workflow::projection::matrix_outputs;
+use crate::workflow::projection::{matrix_outputs, platform_outputs};
 
 /// Prepares workflow execution without constructing credentials or a publication client.
 // Native adapter selection has integration coverage; prepare_with owns fake-driven policy.
@@ -29,7 +29,10 @@ pub(crate) async fn prepare_with(
     host: &impl Host,
 ) -> Result<(), AppError> {
     let invocation = host.current_dir()?;
-    let inputs = WorkflowInputs::parse(&host.read(&rebase(&invocation, args.inputs_file))?)?;
+    let inputs = WorkflowInputs::parse(
+        &host.read(&rebase(&invocation, args.inputs_file))?,
+        args.flow,
+    )?;
     let cwd = host.directory(&inputs.get("working-directory").map_or_else(
         || invocation.clone(),
         |path| rebase(&invocation, path.into()),
@@ -39,12 +42,19 @@ pub(crate) async fn prepare_with(
     let instance = host
         .instance(&cwd, inputs.get("config").map(Path::new))
         .await?;
-    let mut outputs = matrix_outputs(inputs.platforms(), &instance)?;
+    let mut outputs = if args.flow == Flow::Backfill {
+        platform_outputs(inputs.platforms(), &instance)?
+    } else {
+        matrix_outputs(inputs.platforms(), &instance)?
+    };
     if environment.fork() {
         host.note(
             "Skipping fork-origin PR workflow preparation; this is not an empty benchmark scope.",
         );
-        outputs.push_str("skipped=true\nskip-reason=fork-pull-request\nskip-all=true\npackages=\n");
+        outputs.push_str("skipped=true\nskip-reason=fork-pull-request\n");
+        if args.flow != Flow::Backfill {
+            outputs.push_str("skip-all=true\npackages=\n");
+        }
         return host.append_outputs(&output, &outputs);
     }
     if args.flow == Flow::Pr
@@ -74,6 +84,38 @@ pub(crate) async fn prepare_with(
         );
     }
     let base = match args.flow {
+        Flow::Backfill => {
+            let from = resolve(
+                host,
+                &cwd,
+                inputs
+                    .get("from")
+                    .expect("backfill input validation requires its range start"),
+            )
+            .await?;
+            let to = resolve(
+                host,
+                &cwd,
+                inputs
+                    .get("to")
+                    .expect("backfill input validation requires its range end"),
+            )
+            .await?;
+            // Historical commits own their benchmark inventories, not this invocation's HEAD.
+            // The core backfill command owns first-parent range validation and traversal.
+            host.note(&format!(
+                "Prepared backfill for {} from {} to {} using invocation head {}. Historical workspaces determine benchmark scope; exclusions={:?}.",
+                instance.as_str(), from.as_str(), to.as_str(), head.as_str(), inputs.excluded,
+            ));
+            writeln!(
+                outputs,
+                "from={}\nto={}\nskipped=false",
+                from.as_str(),
+                to.as_str()
+            )
+            .expect("formatting into a String cannot fail");
+            return host.append_outputs(&output, &outputs);
+        }
         Flow::History => head.clone(),
         Flow::Pr => {
             let base: CommitSha = environment

@@ -16,6 +16,7 @@ use crate::action::preparation::{Flow, PrepareWorkflowArgs, prepare_with};
 use crate::action::tests::fake::{FakeHost, SHA};
 
 const BASE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const RANGE_END: &str = "cccccccccccccccccccccccccccccccccccccccc";
 
 fn args(host: &FakeHost, flow: Flow) -> PrepareWorkflowArgs {
     PrepareWorkflowArgs {
@@ -85,13 +86,110 @@ fn workflow_inputs_reject_non_strings_duplicates_unknown_fields_and_invalid_scop
         r#"{"platforms":"linux","working-directory":" "}"#,
         r#"{"platforms":"linux","config":"line\nbreak"}"#,
     ] {
-        WorkflowInputs::parse(json.as_bytes()).err().unwrap();
+        WorkflowInputs::parse(json.as_bytes(), Flow::History)
+            .err()
+            .unwrap();
     }
     let inputs = WorkflowInputs::parse(
         br#"{"platforms":"linux","config":"","exclude":" library,library "}"#,
+        Flow::History,
     )
     .unwrap();
     assert_eq!(inputs.excluded, BTreeSet::from(["library".to_owned()]));
+}
+
+#[test]
+fn backfill_range_inputs_are_required_and_specific_to_the_backfill_flow() {
+    for input in [
+        json!({"platforms":"linux", "to":"HEAD"}),
+        json!({"platforms":"linux", "from":"HEAD"}),
+        json!({"platforms":"linux", "from":"", "to":"HEAD"}),
+        json!({"platforms":"linux", "from":"HEAD", "to":""}),
+        json!({"platforms":"linux", "from":"--option", "to":"HEAD"}),
+        json!({"platforms":"linux", "from":"HEAD", "to":"--option"}),
+        json!({"platforms":"linux", "from":true, "to":"HEAD"}),
+    ] {
+        let error = WorkflowInputs::parse(&serde_json::to_vec(&input).unwrap(), Flow::Backfill)
+            .err()
+            .unwrap();
+        assert!(error.find_source::<InvalidInput>().is_some());
+    }
+    for flow in [Flow::History, Flow::Pr] {
+        let error = WorkflowInputs::parse(br#"{"platforms":"linux","from":"","to":""}"#, flow)
+            .err()
+            .unwrap();
+        assert!(error.find_source::<InvalidInput>().is_some());
+    }
+}
+
+#[test]
+fn backfill_freezes_refs_without_filtering_historical_scope_through_head_metadata() {
+    let mut host = FakeHost::new(&json!({
+        "platforms":"windows,linux", "config":"authority.toml",
+        "from":"release~2", "to":"release", "exclude":"historical-only",
+    }));
+    host.files.insert(
+        host.root.join("authority.toml"),
+        b"[project]\nid='Historical Project'".to_vec(),
+    );
+    host.reply("false");
+    host.reply(SHA);
+    host.reply(BASE);
+    host.reply(RANGE_END);
+    block_on(prepare_with(args(&host, Flow::Backfill), &host)).unwrap();
+    let outputs = output(&host);
+    assert!(outputs.contains("instance=historical_project\n"));
+    assert!(outputs.contains("matrix={\"platform\":[\"linux\",\"windows\"]}\n"));
+    assert!(outputs.contains(&format!("from={BASE}\nto={RANGE_END}\nskipped=false\n")));
+    for field in [
+        "head=",
+        "base=",
+        "packages=",
+        "skip-all=",
+        "collection-job-prefix=",
+    ] {
+        assert!(!outputs.lines().any(|line| line.starts_with(field)));
+    }
+    let processes = host.processes.borrow();
+    assert_eq!(processes.len(), 4);
+    assert!(processes.iter().all(|process| process.program == "git"));
+    let from = processes.get(2).unwrap();
+    assert!(from.args.contains(&"--end-of-options".into()));
+    assert_eq!(from.args.last().unwrap(), "release~2^{commit}");
+    let to = processes.get(3).unwrap();
+    assert!(to.args.contains(&"--end-of-options".into()));
+    assert_eq!(to.args.last().unwrap(), "release^{commit}");
+    assert!(host.package_queries.borrow().is_empty());
+}
+
+#[test]
+fn backfill_fork_skip_has_no_range_or_empty_collection_scope() {
+    let mut host = FakeHost::new(&json!({
+        "platforms":"linux", "from":"HEAD~1", "to":"HEAD",
+    }));
+    let mut event = event();
+    event["pull_request"]["head"]["repo"]["full_name"] = json!("fork/repo");
+    host.event("pull_request", &event);
+    block_on(prepare_with(args(&host, Flow::Backfill), &host)).unwrap();
+    let outputs = output(&host);
+    assert!(outputs.contains("skipped=true\nskip-reason=fork-pull-request\n"));
+    for field in ["from=", "to=", "packages=", "skip-all="] {
+        assert!(!outputs.lines().any(|line| line.starts_with(field)));
+    }
+    assert!(host.processes.borrow().is_empty());
+}
+
+#[test]
+fn an_unresolved_backfill_endpoint_withholds_all_outputs() {
+    let host = FakeHost::new(&json!({
+        "platforms":"linux", "from":"missing", "to":"HEAD",
+    }));
+    host.reply("false");
+    host.reply(SHA);
+    host.reply("not-a-commit");
+    block_on(prepare_with(args(&host, Flow::Backfill), &host)).unwrap_err();
+    assert!(host.outputs.borrow().is_empty());
+    assert_eq!(host.processes.borrow().len(), 3);
 }
 
 #[test]

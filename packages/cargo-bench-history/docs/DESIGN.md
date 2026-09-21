@@ -626,6 +626,11 @@ is measured (each point benchmarks a specific commit, never the working tree), a
 interruption leaves the user exactly where they were. Between commits the worktree is reset
 clean while preserving the ignored build directory for incremental speed.
 
+The selected project directory keeps its location relative to the Git repository root in
+every historical checkout. A Cargo workspace nested inside a repository is benchmarked
+from that nested directory, with its own target output and toolchain selection, rather than
+from the repository root. Configuration and project identity still come from the invocation.
+
 Because that worktree is a **historical checkout, its own toolchain selection governs its
 build**: the toolchain selection the launcher exported into the tool's environment is
 dropped for the per-commit bench run, so the toolchain is resolved from the checkout itself —

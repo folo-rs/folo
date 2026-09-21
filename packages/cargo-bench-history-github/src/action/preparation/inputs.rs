@@ -4,9 +4,10 @@ use ohno::AppError;
 
 use crate::action::errors::InvalidInput;
 use crate::action::inputs::InputObject;
+use crate::action::preparation::Flow;
 use crate::result::platform_list;
 
-/// Checked workflow inputs; scope policy is not a root collection command setting.
+/// Checked workflow configuration, collection exclusions and historical range inputs.
 pub(crate) struct WorkflowInputs {
     values: BTreeMap<String, String>,
     pub(crate) excluded: BTreeSet<String>,
@@ -14,15 +15,17 @@ pub(crate) struct WorkflowInputs {
 
 impl WorkflowInputs {
     /// Validates the entire setup selection before config, Git or package discovery runs.
-    pub(crate) fn parse(json: &[u8]) -> Result<Self, AppError> {
+    pub(crate) fn parse(json: &[u8], flow: Flow) -> Result<Self, AppError> {
         let InputObject(mut values) = serde_json::from_slice(json).map_err(|error| {
             InvalidInput::caused_by("inputs-file", "expected a string object", error)
         })?;
         for (key, value) in &values {
-            if !matches!(
+            let common = matches!(
                 key.as_str(),
                 "working-directory" | "config" | "platforms" | "exclude"
-            ) {
+            );
+            let range = flow == Flow::Backfill && matches!(key.as_str(), "from" | "to");
+            if !common && !range {
                 return Err(InvalidInput::new(key, "unknown workflow input").into());
             }
             if !value.is_empty() && (value.trim().is_empty() || value.contains(['\r', '\n', '\0']))
@@ -34,6 +37,20 @@ impl WorkflowInputs {
         platform_list(values.get("platforms").ok_or_else(|| {
             InvalidInput::new("platforms", "expected collection platforms are required")
         })?)?;
+        if flow == Flow::Backfill {
+            for key in ["from", "to"] {
+                let reference = values
+                    .get(key)
+                    .ok_or_else(|| InvalidInput::new(key, "backfill range endpoint is required"))?;
+                if reference.starts_with('-') {
+                    return Err(InvalidInput::new(
+                        key,
+                        "expected a commit reference, not an option",
+                    )
+                    .into());
+                }
+            }
+        }
         let excluded = values
             .get("exclude")
             .map(|value| {

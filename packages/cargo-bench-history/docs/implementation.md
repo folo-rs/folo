@@ -97,6 +97,12 @@ Integration-only benchmark engines and stress tools remain outside the productio
 boundary. They drive the same public shell or persisted format without adding test-only behavior
 to the shipped application.
 
+Backfill asks Git for the selected project's repository-relative prefix instead of comparing
+absolute paths with filesystem case assumptions. It accepts only a relative descendant path
+(or the empty prefix for a root project), then roots both the partition pre-check and per-commit
+collection at that location in the temporary worktree. The benchmark runner, environment probe,
+and target output share this project directory; Git checkout and cleanup remain repository-wide.
+
 ## Azure provisioning bundle
 
 The shell owns `setup-azure` execution and export; `cbh_cli` parses its arguments and
