@@ -237,9 +237,10 @@ Analysis preparation lists every job attempt for the run with Actions-read permi
 collection job name is `cbh-collect:<instance>:<platform>`, either the entire name or its final
 ` / `-separated component in a reusable workflow. Other jobs and instances do not contribute.
 Each expected platform must have an identifiable, terminal collection job. Only its latest
-attempt can establish success, and success requires a matching receipt. A failed retry excludes
-older successful collection from that platform; a platform not rerun retains its earlier
-successful receipt. Unknown states, missing or ambiguous jobs and receipts, mismatched identities
+executed attempt can establish success, and success requires a matching receipt. A failed retry
+excludes older successful collection from that platform; a platform not rerun retains its earlier
+successful receipt, including when GitHub reports that reused result under a later workflow
+attempt. Unknown states, missing or ambiguous jobs and receipts, mismatched identities
 and incomplete API discovery are errors.
 
 At least one platform must succeed. Total failure does not create a report or authorize an

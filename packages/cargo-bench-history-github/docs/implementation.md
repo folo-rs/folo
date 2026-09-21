@@ -24,6 +24,25 @@ as well as its per-artifact directories. Each selected layout remains receipt-on
 run, attempt and commit identity come from validated receipt contents and job reconciliation,
 not directory names.
 
+## Workflow job history
+
+GitHub's all-attempts job listing includes copies of successful jobs reused by later
+workflow attempts. Such copies have new job IDs and `run_attempt` values while retaining
+the original execution's start and completion times.
+
+The REST adapter validates complete pagination before processing snapshots in attempt order.
+For a successful job reported in a later attempt, it reads that attempt's `run_started_at`.
+A job completed before that boundary is reused work only when an earlier snapshot contains
+the same job name and execution interval. The copy is omitted, retaining the original
+execution attempt for receipt matching. Missing original evidence or ambiguous timing is
+an error rather than permission to use an older receipt.
+
+Genuine successful retries retain their own attempt and require their own receipt.
+Unfinished and unsuccessful snapshots remain authoritative, so a failed retry still
+invalidates older success. Skipped jobs can have synthetic timing fields; those fields do
+not establish successful collection. The receipt format and the semantic job/receipt
+reconciliation rules are unchanged.
+
 ## Root action boundary
 
 The `action` entry point separates strict string-object parsing and command planning from

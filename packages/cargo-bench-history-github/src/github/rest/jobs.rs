@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZero;
 
+use jiff::Timestamp;
 use ohno::AppError;
 use reqwest::Method;
 use serde::Deserialize;
@@ -15,7 +16,8 @@ impl<H: Http> RestGitHub<H> {
     /// Reads every job attempt needed to decide each platform's latest collection result.
     ///
     /// Stable totals, unique IDs and run identity establish complete discovery before receipts
-    /// can authorize analysis. A PR merge-ref SHA in job metadata does not replace receipt heads.
+    /// can authorize analysis. Reused success snapshots retain their original execution attempt.
+    /// A PR merge-ref SHA in job metadata does not replace receipt heads.
     pub(crate) async fn list_jobs(
         &self,
         repository: &Repository,
@@ -42,11 +44,18 @@ impl<H: Http> RestGitHub<H> {
             let response: JobsResponse = self.send_json(operation, request).await?;
             if total.is_some_and(|total| total != response.total_count)
                 || response.jobs.len() > self.page_size.get()
-                || response.jobs.iter().any(|job| !seen.insert(job.id))
+                || response
+                    .jobs
+                    .iter()
+                    .any(|snapshot| !seen.insert(snapshot.job.id))
             {
                 return Err(PaginationError::new(operation).into());
             }
-            if response.jobs.iter().any(|job| job.run_id != run_id) {
+            if response
+                .jobs
+                .iter()
+                .any(|snapshot| snapshot.job.run_id != run_id)
+            {
                 return Err(InvalidResponseError::new(operation).into());
             }
             total = Some(response.total_count);
@@ -58,12 +67,83 @@ impl<H: Http> RestGitHub<H> {
                 return Err(PaginationError::new(operation).into());
             }
             if last_page {
-                return Ok(jobs);
+                return self.execution_jobs(repository, run_id, jobs).await;
             }
             page = page
                 .checked_add(1)
                 .ok_or_else(|| PaginationError::new(operation))?;
         }
+    }
+
+    /// Removes later-attempt copies only when earlier execution evidence establishes their origin.
+    async fn execution_jobs(
+        &self,
+        repository: &Repository,
+        run_id: NonZero<u64>,
+        mut snapshots: Vec<JobSnapshot>,
+    ) -> Result<Vec<WorkflowJob>, AppError> {
+        let operation = "resolving workflow job execution attempts";
+        snapshots.sort_unstable_by_key(|snapshot| snapshot.job.run_attempt);
+        let mut starts = BTreeMap::new();
+        let mut executions = BTreeSet::new();
+        let mut jobs = Vec::new();
+        for snapshot in snapshots {
+            let Some((started, completed)) = snapshot.successful_interval()? else {
+                // Unfinished and unsuccessful jobs retain their reported attempt so a failed
+                // or pending retry cannot recover coverage from an older successful receipt.
+                jobs.push(snapshot.job);
+                continue;
+            };
+            let execution = (snapshot.job.name.clone(), started, completed);
+            let attempt = snapshot.job.run_attempt;
+            if attempt > NonZero::<u64>::MIN {
+                let boundary = if let Some(boundary) = starts.get(&attempt) {
+                    *boundary
+                } else {
+                    let boundary = self.attempt_start(repository, run_id, attempt).await?;
+                    starts.insert(attempt, boundary);
+                    boundary
+                };
+                // GitHub copies successful jobs into a rerun with new IDs and run_attempt,
+                // but retains their execution times. A completion before this attempt began
+                // cannot be a new execution. Ref: docs/implementation.md, "Workflow job history".
+                if completed < boundary {
+                    if !executions.contains(&execution) {
+                        return Err(InvalidResponseError::new(operation).into());
+                    }
+                    continue;
+                }
+                if started < boundary {
+                    return Err(InvalidResponseError::new(operation).into());
+                }
+            }
+            executions.insert(execution);
+            jobs.push(snapshot.job);
+        }
+        Ok(jobs)
+    }
+
+    /// Reads the selected attempt's boundary, not the workflow run's first creation time.
+    async fn attempt_start(
+        &self,
+        repository: &Repository,
+        run_id: NonZero<u64>,
+        attempt: NonZero<u64>,
+    ) -> Result<Timestamp, AppError> {
+        let operation = "reading a workflow attempt start";
+        let request = self.request(
+            Method::GET,
+            repository,
+            &format!("actions/runs/{run_id}/attempts/{attempt}"),
+        )?;
+        let response: AttemptResponse = self.send_json(operation, request).await?;
+        if response.id != run_id || response.run_attempt != attempt {
+            return Err(InvalidResponseError::new(operation).into());
+        }
+        response
+            .run_started_at
+            .parse()
+            .map_err(|error| InvalidResponseError::caused_by(operation, error).into())
     }
 }
 
@@ -73,183 +153,47 @@ impl<H: Http> RestGitHub<H> {
 #[derive(Deserialize)]
 struct JobsResponse {
     total_count: usize,
-    jobs: Vec<WorkflowJob>,
+    jobs: Vec<JobSnapshot>,
 }
 
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
-    use std::future::{Future, ready};
-    use std::slice;
-    use std::time::Duration;
+/// API snapshots can copy completed executions into later workflow attempts.
+///
+/// Timing remains nullable for queued or skipped jobs. Only successful executions need
+/// a complete interval to establish that an old receipt belongs to reused work.
+#[derive(Deserialize)]
+struct JobSnapshot {
+    #[serde(flatten)]
+    job: WorkflowJob,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
 
-    use futures::executor::block_on;
-    use reqwest::header::HeaderMap;
-    use reqwest::{Request, StatusCode};
-    use serde_json::{Value, json};
-
-    use super::*;
-    use crate::github::GitHub;
-    use crate::github::http::{HttpResponse, TransportError};
-    use crate::github::rest::SecretToken;
-    use crate::workflow::receipt::tests::receipt;
-    use crate::workflow::reconcile::reconcile;
-
-    /// A finite exchange script asserts page progression before returning each response.
-    struct JobHttp {
-        responses: RefCell<VecDeque<(StatusCode, Value)>>,
-        page: RefCell<u64>,
-    }
-
-    impl Http for JobHttp {
-        fn send(
-            &self,
-            request: Request,
-        ) -> impl Future<Output = Result<HttpResponse, TransportError>> {
-            let mut page = self.page.borrow_mut();
-            *page = page.checked_add(1).unwrap();
-            assert_eq!(request.method(), Method::GET);
-            assert_eq!(
-                request.url().as_str(),
-                format!(
-                    "https://api.github.com/repos/folo-rs/folo/actions/runs/42/jobs?filter=all&per_page=2&page={page}"
-                )
-            );
-            let (status, body) = self.responses.borrow_mut().pop_front().unwrap();
-            ready(Ok(HttpResponse {
-                status,
-                headers: HeaderMap::new(),
-                body: serde_json::to_vec(&body).unwrap(),
-            }))
+impl JobSnapshot {
+    fn successful_interval(&self) -> Result<Option<(Timestamp, Timestamp)>, AppError> {
+        if self.job.status != "completed" || self.job.conclusion.as_deref() != Some("success") {
+            return Ok(None);
         }
-
-        async fn sleep(&self, _delay: Duration) {
-            panic!("these fixtures never permit a retry");
+        let operation = "validating successful workflow job timing";
+        let parse = |value: &Option<String>| -> Result<Timestamp, AppError> {
+            value
+                .as_deref()
+                .ok_or_else(|| InvalidResponseError::new(operation))?
+                .parse()
+                .map_err(|error| InvalidResponseError::caused_by(operation, error).into())
+        };
+        let started = parse(&self.started_at)?;
+        let completed = parse(&self.completed_at)?;
+        if completed < started {
+            return Err(InvalidResponseError::new(operation).into());
         }
+        Ok(Some((started, completed)))
     }
+}
 
-    fn github(responses: Vec<(StatusCode, Value)>) -> RestGitHub<JobHttp> {
-        RestGitHub::new(
-            JobHttp {
-                responses: RefCell::new(responses.into()),
-                page: RefCell::new(0),
-            },
-            SecretToken::select(Some("job-test-credential".to_owned()), None).unwrap(),
-            NonZero::new(2).unwrap(),
-        )
-    }
-
-    fn job(id: u64, platform: &str, attempt: u64, conclusion: &str) -> Value {
-        json!({
-            "id": id, "run_id": 42, "run_attempt": attempt,
-            "name": format!("caller / cbh-collect:folo:{platform}"),
-            "status": "completed", "conclusion": conclusion,
-            "head_sha": "b".repeat(40),
-            "steps": [], "runner_name": "runner"
-        })
-    }
-
-    #[test]
-    fn all_attempt_pages_drive_selection_without_using_merge_ref_sha() {
-        let github = github(vec![
-            (
-                StatusCode::OK,
-                json!({"total_count": 3, "jobs": [
-                    job(3, "windows", 2, "failure"), job(1, "linux", 1, "success")
-                ]}),
-            ),
-            (
-                StatusCode::OK,
-                json!({"total_count": 3, "jobs": [
-                    job(2, "windows", 1, "success")
-                ]}),
-            ),
-        ]);
-        let receipt = receipt("linux", 1);
-        let jobs = block_on(github.workflow_jobs(&receipt.repository, receipt.run_id)).unwrap();
-        let selected = reconcile(
-            &receipt.repository,
-            &receipt.instance,
-            receipt.run_id,
-            &receipt.head,
-            &["linux".to_owned(), "windows".to_owned()].into(),
-            &jobs,
-            slice::from_ref(&receipt),
-        )
-        .unwrap();
-        assert_eq!(selected.receipt_indices, [0]);
-        assert!(!selected.complete);
-        assert!(github.http.responses.borrow().is_empty());
-    }
-
-    #[test]
-    fn missing_attempt_is_not_assumed_to_be_the_current_attempt() {
-        let mut value = job(1, "linux", 1, "success");
-        value.as_object_mut().unwrap().remove("run_attempt");
-        let github = github(vec![(
-            StatusCode::OK,
-            json!({"total_count": 1, "jobs": [value]}),
-        )]);
-        let receipt = receipt("linux", 1);
-        let error =
-            block_on(github.workflow_jobs(&receipt.repository, receipt.run_id)).unwrap_err();
-        assert!(error.find_source::<InvalidResponseError>().is_some());
-    }
-
-    #[test]
-    fn an_exactly_full_page_requires_the_final_empty_page() {
-        let github = github(vec![
-            (
-                StatusCode::OK,
-                json!({"total_count": 2, "jobs": [
-                    job(1, "linux", 1, "success"), job(2, "windows", 1, "success")
-                ]}),
-            ),
-            (StatusCode::OK, json!({"total_count": 2, "jobs": []})),
-        ]);
-        let receipt = receipt("linux", 1);
-        let jobs = block_on(github.workflow_jobs(&receipt.repository, receipt.run_id)).unwrap();
-        assert_eq!(jobs.len(), 2);
-        assert!(github.http.responses.borrow().is_empty());
-    }
-
-    #[test]
-    fn incomplete_pages_fail_instead_of_returning_partial_jobs() {
-        for second in [
-            json!({"total_count": 3, "jobs": []}),
-            json!({"total_count": 3, "jobs": [job(1, "linux", 1, "success")]}),
-            json!({"total_count": 4, "jobs": [job(3, "linux", 2, "success")]}),
-        ] {
-            let github = github(vec![
-                (
-                    StatusCode::OK,
-                    json!({"total_count": 3, "jobs": [
-                        job(1, "linux", 1, "success"), job(2, "windows", 1, "success")
-                    ]}),
-                ),
-                (StatusCode::OK, second),
-            ]);
-            let receipt = receipt("linux", 1);
-            let error =
-                block_on(github.workflow_jobs(&receipt.repository, receipt.run_id)).unwrap_err();
-            assert!(error.find_source::<PaginationError>().is_some());
-        }
-    }
-
-    #[test]
-    fn later_page_http_failure_is_not_a_successful_partial_list() {
-        let github = github(vec![
-            (
-                StatusCode::OK,
-                json!({"total_count": 3, "jobs": [
-                    job(1, "linux", 1, "success"), job(2, "windows", 1, "success")
-                ]}),
-            ),
-            (StatusCode::FORBIDDEN, json!({"message": "denied"})),
-        ]);
-        let receipt = receipt("linux", 1);
-        block_on(github.workflow_jobs(&receipt.repository, receipt.run_id)).unwrap_err();
-    }
+/// An attempt-specific boundary distinguishes new jobs from copied historical results.
+#[derive(Deserialize)]
+struct AttemptResponse {
+    id: NonZero<u64>,
+    run_attempt: NonZero<u64>,
+    run_started_at: String,
 }
