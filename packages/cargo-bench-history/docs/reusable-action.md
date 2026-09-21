@@ -218,7 +218,7 @@ repeating a source-fallback compile. Cache availability is not guaranteed.
 so a released manifest cannot substitute a binary from another revision.
 
 **One manifest for the tested tool set.** A sink-using flow needs the tool *and*
-the companion (§5.1); workflow scope selection also uses `cargo-detect-package` (§4.7).
+the companion (§5.1).
 The **release manifest** records the action's own release version and exact versions of every
 monorepo binary used by the action, workflows or their tests. These are separate version
 selections, not a promise that the binaries have the same package version:
@@ -228,8 +228,10 @@ selections, not a promise that the binaries have the same package version:
   **pinned by the action release** to the version tested with that tool.
 * The **faker** is independently pinned for the action's tests. Its version is not inferred
   from the tool or companion version.
-* **Workflow helpers**, including `cargo-detect-package`, use explicit pins under the same
-  installation and paired-release policy.
+
+The companion links `cargo-detect-package` as a Rust library for workflow scope selection (§4.7).
+It follows the companion's ordinary Cargo dependency/version plan; the action neither installs
+a detector executable nor carries a separate detector pin.
 
 Workspace release groups are derived from exact first-party dependency requirements
 ([release versioning](../../../docs/release-versioning.md#version-groups)). The tool and its
@@ -795,8 +797,8 @@ bulk this design set out to remove.
 
 The action repo publishes these consumption layers:
 
-* **Reusable workflows** (`workflow_call`) — the default path. One per flow:
-  `history.yml`, `pr.yml`, and `backfill.yml`. Each owns the entire job graph, and the
+* **Reusable workflows** (`workflow_call`) — the default path for history and PR reporting:
+  `history.yml` and `pr.yml`. Each owns its entire job graph, and the
   consumer's whole workflow reduces to a trigger, a `uses:` line, the permissions the flow
   needs, and a few inputs:
 
@@ -819,9 +821,13 @@ The action repo publishes these consumption layers:
 
 * **Composite actions** — the escape hatch, and what the reusable workflows are built from.
   A consumer whose graph differs (extra gating, an unusual runner pool, a different sink)
-  calls `collect` / `analyze-history` / `analyze-pr` / publication and lifecycle commands directly and
-  wires the jobs themselves. Nothing is hidden from them; the reusable workflow is a
-  convenience, not a privileged path.
+  calls `collect` / `backfill` / `analyze-history` / `analyze-pr` / publication and lifecycle
+  commands directly and wires the jobs themselves. Nothing is hidden from them; the reusable
+  workflow is a convenience, not a privileged path.
+
+Backfill has no prebuilt reusable workflow. Its root-action command remains available to
+caller-owned job graphs. Folo owns its backfill schedule and bounded historical-window policy
+in the repository workflow and recipe (§10).
 
 **`pr.yml` owns the scope preflight end to end.** Deciding *which packages a PR should
 benchmark* is a prerequisite for the PR flow, and leaving it to the consumer would leave the
@@ -829,8 +835,8 @@ hardest part of adoption unsolved while claiming the flow is one `uses:` line. T
 therefore computes it as follows:
 
 1. **Changed files → owning packages.** The diff against the base names files; each file
-   belongs to a package. This is what `cargo-detect-package` answers, and taking a versioned
-   dependency on it is preferable to reimplementing the lookup.
+   belongs to a package. The companion uses `cargo-detect-package`'s read-only Rust library
+   query for this lookup rather than installing another executable or duplicating its logic.
 2. **Expand to dependents.** A change to a package can move the numbers of anything that
    depends on it, so the set is closed over reverse dependencies within the workspace.
 3. **Keep the packages that carry benchmarks and apply configured exclusions.** `cargo
@@ -898,8 +904,9 @@ around a reusable-workflow call, so a repository can supply:
 .github/actions/bench-history-setup/action.yml
 ```
 
-Collection jobs invoke this action after checkout/bootstrap and before benchmarking; backfill
-uses the same hook before its collection work. If the file is absent, no custom setup runs.
+Shared collection jobs invoke this action after checkout/bootstrap and before benchmarking.
+Folo's repository-owned backfill invokes the same hook before its collection work.
+If the file is absent, the shared workflows run no custom setup.
 The hook belongs to the repository/configuration checkout. It is not invoked by GitHub
 publication jobs, and the shared workflow's own tool installation remains its responsibility.
 
@@ -979,9 +986,10 @@ that gap.
   comparison-relevant commits rather than the oldest ones. It is **resumable by default**:
   commits already stored for this key are skipped, so a truncated run simply continues
   next time, and only an explicit overwrite re-measures.
-  The CLI takes inclusive `FROM TO` commit refs, not a duration flag; the workflow resolves
-  its rolling window to those refs before invoking the composite. Its error policy maps to
-  `--ignore-errors` when it should continue past a commit that cannot build or benchmark.
+  The CLI takes inclusive `FROM TO` commit refs, not a duration flag; the caller-owned workflow
+  or recipe resolves its rolling window before invoking the root action or CLI. Its error
+  policy maps to `--ignore-errors` when it should continue past a commit that cannot build or
+  benchmark.
 * **It has no analysis phase and no sink.** Densification only *writes*; the next
   push-triggered `analyze-history` picks up whatever landed. This keeps the flow free of
   report-sink concerns entirely — no issue, no comment, no staleness.
@@ -1439,8 +1447,8 @@ test their tool/action selection; the action does not add a `report-schema` or t
 * **README is a quick start; the book is the reference.** Two documents describing the same
   action drift, and the one that drifts is always the one a maintainer forgets — so they get
   clearly different jobs rather than overlapping scopes. The **README** answers "what is this
-  and how do I switch it on": a sentence on what the action does, the three `uses:` snippets of
-  §4.7 (history, PR, nightly densification), the permissions each needs, and a link onward for
+  and how do I switch it on": a sentence on what the action does, the history and PR caller
+  snippets of §4.7, the permissions each needs, and a link onward for
   everything else. It stops there deliberately; a reader who needs more is a reader the book
   serves better. The **book's GitHub-automation section** (§11) is the reference: the input
   surface, the hand-assembled recipes for repos whose job graph differs, the deployment
@@ -1449,7 +1457,7 @@ test their tool/action selection; the action does not add a `report-schema` or t
   reader configuring a pipeline actually needs, and which a README cannot supply without
   restating the whole guide.
 
-  The hand-assembled recipes the book carries expand the reusable workflows:
+  Advanced compositions of the root commands follow these flow contracts:
   * A **per-push history** workflow — a `fail-fast: false` matrix `collect` job across the
     platforms (each `on-existing: skip`, uploading its successful collection receipt as a
     per-platform artifact), then an `analyze-history` job (`needs: collect`, `fetch-depth: 0`,
@@ -1467,12 +1475,13 @@ test their tool/action selection; the action does not add a `report-schema` or t
     Analysis and publication use `!cancelled()` so a superseded run never posts.
     The empty-scope `publish-comment-inconclusive` and terminal `publish-comment-failed` paths
     sit alongside them — all behind the same-repo check (§6).
-  * A **nightly densification** workflow (§4.8) — a matrix `backfill` job over the same
-    platforms and window, with no analyze job and no sink.
+  * A **caller-owned densification** workflow (§4.8) — a matrix `backfill` job with the
+    repository's selected platforms and historical window, with no analyze job and no sink.
   * The **concurrency** pattern: PR-driven runs
     cancel superseded runs keyed on the ref, and the close event is handled by `pr.yml` itself
     (§4.7) rather than a second workflow; the push flow deduplicates the same commit instead.
-  These mirror Folo's own bench-history workflows, lifted to consume the published action.
+  Folo's history and PR callers use the shared orchestration; its backfill graph and window
+  remain repository-owned.
 * **Marketplace publish** from the action repo's release UI (root `action.yml` + branding)
   once a `vX.Y.Z` release exists. Only the composite action is listed; the reusable workflows
   ship in the same repo under the same tags but are referenced by path (§4.7).
@@ -1503,9 +1512,10 @@ There is no manual tag-preparation step or crates.io publication in the action r
 The [repository-specific release policy](../../../docs/benchmark-action-releases.md)
 and [`pair-benchmark-action-release` skill](../../../.github/skills/pair-benchmark-action-release/SKILL.md),
 run after general `increment-versions`, require this pairing, including dependency/group and
-version-only movements. The manifest is the scope authority, including its test-only faker pin
-and workflow helpers. Reuse an existing pairing when appropriate and refresh both PRs after any
-version-plan change. A tool-pin-only action change still carries an action-version increment.
+version-only movements. The manifest is the scope authority, including its test-only faker pin.
+Library dependencies reach the action through their pinned executable's release. Reuse an
+existing pairing when appropriate and refresh both PRs after any version-plan change.
+A tool-pin-only action change still carries an action-version increment.
 
 **`install-tools` is a required, fail-closed availability check.** It reads the PR's own
 manifest and invokes the shared installation canaries, not a second installer and not the
@@ -1585,18 +1595,15 @@ so both the install branching and the actual installs are exercised, not just mo
    seeded with **enough points for branch mode to judge against** — a two-commit fixture cannot
    clear the detector's minimum evidence — so this fixture uses the faker→`import` path (§11)
    rather than real benchmark runs to populate the comparison window cheaply.
-5. **Caller canaries for the reusable workflows.** The action repo carries its own caller
-   workflows that invoke `history.yml`, `pr.yml`, and `backfill.yml` exactly as an external
-   consumer would, because none of the other levels exercise the layer that is now doing the
-   most work: matrix expansion from the `platforms` input, fan-out-then-converge onto one
-   analyze/upload/publish job, the same-repo check, artifact aggregation, and concurrency.
-   The canaries deliberately include the ugly cases — a **partially failed** matrix that
-   preserves findings while marking missing platforms in both sinks, a **fully failed**
-   matrix, a malformed `platforms` list, an **empty package scope** (which must route
-   to `publish-comment-inconclusive`, not analyze or workspace collection), and a cancelled run —
-   paths where the graph, not the binaries, decides the outcome.
-   The two layers' input lists are contract-tested against
-   each other so a new composite input cannot silently go unexposed by the workflows.
+5. **Caller coverage for the reusable workflows.** Folo's synthetic caller invokes `history.yml`
+   across the supported native platforms and verifies the report returned to the caller.
+   Its real PR benchmark workflow invokes `pr.yml`. These calls exercise matrix expansion,
+   fan-out-then-converge onto one analysis job, receipt and artifact transport, and the
+   workflow's exported report outputs. Companion fake/native suites and action workflow
+   contract tests cover partial and total collection failure, malformed platforms, empty scope,
+   policy skips and run ownership. Contract tests check supplied inputs and output references
+   against the actual action metadata; they do not require every advanced composite input to
+   become a reusable-workflow input.
 
 **Fork-gate validation exercises behavior.** Event fixtures cover same-repository and fork
 heads, asserting the fork skip result (§6) and that credentialed and publication jobs cannot
@@ -1684,26 +1691,31 @@ common path works while saying nothing about the rest of the input surface. That
 the gap the synthetic-history checks fill: they cover the configurations no production repo happens
 to have, and dogfooding covers the realism no test fixture can.
 
-The Azure auth branches stay covered by the monorepo's Azure-backend test jobs (`DESIGN.md` §6),
-so none of these layers needs to reach the cloud.
+Root-action installation canaries use local storage. Folo's cross-job caller canary uses
+the separate Azure test account to exercise hosted authentication and report handoff.
+The monorepo's Azure-backend test jobs cover the backend's authentication branches (`DESIGN.md` §6).
 
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo's bench-history workflows — the push flow, the PR flow, and the nightly densification
-pass — consume a selected revision of the shared action, normally a published release.
-**`install-method: path`** points at the workspace checkout, so collection keeps measuring
-`main`'s HEAD tool rather than waiting for a release (preserving the property that a tool change is
-exercised the same push it lands). External repos use the default `binstall` install. This
-dogfoods the action's entire input-driven path
+Folo's history and PR workflows consume a selected published revision of the shared action.
+**`install-method: path`** and **`source-path: .`** build the required tools from the invocation
+checkout, so unreleased monorepo changes are exercised without waiting for tool publication.
+The selected action revision supplies orchestration independently of those tool sources.
+External repos use the default `binstall` install. Folo dogfoods the action's input-driven path
 — config resolution, auth wiring, the `on-existing: skip` write mode and delta-scoped
 `packages`, receipt-based machine-key selection, the `--cache` read-through cache, the analysis
 outcome, and both report sinks with their lifecycles.
 
-Folo's entry points are reusable-workflow calls rather than a parallel implementation of
-the full job graphs. Domain rendering belongs to the tool, GitHub reporting belongs to the
-companion, and configurable workflow policy belongs to the shared layer (§5.1). Repository
-choices are inputs rather than duplicated shell logic.
+Folo's history and PR entry points are reusable-workflow calls rather than parallel
+implementations of those job graphs. Domain rendering belongs to the tool, GitHub reporting
+belongs to the companion, and configurable workflow policy belongs to the shared layer (§5.1).
+Repository choices are inputs rather than duplicated shell logic.
+
+The nightly densification workflow remains repository-owned. Its recipe invokes the
+source-built CLI with Folo's historical window and resource budget, sharing the collection
+policy and setup hook with the history and PR callers. It does not depend on a reusable
+backfill workflow.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
@@ -1797,10 +1809,12 @@ The tool, companion and workflow layer have separate responsibilities:
   (`cargo-bench-history-faker`) with its own binary, so the published `cargo-bench-history`
   ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
-  backfill, artifact and reporting policy belong to the shared Rust and workflow layers.
-  PowerShell is limited to bootstrap and the independently executable Azure deployment
-  bundle; its driver is shared by `setup-azure` and export, not reimplemented in Rust.
-  PR-close cancellation belongs to the PR workflow itself.
+  artifact and reporting decisions belong to the shared Rust and workflow layers.
+  Folo retains its backfill window and budget in repository-owned orchestration, while the
+  source-built CLI owns measurement and storage. PowerShell handles bootstrap, repository
+  workflow wiring and the independently executable Azure deployment bundle; its driver is
+  shared by `setup-azure` and export, not reimplemented in Rust. PR-close cancellation belongs
+  to the PR workflow itself.
 * **The book has a "GitHub automation" section.** Running `cargo-bench-history` from
   automation is a primary deployment model, with questions that have no local analogue.
   The section covers:

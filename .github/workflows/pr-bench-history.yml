@@ -49,7 +49,7 @@ jobs:
     needs: configuration
     # The shared workflow derives affected scope and frozen PR head/base; Folo supplies
     # only repository-specific settings. Ref: implementation.md#benchmark-workflow-artifacts.
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@f0b1c5feda0bbabd31fa03b239967da39502140c
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@ca44c44315d7056472c792754b3b9009b7f6705f # v1.0.0
     permissions:
       contents: read
       actions: read
