@@ -198,11 +198,14 @@ workflows are outside its scope, even when they run on a schedule.
 
 Verify the linked run and reported attempt before applying ownership, labels or
 closure rules. A generic triage request, title prefix or label is not
-proof of an eligible run. Leave out-of-scope or unverified reports unchanged under
-this procedure; ordinary triage must not enroll them in scheduled repair intake.
+proof of an eligible run. A confirmed provenance mismatch receives a
+[one-time notification](#provenance-mismatch-notifications), not ownership,
+labels, findings or closure. Unverified reports remain unchanged; ordinary triage
+must not enroll them in scheduled repair intake.
 Process an explicitly requested eligible report, or discover reports using
-[run-report recognition](#run-report-recognition), oldest first. A closed or
-nonmatching explicitly requested issue is out of scope; leave it unchanged.
+[run-report recognition](#run-report-recognition), oldest first. An explicitly
+requested pull request, closed issue or nonmatching title is out of scope;
+leave it unchanged, without a mismatch notification.
 Claim verified reports and process
 them sequentially. Read the report, relevant jobs/logs and source, then search
 relevant open and closed issues and related PRs, including human-filed issues
@@ -249,6 +252,29 @@ with an explanation. Close the report only after every failure is accounted for
 and the linked issues contain the handoff information. Missing decisive evidence
 keeps it open with a concrete blocker. Report closure means triage is complete,
 not that its problems are fixed.
+
+### Provenance mismatch notifications
+
+An open, prefix-matching report whose linked run demonstrably falls outside the
+triage scope receives an explanatory comment so its author can correct the
+report. State the observed mismatch, the required workflow scope, the relevant
+run/attempt link and a concrete corrective action, such as supplying the intended
+failed attempt or removing the report prefix from an unrelated issue. Missing
+evidence or unavailable GitHub metadata is uncertainty, not a confirmed mismatch.
+
+Post this notification only once per issue. Begin with `[Copilot speaking]` and
+include the stable, visible marker `scheduled-triage:provenance-mismatch` on its
+own line. Read all comment pages and check for an existing notification carrying
+that marker before posting; recheck current issue eligibility and discussion
+immediately before the write. Failed or incomplete reads block posting, and an
+ambiguous write is reconciled through discussion rather than blindly retried.
+The marker deduplicates this notification only, following the
+[automation guidelines](automation.md#make-notifications-useful-and-repeatable).
+
+The notification does not claim, relabel, close or enroll the issue for repair.
+Reevaluate the report's current provenance on later visits regardless of the
+marker, so an author correction permits normal triage without another warning.
+Closed issues, pull requests and nonmatching titles remain outside this procedure.
 
 ## Ownership and handoff
 

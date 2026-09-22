@@ -38,20 +38,21 @@ needed to establish ownership, capacity and package relationships. For example:
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-finding&sort=created&direction=asc&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, .title, .html_url] | @tsv'
+gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-finding&sort=created&direction=asc&per_page=100" --jq '.[] | select(.pull_request == null) | select(.title | startswith("Scheduled validation failed on ") | not) | [.number, .title, .html_url] | @tsv'
 ```
 
 | Placeholder | Value |
 |---|---|
 | `REPOSITORY` | This Local project's verified GitHub `owner/repository`. |
 
-Read discussion, assignees, branches and linked PRs for the relevant issues. Do not
-mistake an incomplete API read for an empty queue. Open issues whose titles start
+Filter out run reports before reading discussion, assignees, branches and linked
+PRs for the remaining findings. Do not mistake an incomplete API read for an empty
+queue. Open issues whose titles start
 with the exact, case-sensitive prefix `Scheduled validation failed on ` belong
 to triage, not this repair queue, even if labeled `scheduled-finding`. Follow
 [run-report recognition](../../../docs/scheduled-validation.md#run-report-recognition).
-A human issue is
-eligible on the same terms as an agent issue; no marker or special author is needed.
+A human issue is eligible on the same terms as an agent issue; no marker or
+special author is needed.
 Closed issues are not repair candidates. Read the disposition of known repairs,
 including their linked closed issues and PRs, to exclude finished inactive sessions
 from capacity; do not scan the closed backlog for new repairs.
