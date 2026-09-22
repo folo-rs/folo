@@ -1,5 +1,6 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 # Exercises the report publisher's open-title search and current-issue boundary in memory.
+# Also executes the triage skill's discovery example with an in-memory GitHub CLI response.
 # Fake GitHub pages protect against broad discovery, partial results and stale search hits;
 # no test reads issue content from GitHub or creates files.
 Set-StrictMode -Version Latest
@@ -145,6 +146,24 @@ Describe 'Open title-prefix report discovery' {
             Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly
         }
 
+        It 'rejects a total that <Case> between pages before refreshing candidates' -ForEach @(
+            # Cross a page boundary with otherwise complete responses for each advertised total.
+            @{ Case = 'shrinks'; SecondTotal = 100; SecondCount = 0 }
+            @{ Case = 'grows'; SecondTotal = 102; SecondCount = 2 }
+        ) {
+            $script:pages[0].items = @(1..100 | ForEach-Object { $script:issue.Clone() })
+            $script:pages[0].total_count = 101
+            $script:pages += @{
+                items = @(for ($index = 0; $index -lt $SecondCount; $index++) { $script:issue.Clone() })
+                total_count = $SecondTotal; incomplete_results = $false
+            }
+            { Get-ScheduledReport example/repo $script:attemptUrl } | Should -Throw
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 2 -Exactly
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
+                $Endpoint -match '^repos/'
+            }
+        }
+
         It 'does not use first-page matches when a later page is <Case>' -ForEach @(
             @{ Case = 'unavailable' }, @{ Case = 'incomplete' }, @{ Case = 'empty' }
         ) {
@@ -159,10 +178,73 @@ Describe 'Open title-prefix report discovery' {
                     items = @(); total_count = 101; incomplete_results = ($Case -eq 'incomplete')
                 }
             }
+
             { Get-ScheduledReport example/repo $script:attemptUrl } | Should -Throw
             Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
                 $Endpoint -match '^repos/'
             }
         }
+    }
+}
+
+Describe 'Triage report-discovery example' {
+    BeforeAll {
+        # Execute the documented query rather than asserting its wording or copying its logic.
+        $skillPath = Join-Path $PSScriptRoot '..\..\.github\skills\scheduled-triage\SKILL.md'
+        $skill = Get-Content -LiteralPath $skillPath -Raw
+        $example = [regex]::Match($skill, '(?ms)^```powershell\r?\n(.*?)^```').Groups[1].Value
+        $script:triageDiscovery = [scriptblock]::Create($example.Replace('{{REPOSITORY}}', 'example/repo'))
+        function gh { throw 'The discovery example must use the in-memory CLI response.' }
+    }
+
+    BeforeEach {
+        $script:issue = @{
+            number = 42; state = 'open'; title = 'Scheduled validation failed on a run'
+            html_url = 'https://github.com/example/repo/issues/42'
+        }
+        $script:pages = @()
+        Mock gh { ConvertTo-Json -InputObject $script:pages -Depth 5 -Compress }
+    }
+
+    It 'emits the complete queue for <Count> stable search results' -ForEach @(
+        @{ Count = 0 }, @{ Count = 1 }, @{ Count = 101 }
+    ) {
+        # An empty search still returns one response; the larger case crosses a page boundary.
+        $script:pages = @(for ($offset = 0; $offset -lt [Math]::Max(1, $Count); $offset += 100) {
+            $items = @(for ($index = $offset; $index -lt [Math]::Min($offset + 100, $Count); $index++) {
+                $item = $script:issue.Clone()
+                $item.number += $index
+                $item.html_url = "https://github.com/example/repo/issues/$($item.number)"
+                $item
+            })
+            @{ items = $items; total_count = $Count; incomplete_results = $false }
+        })
+        $reports = @(& $script:triageDiscovery)
+        $reports.Count | Should -Be $Count
+        for ($index = 0; $index -lt $Count; $index++) {
+            $number = $script:issue.number + $index
+            $reports[$index] | Should -Be "$number`t$($script:issue.title)`thttps://github.com/example/repo/issues/$number"
+        }
+        Should -Invoke gh -Times 1 -Exactly
+    }
+
+    It 'emits no candidates when the search total <Case> between pages' -ForEach @(
+        @{ Case = 'shrinks'; SecondTotal = 100; SecondCount = 0 }
+        @{ Case = 'grows'; SecondTotal = 102; SecondCount = 2 }
+    ) {
+        $script:pages = @(
+            @{
+                items = @(1..100 | ForEach-Object { $script:issue.Clone() })
+                total_count = 101; incomplete_results = $false
+            }
+            @{
+                items = @(for ($index = 0; $index -lt $SecondCount; $index++) { $script:issue.Clone() })
+                total_count = $SecondTotal; incomplete_results = $false
+            }
+        )
+        $emitted = [Collections.Generic.List[object]]::new()
+        { & $script:triageDiscovery | ForEach-Object { $emitted.Add($_) } } | Should -Throw
+        $emitted.Count | Should -Be 0
+        Should -Invoke gh -Times 1 -Exactly
     }
 }

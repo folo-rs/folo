@@ -48,14 +48,22 @@ $pages = @(gh api --method GET search/issues `
     -f 'q=repo:{{REPOSITORY}} is:issue is:open in:title "Scheduled validation failed on"' `
     -f sort=created -f order=asc -F per_page=100 --paginate --slurp |
     ConvertFrom-Json -AsHashtable)
+if ($pages.Count -eq 0) {
+    throw 'Report discovery did not return a search response.'
+}
+$expectedTotal = $pages[0].total_count
 foreach ($page in $pages) {
     # GitHub search exposes only its first 1000 results, even when more matches exist.
     if ($page.incomplete_results -or $page.total_count -gt 1000) {
         throw 'Report discovery is incomplete; do not act on partial results.'
     }
+    # Changing totals can shift unseen results onto pages already read.
+    if ($page.total_count -ne $expectedTotal) {
+        throw 'Report discovery total changed during pagination; do not act on partial results.'
+    }
 }
 $issues = @($pages | ForEach-Object { $_.items })
-if ($pages.Count -eq 0 -or $issues.Count -lt $pages[-1].total_count) {
+if ($issues.Count -lt $expectedTotal) {
     throw 'Report discovery did not return its complete result set.'
 }
 $issues | Where-Object {

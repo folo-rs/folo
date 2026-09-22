@@ -103,8 +103,9 @@ have no effect on recognition and need no cleanup.
 
 Discovery searches open issue titles in this repository, then checks the exact
 prefix before reading report content or discussion. It has no recent-date cutoff
-and no general-inventory or closed-report fallback. Incomplete discovery is an
-error, not an empty queue. Closed reports are finished triage work: replaying
+and no general-inventory or closed-report fallback. Incomplete discovery, including
+a reported total that changes between search pages, is an error, not an empty
+queue. Closed reports are finished triage work: replaying
 publication for the same attempt after closure may create a new report.
 An ordinary Actions rerun has a new attempt number and receives its own report
 when it fails.

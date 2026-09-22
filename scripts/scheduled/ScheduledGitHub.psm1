@@ -154,6 +154,7 @@ function Get-ScheduledReportCandidate {
     $searchLimit = 1000 # GitHub exposes only the first results up to this search API limit.
     $candidates = [Collections.Generic.List[hashtable]]::new()
     $page = 1
+    $expectedTotal = 0
     do {
         $response = Invoke-ScheduledGitHubJson "search/issues?q=$query&sort=created&order=asc&per_page=$pageSize&page=$page"
         if ($response -isnot [hashtable] -or $response['items'] -isnot [array] -or
@@ -165,14 +166,19 @@ function Get-ScheduledReportCandidate {
         if ($response.incomplete_results -or $response.total_count -gt $searchLimit) {
             throw 'GitHub report search is incomplete or exceeds its accessible result limit.'
         }
-        if ($response.items.Count -lt [Math]::Min($pageSize, $response.total_count - ($page - 1) * $pageSize)) {
+        # Changing totals can shift unseen results onto pages already read.
+        if ($page -eq 1) { $expectedTotal = $response.total_count }
+        elseif ($response.total_count -ne $expectedTotal) {
+            throw 'GitHub report search total changed during pagination; discovery is incomplete.'
+        }
+        if ($response.items.Count -lt [Math]::Min($pageSize, $expectedTotal - ($page - 1) * $pageSize)) {
             throw 'GitHub report search ended a page before supplying its reported results.'
         }
         foreach ($item in $response.items) {
             if (Test-ScheduledReportIssue $item) { $candidates.Add($item) }
         }
         $page++
-    } while (($page - 1) * $pageSize -lt $response.total_count)
+    } while (($page - 1) * $pageSize -lt $expectedTotal)
 
     # Finish discovery before acting on results. Search can lag closure or title changes;
     # refresh only prefix-matching candidates, never broaden discovery to other issue kinds.
