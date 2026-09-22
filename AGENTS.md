@@ -98,9 +98,16 @@ PowerShell boundaries, script documentation and rules for `*.just` recipes.
 
 **Open this when**: running any build/test/lint/docs command; validating a
 change; writing automation logic, a script or a `[script]` block in a justfile;
-searching the workspace; investigating a failed CI check (including Codecov
-verification-key import failures); running a command on some "other" operating
-system from the one you are on.
+searching the workspace; running a command on some "other" operating system
+from the one you are on.
+
+### [docs/triage.md](docs/triage.md)
+
+Triage guide: issue-specific symptoms, bounded recovery procedures, safeguards and
+evidence to collect when further investigation is needed.
+
+**Open this when**: triaging an issue or failed CI check (including Codecov
+verification-key import failures); adding or maintaining a troubleshooting procedure.
 
 ### [docs/cargo-delta.md](docs/cargo-delta.md)
 
