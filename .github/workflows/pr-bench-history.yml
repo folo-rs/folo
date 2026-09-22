@@ -17,7 +17,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
     # The shared workflow derives affected scope and frozen PR head/base; Folo supplies
     # only repository-specific settings. Ref: implementation.md#benchmark-workflow-artifacts.
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
     permissions:
       contents: read
       actions: read
