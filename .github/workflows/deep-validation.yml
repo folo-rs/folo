@@ -2,7 +2,8 @@ name: Deep validation
 
 on:
   schedule:
-    - cron: 41 2 * * *
+    # Avoid contention with morning work; see design.md#scheduled-validation.
+    - cron: 0 18 * * *
   workflow_dispatch:
 
 permissions:
