@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 use serde::Deserialize;
@@ -14,6 +14,7 @@ use crate::action::preparation::inputs::package_name;
 /// package can still affect a benchmarked dependent on another collection platform.
 pub(crate) struct Workspace {
     pub(crate) root: PathBuf,
+    directories: BTreeMap<PathBuf, String>,
     benchmarks: BTreeSet<String>,
     dependents: BTreeMap<String, BTreeSet<String>>,
 }
@@ -73,9 +74,19 @@ impl Workspace {
         }
         Ok(Self {
             root,
+            directories,
             benchmarks,
             dependents,
         })
+    }
+
+    /// Keeps ownership within Cargo's declared members rather than nested fixture workspaces.
+    pub(crate) fn package_directory(&self, path: &Path) -> Option<&Path> {
+        self.directories
+            .keys()
+            .filter(|directory| path.starts_with(directory))
+            .max_by_key(|directory| directory.components().count())
+            .map(PathBuf::as_path)
     }
 
     /// Expands optional affected owners before benchmark filtering and final exclusions.

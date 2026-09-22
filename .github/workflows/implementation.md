@@ -11,7 +11,7 @@ the installed App's scheduling controls.
 
 | Workflow | What starts it | Responsibility |
 |---|---|---|
-| `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
+| `deep-validation.yml` / **Deep validation** | Daily at 18:00 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
 | `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Production-backed PR collection and combined analysis/publication for same-repository PRs. |
@@ -46,22 +46,27 @@ a job-level `uses:` reference. The action repository provides the following shar
 | --- | --- |
 | `bench-history.yml` | `.github/workflows/history.yml` |
 | `pr-bench-history.yml` | `.github/workflows/pr.yml` |
+| `bench-history-backfill.yml` | `.github/workflows/backfill.yml` |
 
-These shared workflows own preparation, collection, analysis, report artifacts and GitHub
-publication. Their jobs invoke the repository's root **composite action**, a bundle of steps
+These shared workflows own preparation and collection; history and PR also own analysis,
+report artifacts and GitHub publication. Backfill only writes measurements to configured storage.
+Their jobs invoke the repository's root **composite action**, a bundle of steps
 used through a step-level `uses:` reference. It installs and invokes `cargo-bench-history`
 for measurements and analysis, and `cargo-bench-history-github` (the **companion**) for
 workflow evidence and GitHub issue/comment management.
 
-Folo's caller files retain triggers, permissions and repository configuration. A read-only
-configuration job supplies identity values and `Get-BenchHistoryCollectionPolicy` settings.
+Folo's caller files retain only triggers, gates, permissions and parameter values. Azure
+client and tenant IDs come directly from repository variables; measurement settings are
+literal workflow inputs rather than calculated job outputs.
 Folo selects source installation, building the tools from the checkout that started the run
 rather than selecting individual tool versions.
 
 The fixed `bench-history-setup` hook selects Folo's ordinary cached setup environment with
-Valgrind enabled and exports its benchmark-stability compiler flags. Backfill consumes the
-same collection policy and flag helper. This keeps repository-specific setup and measurement
-choices outside the reusable workflow implementation.
+Valgrind enabled. The callers supply matching `rustflags` values; the companion appends them
+to effective ambient Cargo arguments using child-only environment overrides. It honors
+`CARGO_ENCODED_RUSTFLAGS` precedence and preserves argument boundaries, and uses the same
+environment for collection and its machine-key query. No configuration job or flag-merging
+script is required in a consumer repository.
 
 The shared workflows also use an internal composite action at
 `.github/actions/workflow-tools` in the action repository. It prepares the caller's checkouts,
@@ -71,7 +76,8 @@ The workflows' `$/` action references resolve both composites at the called work
 commit, independently of the measured checkout. Notification requires the companion;
 installation/bootstrap failure remains visible and has no second publisher.
 
-The companion turns the configured platform CSV into the matrix and collection job prefix.
+The companion turns the configured platform CSV into the matrix. For history and PR it also
+supplies the collection job prefix.
 Collection jobs use `cbh-collect:<instance>:<platform>` identities. A successful leg produces
 `receipt.json` with its repository, instance, workflow run/attempt, frozen head, platform and
 machine key. Collection artifacts contain only that receipt; measurements remain in the
@@ -141,21 +147,50 @@ Manual pruning and ordinary backfill cover the supported data-maintenance path. 
 workflows expose no targeted historical recollection. Their triggers exclude `merge_group`
 and enqueue/dequeue activity because the workflows are advisory.
 
-`bench-history-backfill.yml` remains repository-owned and consumes the shared collection policy.
 Manual Azure provisioning remains a separate maintainer operation through `setup-azure`.
+
+### Benchmark backfill caller
+
+`bench-history-backfill.yml` retains Folo's nightly trigger, main-only same-repository dispatch
+gate and repository-wide non-cancelling concurrency group. It passes `lookback: 14 days`,
+`minimum-age: 24 hours` and the optional `to_commit` override directly to the reusable workflow.
+Identity variables and literal measurement inputs need no caller-side execution.
+
+The shared workflow's `prepare-workflow --flow backfill` uses one injected clock snapshot and
+the invocation's full first-parent history to calculate the range. Explicit `from`/`to`
+ranges remain available to other callers. Preparation freezes selected refs to full commit
+SHAs and emits a separate successful no-work result when no automatic endpoint is old enough;
+the workflow then skips its benchmark matrix. This is distinct from a fork-policy skip.
+It does not ask current-head Cargo metadata whether
+there are benchmarks: historical workspaces can contain benchmarks absent from the invocation.
+The matrix checks out the resolved `to` commit with full history, while configuration, the fixed
+setup hook and source installation remain invocation-owned. The core tool validates and traverses
+the inclusive first-parent range, preserving the selected project directory in its worktrees.
+
+Folo passes `install-method: path`, `source-path: .`, shared exclusions, all features and the
+shared repetition count and compiler stability flags. Fixed skip-existing behavior
+makes each platform resumable. `ignore-errors: true` continues past per-commit build/benchmark
+failures; `best-effort: true` separately opts into whole-matrix-job `continue-on-error`, including
+the shared hosted-runner timeout. Generic callers default both policies to false.
+
+Backfill creates no receipts, analysis job, report artifacts, publication sink or public outputs.
+Shared run/work concurrency prefixes differ from Folo's caller group; non-cancelling
+`queue: max` project/platform queues serialize aliases of the same configured storage project
+without deduplicating invocations by event or SHA.
 
 ## Reusable workflow canary
 
 The reusable-workflow canary is a small end-to-end integration check. Its purpose is to catch
 failures at the boundaries that local tests cannot execute: calling a workflow in another
-repository, obtaining Azure credentials on hosted runners, passing receipts between jobs,
-and downloading the report exposed to the caller. It checks that the workflow and monorepo
+repository, obtaining Azure credentials on hosted runners, storing historical measurements,
+and passing receipts and reports through the history flow. It checks that the workflow and monorepo
 tools work together without requiring published tool versions or a full performance run.
 
-`benchmark-action-canary.yml` calls the action repository's `history.yml` at the immutable
-commit specified in its `uses:` reference, with tools built from the Folo checkout under test.
+`benchmark-action-canary.yml` calls the action repository's `history.yml` and `backfill.yml`
+at the revisions specified in their `uses:` references, with tools built from the Folo checkout
+under test.
 On a pull request, it runs only when the source branch belongs to `folo-rs/folo`, not a fork.
-GitHub publication is disabled so the synthetic run does not create findings issues.
+History publication is disabled; backfill has no publication.
 Its standalone fixture writes deterministic Criterion artifacts through the existing faker
 library instead of measuring elapsed time.
 
@@ -166,12 +201,40 @@ those identifiers but exports none. Collection depends on both jobs and receives
 directly from configuration.
 
 The storage job creates the fixture's dedicated container through data-plane access; it does
-not provision Azure management resources or use production history. The Linux, Windows and
-Apple Silicon macOS collection jobs store measurements and transport receipts. The analysis
+not provision Azure management resources or use production history. Both calls use that container,
+with separate configured project identities. The history flow's Linux, Windows and
+Apple Silicon macOS collection jobs store measurements and transport receipts. Its analysis
 job reconciles platform evidence, analyzes the real frozen head and uploads reports.
-The final job downloads that artifact and checks the expected synthetic
+The history verification job downloads that artifact and checks the expected synthetic
 series and honest outcome/coverage outputs. Lack of a baseline is not mistaken for failure or
 asserted to be clean.
+
+For backfill, configuration freezes the real event head and its first parent as the inclusive
+`to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on Linux,
+Windows and Apple Silicon macOS, using `.cargo/backfill_history.toml` to select the isolated
+`reusable-backfill-canary` project in the existing test container.
+
+The separate `verify-backfill` job queries `list runs --json` across all stored machine keys and
+targets at the frozen endpoint. It checks the expected project and requires both current range
+endpoints as clean stored commits in one comparable partition for every target. Additional
+machine partitions and older runs cannot substitute for the selected range. The listing is
+retained as test evidence even when its verification assertions fail;
+it is not an output of the reusable backfill workflow, which has no analysis or report phase.
+The verifier does not manufacture a workflow verdict or require a judged-clean analysis outcome.
+`Assert-BackfillCanary.ps1` owns the query and assertions under script analysis.
+`BackfillCanary.Tests.ps1` invokes that script with mocked Cargo output to exercise
+its acceptance and rejection behavior without Azure access.
+
+The hosted caller proves historical storage across native targets. Same-runner installed-tool
+smoke coverage in the action repository proves skip-existing resumption without relying on
+separate hosted invocations receiving the same hardware fingerprint.
+
+An additional Linux rolling call supplies zero minimum age and a sub-second lookback,
+selecting only the event head through the quiet-window fallback. Its isolated project and
+endpoint query establish actual stored results independently of the explicit-range call.
+A separate no-eligible call uses an age older than all repository history; job evidence must
+show successful preparation and no executed backfill matrix. Neither scenario copies the
+planner into the caller. Frozen-clock tests own exact cutoff and calendar assertions.
 
 Invalid input, failed collection, stale attempts and lifecycle mutation cases remain covered
 by the companion's mock/native suites and the action adapter tests. A successful synthetic

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::{Future, ready};
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,7 @@ use ohno::AppError;
 use serde_json::{Value, json};
 
 use crate::action::ActionArgs;
-use crate::action::errors::InvalidOutput;
+use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::native::project_instance;
 use crate::action::port::{Host, Process, Publisher};
 use crate::cli::Command;
@@ -29,6 +29,7 @@ pub(crate) struct FakeHost {
     pub(crate) outputs: RefCell<Vec<(PathBuf, String)>>,
     pub(crate) notes: RefCell<Vec<String>>,
     pub(crate) environment_reads: RefCell<Vec<String>>,
+    pub(crate) unreadable_environment: BTreeSet<String>,
     pub(crate) scratches: RefCell<Vec<PathBuf>>,
     pub(crate) packages: BTreeMap<PathBuf, Option<String>>,
     pub(crate) package_queries: RefCell<Vec<(PathBuf, PathBuf)>>,
@@ -57,6 +58,7 @@ impl FakeHost {
             outputs: RefCell::new(Vec::new()),
             notes: RefCell::new(Vec::new()),
             environment_reads: RefCell::new(Vec::new()),
+            unreadable_environment: BTreeSet::new(),
             scratches: RefCell::new(Vec::new()),
             packages: BTreeMap::new(),
             package_queries: RefCell::new(Vec::new()),
@@ -135,6 +137,9 @@ impl Host for FakeHost {
     }
     fn environment(&self, name: &str) -> Result<Option<String>, AppError> {
         self.environment_reads.borrow_mut().push(name.to_owned());
+        if self.unreadable_environment.contains(name) {
+            return Err(InvalidInput::new(name, "unreadable environment").into());
+        }
         Ok(self.env.get(name).cloned())
     }
     fn read(&self, path: &Path) -> Result<Vec<u8>, AppError> {

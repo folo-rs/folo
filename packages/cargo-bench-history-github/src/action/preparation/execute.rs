@@ -4,6 +4,7 @@ use std::path::{Component, Path};
 
 use cbh_config::rebase;
 use ohno::AppError;
+use tick::Clock;
 
 use crate::action::environment::Environment;
 use crate::action::errors::{InvalidInput, InvalidOutput};
@@ -14,22 +15,26 @@ use crate::action::preparation::inputs::WorkflowInputs;
 use crate::action::preparation::scope::Workspace;
 use crate::action::preparation::{Flow, PrepareWorkflowArgs};
 use crate::model::CommitSha;
-use crate::workflow::projection::matrix_outputs;
+use crate::workflow::projection::{matrix_outputs, platform_outputs};
 
 /// Prepares workflow execution without constructing credentials or a publication client.
 // Native adapter selection has integration coverage; prepare_with owns fake-driven policy.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn prepare_workflow(args: PrepareWorkflowArgs) -> Result<(), AppError> {
-    prepare_with(args, &NativeHost).await
+    prepare_with(args, &NativeHost, &Clock::new_tokio()).await
 }
 
 /// Freezes event identity, canonical configuration and concrete scope before emitting outputs.
 pub(crate) async fn prepare_with(
     args: PrepareWorkflowArgs,
     host: &impl Host,
+    clock: &Clock,
 ) -> Result<(), AppError> {
     let invocation = host.current_dir()?;
-    let inputs = WorkflowInputs::parse(&host.read(&rebase(&invocation, args.inputs_file))?)?;
+    let inputs = WorkflowInputs::parse(
+        &host.read(&rebase(&invocation, args.inputs_file))?,
+        args.flow,
+    )?;
     let cwd = host.directory(&inputs.get("working-directory").map_or_else(
         || invocation.clone(),
         |path| rebase(&invocation, path.into()),
@@ -39,12 +44,21 @@ pub(crate) async fn prepare_with(
     let instance = host
         .instance(&cwd, inputs.get("config").map(Path::new))
         .await?;
-    let mut outputs = matrix_outputs(inputs.platforms(), &instance)?;
+    let mut outputs = if args.flow == Flow::Backfill {
+        platform_outputs(inputs.platforms(), &instance)?
+    } else {
+        matrix_outputs(inputs.platforms(), &instance)?
+    };
     if environment.fork() {
         host.note(
             "Skipping fork-origin PR workflow preparation; this is not an empty benchmark scope.",
         );
-        outputs.push_str("skipped=true\nskip-reason=fork-pull-request\nskip-all=true\npackages=\n");
+        outputs.push_str("skipped=true\nskip-reason=fork-pull-request\n");
+        if args.flow != Flow::Backfill {
+            outputs.push_str("skip-all=true\npackages=\n");
+        } else {
+            outputs.push_str("has-work=false\n");
+        }
         return host.append_outputs(&output, &outputs);
     }
     if args.flow == Flow::Pr
@@ -74,6 +88,31 @@ pub(crate) async fn prepare_with(
         );
     }
     let base = match args.flow {
+        Flow::Backfill => {
+            let range = inputs
+                .backfill
+                .as_ref()
+                .expect("the backfill flow validates its exact or rolling selection");
+            let Some((from, to)) = range.select(host, &cwd, &head, clock).await? else {
+                outputs
+                    .push_str("skipped=false\nhas-work=false\nno-work-reason=no-eligible-commit\n");
+                return host.append_outputs(&output, &outputs);
+            };
+            // Historical commits own their benchmark inventories, not this invocation's HEAD.
+            // The core backfill command owns first-parent range validation and traversal.
+            host.note(&format!(
+                "Prepared backfill for {} from {} to {} using invocation head {}. Historical workspaces determine benchmark scope; exclusions={:?}.",
+                instance.as_str(), from.as_str(), to.as_str(), head.as_str(), inputs.excluded,
+            ));
+            writeln!(
+                outputs,
+                "from={}\nto={}\nskipped=false\nhas-work=true",
+                from.as_str(),
+                to.as_str()
+            )
+            .expect("formatting into a String cannot fail");
+            return host.append_outputs(&output, &outputs);
+        }
         Flow::History => head.clone(),
         Flow::Pr => {
             let base: CommitSha = environment
@@ -103,6 +142,7 @@ pub(crate) async fn prepare_with(
             .collect(),
             cwd: cwd.clone(),
             output: Output::Capture,
+            env: Vec::new(),
         })
         .await?;
     let workspace = Workspace::parse(&metadata, host)?;
@@ -130,7 +170,11 @@ pub(crate) async fn prepare_with(
 }
 
 /// Resolves an actual commit without fetching or accepting an option as a revision.
-async fn resolve(host: &impl Host, cwd: &Path, reference: &str) -> Result<CommitSha, AppError> {
+pub(crate) async fn resolve(
+    host: &impl Host,
+    cwd: &Path,
+    reference: &str,
+) -> Result<CommitSha, AppError> {
     git(
         host,
         cwd,
@@ -189,7 +233,12 @@ async fn affected_packages(
         if !path.starts_with(&workspace.root) {
             return Ok(None);
         }
-        match host.package(&workspace.root, &path)? {
+        // A separate nested workspace is not part of this Cargo inventory. Resolve the
+        // declared owner boundary so its test fixtures cannot become foreign package names.
+        let Some(directory) = workspace.package_directory(&path) else {
+            return Ok(None);
+        };
+        match host.package(&workspace.root, directory)? {
             Some(name) => {
                 owners.insert(name);
             }

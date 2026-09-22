@@ -38,6 +38,11 @@ and actionable findings even from optional checks, and handle relevant later
 results during normal authorized follow-up. Low expected signal is not a reason
 to dismiss an observed problem, cancel workflows or weaken validation.
 
+For Codecov verification-key import failures, follow the
+[bounded recovery policy in the Triage guide](triage.md#codecov-verification-key-import-failures)
+before proposing source changes or asking the user to retry. This exception does
+not authorize retrying arbitrary failed checks or treating a failed upload as passed.
+
 ## Addressing pull request review comments
 
 When addressing PR review comments, reply to each comment thread with the

@@ -30,5 +30,6 @@ pub use operations::run;
 #[cfg(any(test, feature = "private-test-util"))]
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::action::prepare_backfill_at;
     pub use crate::private_test_util::*;
 }

@@ -54,10 +54,12 @@ This applies regardless of the reason for the tool's movement: source changes, d
 group effects, version-only increments, and first publication all count. Inspect the complete
 verified pending release set, including retained increments, not only a newly applied plan.
 
-The action's release manifest defines the tool set, including test-only tools. It covers
-`cargo-bench-history`, `cargo-bench-history-github`, `cargo-bench-history-faker`, and the
-`cargo-detect-package` dependency used by workflow scope selection. Check the actual manifest
-for additional pins; do not maintain a second machine-readable list in this repository.
+The action's release manifest defines the executable tool set, including test-only tools:
+`cargo-bench-history`, `cargo-bench-history-github` and `cargo-bench-history-faker`.
+Check the actual manifest for additional pins; do not maintain a second machine-readable list
+in this repository. Workflow scope selection links `cargo-detect-package` as a Rust library
+dependency of the companion, not as a separately installed executable or action pin. Its
+release effects reach the action through the companion's ordinary Cargo dependency/version plan.
 Private implementation packages matter through the pinned binary version they move, not
 through independent action pins. The action repository's own release instructions determine
 its version decision; monorepo tool versions do not determine the action's version number.

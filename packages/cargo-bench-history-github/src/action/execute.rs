@@ -11,6 +11,7 @@ use crate::action::args::ActionArgs;
 use crate::action::artifact_path::for_output;
 use crate::action::environment::Environment;
 use crate::action::errors::{InvalidInput, InvalidOutput};
+use crate::action::flags::compiler_environment;
 use crate::action::inputs::{ActionCommand, Inputs};
 use crate::action::native::{LivePublisher, NativeHost};
 use crate::action::plan::{Reports, analysis_process, build_process};
@@ -58,7 +59,8 @@ pub(crate) async fn run_with(
     );
     match inputs.command {
         ActionCommand::Collect | ActionCommand::Backfill => {
-            let process = build_process(&inputs, &cwd, &tool)?;
+            let mut process = build_process(&inputs, &cwd, &tool)?;
+            process.env = compiler_environment(inputs.get("rustflags"), host)?;
             host.note(&format!(
                 "Running {} in {} with arguments {:?}; the explicit scope, feature and write-mode selections preserve this command's defaults, and benchmark output streams to the job log.",
                 process.program.to_string_lossy(), process.cwd.display(), process.args
@@ -71,6 +73,7 @@ pub(crate) async fn run_with(
                         args: vec!["machine-key".into()],
                         cwd,
                         output: Output::Capture,
+                        env: process.env,
                     })
                     .await?;
                 writeln!(outputs, "machine-key={}", machine_key(key.trim())?)
@@ -153,6 +156,7 @@ pub(crate) async fn git(host: &impl Host, cwd: &Path, args: &[&str]) -> Result<S
         args: args.iter().map(OsString::from).collect(),
         cwd: cwd.to_owned(),
         output: Output::Capture,
+        env: Vec::new(),
     })
     .await
 }

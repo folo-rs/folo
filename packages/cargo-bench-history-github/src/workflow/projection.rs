@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use ohno::AppError;
@@ -14,6 +15,18 @@ use crate::workflow::reconcile::{Selection, collection_job_prefix};
 /// `workflow_matrix` appends this block to the runner's output file. The shared normalization
 /// also supplies the collection-job prefix consumed by job reconciliation.
 pub(crate) fn matrix_outputs(platforms: &str, instance: &Instance) -> Result<String, AppError> {
+    let mut outputs = platform_outputs(platforms, instance)?;
+    writeln!(
+        outputs,
+        "collection-job-prefix={}",
+        collection_job_prefix(instance)
+    )
+    .expect("formatting into a String cannot fail");
+    Ok(outputs)
+}
+
+/// Shares project and platform identity without claiming single-commit collection evidence.
+pub(crate) fn platform_outputs(platforms: &str, instance: &Instance) -> Result<String, AppError> {
     let platforms = platform_list(platforms)?;
     let expected = platforms
         .iter()
@@ -22,9 +35,8 @@ pub(crate) fn matrix_outputs(platforms: &str, instance: &Instance) -> Result<Str
         .join(",");
     let matrix = json!({"platform": platforms});
     Ok(format!(
-        "matrix={matrix}\nexpected-platforms={expected}\ninstance={}\ncollection-job-prefix={}\n",
+        "matrix={matrix}\nexpected-platforms={expected}\ninstance={}\n",
         instance.as_str(),
-        collection_job_prefix(instance)
     ))
 }
 

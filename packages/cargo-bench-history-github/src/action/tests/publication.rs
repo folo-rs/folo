@@ -21,7 +21,12 @@ fn fork_and_target_events_skip_before_processes_publication_or_credential_reads(
             if command == "publish-comment-preflight" {
                 input["packages"] = json!("crate");
             }
+            if command == "collect" {
+                input["rustflags"] = json!("--cfg=extra");
+            }
             let mut host = FakeHost::new(&input);
+            host.unreadable_environment
+                .extend(["RUSTFLAGS".to_owned(), "CARGO_ENCODED_RUSTFLAGS".to_owned()]);
             host.event(name, &event("fork/repo"));
             let publisher = FakePublisher::default();
             block_on(run_with(host.args(), &host, &publisher)).unwrap();

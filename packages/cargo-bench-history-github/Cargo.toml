@@ -2,7 +2,7 @@
 name = "cargo-bench-history-github"
 description = "Unsupported GitHub automation companion for cargo-bench-history; no stable API or CLI"
 publish = true
-version = "0.2.7"
+version = "0.2.8"
 
 authors.workspace = true
 edition.workspace = true
@@ -44,8 +44,8 @@ private-test-util = []
 cargo-detect-package = { version = "1.1.0", path = "../cargo-detect-package", default-features = false }
 # Canonical configuration and storage identity are shared behavior, not a shared release group.
 # Compatible requirements keep this companion independently versioned from the core tool.
-cbh_config = { version = "0.2.14", path = "../cbh_config", default-features = false }
-cbh_model = { version = "0.2.14", path = "../cbh_model", default-features = false }
+cbh_config = { version = "0.2.15", path = "../cbh_config", default-features = false }
+cbh_model = { version = "0.2.15", path = "../cbh_model", default-features = false }
 clap = { workspace = true, features = ["derive"] }
 dunce = { workspace = true }
 jiff = { workspace = true }

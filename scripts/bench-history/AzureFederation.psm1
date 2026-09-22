@@ -1,18 +1,13 @@
 #requires -Version 7
 
-# Azure OIDC federation identity plumbing for the benchmark-history workflow
-# (.github/workflows/bench-history.yml).
-#
-# Collection, backfill and analysis share one production identity. Its non-secret client ID
-# and tenant ID live in constants.env. This module keeps the
-# required-value validation and standard AZURE_* export consistent across workflow jobs.
-#
-# constants.env is read directly (not via `just`'s dotenv) because these steps re-export under
-# different names (AZURE_PROD_CLIENT_ID -> AZURE_CLIENT_ID) and must fail loudly when an identifier
-# is missing rather than federate later with an empty value and an opaque error.
+# Reads the existing non-secret test identity configuration for the hosted benchmark caller
+# canary before Rust/bootstrap setup. Production callers use repository variables directly.
+# Missing values fail here rather than causing an opaque federation error in another job.
+# Ref: .github/workflows/implementation.md#reusable-workflow-canary.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 function Read-DotEnvFile {
     # Parses a KEY=value dotenv file (constants.env) into an ordered hashtable. Blank lines and
@@ -56,29 +51,4 @@ function Get-RequiredConstant {
     return $value
 }
 
-function Set-AzureFederationEnv {
-    # Exports the client and tenant IDs used for the shared production identity. A source-built
-    # preparation job may also call this to validate identifiers without holding id-token permission.
-    # Ref: .github/workflows/design.md#federated-identity.
-    [CmdletBinding(SupportsShouldProcess)]
-    [OutputType([System.Collections.Specialized.OrderedDictionary])]
-    param(
-        [Parameter(Mandatory)][string] $ConstantsPath,
-        [Parameter(Mandatory)][string] $EnvFilePath
-    )
-
-    $constants = Read-DotEnvFile -Path $ConstantsPath
-    $exported = [ordered]@{
-        AZURE_CLIENT_ID = Get-RequiredConstant -Values $constants -Name 'AZURE_PROD_CLIENT_ID'
-        AZURE_TENANT_ID = Get-RequiredConstant -Values $constants -Name 'AZURE_TENANT_ID'
-    }
-
-    $lines = foreach ($entry in $exported.GetEnumerator()) { "$($entry.Key)=$($entry.Value)" }
-    if ($PSCmdlet.ShouldProcess($EnvFilePath, 'Append AZURE_CLIENT_ID and AZURE_TENANT_ID')) {
-        $lines | Add-Content -Path $EnvFilePath -Encoding utf8
-    }
-    Write-Verbose "Using the shared production identity from AZURE_PROD_CLIENT_ID in '$ConstantsPath'; exported its client ID and tenant ID to '$EnvFilePath'."
-    return $exported
-}
-
-Export-ModuleMember -Function Read-DotEnvFile, Get-RequiredConstant, Set-AzureFederationEnv
+Export-ModuleMember -Function Read-DotEnvFile, Get-RequiredConstant

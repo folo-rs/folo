@@ -1,0 +1,7 @@
+[project]
+id = "reusable-backfill-canary"
+
+[storage.azure]
+# Keep backfill evidence separate from the single-commit fixture in the same test container.
+account = "folovalidate"
+container = "bench-history-caller-canary"
