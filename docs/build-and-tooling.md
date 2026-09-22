@@ -231,6 +231,9 @@ observed failures into passes, or bypass required CI checks.
 
 ## Automation language and boundaries
 
+For issue classification, discovery scope and repeatable notifications, follow
+the [automation guidelines](automation.md).
+
 Prefer **nonpublished Rust utilities** for automation logic, especially structured
 configuration parsing, data transformations and policy decisions. Reuse workspace
 dependencies and validation conventions; an internal automation task is not a reason
