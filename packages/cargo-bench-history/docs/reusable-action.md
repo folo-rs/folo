@@ -218,7 +218,7 @@ repeating a source-fallback compile. Cache availability is not guaranteed.
 so a released manifest cannot substitute a binary from another revision.
 
 **One manifest for the tested tool set.** A sink-using flow needs the tool *and*
-the companion (§5.1); workflow scope selection also uses `cargo-detect-package` (§4.7).
+the companion (§5.1).
 The **release manifest** records the action's own release version and exact versions of every
 monorepo binary used by the action, workflows or their tests. These are separate version
 selections, not a promise that the binaries have the same package version:
@@ -228,8 +228,10 @@ selections, not a promise that the binaries have the same package version:
   **pinned by the action release** to the version tested with that tool.
 * The **faker** is independently pinned for the action's tests. Its version is not inferred
   from the tool or companion version.
-* **Workflow helpers**, including `cargo-detect-package`, use explicit pins under the same
-  installation and paired-release policy.
+
+The companion links `cargo-detect-package` as a Rust library for workflow scope selection (§4.7).
+It follows the companion's ordinary Cargo dependency/version plan; the action neither installs
+a detector executable nor carries a separate detector pin.
 
 Workspace release groups are derived from exact first-party dependency requirements
 ([release versioning](../../../docs/release-versioning.md#version-groups)). The tool and its
@@ -795,10 +797,10 @@ bulk this design set out to remove.
 
 The action repo publishes these consumption layers:
 
-* **Reusable workflows** (`workflow_call`) — the default path. One per flow:
-  `history.yml`, `pr.yml`, and `backfill.yml`. Each owns the entire job graph, and the
-  consumer's whole workflow reduces to a trigger, a `uses:` line, the permissions the flow
-  needs, and a few inputs:
+* **Reusable workflows** (`workflow_call`) — the default path for history and PR reporting
+  and historical densification: `history.yml`, `pr.yml` and `backfill.yml`. Each owns its entire
+  job graph, and the consumer's whole workflow reduces to a trigger, a `uses:` line, the
+  permissions the flow needs, and a few inputs:
 
   ```yaml
   on:
@@ -819,9 +821,47 @@ The action repo publishes these consumption layers:
 
 * **Composite actions** — the escape hatch, and what the reusable workflows are built from.
   A consumer whose graph differs (extra gating, an unusual runner pool, a different sink)
-  calls `collect` / `analyze-history` / `analyze-pr` / publication and lifecycle commands directly and
-  wires the jobs themselves. Nothing is hidden from them; the reusable workflow is a
-  convenience, not a privileged path.
+  calls `collect` / `backfill` / `analyze-history` / `analyze-pr` / publication and lifecycle
+  commands directly and wires the jobs themselves. Nothing is hidden from them; the reusable
+  workflow is a convenience, not a privileged path.
+
+**`backfill.yml` owns the densification job graph.** Callers supply required `azure-client-id`,
+`azure-tenant-id`, and either an explicit inclusive `from`/`to` range or rolling
+`lookback`/`minimum-age` durations with an optional `to` override. The caller chooses the
+schedule and parameter values; shared Rust calculates and freezes the range. Folo's nightly
+policy is one such configuration (§10), not a separate planning implementation.
+
+Rolling durations use the same calendar-aware Jiff span conventions as `--since`, including
+`24 hours`, `24 hours ago` and ISO spans. Their magnitudes are subtracted from one preparation-time
+UTC clock snapshot. `lookback` must be nonzero; `minimum-age` may be zero. Both are required
+for rolling selection, and neither accompanies an explicit `from`.
+The automatic end is the newest eligible first-parent commit at least `minimum-age` old.
+An explicit `to` bypasses that age selection. The start is the oldest first-parent commit
+reachable from the selected end within `lookback` of preparation time, not of that end.
+When the selected history is older than the horizon, the range collapses to the end alone.
+No eligible automatic end is a successful, explained no-work result that starts no benchmark
+jobs, distinct from fork-policy skipping and from empty current-head benchmark scope.
+
+The workflow accepts the shared `platforms`, `working-directory`, `config`, `exclude`, `bench`,
+`best-of`, `all-features`, `no-default-features`, `features`, `rustflags`, `install-method` and `source-path`
+inputs. Collection covers the workspace at each historical commit, subject to exclusions.
+There is no public package allowlist, scope/instance selector or setup-path input.
+`ignore-errors` and `best-effort` are independent Boolean inputs, both defaulting to false:
+the former continues past per-commit build/benchmark failures, while the latter opts into
+matrix-job `continue-on-error`, including a hosted-runner timeout. Infrastructure errors remain
+errors in the core tool even when `ignore-errors` is enabled.
+
+Preparation uses full Git history to resolve selected nonblank, single-line refs safely to full
+commit SHAs. It does not filter scope against current-head Cargo metadata or benchmark inventory:
+historical commits can carry benchmarks absent from the invocation head. Execution checks out
+the resolved `to` SHA with full history; configuration, optional source-built tools and the fixed
+setup hook remain from the invocation checkout. The core tool owns first-parent range validation
+and newest-first traversal, including the selected project directory within each worktree.
+
+The shared matrix disables fail-fast, uses the hosted-job ceiling of 360 minutes, and fixes
+`on-existing: skip` for resumability. It has no analysis, receipts, report artifacts,
+publication sink or public outputs. Different write modes or a different job graph remain
+available through the lower composite layer.
 
 **`pr.yml` owns the scope preflight end to end.** Deciding *which packages a PR should
 benchmark* is a prerequisite for the PR flow, and leaving it to the consumer would leave the
@@ -829,8 +869,8 @@ hardest part of adoption unsolved while claiming the flow is one `uses:` line. T
 therefore computes it as follows:
 
 1. **Changed files → owning packages.** The diff against the base names files; each file
-   belongs to a package. This is what `cargo-detect-package` answers, and taking a versioned
-   dependency on it is preferable to reimplementing the lookup.
+   belongs to a package. The companion uses `cargo-detect-package`'s read-only Rust library
+   query for this lookup rather than installing another executable or duplicating its logic.
 2. **Expand to dependents.** A change to a package can move the numbers of anything that
    depends on it, so the set is closed over reverse dependencies within the workspace.
 3. **Keep the packages that carry benchmarks and apply configured exclusions.** `cargo
@@ -898,8 +938,9 @@ around a reusable-workflow call, so a repository can supply:
 .github/actions/bench-history-setup/action.yml
 ```
 
-Collection jobs invoke this action after checkout/bootstrap and before benchmarking; backfill
-uses the same hook before its collection work. If the file is absent, no custom setup runs.
+Shared collection and backfill jobs invoke this action after checkout/bootstrap and before
+benchmarking.
+If the file is absent, the shared workflows run no custom setup.
 The hook belongs to the repository/configuration checkout. It is not invoked by GitHub
 publication jobs, and the shared workflow's own tool installation remains its responsibility.
 
@@ -950,6 +991,12 @@ deduplication targets the same commit, not different commits. Manual
 history runs use their own groups rather than waiting behind the push backlog. Queueing
 belongs to GitHub, not a running worker waiting on a lock.
 
+Backfill does not deduplicate invocations by event or SHA and never cancels an earlier
+invocation. Its run and work groups use distinct prefixes, separate from caller groups and
+the reporting flows. Non-cancelling `queue: max` work queues are keyed by the canonical
+storage project identity and platform, so different config paths naming the same project
+cannot race each other.
+
 **Merge queues do not add a benchmark flow.** Benchmark feedback is advisory and is not a
 required branch-protection check. The PR workflow measures its frozen real head, not a
 `merge_group` SHA, and does not subscribe to enqueue/dequeue activity. The history workflow
@@ -979,15 +1026,18 @@ that gap.
   comparison-relevant commits rather than the oldest ones. It is **resumable by default**:
   commits already stored for this key are skipped, so a truncated run simply continues
   next time, and only an explicit overwrite re-measures.
-  The CLI takes inclusive `FROM TO` commit refs, not a duration flag; the workflow resolves
-  its rolling window to those refs before invoking the composite. Its error policy maps to
-  `--ignore-errors` when it should continue past a commit that cannot build or benchmark.
+  The CLI takes inclusive `FROM TO` commit refs, not a duration flag. A reusable-workflow
+  caller supplies either `from`/`to` or rolling duration parameters; shared preparation calculates
+  the range and freezes it to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
+  should continue past a commit that cannot build or benchmark. It does not suppress
+  infrastructure failures; `best-effort` separately opts into tolerating matrix-job failures.
 * **It has no analysis phase and no sink.** Densification only *writes*; the next
   push-triggered `analyze-history` picks up whatever landed. This keeps the flow free of
-  report-sink concerns entirely — no issue, no comment, no staleness.
+  report-sink concerns entirely — no issue, no comment, no staleness, receipts or reports.
 * **Its natural trigger is `schedule`**, which is precisely the trigger-agnostic case §1
   calls out: a nightly densification pass and a per-push collector can target the same
-  commit, so the write mode must be caller-selected rather than assumed (§4.5).
+  commit. The predefined backfill flow always skips existing data; custom composite callers
+  may select overwrite when remeasurement is intentional (§4.5).
 
 ## 5. Configuration and the division of labour
 
@@ -1354,6 +1404,14 @@ flows' need to reach benchmark targets gated behind `required-features`),
 `no-default-features`, and `features` (a list). Without these a repo whose benches sit behind
 a feature would silently measure nothing.
 
+`rustflags` optionally appends rustc arguments using Cargo's whitespace-separated `RUSTFLAGS`
+syntax, not shell quoting. The companion preserves effective ambient arguments, preferring
+`CARGO_ENCODED_RUSTFLAGS` when present over `RUSTFLAGS`, and supplies the combined arguments
+only to measurement child processes and the associated machine-key query. An empty input
+leaves the environment unchanged. Rustc owns option interpretation; the action does not
+invent a flag-normalization language. Callers choose any stability settings and use matching
+inputs across history, PR and backfill.
+
 **`collect` inputs:** `packages` (comma-separated list → `--package` per name; empty → whole
 workspace); `exclude`, `bench` (→ repeated flags); `best-of` (→ `--best-of`, default 1);
 `on-existing` (`error` (default here) | `skip` |
@@ -1403,12 +1461,15 @@ it from events, scope selection and validated artifacts.
 Attempts share the same run identity. It has no resolution counterpart or auto-close input.
 The names and required evidence agree between the composite and companion layers.
 
-**`backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
+**Composite `backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
 `best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
-or `overwrite`; `error` is invalid here, §4.5). The reusable workflow resolves its rolling
-window to those refs.
+or `overwrite`; `error` is invalid here, §4.5). The reusable workflow accepts either explicit
+`from`/`to` or rolling `lookback`/`minimum-age` with an optional `to` override. Shared preparation
+calculates and freezes the range; callers supply parameters only. The workflow fixes skip-existing
+workspace collection with configurable exclusions and additionally exposes the whole-job
+`best-effort` opt-in (§4.7).
 
-**Reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
+**History/PR reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
 GitHub writes as one policy (§5.2). It is not an input to the individual composite commands:
 analysis commands never post, while publication/lifecycle commands perform their named role.
 There are no report-wording, marker, template or label inputs.
@@ -1420,7 +1481,7 @@ There are no report-wording, marker, template or label inputs.
 as `outcome == findings`);
 `partial-platform-coverage` (`true`/`false`, orthogonal to `outcome`);
 `regressions` (count); `report-markdown` (full report path); `report-json`; `report-summary`
-(condensed top-findings Markdown). Paths are local to the analysis job. Reusable workflows
+(condensed top-findings Markdown). Paths are local to the analysis job. History/PR reusable workflows
 re-export verdict/count/coverage values and the report artifact identity/link, not paths
 that a downstream job cannot access.
 
@@ -1439,8 +1500,8 @@ test their tool/action selection; the action does not add a `report-schema` or t
 * **README is a quick start; the book is the reference.** Two documents describing the same
   action drift, and the one that drifts is always the one a maintainer forgets — so they get
   clearly different jobs rather than overlapping scopes. The **README** answers "what is this
-  and how do I switch it on": a sentence on what the action does, the three `uses:` snippets of
-  §4.7 (history, PR, nightly densification), the permissions each needs, and a link onward for
+  and how do I switch it on": a sentence on what the action does, the history and PR caller
+  snippets of §4.7, the permissions each needs, and a link onward for
   everything else. It stops there deliberately; a reader who needs more is a reader the book
   serves better. The **book's GitHub-automation section** (§11) is the reference: the input
   surface, the hand-assembled recipes for repos whose job graph differs, the deployment
@@ -1449,7 +1510,7 @@ test their tool/action selection; the action does not add a `report-schema` or t
   reader configuring a pipeline actually needs, and which a README cannot supply without
   restating the whole guide.
 
-  The hand-assembled recipes the book carries expand the reusable workflows:
+  Advanced compositions of the root commands follow these flow contracts:
   * A **per-push history** workflow — a `fail-fast: false` matrix `collect` job across the
     platforms (each `on-existing: skip`, uploading its successful collection receipt as a
     per-platform artifact), then an `analyze-history` job (`needs: collect`, `fetch-depth: 0`,
@@ -1467,12 +1528,13 @@ test their tool/action selection; the action does not add a `report-schema` or t
     Analysis and publication use `!cancelled()` so a superseded run never posts.
     The empty-scope `publish-comment-inconclusive` and terminal `publish-comment-failed` paths
     sit alongside them — all behind the same-repo check (§6).
-  * A **nightly densification** workflow (§4.8) — a matrix `backfill` job over the same
-    platforms and window, with no analyze job and no sink.
+  * A **densification** workflow (§4.8) — a matrix `backfill` job with the
+    repository's selected platforms and historical window, with no analyze job and no sink.
   * The **concurrency** pattern: PR-driven runs
     cancel superseded runs keyed on the ref, and the close event is handled by `pr.yml` itself
     (§4.7) rather than a second workflow; the push flow deduplicates the same commit instead.
-  These mirror Folo's own bench-history workflows, lifted to consume the published action.
+  Folo's history, PR and backfill callers use the shared orchestration; triggers and the
+  backfill parameter values remain repository-owned.
 * **Marketplace publish** from the action repo's release UI (root `action.yml` + branding)
   once a `vX.Y.Z` release exists. Only the composite action is listed; the reusable workflows
   ship in the same repo under the same tags but are referenced by path (§4.7).
@@ -1503,9 +1565,10 @@ There is no manual tag-preparation step or crates.io publication in the action r
 The [repository-specific release policy](../../../docs/benchmark-action-releases.md)
 and [`pair-benchmark-action-release` skill](../../../.github/skills/pair-benchmark-action-release/SKILL.md),
 run after general `increment-versions`, require this pairing, including dependency/group and
-version-only movements. The manifest is the scope authority, including its test-only faker pin
-and workflow helpers. Reuse an existing pairing when appropriate and refresh both PRs after any
-version-plan change. A tool-pin-only action change still carries an action-version increment.
+version-only movements. The manifest is the scope authority, including its test-only faker pin.
+Library dependencies reach the action through their pinned executable's release. Reuse an
+existing pairing when appropriate and refresh both PRs after any version-plan change.
+A tool-pin-only action change still carries an action-version increment.
 
 **`install-tools` is a required, fail-closed availability check.** It reads the PR's own
 manifest and invokes the shared installation canaries, not a second installer and not the
@@ -1585,18 +1648,30 @@ so both the install branching and the actual installs are exercised, not just mo
    seeded with **enough points for branch mode to judge against** — a two-commit fixture cannot
    clear the detector's minimum evidence — so this fixture uses the faker→`import` path (§11)
    rather than real benchmark runs to populate the comparison window cheaply.
-5. **Caller canaries for the reusable workflows.** The action repo carries its own caller
-   workflows that invoke `history.yml`, `pr.yml`, and `backfill.yml` exactly as an external
-   consumer would, because none of the other levels exercise the layer that is now doing the
-   most work: matrix expansion from the `platforms` input, fan-out-then-converge onto one
-   analyze/upload/publish job, the same-repo check, artifact aggregation, and concurrency.
-   The canaries deliberately include the ugly cases — a **partially failed** matrix that
-   preserves findings while marking missing platforms in both sinks, a **fully failed**
-   matrix, a malformed `platforms` list, an **empty package scope** (which must route
-   to `publish-comment-inconclusive`, not analyze or workspace collection), and a cancelled run —
-   paths where the graph, not the binaries, decides the outcome.
-   The two layers' input lists are contract-tested against
-   each other so a new composite input cannot silently go unexposed by the workflows.
+5. **Caller coverage for the reusable workflows.** Folo's synthetic caller invokes `history.yml`
+   across the supported native platforms and verifies the report returned to the caller.
+   Its real PR benchmark workflow invokes `pr.yml`. These calls exercise matrix expansion,
+   fan-out-then-converge onto one analysis job, receipt and artifact transport, and the
+   workflow's exported report outputs. Companion fake/native suites and action workflow
+   contract tests cover partial and total collection failure, malformed platforms, empty scope,
+   policy skips and run ownership. Contract tests check supplied inputs and output references
+   against the actual action metadata; they do not require every advanced composite input to
+   become a reusable-workflow input.
+   The same synthetic caller invokes `backfill.yml` on Linux, Windows and Apple Silicon macOS
+   over the frozen real event head and its first parent, using the nested faker fixture rather
+   than wall-clock Criterion measurements. An isolated backfill project shares the existing
+   test container. A separate caller verification job queries the core tool across all stored
+   machines and targets. Its structured run listing must contain both current range endpoints
+   as clean stored commits in one comparable partition per expected target; aggregate counts
+   or older history cannot satisfy that check. It does not fabricate a verdict or require
+   enough baseline to judge the history clean. This query and its failure-time listing are test evidence,
+   not part of the public backfill workflow, which has no analysis, receipts or reports.
+   Installed-tool smoke tests on the same runner separately prove skip-existing resumption;
+   the hosted caller does not assume later invocations receive the same machine fingerprint.
+   A Linux rolling call verifies automatic selection and single-commit fallback in a separate
+   test project. A no-eligible call must show successful preparation with no executed
+   benchmark jobs in current-attempt GitHub evidence. Exact cutoff, calendar and override
+   behavior belongs to frozen-clock Rust tests rather than hosted-runner timing.
 
 **Fork-gate validation exercises behavior.** Event fixtures cover same-repository and fork
 heads, asserting the fork skip result (§6) and that credentialed and publication jobs cannot
@@ -1606,8 +1681,9 @@ canary for the skip path; a same-repository scratch PR is not counted as fork co
 This adds neither a maintained fork repository nor fork execution support.
 
 The caller canaries run without publishing to GitHub
-(`publish: false` for reusable-workflow calls); composed-body checks use the fake transport.
-Live posting and Azure authorization are covered by their dedicated validation layers.
+(`publish: false` for history/PR calls; backfill has no publication); composed-body checks use
+the fake transport.
+The hosted callers exercise Azure authorization; live posting uses its dedicated validation layer.
 
 Publication cases assert the selected command and resulting state, not just `notable == false`.
 They cover fully clean reports, findings with missing platforms, inconclusive reports, empty
@@ -1684,26 +1760,41 @@ common path works while saying nothing about the rest of the input surface. That
 the gap the synthetic-history checks fill: they cover the configurations no production repo happens
 to have, and dogfooding covers the realism no test fixture can.
 
-The Azure auth branches stay covered by the monorepo's Azure-backend test jobs (`DESIGN.md` §6),
-so none of these layers needs to reach the cloud.
+Root-action installation canaries use local storage. Folo's cross-job caller canary uses
+the separate Azure test account to exercise hosted authentication, history report handoff
+and stored historical backfill data. Its independent backfill verification query does not
+add an analysis phase to the reusable flow.
+The monorepo's Azure-backend test jobs cover the backend's authentication branches (`DESIGN.md` §6).
 
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo's bench-history workflows — the push flow, the PR flow, and the nightly densification
-pass — consume a selected revision of the shared action, normally a published release.
-**`install-method: path`** points at the workspace checkout, so collection keeps measuring
-`main`'s HEAD tool rather than waiting for a release (preserving the property that a tool change is
-exercised the same push it lands). External repos use the default `binstall` install. This
-dogfoods the action's entire input-driven path
+Folo's history, PR and backfill workflows consume a selected revision of the shared action.
+**`install-method: path`** and **`source-path: .`** build the required tools from the invocation
+checkout, so unreleased monorepo changes are exercised without waiting for tool publication.
+The selected action revision supplies orchestration independently of those tool sources.
+External repos use the default `binstall` install. Folo dogfoods the action's input-driven path
 — config resolution, auth wiring, the `on-existing: skip` write mode and delta-scoped
 `packages`, receipt-based machine-key selection, the `--cache` read-through cache, the analysis
 outcome, and both report sinks with their lifecycles.
 
-Folo's entry points are reusable-workflow calls rather than a parallel implementation of
-the full job graphs. Domain rendering belongs to the tool, GitHub reporting belongs to the
-companion, and configurable workflow policy belongs to the shared layer (§5.1). Repository
-choices are inputs rather than duplicated shell logic.
+Folo's history, PR and backfill entry points are reusable-workflow calls rather than parallel
+implementations of those job graphs. Domain rendering belongs to the tool, GitHub reporting
+belongs to the companion, and configurable workflow policy belongs to the shared layer (§5.1).
+Repository choices are inputs rather than duplicated shell logic.
+
+The nightly densification caller keeps Folo's 02:00 UTC schedule, same-repository `main` gate
+and repository-wide non-cancelling concurrency group. It passes `lookback: 14 days`,
+`minimum-age: 24 hours` and an optional `to_commit` override as parameters. Shared preparation
+owns the full-history queries, date arithmetic, frozen endpoints and successful no-work result.
+
+Every production caller passes non-secret repository identity variables, exclusions, all
+features, `best-of: 3` and matching compiler stability flags directly in `with`, with
+`install-method: path` and `source-path: .`. The invocation-owned setup hook supplies genuine
+build prerequisites only. There are no caller configuration jobs, shell calculations or
+calculated outputs. Folo explicitly selects `ignore-errors: true` and `best-effort: true`
+at the shared hosted-job ceiling; neither is the generic default. The shared workflow owns
+the matrix and skip-existing execution, and leaves first-parent traversal to the core.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
@@ -1797,10 +1888,12 @@ The tool, companion and workflow layer have separate responsibilities:
   (`cargo-bench-history-faker`) with its own binary, so the published `cargo-bench-history`
   ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
-  backfill, artifact and reporting policy belong to the shared Rust and workflow layers.
-  PowerShell is limited to bootstrap and the independently executable Azure deployment
-  bundle; its driver is shared by `setup-azure` and export, not reimplemented in Rust.
-  PR-close cancellation belongs to the PR workflow itself.
+  artifact and reporting decisions belong to the shared Rust and workflow layers.
+  Folo retains its triggers, window parameters and best-effort choice in the thin caller, while the
+  source-built CLI owns measurement and storage. PowerShell handles bootstrap, repository
+  workflow wiring and the independently executable Azure deployment bundle; its driver is
+  shared by `setup-azure` and export, not reimplemented in Rust. PR-close cancellation belongs
+  to the PR workflow itself.
 * **The book has a "GitHub automation" section.** Running `cargo-bench-history` from
   automation is a primary deployment model, with questions that have no local analogue.
   The section covers:

@@ -6,6 +6,9 @@ on:
     paths:
       - .github/workflows/benchmark-action-canary.yml
       - .github/fixtures/bench-history-caller/**
+      - scripts/bench-history/Assert-BackfillCanary.ps1
+      - scripts/bench-history/Assert-BackfillNoWorkCanary.ps1
+      - packages/cargo-bench-history/**
       - packages/cargo-bench-history-github/**
       - packages/cargo-detect-package/**
       - packages/cargo-bench-history-faker/**
@@ -30,9 +33,12 @@ jobs:
       tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
       subscription-id: ${{ steps.values.outputs.AZURE_SUBSCRIPTION_ID }}
       account: ${{ steps.values.outputs.BENCH_HISTORY_TEST_AZURE_ACCOUNT }}
+      from: ${{ steps.range.outputs.from }}
+      to: ${{ steps.range.outputs.to }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Load test identity and account
         id: values
@@ -47,6 +53,19 @@ jobs:
             $value = Get-RequiredConstant -Values $values -Name $name
             "$name=$value" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           }
+      - name: Freeze the synthetic backfill range
+        id: range
+        shell: pwsh
+        env:
+          CANARY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # Adjacent commits exercise real historical checkout without expanding the CI workload.
+          $to = git rev-parse --verify --end-of-options "$($env:CANARY_HEAD)^{commit}"
+          $from = git rev-parse --verify --end-of-options "$($to)^"
+          @("from=$from", "to=$to") | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
   storage:
     # This is a real data-plane canary using the separate test identity, never production
@@ -79,7 +98,7 @@ jobs:
 
   exercise:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@f0b1c5feda0bbabd31fa03b239967da39502140c
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
     permissions:
       contents: read
       actions: read
@@ -96,7 +115,173 @@ jobs:
       working-directory: .github/fixtures/bench-history-caller
       bench: synthetic
       best-of: 1
+      rustflags: -Cllvm-args=-align-all-functions=6
       publish: false
+
+  backfill:
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      from: ${{ needs.configuration.outputs.from }}
+      to: ${{ needs.configuration.outputs.to }}
+      platforms: ubuntu-latest,windows-latest,macos-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_history.toml
+      bench: synthetic
+      best-of: 1
+      rustflags: -Cllvm-args=-align-all-functions=6
+
+  rolling-backfill:
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # A sub-second horizon exercises the single-commit fallback; zero age selects the head.
+      # Exact cutoff behavior uses frozen-clock Rust tests, not hosted-runner timing.
+      # Ref: implementation.md#reusable-workflow-canary.
+      lookback: 1 nanosecond
+      minimum-age: 0 seconds
+      platforms: ubuntu-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_rolling.toml
+      bench: synthetic
+      best-of: 1
+      rustflags: -Cllvm-args=-align-all-functions=6
+
+  no-eligible-backfill:
+    needs: configuration
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # The repository has no history this old, so only preparation may execute.
+      # Ref: implementation.md#reusable-workflow-canary.
+      lookback: 14 days
+      minimum-age: 100 years
+      platforms: ubuntu-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_rolling.toml
+
+  verify-rolling-backfill:
+    needs: [configuration, rolling-backfill]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ needs.configuration.outputs.client-id }}
+      AZURE_TENANT_ID: ${{ needs.configuration.outputs.tenant-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.configuration.outputs.to }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Verify the rolling window stored its selected commit
+        shell: pwsh
+        env:
+          CANARY_HEAD: ${{ needs.configuration.outputs.to }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & ./scripts/bench-history/Assert-BackfillCanary.ps1 -Workspace $env:GITHUB_WORKSPACE `
+            -From $env:CANARY_HEAD -To $env:CANARY_HEAD -Config '.cargo/backfill_rolling.toml' `
+            -Project reusable-rolling-canary -TargetTriple x86_64-unknown-linux-gnu `
+            -OutputPath (Join-Path $env:RUNNER_TEMP 'rolling-canary-runs.json')
+      - name: Retain the rolling verification listing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rolling-caller-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rolling-canary-runs.json
+          if-no-files-found: error
+
+  verify-no-work:
+    needs: no-eligible-backfill
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify no benchmark job executed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & ./scripts/bench-history/Assert-BackfillNoWorkCanary.ps1 `
+            -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -OutputPath (Join-Path $env:RUNNER_TEMP 'no-work-canary-jobs.json')
+      - name: Retain the no-work job evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: no-work-caller-jobs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/no-work-canary-jobs.json
+          if-no-files-found: error
+
+  verify-backfill:
+    needs: [configuration, backfill]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ needs.configuration.outputs.client-id }}
+      AZURE_TENANT_ID: ${{ needs.configuration.outputs.tenant-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.configuration.outputs.to }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      # Backfill itself has no analysis or report. Query exact stored endpoints rather
+      # than letting older data in the persistent test project satisfy an aggregate count.
+      - name: Verify stored historical measurements
+        shell: pwsh
+        env:
+          CANARY_FROM: ${{ needs.configuration.outputs.from }}
+          CANARY_TO: ${{ needs.configuration.outputs.to }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $reportPath = Join-Path $env:RUNNER_TEMP 'backfill-canary-runs.json'
+          & ./scripts/bench-history/Assert-BackfillCanary.ps1 -Workspace $env:GITHUB_WORKSPACE `
+            -From $env:CANARY_FROM -To $env:CANARY_TO -OutputPath $reportPath
+      - name: Retain the backfill verification listing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backfill-caller-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backfill-canary-runs.json
+          if-no-files-found: error
 
   verify:
     needs: exercise

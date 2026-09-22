@@ -415,9 +415,11 @@ registered on that identity. The subject encodes the triggering event: a push to
 presents `repo:folo-rs/folo:ref:refs/heads/<branch>` (e.g. `…:ref:refs/heads/main`), while a
 pull-request run presents `repo:folo-rs/folo:pull_request`. The audience is always
 `api://AzureADTokenExchange`. The two non-secret identifiers a job needs — the managed
-identity's client id and the tenant id — live in `constants.env` and are remapped to the
-standard `AZURE_*` names by the shared federation helper. All production-history consumers
-select `AZURE_PROD_CLIENT_ID`; analysis does not need another identity.
+identity's client id and the tenant id — are non-secret repository variables for the
+production benchmark callers. They pass `vars.AZURE_PROD_CLIENT_ID` and `vars.AZURE_TENANT_ID`
+directly to the shared workflows. `constants.env` retains the infrastructure and test
+configuration; keep the corresponding repository variables aligned when those identities
+change. Analysis does not need another identity.
 
 Azure-touching work selects **same-repo** PRs. Under GitHub's default fork permissions,
 GitHub removes the capability to request an OIDC token after evaluating workflow YAML;
@@ -452,6 +454,12 @@ because their fixtures are created and deleted independently. See
 [`infra/azure-bench-history-prod`](../../infra/azure-bench-history-prod/README.md).
 
 ## Benchmark history
+
+Folo's history, PR and backfill callers delegate their job graphs to the action repository's
+`history.yml`, `pr.yml` and `backfill.yml` reusable workflows. Folo owns their triggers,
+identity configuration and measurement settings, including the nightly window parameters.
+The callers contain configuration only: shared Rust plans the historical window and effective
+compiler flags, and shared orchestration owns checkout, setup and tool installation.
 
 History collection runs on every push to `main`, measuring the pushed tip rather than
 repeatedly measuring an unchanged scheduled tip. A push may contain several commits, including
@@ -503,9 +511,9 @@ minutes producing series no one reads.
 
 Every selected package is benchmarked with all Cargo features enabled. This makes Cargo include
 benchmark targets guarded by `required-features` and builds each selected package in its
-all-features configuration. The push, PR and nightly-backfill paths all obtain this
-feature selection from the same collection policy, so a stored point is never made incomparable by
-one path using narrower feature coverage.
+all-features configuration. The push, PR and nightly-backfill callers specify matching
+feature, exclusion, repetition and compiler-flag inputs so one path does not narrow the
+measurement configuration of a stored point.
 
 Unsuitable measurements are removed by a maintainer's manual `prune` invocation. A gap after
 pruning is acceptable; ordinary backfill may fill it within its scope. The workflows expose
@@ -543,8 +551,10 @@ fits while complete results, including quiet or partial reports, remain accessib
 
 Benchmark preparation uses the fixed repository-local
 `.github/actions/bench-history-setup/action.yml` convention. Folo's hook wraps its ordinary
-setup action with the Valgrind requirement enabled and exports the configured stability flags.
-Collection/backfill share those settings. The reusable workflows own tool installation and
+setup action with the Valgrind requirement enabled. Compiler stability flags are measurement
+inputs, not setup code: every production caller supplies the same `rustflags` value.
+The companion combines it with the effective ambient Cargo flags for measurement child
+processes, preserving unrelated options. The reusable workflows own tool installation and
 their remaining job preparation.
 
 Requirements for reusable workflows and their composite-action building blocks in the external
@@ -552,31 +562,65 @@ Requirements for reusable workflows and their composite-action building blocks i
 [reusable-action design](../../packages/cargo-bench-history/docs/reusable-action.md#47-two-consumption-layers--reusable-workflows-over-composite-actions).
 They are separate from Folo's repository-local hook.
 
+### Reusable workflow canary
+
+A synthetic caller checks shared history and backfill orchestration on Linux, Windows and
+Apple Silicon macOS using the existing test identity and storage container, not production
+history. Separate project identities isolate the flows. The fixture produces deterministic
+Criterion data without wall-clock measurements.
+
+History coverage checks receipts, report transport and honest outcome/coverage outputs.
+Backfill coverage freezes the real event head and its first parent as an inclusive range,
+then checks that every expected target has stored historical measurements. A separate
+test-verification query reads the core tool's structured run listing across all machines and
+targets. Each target must have both current endpoint commits stored cleanly in one comparable
+partition; older data and aggregate run counts cannot substitute for that range. This query
+and its retained failure-time evidence belong to the canary,
+not the reusable backfill flow, which remains collection-only with no reports or publication.
+Same-runner installed-tool tests separately cover skip-existing resumption.
+
+A rolling-window call uses zero minimum age and a sub-second horizon to exercise automatic
+selection and the single-commit fallback at the real event head. It writes to a separate
+test project so explicit-range data cannot satisfy its verification. A no-eligible call
+uses a minimum age older than the repository and must finish without executing a backfill
+matrix. Exact duration boundaries and calendar arithmetic use frozen-clock Rust tests.
+
+See [canary implementation](implementation.md#reusable-workflow-canary) for the job boundaries.
+
 ### Nightly history backfill
 
-A scheduled companion workflow densifies the per-machine-key series the push workflow leaves
-sparse. At 02:00 UTC — clear of the cache warmup's midnight slot — it runs the collection tool's
-`backfill` in its default skip-existing mode over a window of recent `main` commits, on the same
-two platforms, so whichever machine key its runner draws that night receives the newest commits
-that key is missing. It is purely a producer: it performs no analysis and raises no alert.
+A scheduled caller densifies the per-machine-key series the push workflow leaves
+sparse. At 02:00 UTC — clear of the cache warmup's midnight slot — it invokes the shared
+`backfill.yml` workflow over a window of recent `main` commits, in fixed skip-existing mode on
+the same platforms, so whichever machine key its runner draws that night receives the newest commits
+that key is missing. It is purely a producer: it performs no analysis, emits no receipts or
+reports, and has no publication sink or alert.
 Analysis stays with the push workflow, which surveys a densified series the next time one of its
 runners draws that same machine key.
 
-The window is computed per run rather than fixed. Its newest end is the newest first-parent
-commit at least 24 hours old, which keeps the nightly from racing a push-collect that may still
+The caller supplies `lookback: 14 days` and `minimum-age: 24 hours`. Shared Rust preparation
+computes the window once using full Git history and one clock snapshot, before any benchmark
+setup or Azure access. Its newest end is the newest first-parent commit at least 24 hours old,
+which keeps the nightly from racing a push-collect that may still
 be measuring a recent commit (collection runs for hours). Its oldest end is 14 days
 back: history older than that has no comparison value against the current tip, since detection
 reads only a short window of recent points, and the same bound caps how far back the
-measurement-configuration caveat below can plant an odd-looking point.
+measurement-configuration caveat below can plant an odd-looking point. With no eligible commit,
+shared preparation explains the successful no-op and starts no benchmark jobs. The horizon
+is relative to preparation time, not to the selected end. Quiet history and an override
+older than that horizon produce a single-commit range. Scheduled and manual runs are
+restricted to `main` in this repository.
 
-Being killed by the clock is the expected outcome, not a failure. One commit costs as much as a
-push-collect and more — the backfill worktree's build directory sits outside the shared
+Folo explicitly opts into best-effort execution: being killed by the clock is an expected outcome.
+One commit costs as much as a push-collect and more — the backfill worktree's build directory sits
+outside the shared
 dependency cache, so it always builds cold — so a night fills roughly one gap per platform
-against the six-hour hosted-runner ceiling. The job therefore carries the maximum
-`timeout-minutes` *together with* `continue-on-error`, which is what turns the kill into an
-unremarkable end rather than a red scheduled workflow, and it ignores per-commit errors so one
-unbuildable commit does not end the walk. Because backfill works newest-first, whatever the run
-managed to finish is the most comparison-relevant part of the range. A kill landing in the
+against the shared workflow's fixed six-hour hosted-runner ceiling. The caller passes
+`best-effort: true`, which sets the matrix jobs' `continue-on-error`, and `ignore-errors: true`,
+which lets the core walk past per-commit build or benchmark failures. These are independent
+opt-ins, both false by default for generic callers; ignoring per-commit failures does not suppress
+infrastructure errors. Because backfill works newest-first, whatever the run managed to finish
+is the most comparison-relevant part of the range. A kill landing in the
 seconds a commit spends writing its per-engine results leaves that commit stored for only some
 engines, and later runs count it as filled; repairing it takes a `backfill --overwrite` over
 that commit. The accepted cost is that a
@@ -588,15 +632,21 @@ It carries its own concurrency group instead of joining history collection's. A 
 SHA *is* the current tip, so sharing that SHA-keyed, cancel-in-progress group would put the
 nightly and the tip commit's own collection into one group where whichever started later kills
 the other — hours of benchmarking discarded in either direction. The backfill's own group merely
-stops a manual dispatch from duplicating a scheduled run, queueing it instead. The dispatch
+stops a manual dispatch from duplicating a scheduled run, queueing it instead. This repository-wide
+caller group is distinct from the reusable workflow's run and canonical project/platform queues,
+which retain earlier invocations without event/SHA deduplication or cancellation. The dispatch
 exists as an escape hatch: it can override the computed newest endpoint to step over a commit
-that fails slowly and would otherwise be re-selected every night.
+that fails slowly and would otherwise be re-selected every night. The shared preparation resolves
+the selected endpoints to full commit SHAs, and execution checks out the resolved `to` commit with
+full history. The core tool owns first-parent validation and traversal. Historical scope comes from
+each historical workspace, not a benchmark-inventory check at the invocation head.
 
 Two fidelity caveats ride along, both worth recognising before an unexplained step in a series
 is read as a real regression. A backfilled commit is built with the toolchain that commit pins,
-but its `RUSTFLAGS` and benchmark scope come from the current checkout — they are caller intent
-that a general-purpose tool cannot recover from a historical worktree — so a commit older than
-the newest change to either is measured slightly differently from its pushed neighbours; the
+but its configuration, setup hook and source-built tools come from the invocation checkout.
+Its `RUSTFLAGS` and benchmark scope settings are caller intent that a general-purpose tool cannot
+recover from a historical worktree, so a commit older than the newest change to those settings
+is measured slightly differently from its pushed neighbours; the
 14-day window is what bounds this. Separately, the hosted runner images roll weekly and the
 hardware fingerprint does not capture the image version, so a gap filled tonight may be measured
 on a newer image than the neighbour it sits between — an exposure the pushed series already

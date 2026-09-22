@@ -7,6 +7,7 @@
 )]
 
 use std::env::consts::EXE_SUFFIX;
+use std::env::var_os;
 use std::ffi::OsString;
 use std::fs;
 #[cfg(unix)]
@@ -91,6 +92,9 @@ impl Fixture {
             "GITHUB_SHA",
             "GITHUB_SERVER_URL",
             "CBH_ACTION_FIXTURE_FAIL",
+            "CBH_ACTION_FIXTURE_CHECK_FLAGS",
+            "CBH_ACTION_FIXTURE_EXPECT_RUSTFLAGS",
+            "CBH_ACTION_FIXTURE_EXPECT_CARGO_ENCODED_RUSTFLAGS",
         ] {
             command.env_remove(name);
         }
@@ -279,6 +283,80 @@ fn native_core_commands_preserve_environment_checkout_streams_and_reports() {
         .unwrap();
     assert!(!failed.status.success());
     assert_eq!(fixture.outputs(), before);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Real executable compilation, child processes and files."
+)]
+fn native_compiler_flags_override_only_measurement_children() {
+    let fixture = Fixture::new();
+    let tool = fixture.build_tool();
+    let inherited = (var_os("RUSTFLAGS"), var_os("CARGO_ENCODED_RUSTFLAGS"));
+    for (additional, ambient, encoded, expected) in [
+        (
+            None,
+            Some("  --cfg=ordinary\t"),
+            Some("--cfg=encoded\u{1f}-C\u{1f}link-arg=path with spaces"),
+            Some("--cfg=encoded\u{1f}-C\u{1f}link-arg=path with spaces"),
+        ),
+        (Some(""), Some("  --cfg=ordinary\t"), None, None),
+        (Some("--cfg=extra"), None, None, Some("--cfg=extra")),
+        (
+            Some(" -C llvm-args=-align-all-functions=6\t--cfg=extra "),
+            Some("-Cllvm-args=-align-all-functions=3\t--cfg=ordinary"),
+            None,
+            Some(
+                "-Cllvm-args=-align-all-functions=3\u{1f}--cfg=ordinary\u{1f}-C\u{1f}llvm-args=-align-all-functions=6\u{1f}--cfg=extra",
+            ),
+        ),
+        (
+            Some("-Cllvm-args=-align-all-functions=6"),
+            Some("--cfg=ignored"),
+            Some("-C\u{1f}link-arg=path with spaces"),
+            Some("-C\u{1f}link-arg=path with spaces\u{1f}-Cllvm-args=-align-all-functions=6"),
+        ),
+        (
+            Some("--cfg=extra"),
+            Some("--cfg=ignored"),
+            Some(""),
+            Some("--cfg=extra"),
+        ),
+    ] {
+        for action in ["collect", "backfill"] {
+            let mut input = json!({"command":action});
+            if let Some(additional) = additional {
+                input["rustflags"] = json!(additional);
+            }
+            if action == "backfill" {
+                input["from"] = json!("older");
+                input["to"] = json!("newer");
+            }
+            let mut command = fixture.tool_command(&input, &tool);
+            command.env("CBH_ACTION_FIXTURE_CHECK_FLAGS", "true");
+            for (name, value) in [
+                ("RUSTFLAGS", ambient),
+                ("CARGO_ENCODED_RUSTFLAGS", encoded),
+                ("CBH_ACTION_FIXTURE_EXPECT_RUSTFLAGS", ambient),
+                (
+                    "CBH_ACTION_FIXTURE_EXPECT_CARGO_ENCODED_RUSTFLAGS",
+                    expected,
+                ),
+            ] {
+                if let Some(value) = value {
+                    command.env(name, value);
+                } else {
+                    command.env_remove(name);
+                }
+            }
+            success(&command.output().unwrap());
+        }
+    }
+    assert_eq!(
+        (var_os("RUSTFLAGS"), var_os("CARGO_ENCODED_RUSTFLAGS")),
+        inherited
+    );
 }
 
 #[test]

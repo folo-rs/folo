@@ -14,9 +14,10 @@ pub(crate) struct PrepareWorkflowArgs {
     pub(crate) github_output: PathBuf,
 }
 
-/// Selects event attribution and the supported scope policy for the calling workflow.
+/// Selects event attribution and collection-scope or historical-range preparation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum Flow {
     History,
     Pr,
+    Backfill,
 }

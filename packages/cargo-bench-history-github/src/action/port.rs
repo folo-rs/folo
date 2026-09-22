@@ -52,13 +52,15 @@ pub(crate) trait Publisher {
     ) -> impl Future<Output = Result<(), AppError>>;
 }
 
-/// A shell-free process invocation with an explicit output policy and measured checkout.
+/// A shell-free invocation with a measured checkout and child-only environment overrides.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Process {
     pub(crate) program: OsString,
     pub(crate) args: Vec<OsString>,
     pub(crate) cwd: PathBuf,
     pub(crate) output: Output,
+    /// Empty overrides preserve the full inherited environment.
+    pub(crate) env: Vec<(OsString, OsString)>,
 }
 
 /// Benchmark logs stream; only dedicated Git and machine-key responses are buffered.

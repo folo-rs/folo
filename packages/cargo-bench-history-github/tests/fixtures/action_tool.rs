@@ -27,6 +27,14 @@ fn main() -> ExitCode {
             env::var_os(format!("CBH_ACTION_FIXTURE_EXPECT_{name}"))
         );
     }
+    if env::var_os("CBH_ACTION_FIXTURE_CHECK_FLAGS").is_some() {
+        for name in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"] {
+            assert_eq!(
+                env::var_os(name),
+                env::var_os(format!("CBH_ACTION_FIXTURE_EXPECT_{name}"))
+            );
+        }
+    }
     if env::var("CBH_ACTION_FIXTURE_FAIL").as_deref() == Ok(command) {
         return ExitCode::FAILURE;
     }

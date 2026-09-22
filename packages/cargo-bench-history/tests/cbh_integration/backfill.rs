@@ -1,4 +1,71 @@
+use std::fs;
+use std::process::Command as ProcessCommand;
+
 use crate::harness::*;
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "uses real git and binary processes with filesystem storage"
+)]
+fn backfill_rejects_unavailable_git() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    let head_before = workspace.head();
+    let worktrees_before = workspace.git(&["worktree", "list", "--porcelain"]).stdout;
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .args(["backfill", "HEAD", "HEAD", "--ignore-errors"])
+        .arg(format!(
+            "--local={}",
+            workspace.root().join("store").display()
+        ))
+        .current_dir(workspace.root())
+        // Only this child loses Git; fixture setup and other tests keep their environment.
+        .env("PATH", "")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
+    assert!(workspace.stored_objects().is_empty());
+    assert_eq!(workspace.head(), head_before);
+    assert_eq!(
+        workspace.git(&["worktree", "list", "--porcelain"]).stdout,
+        worktrees_before
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "uses real git and binary processes with filesystem storage"
+)]
+fn backfill_rejects_non_git_directory() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    for ignore_errors in [false, true] {
+        let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_cargo-bench-history"));
+        command
+            .args(["backfill", "HEAD", "HEAD"])
+            .arg(format!(
+                "--local={}",
+                workspace.root().join("store").display()
+            ))
+            .current_dir(workspace.root());
+        if ignore_errors {
+            command.arg("--ignore-errors");
+        }
+        let output = command.output().unwrap();
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+        assert!(workspace.stored_objects().is_empty());
+        assert!(!workspace.root().join(".git").exists());
+        assert!(!workspace.root().join("target").exists());
+    }
+}
 
 /// A backfill stores one clean result per commit in the range, leaves the primary
 /// checkout and branch untouched, and the backfilled points then surface through
@@ -55,6 +122,158 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     assert_eq!(
         parsed["runs"], 2,
         "analyze should see every backfilled commit: {report}"
+    );
+}
+
+/// A nested workspace keeps its project directory in every historical checkout,
+/// including its output tree, and resuming never launches already-recorded benches.
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "uses real git worktrees, processes, and filesystem storage"
+)]
+async fn backfill_preserves_nested_project_and_resumes() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    let before_project = workspace.head();
+    let relative = Path::new(".github").join("fixtures").join("nested project");
+    let project = workspace.root().join(&relative);
+    fs::create_dir_all(project.join("benches")).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[workspace]\n[package]\nname = \"nested_project\"\nversion = \"0.0.0\"\n\
+         edition = \"2024\"\n[lib]\npath = \"lib.rs\"\n",
+    )
+    .unwrap();
+    fs::write(project.join("lib.rs"), "pub fn measure() {}\n").unwrap();
+    fs::write(project.join("benches").join("marker"), "nested benches\n").unwrap();
+    workspace.git(&["add", &relative.to_string_lossy()]);
+    let c1 = workspace.commit_with_file("nested workspace", ".gitignore", "target/\n.cargo/\n");
+    let c2 = workspace.commit_with_file(
+        "update nested workspace",
+        &relative.join("lib.rs").to_string_lossy(),
+        "pub fn measure() -> bool { true }\n",
+    );
+
+    // Configuration belongs to the invocation, not the historical checkouts.
+    fs::create_dir_all(project.join(".cargo")).unwrap();
+    fs::write(
+        project.join(".cargo").join("bench_history.toml"),
+        storage_only_config().replace("testproj", "nested-project"),
+    )
+    .unwrap();
+    workspace.make_dirty("UNCOMMITTED");
+    // Running in the primary project, or writing to the worktree's repository-root
+    // target on the newer commit, makes the faker fail rather than silently pass.
+    fs::create_dir_all(workspace.root().join("target")).unwrap();
+    let root_target = Path::new("..").join("..").join("..").join("target");
+    let status_before = workspace.git(&["status", "--porcelain"]).stdout;
+    let worktrees_before = workspace.git(&["worktree", "list", "--porcelain"]).stdout;
+    let branch_before = workspace.current_branch();
+
+    let bench = callgrind_arg(
+        "nested",
+        "nested_bench::measure|measure||nested_project=41/5/2",
+    );
+    let command = command_from(&[
+        "backfill",
+        &c1,
+        &c2,
+        &format!("--local={}", workspace.root().join("store").display()),
+    ]);
+    let outcome = run_with_overrides(
+        &command,
+        Overrides {
+            workspace_dir: Some(project.clone()),
+            bench_command: Some(vec![
+                cargo_bench_history_faker::binary_path().to_owned(),
+                "--fail-if-exists".to_owned(),
+                root_target.to_string_lossy().into_owned(),
+                // Only the selected project has this directory.
+                "--chdir".to_owned(),
+                "benches".to_owned(),
+                "--callgrind".to_owned(),
+                bench,
+            ]),
+            ..Overrides::default()
+        },
+    )
+    .await
+    .unwrap();
+    let RunOutcome::Completed { message } = outcome else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("2 stored"), "{message}");
+
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 2);
+    for commit in [&c1, &c2] {
+        let (key, run) = objects
+            .iter()
+            .find(|(_, run)| run.context.git.commit.as_ref() == Some(commit))
+            .unwrap();
+        let triple = &run.context.toolchain.target_triple;
+        let machine = &run.context.machine.as_ref().unwrap().fingerprint;
+        assert_eq!(
+            key,
+            &format!("v1/nested-project/objects/callgrind/{triple}/{machine}/{commit}/clean.json")
+        );
+        assert!(!run.context.git.dirty);
+        assert_eq!(run.results.len(), 1);
+        assert_eq!(
+            run.results[0].id.segments.first().as_str(),
+            "nested_project"
+        );
+        assert_eq!(run.results[0].id.segments.last().as_str(), "measure");
+        assert_eq!(ir_of(&run.results[0]), 41.0);
+    }
+
+    // Exercise --repo as well as the workspace override. Any benchmark launch
+    // fails, so this proves the partition pre-check skips execution, not just writes.
+    let workspace = workspace.with_bench(&["--exit-code", "1"]);
+    let RunOutcome::Completed { message } = workspace
+        .drive(&["backfill", &c1, &c2, "--repo", &relative.to_string_lossy()])
+        .await
+        .unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("0 stored, 2 skipped (existing)"),
+        "{message}"
+    );
+
+    // Recorded commits launch no benchmarks, so their ignored target output cannot keep
+    // the project directory alive when checkout reaches a commit before its introduction.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "backfill",
+            &before_project,
+            &c2,
+            "--repo",
+            &relative.to_string_lossy(),
+            "--ignore-errors",
+        ])
+        .await
+        .unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("0 stored, 2 skipped (existing)"),
+        "{message}"
+    );
+    assert!(message.contains("1 failed"), "{message}");
+    let resumed = workspace.stored_objects();
+    assert_eq!(resumed, objects);
+    assert_eq!(workspace.head(), c2);
+    assert_eq!(workspace.current_branch(), branch_before);
+    assert_eq!(
+        workspace.git(&["status", "--porcelain"]).stdout,
+        status_before
+    );
+    assert_eq!(
+        workspace.git(&["worktree", "list", "--porcelain"]).stdout,
+        worktrees_before
     );
 }
 

@@ -17,17 +17,35 @@ The workflow's offline preparation is a separate companion invocation, not a roo
 command:
 
 ```text
-cargo-bench-history-github prepare-workflow --flow history|pr --inputs-file PATH --github-output PATH
+cargo-bench-history-github prepare-workflow --flow history|pr|backfill --inputs-file PATH --github-output PATH
 ```
 
 Its strict string-only JSON inputs are `working-directory`, `config`, required `platforms`
-and optional `exclude`. Path resolution and empty-string handling match the root
-boundary below. The flow selects history workspace or PR affected scope; there is no scope input.
-Exclusions are exact workspace package names. Both flows select concrete packages with
-explicit benchmark targets. PR affected selection expands changed ownership through
-workspace path dependents before filtering benchmarks and exclusions.
+and optional `exclude`. Backfill additionally accepts mutually exclusive range selections:
 
-Preparation appends `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
+* An explicit range requires `from` and `to`, without rolling inputs.
+* A rolling window requires `lookback` and `minimum-age`, without `from`. An optional `to`
+  overrides automatic endpoint selection.
+
+Range inputs do not apply to other flows. Known empty defaults mean unspecified, including
+inactive range fields; unknown keys and whitespace-only values remain invalid.
+Path resolution matches the root boundary below.
+The flow selects history workspace, PR affected scope or a historical backfill range;
+there is no scope input.
+
+Rolling durations accept Jiff friendly and ISO spans, including `24 hours ago`, interpreted
+as magnitudes against one preparation-time UTC anchor. `lookback` is nonzero; `minimum-age`
+may be zero. Automatic selection chooses the newest first-parent commit old enough for the
+age cutoff. The lookback is relative to preparation time even with a `to` override.
+When no reachable commit falls inside that window, the selected end becomes a single-commit range.
+
+History and PR exclusions are exact workspace package names. Those flows select concrete packages with
+explicit benchmark targets. PR affected selection expands changed ownership through
+workspace path dependents before filtering benchmarks and exclusions. Ownership is bounded
+by Cargo's declared members: nested fixture workspaces do not become foreign package owners,
+and paths outside those members select workspace scope.
+
+History and PR preparation append `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
 `head`, `base`, `packages`, `skip-all` and `skipped`. Package CSV and platform identifiers are
 sorted and deduplicated; booleans are lowercase. Head/base are frozen full commit SHAs.
 History uses head as base; PR preparation uses the event's real head and base, requiring
@@ -43,11 +61,32 @@ PR collection receives the prepared `packages` and no `exclude`, since exclusion
 already been applied. History collection omits `packages` and retains its configured
 `exclude` values, preserving Cargo workspace collection.
 
-A fork event instead emits the matrix/namespace outputs, `skipped=true`,
+For history and PR, a fork event instead emits the matrix/namespace outputs, `skipped=true`,
 `skip-reason=fork-pull-request`, `skip-all=true` and an empty `packages`; it emits no
 head/base outputs and starts no Git/Cargo/detector work. This policy skip does not authorize
 empty-scope publication. Successful non-skipped preparation emits `skipped=false`.
 The workflow retains its same-repository selection independently.
+
+Every backfill result emits `instance`, `matrix`, `expected-platforms`, `skipped` and `has-work`.
+The remaining fields distinguish the preparation result:
+
+| Result | `skipped` | `has-work` | Additional fields |
+| --- | --- | --- | --- |
+| Selected explicit or rolling range | `false` | `true` | Frozen full commit SHAs in `from` and `to` |
+| No eligible automatic endpoint | `false` | `false` | `no-work-reason=no-eligible-commit`, without endpoints |
+| Fork-policy skip | `true` | `false` | `skip-reason=fork-pull-request`, without endpoints |
+
+No eligible endpoint is a successful no-work result, not an empty benchmark scope or policy
+skip. Only `skipped=false` with `has-work=true` starts the benchmark matrix.
+Non-skipped preparation verifies the invocation checkout against the event head and requires
+full history, but does not inspect its current Cargo benchmark inventory. Historical commits
+determine their own workspace scope; exclusions are passed to the core backfill command,
+which owns first-parent range validation and traversal.
+Execution checks out the resolved range end, while configuration and source-built tools remain
+from the invocation checkout.
+
+Backfill emits no head/base, package CSV, empty-scope flag or collection-job prefix. Its fork
+skip starts no Git/Cargo/detector work. It produces neither collection receipts nor analysis reports.
 
 There is no detector executable argument or installation role for this helper: the companion
 uses the detector's read-only in-workspace library query. Existing receipt and analysis
@@ -87,7 +126,7 @@ there is no success default.
 
 | Command | Inputs |
 | --- | --- |
-| `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features` |
+| `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features`, `rustflags` |
 | `backfill` | Collection inputs plus required `from`, `to`, and optional `ignore-errors` |
 | `analyze-history` | `local-path`, `cache`, required `machine-keys`, `context`, `since`, required `expected-platforms`, `completed-platforms` |
 | `analyze-pr` | The history inputs except `since`, plus optional `base` |
@@ -122,6 +161,25 @@ At least one key is required. Other files and filesystem links within this tree 
 Expected and completed platform CSVs are required independently of these keys and use the
 existing platform-coverage validation.
 
+### Compiler flags
+
+Collection and backfill accept optional `rustflags`: additional rustc arguments using Cargo's
+`RUSTFLAGS` whitespace splitting, without shell quoting or expansion. A supplied value must be
+nonblank and single-line. Empty or omitted input leaves the environment untouched.
+
+Additional arguments follow the effective ambient flags: `CARGO_ENCODED_RUSTFLAGS` takes
+precedence when present, otherwise `RUSTFLAGS` supplies the inherited arguments. Encoded
+argument boundaries, including arguments containing spaces, and unrelated options are preserved.
+The resulting flags use a child-only `CARGO_ENCODED_RUSTFLAGS` override for the core command
+and its descendants. Collection's machine-key query receives the same override.
+The companion's own environment and every unrelated environment variable remain unchanged.
+
+For example, `-Cllvm-args=-align-all-functions=6` follows any inherited alignment setting;
+rustc applies the last occurrence of that LLVM option. The action does not normalize or
+replace arbitrary compiler options. Arguments containing spaces must come from the ambient
+encoded flags, not shell quoting in this input. The encoded argument separator is reserved
+in both the additional input and ordinary ambient flags.
+
 ## Execution context and skips
 
 Publication obtains its repository from `GITHUB_REPOSITORY`, or the event's repository.
@@ -142,7 +200,8 @@ work. Shape validation and local namespace resolution still apply.
 
 For offline commands, the companion does not read `GITHUB_TOKEN` or `GH_TOKEN` or
 initialize GitHub authentication. Core and Git child processes inherit the caller's environment
-unchanged, including variables needed by build helpers or benchmarks. The credentialed adapter
+including variables needed by build helpers or benchmarks. Only a nonempty collection/backfill
+`rustflags` input adds the compiler-flag override described above. The credentialed adapter
 is constructed only for publication, after input and fork checks.
 
 ## Artifacts and outputs
