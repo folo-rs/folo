@@ -1463,9 +1463,11 @@ The names and required evidence agree between the composite and companion layers
 
 **Composite `backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
 `best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
-or `overwrite`; `error` is invalid here, §4.5). The reusable workflow requires explicit refs,
-fixes skip-existing workspace collection with configurable exclusions, and additionally exposes
-the whole-job `best-effort` opt-in (§4.7). Rolling-window selection stays with the caller.
+or `overwrite`; `error` is invalid here, §4.5). The reusable workflow accepts either explicit
+`from`/`to` or rolling `lookback`/`minimum-age` with an optional `to` override. Shared preparation
+calculates and freezes the range; callers supply parameters only. The workflow fixes skip-existing
+workspace collection with configurable exclusions and additionally exposes the whole-job
+`best-effort` opt-in (§4.7).
 
 **History/PR reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
 GitHub writes as one policy (§5.2). It is not an input to the individual composite commands:

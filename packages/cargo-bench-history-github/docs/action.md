@@ -21,10 +21,23 @@ cargo-bench-history-github prepare-workflow --flow history|pr|backfill --inputs-
 ```
 
 Its strict string-only JSON inputs are `working-directory`, `config`, required `platforms`
-and optional `exclude`. Backfill additionally requires `from` and `to`; those inputs do not
-apply to other flows. Path resolution and empty-string handling match the root boundary below.
+and optional `exclude`. Backfill additionally accepts mutually exclusive range selections:
+
+* An explicit range requires `from` and `to`, without rolling inputs.
+* A rolling window requires `lookback` and `minimum-age`, without `from`. An optional `to`
+  overrides automatic endpoint selection.
+
+Range inputs do not apply to other flows. Known empty defaults mean unspecified, including
+inactive range fields; unknown keys and whitespace-only values remain invalid.
+Path resolution matches the root boundary below.
 The flow selects history workspace, PR affected scope or a historical backfill range;
 there is no scope input.
+
+Rolling durations accept Jiff friendly and ISO spans, including `24 hours ago`, interpreted
+as magnitudes against one preparation-time UTC anchor. `lookback` is nonzero; `minimum-age`
+may be zero. Automatic selection chooses the newest first-parent commit old enough for the
+age cutoff. The lookback is relative to preparation time even with a `to` override.
+When no reachable commit falls inside that window, the selected end becomes a single-commit range.
 
 History and PR exclusions are exact workspace package names. Those flows select concrete packages with
 explicit benchmark targets. PR affected selection expands changed ownership through
@@ -48,23 +61,32 @@ PR collection receives the prepared `packages` and no `exclude`, since exclusion
 already been applied. History collection omits `packages` and retains its configured
 `exclude` values, preserving Cargo workspace collection.
 
-A fork event instead emits the matrix/namespace outputs, `skipped=true`,
+For history and PR, a fork event instead emits the matrix/namespace outputs, `skipped=true`,
 `skip-reason=fork-pull-request`, `skip-all=true` and an empty `packages`; it emits no
 head/base outputs and starts no Git/Cargo/detector work. This policy skip does not authorize
 empty-scope publication. Successful non-skipped preparation emits `skipped=false`.
 The workflow retains its same-repository selection independently.
 
-Backfill freezes `from` and `to` references to full commit SHAs and emits `instance`, `matrix`,
-`expected-platforms`, `from`, `to` and `skipped=false`. It verifies the invocation checkout
-against the event head and requires full history, but does not inspect its current Cargo
-benchmark inventory. Historical commits determine their own workspace scope; exclusions
-are passed to the core backfill command, which owns first-parent range validation and traversal.
+Every backfill result emits `instance`, `matrix`, `expected-platforms`, `skipped` and `has-work`.
+The remaining fields distinguish the preparation result:
+
+| Result | `skipped` | `has-work` | Additional fields |
+| --- | --- | --- | --- |
+| Selected explicit or rolling range | `false` | `true` | Frozen full commit SHAs in `from` and `to` |
+| No eligible automatic endpoint | `false` | `false` | `no-work-reason=no-eligible-commit`, without endpoints |
+| Fork-policy skip | `true` | `false` | `skip-reason=fork-pull-request`, without endpoints |
+
+No eligible endpoint is a successful no-work result, not an empty benchmark scope or policy
+skip. Only `skipped=false` with `has-work=true` starts the benchmark matrix.
+Non-skipped preparation verifies the invocation checkout against the event head and requires
+full history, but does not inspect its current Cargo benchmark inventory. Historical commits
+determine their own workspace scope; exclusions are passed to the core backfill command,
+which owns first-parent range validation and traversal.
 Execution checks out the resolved range end, while configuration and source-built tools remain
 from the invocation checkout.
 
 Backfill emits no head/base, package CSV, empty-scope flag or collection-job prefix. Its fork
-skip emits only the matrix/namespace fields, `skipped=true` and the skip reason, without
-resolving Git references. It produces neither collection receipts nor analysis reports.
+skip starts no Git/Cargo/detector work. It produces neither collection receipts nor analysis reports.
 
 There is no detector executable argument or installation role for this helper: the companion
 uses the detector's read-only in-workspace library query. Existing receipt and analysis
