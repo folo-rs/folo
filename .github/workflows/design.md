@@ -18,6 +18,12 @@ issue when planning or checks fail. A triager investigates all reported
 failures and creates or updates separate problem issues. The report closes when its
 failures have been accounted for; the problem issues stay open until resolved.
 
+Report discovery uses only open issues with the fixed title prefix defined by
+[run-report recognition](../../docs/scheduled-validation.md#run-report-recognition).
+Labels do not identify reports. The exact workflow attempt distinguishes executions;
+the title's date is descriptive. Closed reports and alternative titles are outside
+discovery, so replaying publication after triage closes a report can create another.
+
 Problem grouping follows the cause or independently actionable symptom, not job
 boundaries or log fingerprints. Infrastructure failures are problems too; checks
 blocked by a failed prerequisite are not themselves evidence of source defects.

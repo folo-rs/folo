@@ -552,7 +552,7 @@ the run completes, diagnostics become unavailable or packing of missing sections
 changes. Human reports and partial reports without these headings receive the
 bounded sections in their existing discussion rather than a replacement issue.
 
-All reporter mutations are serial and paced, including label creation and duplicate
+All reporter mutations are serial and paced, including report creation and duplicate
 reconciliation. Explicit HTTP rate-limit refusals permit finite exponential retries
 after the longer of the secondary-limit cooldown and server-provided retry/reset
 deadlines. No reconciliation reads happen during that cooldown. Other write
@@ -569,9 +569,27 @@ The publication limits and cooldowns are implemented in `ScheduledReport.psm1` a
 Pester exercises large reports and partial, throttled and ambiguous publication
 against fake GitHub responses with mocked waits, never live content-creation bursts.
 
-An exact visible attempt link identifies an existing report in open or closed
-issues. The current workflow attempt identifies the report, while each job's
+Report lookup uses repository-scoped, open-issue title search, followed by the
+exact prefix filter from
+[run-report recognition](../../docs/scheduled-validation.md#run-report-recognition).
+It never scans the general issue inventory or closed reports. All search pages
+must be complete and within GitHub's accessible result limit before publication;
+incomplete discovery fails rather than becoming an empty queue. Matching candidates
+are deduplicated and ordered by issue number, then refreshed by number to reject
+stale closed or retitled search hits before reading their content or discussion.
+The same fixed prefix constructs generated titles. No label API or assignment
+is needed.
+
+An exact visible attempt link identifies the execution within an eligible report.
+Body identity takes precedence over comparison links in comments; paginated
+discussion can supply identity when the body does not. The current workflow attempt
+identifies the report, while each job's
 execution identifies its diagnostic artifact. Successful validation does not close earlier reports.
+Search indexing may lag an ambiguous issue creation. A missing indexed match does
+not authorize replaying that write; unresolved publication fails visibly. A
+successful create supplies the issue number for subsequent comments without
+rediscovery. Separate invocations can reconcile visible open duplicates, but
+publication does not promise exactly-once creation or reuse after report closure.
 Reporting errors fail the reporter job and remain visible in Actions. Recovery
 can rerun that job through normal Actions controls. Rerunning all failed jobs may
 also rerun checks; neither path needs a separate reporting workflow or journal.

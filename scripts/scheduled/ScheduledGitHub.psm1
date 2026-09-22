@@ -9,6 +9,10 @@ $PSNativeCommandUseErrorActionPreference = $true
 Import-Module (Join-Path $PSScriptRoot 'ScheduledReport.psm1')
 Import-Module (Join-Path $PSScriptRoot '..\utility\Retry.psm1')
 
+# Shared with title generation so publishing and discovery use the same report-role contract.
+# Ref: ../../docs/scheduled-validation.md#run-report-recognition.
+$script:ReportTitlePrefix = 'Scheduled validation failed on '
+
 # Result archives include raw tool output as well as summaries. Bound their transfer and disk
 # footprint so an ordinary verbose check cannot consume the reporter's available storage.
 $script:ArchiveByteLimit = 64MB
@@ -117,7 +121,7 @@ function Get-ScheduledGitHubCollection {
         [string] $Property
     )
     $separator = if ($Endpoint.Contains('?')) { '&' } else { '?' }
-    # Follow every API page, including closed reports and large job/artifact collections.
+    # Follow every API page, including large comment/job/artifact collections.
     # GitHub's maximum page size avoids an artificial workflow-size/report-count limit.
     $page = 1
     do {
@@ -131,18 +135,64 @@ function Get-ScheduledGitHubCollection {
     } while ($items.Count -eq 100)
 }
 
+function Test-ScheduledReportIssue {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable] $Issue)
+
+    return -not $Issue.ContainsKey('pull_request') -and $Issue.state -ceq 'open' -and
+        ([string]$Issue.title).StartsWith($script:ReportTitlePrefix, [StringComparison]::Ordinal)
+}
+
+function Get-ScheduledReportCandidate {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Repository)
+
+    # GitHub title search is not a prefix query. Filter metadata before reading any content.
+    # Ref: ../../docs/scheduled-validation.md#run-report-recognition.
+    $query = [Uri]::EscapeDataString("repo:$Repository is:issue is:open in:title `"$($script:ReportTitlePrefix.TrimEnd())`"")
+    $pageSize = 100 # GitHub's maximum search page size.
+    $searchLimit = 1000 # GitHub exposes only the first results up to this search API limit.
+    $candidates = [Collections.Generic.List[hashtable]]::new()
+    $page = 1
+    do {
+        $response = Invoke-ScheduledGitHubJson "search/issues?q=$query&sort=created&order=asc&per_page=$pageSize&page=$page"
+        if ($response -isnot [hashtable] -or $response['items'] -isnot [array] -or
+            $response['incomplete_results'] -isnot [bool] -or
+            ($response['total_count'] -isnot [int] -and $response['total_count'] -isnot [long]) -or
+            $response.total_count -lt 0) {
+            throw 'GitHub report search lacks a valid items, total_count or incomplete_results field.'
+        }
+        if ($response.incomplete_results -or $response.total_count -gt $searchLimit) {
+            throw 'GitHub report search is incomplete or exceeds its accessible result limit.'
+        }
+        if ($response.items.Count -lt [Math]::Min($pageSize, $response.total_count - ($page - 1) * $pageSize)) {
+            throw 'GitHub report search ended a page before supplying its reported results.'
+        }
+        foreach ($item in $response.items) {
+            if (Test-ScheduledReportIssue $item) { $candidates.Add($item) }
+        }
+        $page++
+    } while (($page - 1) * $pageSize -lt $response.total_count)
+
+    # Finish discovery before acting on results. Search can lag closure or title changes;
+    # refresh only prefix-matching candidates, never broaden discovery to other issue kinds.
+    foreach ($candidate in @($candidates | Sort-Object number -Unique)) {
+        $issue = Invoke-ScheduledGitHubJson "repos/$Repository/issues/$($candidate.number)"
+        if (Test-ScheduledReportIssue $issue) { $issue }
+    }
+}
+
 function Get-ScheduledReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][string] $AttemptUrl
     )
-    $issues = @(Get-ScheduledGitHubCollection "repos/$Repository/issues?state=all&labels=scheduled-run-failure")
+    $issues = @(Get-ScheduledReportCandidate $Repository)
     $linkBoundary = '(?=$|[\s<>)\].,;!?])'
     $attemptPattern = [regex]::Escape($AttemptUrl) + $linkBoundary
     $bodyAttemptPattern = 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*' + $linkBoundary
     $issues | Where-Object {
-        if ($_.ContainsKey('pull_request')) { return $false }
         if ([string]$_.body -cmatch $attemptPattern) { return $true }
         # A body identifying another attempt takes precedence over comparison links in comments.
         if ([string]$_.body -cmatch $bodyAttemptPattern) { return $false }
@@ -397,22 +447,16 @@ function Invoke-ScheduledReporting {
         Set-Content -LiteralPath (Join-Path $OutputDirectory "report-$index.md") -Value $messages[$index] -Encoding utf8 -NoNewline
     }
     if ($reports.Count -eq 0) {
-        $labels = @(Get-ScheduledGitHubCollection "repos/$Repository/labels")
-        if (@($labels | Where-Object name -EQ 'scheduled-run-failure').Count -eq 0) {
-            # Error-red distinguishes the failed-run triage queue from repair work.
-            $null = Invoke-ScheduledGitHubWrite "repos/$Repository/labels" -Body @{
-                name = 'scheduled-run-failure'; color = 'B60205'; description = 'A failed deep-validation attempt awaiting triage'
-            } -FindPersisted {
-                # Another reporter may create the label concurrently. Only observed presence
-                # permits continuing, under the same cooldown policy as every other write.
-                @(Get-ScheduledGitHubCollection "repos/$Repository/labels") |
-                    Where-Object name -EQ 'scheduled-run-failure' | Select-Object -First 1
-            }
-        }
         $date = ([datetimeoffset]$run.run_started_at).UtcDateTime.ToString('yyyy-MM-dd')
         $report = Invoke-ScheduledGitHubWrite "repos/$Repository/issues" -Body @{
-            title = "Scheduled validation failed on $date"; body = $messages[0]; labels = @('scheduled-run-failure')
-        } -FindPersisted { Get-ScheduledReport $Repository $attemptUrl | Select-Object -First 1 }
+            title = "$script:ReportTitlePrefix$date"; body = $messages[0]
+        } -FindPersisted {
+            $persisted = Get-ScheduledReport $Repository $attemptUrl | Select-Object -First 1
+            if ($null -eq $persisted) {
+                Write-Verbose "No open report for $attemptUrl is visible in title search. GitHub indexing may lag a persisted creation; an ambiguous write must not be replayed."
+            }
+            $persisted
+        }
         # A lost response may resolve to an existing human report, not the body we sent.
         $comments = @(Get-ScheduledGitHubCollection "repos/$Repository/issues/$($report.number)/comments")
         $existingText = @([string]$report.body) + @($comments | ForEach-Object { [string]$_.body })

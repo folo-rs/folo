@@ -29,23 +29,51 @@ tools, create or enable automations, or change accounts, models or billing.
 
 # Stage 1: Verify the report's scope and establish ownership
 
-Read an explicitly requested report first. Otherwise, read the open
-`scheduled-run-failure` queue oldest first, without a recent-date cutoff.
-For example:
+For an explicitly requested issue, check its current state and title first.
+Only open issues whose titles start with the exact, case-sensitive prefix
+`Scheduled validation failed on ` are reports under this procedure. Otherwise,
+search that queue oldest first, without a recent-date cutoff, following
+[run-report recognition](../../../docs/scheduled-validation.md#run-report-recognition).
+Search titles only; apply the prefix filter before inspecting content or
+discussion. Do not scan general issue inventories or closed reports. For example:
 
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-run-failure&sort=created&direction=asc&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, .title, .html_url] | @tsv'
+$pages = @(gh api --method GET search/issues `
+    -f 'q=repo:{{REPOSITORY}} is:issue is:open in:title "Scheduled validation failed on"' `
+    -f sort=created -f order=asc -F per_page=100 --paginate --slurp |
+    ConvertFrom-Json -AsHashtable)
+foreach ($page in $pages) {
+    # GitHub search exposes only its first 1000 results, even when more matches exist.
+    if ($page.incomplete_results -or $page.total_count -gt 1000) {
+        throw 'Report discovery is incomplete; do not act on partial results.'
+    }
+}
+$issues = @($pages | ForEach-Object { $_.items })
+if ($pages.Count -eq 0 -or $issues.Count -lt $pages[-1].total_count) {
+    throw 'Report discovery did not return its complete result set.'
+}
+$issues | Where-Object {
+    -not $_.ContainsKey('pull_request') -and $_.state -ceq 'open' -and
+        ([string]$_.title).StartsWith('Scheduled validation failed on ', [StringComparison]::Ordinal)
+} | Sort-Object number -Unique | ForEach-Object {
+    "$($_.number)`t$($_.title)`t$($_.html_url)"
+}
 ```
 
 | Placeholder | Value |
 |---|---|
 | `REPOSITORY` | This Local project's verified GitHub `owner/repository`. |
 
-Read the returned issues, not just their titles. A failed or incomplete read is a
-blocker, not an empty queue. If there is nothing actionable, exit without posting.
+Refresh the returned issues by number and recheck state and prefix before reading
+their content or discussion; search indexing can lag closure or title changes.
+Closed or nonmatching issues remain unchanged. For an ineligible explicit request,
+explain the mismatch in the native session and stop rather than substituting
+another report. Labels, authorship and body wording do not bypass this boundary.
+A failed or incomplete read is a blocker, not an empty queue or a reason to
+broaden the search. If there is nothing actionable, exit without posting.
 Process reports sequentially; do not launch parallel triagers.
 
 Before assigning, commenting, labeling, creating follow-up issues or closing a
@@ -53,8 +81,8 @@ report, verify its linked run and reported attempt using GitHub metadata. Confir
 the repository, `.github/workflows/deep-validation.yml` workflow, `main` branch,
 scheduled or manual trigger, and the reported unsuccessful execution. Inspect the
 reported attempt rather than substituting the latest rerun's outcome.
-An issue title, `ci-failure` or `scheduled-run-failure` label, or similar error text
-does not establish this provenance.
+The title prefix classifies the issue as a report, but neither it, labels nor
+similar error text establish this provenance.
 
 If the run is outside this scope, leave the issue unchanged under this skill and
 explain the mismatch in the native session. Do not convert it into a scheduled

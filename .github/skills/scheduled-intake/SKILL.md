@@ -46,8 +46,11 @@ gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-findi
 | `REPOSITORY` | This Local project's verified GitHub `owner/repository`. |
 
 Read discussion, assignees, branches and linked PRs for the relevant issues. Do not
-mistake an incomplete API read for an empty queue. Run reports labelled
-`scheduled-run-failure` belong to triage, not this repair queue. A human issue is
+mistake an incomplete API read for an empty queue. Open issues whose titles start
+with the exact, case-sensitive prefix `Scheduled validation failed on ` belong
+to triage, not this repair queue, even if labeled `scheduled-finding`. Follow
+[run-report recognition](../../../docs/scheduled-validation.md#run-report-recognition).
+A human issue is
 eligible on the same terms as an agent issue; no marker or special author is needed.
 Closed issues are not repair candidates. Read the disposition of known repairs,
 including their linked closed issues and PRs, to exclude finished inactive sessions
