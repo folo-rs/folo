@@ -11,8 +11,9 @@ The [scheduled validation contract](../../docs/scheduled-validation.md) separate
 check execution, failure triage and repair. Each handoff is an ordinary GitHub issue
 that a human or Local Copilot App agent can understand and act on.
 
-The **Deep validation** workflow runs the full standard and deep suites against merged `main` on its
-schedule, or when started manually on `main`. It is not triggered by PRs or forks.
+The **Deep validation** workflow runs the full standard and deep suites against merged `main`
+daily at 18:00 UTC to avoid contention with morning work, or when started manually on `main`.
+It is not triggered by PRs or forks.
 Its failure-reporting job files a readable **Scheduled validation failed on &lt;date&gt;**
 issue when planning or checks fail. A triager investigates all reported
 failures and creates or updates separate problem issues. The report closes when its

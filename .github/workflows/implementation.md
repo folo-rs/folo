@@ -11,7 +11,7 @@ the installed App's scheduling controls.
 
 | Workflow | What starts it | Responsibility |
 |---|---|---|
-| `deep-validation.yml` / **Deep validation** | Daily at 02:41 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
+| `deep-validation.yml` / **Deep validation** | Daily at 18:00 UTC, or no-input manual dispatch on `main`. | Execute full standard and deep main-branch validation, preserve diagnostics and report failures within one run. |
 | `standard-validation.yml` / **Standard validation** | Push to `main`, PR opened/synchronized/reopened/ready for review, or a reusable call from Deep validation. | Shallow checks feeding the single required `required-checks` result. |
 | `merge-queue-validation.yml` / **Merge queue validation** | Merge-group checks requested for `main`. | Full-workspace dev Clippy, formatting and version readiness feeding `required-checks`. |
 | `pr-bench-history.yml` / **PR Benchmark history** | PR opened/synchronized/reopened; closed events cancel without collecting. | Production-backed PR collection and combined analysis/publication for same-repository PRs. |
