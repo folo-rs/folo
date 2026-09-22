@@ -13,7 +13,7 @@ BeforeAll {
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
     $script:benchmarkWorkflows = @(
-        foreach ($name in @('bench-history', 'pr-bench-history', 'benchmark-action-canary')) {
+        foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
         }
     )
@@ -60,6 +60,26 @@ BeforeAll {
     function Get-MustSucceedJob([string] $FanIn) {
         return [regex]::Match($FanIn, '(?m)^\s+MUST_SUCCEED_JOBS: ([^\r\n]+)').Groups[1].Value -split '\s+'
     }
+
+    function Assert-WorkflowIdentityHandoff([string] $Workflow) {
+        foreach ($name in @(Get-WorkflowJobName $Workflow)) {
+            $job = Get-WorkflowJob $Workflow $name
+            if ($job -notmatch '(?m)^    uses: .*cargo-bench-history-action/') { continue }
+
+            # Only job-output bindings can be lost through Azure login masking.
+            # Repository variables need no producer; storage ordering is a separate concern.
+            $inputs = [regex]::Matches($job,
+                '(?m)^      azure-(?:client|tenant)-id: \$\{\{ needs\.(?<job>[a-z][a-z0-9-]*)\.outputs\.(?<output>[a-z][a-z0-9-]*) \}\}')
+            foreach ($inputReference in $inputs) {
+                $producerName = $inputReference.Groups['job'].Value
+                $outputName = $inputReference.Groups['output'].Value
+                @(Get-WorkflowJobDependency $job) | Should -Contain $producerName
+                $producer = Get-WorkflowJob $Workflow $producerName
+                $producer | Should -Match ('(?m)^      ' + [regex]::Escape($outputName) + ': ')
+                $producer | Should -Not -Match '(?m)^\s+(?:- )?uses: azure/login@'
+            }
+        }
+    }
 }
 
 Describe 'Workflow dependency extraction' {
@@ -78,7 +98,7 @@ Describe 'Workflow dependency extraction' {
 
 Describe 'Validation job references' {
     It 'resolves every declared prerequisite within its workflow' {
-        foreach ($workflow in @($standard, $deep, $queue)) {
+        foreach ($workflow in (@($standard, $deep, $queue) + $benchmarkWorkflows)) {
             $jobNames = @(Get-WorkflowJobName $workflow)
             foreach ($name in $jobNames) {
                 $job = Get-WorkflowJob $workflow $name
@@ -92,31 +112,57 @@ Describe 'Validation job references' {
 }
 
 Describe 'Benchmark caller identity handoff' {
-    It 'exports identity inputs from prerequisite jobs that do not mask them through Azure login' {
+    BeforeAll {
+        # Synthetic workflows exercise the relationship check independently of repository settings.
+        $script:identityOutputWorkflow = @'
+jobs:
+  identities:
+    runs-on: ubuntu-latest
+    outputs:
+      client-id: ${{ steps.ids.outputs.client }}
+    steps:
+      - uses: example/read-identifiers@v1
+  storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v3
+  collect:
+    needs: identities
+    uses: example/cargo-bench-history-action/.github/workflows/history.yml@v1
+    with:
+      azure-client-id: ${{ needs.identities.outputs.client-id }}
+      azure-tenant-id: ${{ vars.TENANT_ID }}
+'@
+    }
+
+    It 'accepts repository variables without prerequisite jobs' {
+        $workflow = @'
+jobs:
+  collect:
+    uses: example/cargo-bench-history-action/.github/workflows/history.yml@v1
+    with:
+      azure-client-id: ${{ vars.CLIENT_ID }}
+      azure-tenant-id: ${{ vars.TENANT_ID }}
+'@
+        { Assert-WorkflowIdentityHandoff $workflow } | Should -Not -Throw
+    }
+
+    It 'accepts an unmasked producer without depending on unrelated login jobs' {
+        { Assert-WorkflowIdentityHandoff $identityOutputWorkflow } | Should -Not -Throw
+    }
+
+    It 'rejects <Case> for a job-output identity binding' -ForEach @(
+        @{ Case = 'an undeclared dependency'; Before = '    needs: identities'; After = '' }
+        @{ Case = 'an undeclared output'; Before = '      client-id:'; After = '      other-id:' }
+        @{ Case = 'a masking producer'; Before = 'example/read-identifiers@v1'; After = 'azure/login@v3' }
+    ) {
+        $workflow = $identityOutputWorkflow.Replace($Before, $After)
+        { Assert-WorkflowIdentityHandoff $workflow } | Should -Throw
+    }
+
+    It 'validates actual cross-job identity bindings without imposing an execution graph' {
         foreach ($workflow in $benchmarkWorkflows) {
-            foreach ($name in @(Get-WorkflowJobName $workflow)) {
-                $job = Get-WorkflowJob $workflow $name
-                if ($job -notmatch '(?m)^    uses: .*cargo-bench-history-action/') { continue }
-
-                $inputs = [regex]::Matches($job,
-                    '(?m)^      azure-(?:client|tenant)-id: \$\{\{ needs\.(?<job>[a-z][a-z0-9-]*)\.outputs\.(?<output>[a-z][a-z0-9-]*) \}\}')
-                $inputs.Count | Should -BeGreaterThan 0
-                foreach ($inputReference in $inputs) {
-                    $producerName = $inputReference.Groups['job'].Value
-                    $outputName = $inputReference.Groups['output'].Value
-                    @(Get-WorkflowJobDependency $job) | Should -Contain $producerName
-                    $producer = Get-WorkflowJob $workflow $producerName
-                    $producer | Should -Match ('(?m)^      ' + [regex]::Escape($outputName) + ': ')
-                    $producer | Should -Not -Match '(?m)^\s+(?:- )?uses: azure/login@'
-                }
-
-                # A reusable caller must wait for any Azure-authenticated storage preparation.
-                foreach ($candidate in @(Get-WorkflowJobName $workflow)) {
-                    if ((Get-WorkflowJob $workflow $candidate) -match '(?m)^\s+(?:- )?uses: azure/login@') {
-                        @(Get-WorkflowJobDependency $job) | Should -Contain $candidate
-                    }
-                }
-            }
+            Assert-WorkflowIdentityHandoff $workflow
         }
     }
 }
