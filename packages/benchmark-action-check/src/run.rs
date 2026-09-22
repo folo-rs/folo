@@ -9,6 +9,9 @@ use crate::check::pairing_needed;
 
 /// Emits the one-line relevance result consumed by repository release instructions.
 #[must_use]
+// Process arguments, standard streams and native adapters are covered by tests/cli.rs.
+// Keep this boundary out of library-only mutation testing; see docs/implementation.md.
+#[cfg_attr(test, mutants::skip)]
 pub fn run() -> ExitCode {
     match execute(Args::parse()) {
         Ok(needed) => {
@@ -38,6 +41,7 @@ struct Args {
 }
 
 /// Connects file/GitHub input acquisition to the pure relevance decision.
+// Native input and diagnostic I/O belong to integration coverage, not library unit tests.
 #[cfg_attr(test, mutants::skip)]
 fn execute(args: Args) -> Result<bool, AppError> {
     let report = read_input(&args.report)?;
@@ -56,6 +60,7 @@ fn execute(args: Args) -> Result<bool, AppError> {
 }
 
 /// Reads caller-selected captured evidence without refreshing or rewriting it.
+// Real filesystem access is an integration-test boundary.
 #[cfg_attr(test, mutants::skip)]
 fn read_input(path: &Path) -> Result<String, AppError> {
     fs::read_to_string(path)
@@ -63,6 +68,7 @@ fn read_input(path: &Path) -> Result<String, AppError> {
 }
 
 /// Fetches only the authoritative manifest, not the action repository or its PR history.
+// Spawning the authenticated GitHub CLI cannot be exercised by in-process unit tests.
 #[cfg_attr(test, mutants::skip)]
 fn published_manifest() -> Result<String, AppError> {
     // The action repository documents release.json as its pinned-tool authority.

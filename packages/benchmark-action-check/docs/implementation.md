@@ -16,3 +16,11 @@ malformed or unsupported inputs fail rather than returning a success-shaped `fal
 Stdout contains exactly `true` or `false` on success; verbose reasoning goes to stderr.
 The pure decision and deferred-loader ordering have in-memory tests. Native executable tests
 exercise file input, exit status and output shape without network access.
+
+The process entry point and its native adapters are excluded from library-only mutation testing:
+observing their argument acquisition, file/process I/O and standard streams requires integration
+tests. The small output/status mapping stays in this shell rather than adding an injectable
+layer solely to duplicate its executable coverage. The relevance decision remains mutation-tested
+in process, while `tests/cli.rs` verifies exact boolean-line output, stderr-only verbose diagnostics
+and failing status with a diagnostic and empty stdout for invalid input. This follows the repository's
+[unit/integration boundary and mutation exclusion policy](../../../docs/testing.md).

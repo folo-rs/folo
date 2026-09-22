@@ -31,7 +31,8 @@ fn unrelated_release_returns_only_false() {
             .output()
             .unwrap();
         assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "false");
+        assert_eq!(output.stdout, b"false\n");
+        assert!(output.stderr.is_empty());
     });
 }
 
@@ -49,7 +50,8 @@ fn empty_release_does_not_require_a_manifest() {
             .output()
             .unwrap();
         assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "false");
+        assert_eq!(output.stdout, b"false\n");
+        assert!(output.stderr.is_empty());
     });
 }
 
@@ -70,8 +72,12 @@ fn a_pinned_release_returns_true_and_malformed_input_is_an_error() {
             r#"{"schema_version":1,"tools":[{"name":"new-tool","role":"fixture"}]}"#,
         )
         .unwrap();
-        let invoke = || {
-            Command::new(env!("CARGO_BIN_EXE_benchmark-action-check"))
+        let invoke = |verbose| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_benchmark-action-check"));
+            if verbose {
+                command.arg("--verbose");
+            }
+            command
                 .arg("--report")
                 .arg(&report)
                 .arg("--action-manifest")
@@ -79,11 +85,25 @@ fn a_pinned_release_returns_true_and_malformed_input_is_an_error() {
                 .output()
                 .unwrap()
         };
-        let output = invoke();
+        let output = invoke(true);
         assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "true");
+        assert_eq!(output.stdout, b"true\n");
+        assert!(!output.stderr.is_empty());
         fs::write(&manifest, "{}").unwrap();
-        let output = invoke();
+        let output = invoke(false);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Native subprocess integration.")]
+fn missing_required_argument_is_an_error() {
+    with_watchdog(|| {
+        let output = Command::new(env!("CARGO_BIN_EXE_benchmark-action-check"))
+            .output()
+            .unwrap();
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
