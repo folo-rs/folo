@@ -138,6 +138,9 @@ whether the checks pass.
 The policy lives in `codecov.yml`. Statuses and comments are posted only after all
 coverage-producing jobs finish, so they reflect the complete set of reports.
 
+For Codecov verification-key import failures, follow the
+[Triage guide](triage.md#codecov-verification-key-import-failures).
+
 ### Coverage target selection
 
 `coverage-measure` uses Cargo's `--tests --examples` selection. `--tests` includes

@@ -80,6 +80,12 @@ To scope package-aware commands, put the package selection first, for example
 Linux commands through WSL as well when validating platform-specific changes.
 See [build and tooling](docs/build-and-tooling.md) for command details and platform guidance.
 
+# Triaging issues
+
+The [Triage guide](docs/triage.md) collects issue-specific troubleshooting procedures,
+including how to recognize a failure, recover within defined limits and gather evidence
+when investigation is needed.
+
 # Scheduled deep validation and Local App remediation
 
 The [scheduled-validation chapter](docs/scheduled-validation.md) describes nightly
