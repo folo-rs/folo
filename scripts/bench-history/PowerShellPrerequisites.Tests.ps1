@@ -15,6 +15,9 @@ BeforeDiscovery {
     $script:PrerequisiteScripts = @(Get-ChildItem -LiteralPath $scriptDirectories -Recurse -File |
         Where-Object { $_.Extension -in @('.ps1', '.psm1') } |
         ForEach-Object { @{ ScriptPath = $_.FullName; ScriptName = $_.Name } })
+    if ($script:PrerequisiteScripts.Count -eq 0) {
+        throw 'No PowerShell deployment prerequisites were discovered.'
+    }
 }
 
 Describe 'Linux ARM64 PowerShell prerequisite compatibility' {
