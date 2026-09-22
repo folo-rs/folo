@@ -5,5 +5,6 @@
 
 mod execution;
 pub(crate) mod fake;
+mod flags;
 mod publication;
 mod validation;

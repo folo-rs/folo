@@ -22,7 +22,8 @@
 //! topology and worktree lifecycle, and a [`CommitRunner`] port that runs and
 //! stores one commit. The production [`execute`] wires the real adapters; the real
 //! [`CommitRunner`] reuses the `collect` pipeline ([`run_engines`]) against a
-//! worktree-rooted probe, engine runner, and output source.
+//! probe, engine runner, and output source rooted at the selected project within
+//! each worktree.
 //!
 //! Before any commit is benchmarked, the commits that already have a stored
 //! (clean) result **in the partition this run would write to** are listed once from
@@ -36,7 +37,7 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -57,8 +58,8 @@ use super::collect::{
     probe_partition, run_engines,
 };
 use crate::errors::{
-    AddWorktreeFailedError, BenchFailure, FirstParentWalkFailedError, RemoveWorktreeFailedError,
-    ResetWorktreeFailedError, ResolveRefFailedError,
+    AddWorktreeFailedError, BenchFailure, FirstParentWalkFailedError, MissingProjectDirectoryError,
+    RemoveWorktreeFailedError, ResetWorktreeFailedError, ResolveRefFailedError,
 };
 use crate::model::{Engine, StorageKey, parse_key};
 use crate::{
@@ -159,6 +160,7 @@ pub(crate) async fn execute(
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let git = SystemBackfillGit::new(base);
+    let project_relative_dir = git.project_relative_dir().await?;
     let worktree = worktree_path();
     let reporter = StderrReporter::new(options.verbose);
     let runner = SystemCommitRunner {
@@ -168,6 +170,7 @@ pub(crate) async fn execute(
         options,
         bench_command: &bench_command,
         worktree: &worktree,
+        project_relative_dir: &project_relative_dir,
         reporter: &reporter,
     };
 
@@ -483,6 +486,26 @@ fn worktree_path() -> PathBuf {
     ))
 }
 
+/// Parses Git's project prefix without allowing a join to escape the worktree.
+fn parse_project_prefix(output: &str) -> Result<PathBuf, AppError> {
+    // Only remove the command's line ending; whitespace can belong to directory names.
+    let prefix = output
+        .strip_suffix("\r\n")
+        .or_else(|| output.strip_suffix('\n'))
+        .unwrap_or(output);
+    let relative = Path::new(prefix);
+    if !relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(BackfillError::new(format!(
+            "git returned a project directory that is not relative to the repository: {prefix:?}"
+        ))
+        .into());
+    }
+    Ok(relative.to_path_buf())
+}
+
 /// Maps a per-commit `collect` result to a [`CommitOutcome`].
 ///
 /// A stored set (or several) is success; a duplicate is a resumable skip; an
@@ -506,6 +529,30 @@ fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<Commit
         Ok(CommitOutcome::BenchFailed(error))
     } else {
         Err(error)
+    }
+}
+
+/// Separates historical project absence from failures to inspect the worktree.
+fn check_project_directory(path: &Path, directory: io::Result<bool>) -> Result<(), AppError> {
+    match directory {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(MissingProjectDirectoryError::new(path).into()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Err(MissingProjectDirectoryError::new(path).into())
+        }
+        Err(error) => Err(BackfillError::caused_by(
+            format!(
+                "failed to inspect historical project directory {}",
+                path.display()
+            ),
+            error,
+        )
+        .into()),
     }
 }
 
@@ -579,6 +626,27 @@ impl SystemBackfillGit {
         let repo = repo.into();
         let history = SystemGitHistory::new(&repo);
         Self { repo, history }
+    }
+
+    /// Resolves the selected directory relative to its repository's root.
+    #[cfg_attr(test, mutants::skip)] // Real git IO; prefix validation is tested separately.
+    async fn project_relative_dir(&self) -> Result<PathBuf, AppError> {
+        // Let Git resolve its own root and path spelling instead of comparing
+        // filesystem paths using assumptions about case or symlink resolution.
+        let repo = self.repo.to_string_lossy();
+        let output = capture("git", &["-C", &repo, "rev-parse", "--show-prefix"])
+            .await
+            .map_err(|error| {
+                BackfillError::caused_by("failed to resolve the selected project directory", error)
+            })?;
+        if !output.status.success() {
+            return Err(BackfillError::new(format!(
+                "failed to resolve the selected project directory in {}",
+                self.repo.display()
+            ))
+            .into());
+        }
+        parse_project_prefix(&output.stdout)
     }
 
     /// Runs `git -C <dir> <args>`, erroring on a non-zero exit.
@@ -684,6 +752,8 @@ struct SystemCommitRunner<'a, S> {
     /// The worktree every commit is checked out into. The pre-check probes it for
     /// the partition, so it reads the same partition each commit then writes to.
     worktree: &'a Path,
+    /// The selected project directory relative to the Git root, reused in every checkout.
+    project_relative_dir: &'a Path,
     /// Diagnostic sink for the pre-check, and for each per-commit `collect`.
     reporter: &'a dyn Reporter,
 }
@@ -694,7 +764,8 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         // The partition comes from the same helper (and the same worktree probe)
         // the store path uses, so the commits treated as already recorded are
         // exactly the ones that would collide were they benchmarked again.
-        let probe = SystemProbe::in_worktree(self.worktree);
+        let project_dir = self.worktree.join(self.project_relative_dir);
+        let probe = SystemProbe::in_worktree(project_dir);
         let env = |name: &str| std::env::var(name).ok();
         let partition = probe_partition(&probe, &env).await?;
 
@@ -715,9 +786,18 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         // A historical checkout is built and described by the toolchain it pins
         // itself, not by the one that happened to build this tool, so the stored
         // provenance names the compiler that produced the numbers.
-        let probe = SystemProbe::in_worktree(worktree);
-        let runner = TokioBenchRunner::in_worktree(worktree);
-        let target_root = worktree.join("target");
+        let project_dir = worktree.join(self.project_relative_dir);
+        // Historical project absence is a per-commit failure; a missing executable is not.
+        // Ref: docs/implementation.md, Backfill project-directory handling.
+        let directory = tokio::fs::metadata(&project_dir)
+            .await
+            .map(|metadata| metadata.is_dir());
+        if let Err(error) = check_project_directory(&project_dir, directory) {
+            return map_collect_result(Err(error));
+        }
+        let probe = SystemProbe::in_worktree(&project_dir);
+        let runner = TokioBenchRunner::in_worktree(&project_dir);
+        let target_root = project_dir.join("target");
         let output = FsBenchOutputSource::new(target_root.clone());
         let clock = Clock::new_tokio();
         let env = |name: &str| std::env::var(name).ok();
@@ -775,6 +855,42 @@ mod tests {
     use crate::EngineFailedError;
     use crate::errors::ParseOutputError;
     use crate::model::{MachineKey, TargetTriple};
+
+    #[test]
+    fn missing_historical_directories_are_per_commit_failures() {
+        for directory in [
+            Ok(false),
+            Err(io::ErrorKind::NotFound.into()),
+            Err(io::ErrorKind::NotADirectory.into()),
+        ] {
+            let error =
+                check_project_directory(Path::new("historical-project"), directory).unwrap_err();
+            let outcome = map_collect_result(Err(error)).unwrap();
+            let CommitOutcome::BenchFailed(error) = outcome else {
+                panic!("expected a per-commit failure");
+            };
+            assert!(
+                error
+                    .find_source::<MissingProjectDirectoryError>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn available_historical_directory_passes_without_changing_io_failures() {
+        check_project_directory(Path::new("project"), Ok(true)).unwrap();
+        let error = check_project_directory(
+            Path::new("project"),
+            Err(io::ErrorKind::PermissionDenied.into()),
+        )
+        .unwrap_err();
+        assert!(BenchFailure::find(&error).is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]
@@ -953,6 +1069,58 @@ mod tests {
 
     fn worktree() -> PathBuf {
         PathBuf::from("/tmp/cargo-bench-history-worktree-test")
+    }
+
+    #[test]
+    fn project_prefix_keeps_root_projects_at_the_worktree_root() {
+        for output in ["", "\n", "\r\n"] {
+            let relative = parse_project_prefix(output).unwrap();
+            assert_eq!(relative, Path::new(""));
+            assert_eq!(worktree().join(relative), worktree());
+        }
+    }
+
+    #[test]
+    fn project_prefix_preserves_nested_names_and_spaces() {
+        for output in [
+            " .github/Fixtures/Nested Project/",
+            " .github/Fixtures/Nested Project/\n",
+            " .github/Fixtures/Nested Project/\r\n",
+        ] {
+            let relative = parse_project_prefix(output).unwrap();
+            let expected = Path::new(" .github")
+                .join("Fixtures")
+                .join("Nested Project");
+            assert_eq!(relative, expected);
+            assert_eq!(worktree().join(relative), worktree().join(expected));
+        }
+    }
+
+    #[test]
+    fn project_prefix_rejects_paths_outside_the_worktree() {
+        for output in [
+            "../outside\n",
+            "nested/../../outside\n",
+            "/outside\n",
+            "./nested\n",
+        ] {
+            let error = parse_project_prefix(output).unwrap_err();
+            assert!(error.find_source::<BackfillError>().is_some());
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn project_prefix_rejects_windows_drive_and_unc_paths() {
+        for output in [
+            r"C:\outside",
+            "C:outside",
+            r"\\server\share\outside",
+            r"\outside",
+        ] {
+            let error = parse_project_prefix(output).unwrap_err();
+            assert!(error.find_source::<BackfillError>().is_some());
+        }
     }
 
     /// Drives [`run_commits`] over `commits`, discarding the diagnostics the

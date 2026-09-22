@@ -31,6 +31,7 @@ fn collect_streams_then_captures_only_machine_key_and_appends_after_success() {
     assert_eq!(collect.cwd, cwd);
     assert_eq!(collect.program, cwd.join("tools\\core.exe"));
     assert_eq!(collect.output, Output::Inherit);
+    assert!(collect.env.is_empty());
     let expected: Vec<OsString> = vec![
         "collect".into(),
         "--verbose".into(),
@@ -51,6 +52,7 @@ fn collect_streams_then_captures_only_machine_key_and_appends_after_success() {
     assert_eq!(key.output, Output::Capture);
     assert_eq!(key.args, [OsString::from("machine-key")]);
     assert_eq!(key.cwd, cwd);
+    assert!(key.env.is_empty());
     assert_eq!(
         *host.outputs.borrow(),
         [(
@@ -157,6 +159,7 @@ fn history_passes_resolved_context_as_base_and_explicit_actual_keys() {
     host.reports("history", "findings", "full", 1, 1);
     block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap();
     let processes = host.processes.borrow();
+    assert!(processes.iter().all(|process| process.env.is_empty()));
     assert_eq!(
         processes.get(2).unwrap().args.last().unwrap(),
         "release^{commit}"

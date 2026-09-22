@@ -159,6 +159,7 @@ impl Host for NativeHost {
         let mut command = NativeCommand::new(&process.program);
         command
             .args(&process.args)
+            .envs(process.env.iter().cloned())
             .current_dir(&process.cwd)
             .stdin(Stdio::inherit())
             .stderr(Stdio::inherit())

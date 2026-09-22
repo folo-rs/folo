@@ -1,0 +1,7 @@
+[project]
+id = "reusable-rolling-canary"
+
+[storage.azure]
+# Isolate rolling selection evidence from the explicit-range canary.
+account = "folovalidate"
+container = "bench-history-caller-canary"

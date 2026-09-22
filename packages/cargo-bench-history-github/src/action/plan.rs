@@ -88,6 +88,7 @@ pub(crate) fn build_process(
         args,
         cwd: cwd.to_owned(),
         output: Output::Inherit,
+        env: Vec::new(),
     })
 }
 
@@ -136,6 +137,7 @@ pub(crate) fn analysis_process(
         args,
         cwd: cwd.to_owned(),
         output: Output::Inherit,
+        env: Vec::new(),
     }
 }
 

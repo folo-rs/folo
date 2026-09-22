@@ -25,7 +25,14 @@ work and drives the selected command. The measured working directory independent
 checkout and configuration; the project namespace uses the core tool's canonical storage identity.
 
 Collection and backfill preserve the core tool's scope, feature, repetition and write-mode
-choices. Analysis validates full Git history, resolves the context commit and uses only the
+choices. Optional compiler flags append additional rustc arguments to the effective ambient
+flags, preserving encoded argument boundaries and unrelated options. Empty input preserves the
+environment unchanged. Composition uses Cargo's whitespace splitting rather than a shell
+parser or option-rewriting language; repeated options retain rustc's own semantics.
+The composed environment applies only to measured child processes and collection's machine-key
+query, never to the companion process globally.
+
+Analysis validates full Git history, resolves the context commit and uses only the
 actual supplied machine keys. History analysis selects that commit as both context and base;
 PR analysis accepts the caller's base or the core default and requires a branch-mode report.
 Platform coverage is explicit workflow evidence, never inferred from deduplicated fingerprints.
@@ -191,18 +198,23 @@ both runs analyze the same commit.
 ### Workflow preparation
 
 Offline preparation resolves the core configuration namespace, validates the platform matrix
-and freezes the real checkout head and the PR event's base commit. PR attribution uses the
+and freezes the revisions used by the selected flow. PR attribution uses the
 event's real head, not its synthetic merge SHA; the checkout must match that head. History uses
 its measured head as base. Preparation requires full Git history and never fetches or reads
 GitHub credentials.
 
 History collects the workspace with configured exclusions. The PR workflow selects affected scope:
-the merge-base diff identifies changed files, the shared package detector finds owners, and
+the merge-base diff identifies changed files, Cargo member directories bound the package-detector
+queries, and
 reverse workspace path dependencies expand the affected set. All dependency kinds and target
 conditions participate so development/build dependencies and another platform's dependencies
 are not missed. Filtering retains explicit benchmark targets and then applies exact
 package-name exclusions. Excluded or non-benchmark packages still participate in expansion.
 Unknown exclusions or owners are errors, not silently ignored names.
+
+Independent fixture workspaces do not add candidates to the selected Cargo workspace.
+Changes outside its declared members select workspace scope; a fixture nested within a member
+belongs to that member for impact selection.
 
 Root-workspace and repository-wide changes select the whole workspace conservatively.
 Deleted and renamed paths remain part of ownership discovery; removed package manifests can
@@ -210,10 +222,41 @@ therefore select the whole workspace. Empty affected scope is an explicit skip-a
 never an empty package argument accidentally interpreted as workspace collection.
 Fork skips remain distinct from empty benchmark scope and do not authorize publication.
 
-Preparation outputs concrete benchmark package names for either flow. PR collection consumes
+History and PR preparation output concrete benchmark package names. PR collection consumes
 that list without applying exclusions a second time; history collection retains workspace
 selection and passes its exclusions to Cargo. There is no consumer scope switch.
 Jobs, receipts and analysis reuse the prepared namespace, frozen commits and expected-platform set.
+
+Backfill preparation freezes an inclusive historical range in either exact or rolling mode.
+Empty adapter defaults are treated as absent before selecting the mode.
+Exact mode requires nonblank `from` and `to` references and does not accept rolling inputs.
+Rolling mode requires both `lookback` and `minimum-age`, forbids `from`, and permits a `to`
+override. Durations accept Jiff friendly or ISO spans, including `ago`, and use their magnitudes:
+`lookback` must be nonzero, while `minimum-age` may be zero. Absolute dates are not durations.
+Unrecognized keys, whitespace-only values, missing required values and incompatible nonempty
+range inputs are errors before outputs are written.
+
+A rolling range uses one snapshot of the current time and calendar arithmetic in UTC.
+Automatic endpoint selection takes the first commit on the frozen invocation head's
+first-parent history at or before the minimum-age cutoff. An explicit `to` resolves to a
+full commit ID and bypasses that age selection. The start is the oldest first-parent commit
+reachable from the selected endpoint within the lookback window, using Git's date-filter
+traversal semantics. The lookback horizon is relative to the same current-time snapshot, not
+to the endpoint's commit date. If no commit falls within that window, the range contains only
+the selected endpoint. Subsecond spans retain their precision when compared with Git's
+whole-second commit timestamps.
+
+Every backfill result includes `has-work`. A selected range emits `skipped=false`,
+`has-work=true` and full `from`/`to` commit IDs. No eligible automatic endpoint emits
+`skipped=false`, `has-work=false` and `no-work-reason=no-eligible-commit`, without endpoints.
+A fork skip emits `skipped=true`, `has-work=false` and the fork skip reason, without endpoints.
+Neither no-work result starts execution jobs. History and PR result fields are unchanged.
+
+Backfill does not select work from the invocation head's benchmark inventory: historical commits
+own their workspace scope. Execution receives only the frozen explicit range. The core tool
+validates first-parent membership and traverses it, retaining skip-existing behavior and the
+caller's exclusions and measurement settings. This flow emits range and platform identity,
+not single-commit collection receipts or analysis verdicts.
 
 ### Collection and analysis evidence
 
