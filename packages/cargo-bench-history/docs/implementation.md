@@ -97,11 +97,18 @@ Integration-only benchmark engines and stress tools remain outside the productio
 boundary. They drive the same public shell or persisted format without adding test-only behavior
 to the shipped application.
 
+### Backfill project-directory handling
+
 Backfill asks Git for the selected project's repository-relative prefix instead of comparing
 absolute paths with filesystem case assumptions. It accepts only a relative descendant path
 (or the empty prefix for a root project), then roots both the partition pre-check and per-commit
 collection at that location in the temporary worktree. The benchmark runner, environment probe,
 and target output share this project directory; Git checkout and cleanup remain repository-wide.
+After the initial partition pre-check, replay checks the selected directory before launching a
+benchmark. A historically missing directory or a file occupying that path is a per-commit
+failure, including when resumption has skipped newer commits without creating build output.
+Directory-inspection errors other than absence or a non-directory path remain infrastructure
+failures, as do failures to launch an executable from an available project directory.
 
 ## Azure provisioning bundle
 

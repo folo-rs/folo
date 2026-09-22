@@ -58,8 +58,8 @@ use super::collect::{
     probe_partition, run_engines,
 };
 use crate::errors::{
-    AddWorktreeFailedError, BenchFailure, FirstParentWalkFailedError, RemoveWorktreeFailedError,
-    ResetWorktreeFailedError, ResolveRefFailedError,
+    AddWorktreeFailedError, BenchFailure, FirstParentWalkFailedError, MissingProjectDirectoryError,
+    RemoveWorktreeFailedError, ResetWorktreeFailedError, ResolveRefFailedError,
 };
 use crate::model::{Engine, StorageKey, parse_key};
 use crate::{
@@ -532,6 +532,30 @@ fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<Commit
     }
 }
 
+/// Separates historical project absence from failures to inspect the worktree.
+fn check_project_directory(path: &Path, directory: io::Result<bool>) -> Result<(), AppError> {
+    match directory {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(MissingProjectDirectoryError::new(path).into()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Err(MissingProjectDirectoryError::new(path).into())
+        }
+        Err(error) => Err(BackfillError::caused_by(
+            format!(
+                "failed to inspect historical project directory {}",
+                path.display()
+            ),
+            error,
+        )
+        .into()),
+    }
+}
+
 /// The commits that already have a stored clean result in `partition`.
 ///
 /// Scans one narrow listing per engine — the engine is the outermost discriminant
@@ -763,6 +787,14 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
         // itself, not by the one that happened to build this tool, so the stored
         // provenance names the compiler that produced the numbers.
         let project_dir = worktree.join(self.project_relative_dir);
+        // Historical project absence is a per-commit failure; a missing executable is not.
+        // Ref: docs/implementation.md, Backfill project-directory handling.
+        let directory = tokio::fs::metadata(&project_dir)
+            .await
+            .map(|metadata| metadata.is_dir());
+        if let Err(error) = check_project_directory(&project_dir, directory) {
+            return map_collect_result(Err(error));
+        }
         let probe = SystemProbe::in_worktree(&project_dir);
         let runner = TokioBenchRunner::in_worktree(&project_dir);
         let target_root = project_dir.join("target");
@@ -823,6 +855,42 @@ mod tests {
     use crate::EngineFailedError;
     use crate::errors::ParseOutputError;
     use crate::model::{MachineKey, TargetTriple};
+
+    #[test]
+    fn missing_historical_directories_are_per_commit_failures() {
+        for directory in [
+            Ok(false),
+            Err(io::ErrorKind::NotFound.into()),
+            Err(io::ErrorKind::NotADirectory.into()),
+        ] {
+            let error =
+                check_project_directory(Path::new("historical-project"), directory).unwrap_err();
+            let outcome = map_collect_result(Err(error)).unwrap();
+            let CommitOutcome::BenchFailed(error) = outcome else {
+                panic!("expected a per-commit failure");
+            };
+            assert!(
+                error
+                    .find_source::<MissingProjectDirectoryError>()
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn available_historical_directory_passes_without_changing_io_failures() {
+        check_project_directory(Path::new("project"), Ok(true)).unwrap();
+        let error = check_project_directory(
+            Path::new("project"),
+            Err(io::ErrorKind::PermissionDenied.into()),
+        )
+        .unwrap_err();
+        assert!(BenchFailure::find(&error).is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]

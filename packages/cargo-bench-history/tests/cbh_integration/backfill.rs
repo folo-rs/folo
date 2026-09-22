@@ -134,6 +134,7 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
 )]
 async fn backfill_preserves_nested_project_and_resumes() {
     let workspace = Workspace::clean_repo(&storage_only_config());
+    let before_project = workspace.head();
     let relative = Path::new(".github").join("fixtures").join("nested project");
     let project = workspace.root().join(&relative);
     fs::create_dir_all(project.join("benches")).unwrap();
@@ -240,6 +241,28 @@ async fn backfill_preserves_nested_project_and_resumes() {
         message.contains("0 stored, 2 skipped (existing)"),
         "{message}"
     );
+
+    // Recorded commits launch no benchmarks, so their ignored target output cannot keep
+    // the project directory alive when checkout reaches a commit before its introduction.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "backfill",
+            &before_project,
+            &c2,
+            "--repo",
+            &relative.to_string_lossy(),
+            "--ignore-errors",
+        ])
+        .await
+        .unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(
+        message.contains("0 stored, 2 skipped (existing)"),
+        "{message}"
+    );
+    assert!(message.contains("1 failed"), "{message}");
     let resumed = workspace.stored_objects();
     assert_eq!(resumed, objects);
     assert_eq!(workspace.head(), c2);

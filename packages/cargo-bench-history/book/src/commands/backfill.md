@@ -31,7 +31,8 @@ By default, commits that already have a stored result are listed once up front a
 before their benches run, making backfill resumable and cheap to re-issue;
 `--overwrite` regenerates them. A build or bench failure stops by default;
 `--ignore-errors` instead continues and includes every failed commit in the end-of-run
-summary. Infrastructure failures always abort.
+summary. During replay, a commit without the selected project directory also counts as a
+per-commit failure. Infrastructure failures always abort.
 
 That skip check looks only at the **storage partition this run writes to** — the target triple
 and auto-detected machine key this run stores under — so a commit measured on other hardware,
