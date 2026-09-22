@@ -101,6 +101,16 @@ change; writing automation logic, a script or a `[script]` block in a justfile;
 searching the workspace; running a command on some "other" operating system
 from the one you are on.
 
+### [docs/automation.md](docs/automation.md)
+
+Automation guidelines: minimal issue metadata, title-based issue classification,
+narrow active-work discovery, justified historical lookups and deduplicated
+notifications.
+
+**Open this when**: designing or modifying an automation, workflow or skill that
+creates or discovers GitHub issues; choosing labels, title conventions, query
+scope or notification deduplication.
+
 ### [docs/triage.md](docs/triage.md)
 
 Triage guide: issue-specific symptoms, bounded recovery procedures, safeguards and
