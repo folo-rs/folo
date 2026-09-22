@@ -214,11 +214,11 @@ For backfill, configuration freezes the real event head and its first parent as 
 Windows and Apple Silicon macOS, using `.cargo/backfill_history.toml` to select the isolated
 `reusable-backfill-canary` project in the existing test container.
 
-The separate `verify-backfill` job queries the core tool's `analyze` command across all stored
-machine keys and targets at the frozen endpoint. It checks the actual structured report for
-the expected clean-source project/context, history mode, no regressions and nonempty series
-with at least two historical runs for each expected target. Additional machine partitions may
-exist but cannot substitute for a missing target. The query report is retained as test evidence;
+The separate `verify-backfill` job queries `list runs --json` across all stored machine keys and
+targets at the frozen endpoint. It checks the expected project and requires both current range
+endpoints as clean stored commits in one comparable partition for every target. Additional
+machine partitions and older runs cannot substitute for the selected range. The listing is
+retained as test evidence even when its verification assertions fail;
 it is not an output of the reusable backfill workflow, which has no analysis or report phase.
 The verifier does not manufacture a workflow verdict or require a judged-clean analysis outcome.
 `BackfillCanary.Tests.ps1` executes this verification step with mocked Cargo output to exercise

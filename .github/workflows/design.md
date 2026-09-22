@@ -566,9 +566,10 @@ Criterion data without wall-clock measurements.
 History coverage checks receipts, report transport and honest outcome/coverage outputs.
 Backfill coverage freezes the real event head and its first parent as an inclusive range,
 then checks that every expected target has stored historical measurements. A separate
-test-verification query reads the core tool's actual report across all machines and targets;
-it requires nonempty series and at least two historical runs per target, not a fabricated or
-necessarily judged-clean verdict. This query and its retained evidence belong to the canary,
+test-verification query reads the core tool's structured run listing across all machines and
+targets. Each target must have both current endpoint commits stored cleanly in one comparable
+partition; older data and aggregate run counts cannot substitute for that range. This query
+and its retained failure-time evidence belong to the canary,
 not the reusable backfill flow, which remains collection-only with no reports or publication.
 Same-runner installed-tool tests separately cover skip-existing resumption.
 

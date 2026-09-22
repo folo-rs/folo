@@ -1639,9 +1639,10 @@ so both the install branching and the actual installs are exercised, not just mo
    over the frozen real event head and its first parent, using the nested faker fixture rather
    than wall-clock Criterion measurements. An isolated backfill project shares the existing
    test container. A separate caller verification job queries the core tool across all stored
-   machines and targets and checks the actual report for nonempty series and at least two
-   historical runs per expected target. It does not fabricate a verdict or require enough
-   baseline to judge the history clean. This query and its retained report are test evidence,
+   machines and targets. Its structured run listing must contain both current range endpoints
+   as clean stored commits in one comparable partition per expected target; aggregate counts
+   or older history cannot satisfy that check. It does not fabricate a verdict or require
+   enough baseline to judge the history clean. This query and its failure-time listing are test evidence,
    not part of the public backfill workflow, which has no analysis, receipts or reports.
    Installed-tool smoke tests on the same runner separately prove skip-existing resumption;
    the hosted caller does not assume later invocations receive the same machine fingerprint.
