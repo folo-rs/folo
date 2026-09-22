@@ -221,7 +221,8 @@ machine partitions and older runs cannot substitute for the selected range. The 
 retained as test evidence even when its verification assertions fail;
 it is not an output of the reusable backfill workflow, which has no analysis or report phase.
 The verifier does not manufacture a workflow verdict or require a judged-clean analysis outcome.
-`BackfillCanary.Tests.ps1` executes this verification step with mocked Cargo output to exercise
+`Assert-BackfillCanary.ps1` owns the query and assertions under script analysis.
+`BackfillCanary.Tests.ps1` invokes that script with mocked Cargo output to exercise
 its acceptance and rejection behavior without Azure access.
 
 The hosted caller proves historical storage across native targets. Same-runner installed-tool

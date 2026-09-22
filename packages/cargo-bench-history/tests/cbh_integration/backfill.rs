@@ -1,6 +1,71 @@
 use std::fs;
+use std::process::Command as ProcessCommand;
 
 use crate::harness::*;
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "uses real git and binary processes with filesystem storage"
+)]
+fn backfill_rejects_unavailable_git() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    let head_before = workspace.head();
+    let worktrees_before = workspace.git(&["worktree", "list", "--porcelain"]).stdout;
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
+        .args(["backfill", "HEAD", "HEAD", "--ignore-errors"])
+        .arg(format!(
+            "--local={}",
+            workspace.root().join("store").display()
+        ))
+        .current_dir(workspace.root())
+        // Only this child loses Git; fixture setup and other tests keep their environment.
+        .env("PATH", "")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
+    assert!(workspace.stored_objects().is_empty());
+    assert_eq!(workspace.head(), head_before);
+    assert_eq!(
+        workspace.git(&["worktree", "list", "--porcelain"]).stdout,
+        worktrees_before
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "uses real git and binary processes with filesystem storage"
+)]
+fn backfill_rejects_non_git_directory() {
+    let workspace = Workspace::new(&storage_only_config());
+
+    for ignore_errors in [false, true] {
+        let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_cargo-bench-history"));
+        command
+            .args(["backfill", "HEAD", "HEAD"])
+            .arg(format!(
+                "--local={}",
+                workspace.root().join("store").display()
+            ))
+            .current_dir(workspace.root());
+        if ignore_errors {
+            command.arg("--ignore-errors");
+        }
+        let output = command.output().unwrap();
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+        assert!(workspace.stored_objects().is_empty());
+        assert!(!workspace.root().join(".git").exists());
+        assert!(!workspace.root().join("target").exists());
+    }
+}
 
 /// A backfill stores one clean result per commit in the range, leaves the primary
 /// checkout and branch untouched, and the backfilled points then surface through

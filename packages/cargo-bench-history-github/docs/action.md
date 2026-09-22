@@ -28,7 +28,9 @@ there is no scope input.
 
 History and PR exclusions are exact workspace package names. Those flows select concrete packages with
 explicit benchmark targets. PR affected selection expands changed ownership through
-workspace path dependents before filtering benchmarks and exclusions.
+workspace path dependents before filtering benchmarks and exclusions. Ownership is bounded
+by Cargo's declared members: nested fixture workspaces do not become foreign package owners,
+and paths outside those members select workspace scope.
 
 History and PR preparation append `instance`, `matrix`, `expected-platforms`, `collection-job-prefix`,
 `head`, `base`, `packages`, `skip-all` and `skipped`. Package CSV and platform identifiers are

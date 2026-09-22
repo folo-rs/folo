@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/benchmark-action-canary.yml
       - .github/fixtures/bench-history-caller/**
+      - scripts/bench-history/Assert-BackfillCanary.ps1
       - packages/cargo-bench-history/**
       - packages/cargo-bench-history-github/**
       - packages/cargo-detect-package/**
@@ -161,33 +162,9 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $fixture = Join-Path $env:GITHUB_WORKSPACE '.github/fixtures/bench-history-caller'
-          $config = Join-Path $fixture '.cargo/backfill_history.toml'
           $reportPath = Join-Path $env:RUNNER_TEMP 'backfill-canary-runs.json'
-          cargo run --locked --package cargo-bench-history --bin cargo-bench-history -- `
-            list runs --repo $fixture --config $config --context $env:CANARY_TO --base $env:CANARY_TO `
-            --engine criterion --target-triple all --machine-key all --no-dirty --no-text --json $reportPath
-          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
-          if ($report.project -cne 'reusable-backfill-canary') {
-            throw 'Backfill verification did not read the expected synthetic project.'
-          }
-          # Each target needs both current endpoints in one comparable hardware partition.
-          # Existing matching data is valid resumption; another range or target is not.
-          $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
-          $completeTargets = @(foreach ($set in $report.sets) {
-            if ($set.engine -cne 'criterion' -or $set.series -le 0) { continue }
-            $complete = $true
-            foreach ($endpoint in @($env:CANARY_FROM, $env:CANARY_TO)) {
-              $matching = @($set.commits | Where-Object {
-                $_.commit -ceq $endpoint -and $_.clean -gt 0 -and $_.dirty -eq 0 -and $_.runs -gt 0
-              })
-              if ($matching.Count -eq 0) { $complete = $false; break }
-            }
-            if ($complete) { $set.target_triple }
-          }) | Sort-Object -Unique
-          if (($completeTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
-            throw 'Backfill did not store both current endpoint commits for every target.'
-          }
+          & ./scripts/bench-history/Assert-BackfillCanary.ps1 -Workspace $env:GITHUB_WORKSPACE `
+            -From $env:CANARY_FROM -To $env:CANARY_TO -OutputPath $reportPath
       - name: Retain the backfill verification listing
         if: always()
         uses: actions/upload-artifact@v7

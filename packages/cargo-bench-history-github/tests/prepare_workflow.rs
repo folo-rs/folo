@@ -272,3 +272,38 @@ fn native_backfill_does_not_require_cargo_metadata_at_the_invocation_head() {
     assert_eq!(outputs.get("to").unwrap(), &fixture.head);
     assert_eq!(outputs.get("skipped").unwrap(), "false");
 }
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Native Cargo workspace boundaries and Git change discovery."
+)]
+fn native_independent_virtual_workspaces_do_not_become_foreign_scope_owners() {
+    for location in [".github/fixture", "library/tests/fixture"] {
+        let mut fixture = Fixture::new();
+        let nested = fixture.checkout.join(location);
+        fs::create_dir_all(nested.join("foreign").join("src")).unwrap();
+        fs::write(
+            nested.join("Cargo.toml"),
+            "[workspace]\nmembers=['foreign']\nresolver='3'\n",
+        )
+        .unwrap();
+        fs::write(
+            nested.join("foreign").join("Cargo.toml"),
+            "[package]\nname='foreign'\nversion='0.0.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        fs::write(nested.join("foreign").join("src").join("lib.rs"), "").unwrap();
+        fixture.git(&["add", "."]);
+        fixture.commit();
+        fixture.head = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let outputs = fixture.prepare("pr", &json!({"platforms":"linux"}));
+        let expected = if location.starts_with(".github") {
+            "benchmark,unrelated"
+        } else {
+            "benchmark"
+        };
+        assert_eq!(outputs.get("packages").unwrap(), expected);
+        assert_eq!(outputs.get("skip-all").unwrap(), "false");
+    }
+}

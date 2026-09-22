@@ -65,6 +65,25 @@ fn prepare_responses(host: &FakeHost, flow: Flow) {
     host.reply(&metadata(host).to_string());
 }
 
+// Boundary cases need one candidate, not the separate dependency-closure fixture.
+fn prepare_single_member_responses(host: &FakeHost) {
+    host.reply("false");
+    host.reply(SHA);
+    host.reply(BASE);
+    host.reply(
+        &json!({
+            "workspace_root":host.root,
+            "workspace_members":["owner"],
+            "packages":[{
+                "id":"owner", "name":"owner",
+                "manifest_path":host.root.join("owner").join("Cargo.toml"),
+                "targets":[{"kind":["bench"]}], "dependencies":[],
+            }],
+        })
+        .to_string(),
+    );
+}
+
 fn output(host: &FakeHost) -> String {
     let outputs = host.outputs.borrow();
     assert_eq!(outputs.len(), 1);
@@ -120,6 +139,15 @@ fn backfill_range_inputs_are_required_and_specific_to_the_backfill_flow() {
             .unwrap();
         assert!(error.find_source::<InvalidInput>().is_some());
     }
+}
+
+#[test]
+fn invalid_backfill_inputs_stop_preparation_before_processes_or_outputs() {
+    let host = FakeHost::new(&json!({"platforms":"linux", "to":"HEAD"}));
+    let error = block_on(prepare_with(args(&host, Flow::Backfill), &host)).unwrap_err();
+    assert!(error.find_source::<InvalidInput>().is_some());
+    assert!(host.processes.borrow().is_empty());
+    assert!(host.outputs.borrow().is_empty());
 }
 
 #[test]
@@ -293,12 +321,8 @@ fn affected_scope_expands_through_excluded_nonbenchmark_dependencies() {
     prepare_responses(&host, Flow::Pr);
     host.reply(host.root.to_str().unwrap());
     host.reply("library/deleted.rs\0library/new.rs\0");
-    for name in ["deleted.rs", "new.rs"] {
-        host.packages.insert(
-            host.root.join("library").join(name),
-            Some("library".to_owned()),
-        );
-    }
+    host.packages
+        .insert(host.root.join("library"), Some("library".to_owned()));
     block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
     assert!(output(&host).contains(&format!("head={SHA}\nbase={BASE}\n")));
     assert!(output(&host).contains("packages=benchmark\nskip-all=false\n"));
@@ -332,6 +356,58 @@ fn workspace_file_changes_select_every_benchmark_package() {
     host.packages.insert(host.root.join("Cargo.toml"), None);
     block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
     assert!(output(&host).contains("packages=benchmark,unrelated\n"));
+}
+
+#[test]
+fn independent_fixture_workspaces_outside_members_select_the_workspace() {
+    let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+    host.event("pull_request", &event());
+    prepare_single_member_responses(&host);
+    host.reply(host.root.to_str().unwrap());
+    host.reply(".github/fixture/Cargo.toml\0");
+    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+    assert!(output(&host).contains("packages=owner\n"));
+    assert!(host.package_queries.borrow().is_empty());
+}
+
+#[test]
+fn fixture_workspaces_within_members_query_the_declared_package_boundary() {
+    let mut host = FakeHost::new(&json!({"platforms":"linux"}));
+    host.event("pull_request", &event());
+    prepare_single_member_responses(&host);
+    host.reply(host.root.to_str().unwrap());
+    host.reply("owner/tests/fixture/Cargo.toml\0");
+    host.packages
+        .insert(host.root.join("owner"), Some("owner".to_owned()));
+    block_on(prepare_with(args(&host, Flow::Pr), &host)).unwrap();
+    assert!(output(&host).contains("packages=owner\n"));
+    let queries = host.package_queries.borrow();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].1, host.root.join("owner"));
+}
+
+#[test]
+fn declared_member_boundaries_choose_the_deepest_member_without_prefix_collisions() {
+    let host = FakeHost::new(&json!({}));
+    let mut metadata = metadata(&host);
+    metadata["workspace_members"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("nested"));
+    let nested = host.root.join("library").join("nested");
+    metadata["packages"].as_array_mut().unwrap().push(json!({
+        "id":"nested", "name":"nested", "manifest_path":nested.join("Cargo.toml"),
+        "targets":[{"kind":["bench"]}], "dependencies":[],
+    }));
+    let workspace = Workspace::parse(&metadata.to_string(), &host).unwrap();
+    assert_eq!(
+        workspace.package_directory(&nested.join("src").join("lib.rs")),
+        Some(nested.as_path())
+    );
+    assert_eq!(
+        workspace.package_directory(&host.root.join("library-other").join("lib.rs")),
+        None
+    );
 }
 
 #[test]

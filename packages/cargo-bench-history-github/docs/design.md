@@ -197,12 +197,17 @@ its measured head as base. Preparation requires full Git history and never fetch
 GitHub credentials.
 
 History collects the workspace with configured exclusions. The PR workflow selects affected scope:
-the merge-base diff identifies changed files, the shared package detector finds owners, and
+the merge-base diff identifies changed files, Cargo member directories bound the package-detector
+queries, and
 reverse workspace path dependencies expand the affected set. All dependency kinds and target
 conditions participate so development/build dependencies and another platform's dependencies
 are not missed. Filtering retains explicit benchmark targets and then applies exact
 package-name exclusions. Excluded or non-benchmark packages still participate in expansion.
 Unknown exclusions or owners are errors, not silently ignored names.
+
+Independent fixture workspaces do not add candidates to the selected Cargo workspace.
+Changes outside its declared members select workspace scope; a fixture nested within a member
+belongs to that member for impact selection.
 
 Root-workspace and repository-wide changes select the whole workspace conservatively.
 Deleted and renamed paths remain part of ownership discovery; removed package manifests can

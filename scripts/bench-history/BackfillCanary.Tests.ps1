@@ -1,33 +1,25 @@
 #Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Executes the real caller-verification step with a mocked Cargo boundary. The cases
+# Executes the caller-verification script with a mocked Cargo boundary. The cases
 # validate stored endpoint identities without Azure access or benchmark execution.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
-    Import-Module powershell-yaml -RequiredVersion 0.4.12 -ErrorAction Stop
-    $path = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', '.github', 'workflows', 'benchmark-action-canary.yml'
-    $workflow = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
-    $step = @($workflow.jobs['verify-backfill'].steps |
-            Where-Object { $_['name'] -ceq 'Verify stored historical measurements' })
-    if ($step.Count -ne 1) { throw 'Expected one backfill verification step.' }
-    $script:Verify = [scriptblock]::Create($step[0].run)
+    $script:Verify = Join-Path $PSScriptRoot 'Assert-BackfillCanary.ps1'
     function cargo { throw 'The Cargo boundary must be mocked.' }
 }
 
 Describe 'Backfill caller report verification' {
     BeforeEach {
-        $script:EnvironmentBefore = @{}
-        foreach ($name in @('GITHUB_WORKSPACE', 'RUNNER_TEMP', 'CANARY_FROM', 'CANARY_TO')) {
-            $script:EnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name)
+        $script:Invocation = @{
+            Workspace = Join-Path $TestDrive 'invocation workspace'
+            From = 'b' * 40
+            To = 'a' * 40
+            OutputPath = Join-Path $TestDrive 'backfill-canary-runs.json'
         }
-        $env:GITHUB_WORKSPACE = Join-Path $TestDrive 'invocation workspace'
-        $env:RUNNER_TEMP = $TestDrive
-        $env:CANARY_FROM = 'b' * 40
-        $env:CANARY_TO = 'a' * 40
         $script:Report = @{
             project = 'reusable-backfill-canary'
             sets = @(foreach ($target in @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')) {
@@ -37,29 +29,24 @@ Describe 'Backfill caller report verification' {
                     series = 1
                     runs = 2
                     commits = @(
-                        @{ commit = $env:CANARY_FROM; clean = 1; dirty = 0; runs = 1 }
-                        @{ commit = $env:CANARY_TO; clean = 1; dirty = 0; runs = 1 }
+                        @{ commit = $script:Invocation.From; clean = 1; dirty = 0; runs = 1 }
+                        @{ commit = $script:Invocation.To; clean = 1; dirty = 0; runs = 1 }
                     )
                 }
             })
         }
-        Mock cargo {
+        $payload = $script:Report
+        Mock cargo -MockWith ({
             $jsonIndex = [array]::IndexOf($args, '--json')
             if ($jsonIndex -lt 0) { throw 'The verifier must request a structured report.' }
-            $script:Report | ConvertTo-Json -Depth 8 |
+            $payload | ConvertTo-Json -Depth 8 |
                 Set-Content -LiteralPath $args[$jsonIndex + 1] -Encoding utf8
             $global:LASTEXITCODE = 0
-        }
-    }
-
-    AfterEach {
-        foreach ($name in $script:EnvironmentBefore.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $script:EnvironmentBefore[$name])
-        }
+        }.GetNewClosure())
     }
 
     It 'queries every stored platform and machine key rather than the verifier host' {
-        & $script:Verify
+        & $script:Verify @script:Invocation
         Should -Invoke cargo -Times 1 -Exactly -ParameterFilter {
             ($args -contains 'list') -and ($args -contains 'runs') -and
             ($args[[array]::IndexOf($args, '--context') + 1] -ceq ('a' * 40)) -and
@@ -79,7 +66,7 @@ Describe 'Backfill caller report verification' {
             runs = 3
             commits = @(@{ commit = 'c' * 40; clean = 3; dirty = 0; runs = 3 })
         }
-        { & $script:Verify } | Should -Not -Throw
+        { & $script:Verify @script:Invocation } | Should -Not -Throw
     }
 
     It 'rejects <Case> instead of treating it as successful historical coverage' -ForEach @(
@@ -114,7 +101,7 @@ Describe 'Backfill caller report verification' {
             'empty series' { $script:Report.sets[2].series = 0 }
             'empty store' { $script:Report.sets = @() }
         }
-        { & $script:Verify } | Should -Throw
+        { & $script:Verify @script:Invocation } | Should -Throw
     }
 
     It 'requires the endpoints in the same comparable partition' {
@@ -127,11 +114,11 @@ Describe 'Backfill caller report verification' {
             runs = 1
             commits = @($end)
         }
-        { & $script:Verify } | Should -Throw
+        { & $script:Verify @script:Invocation } | Should -Throw
     }
 
     It 'preserves a failing listing command as an execution failure' {
         Mock cargo { throw 'Synthetic listing failure.' }
-        { & $script:Verify } | Should -Throw
+        { & $script:Verify @script:Invocation } | Should -Throw
     }
 }

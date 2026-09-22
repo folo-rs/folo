@@ -234,9 +234,11 @@ it uses the action host's Git/Cargo/filesystem operations, without constructing 
 or reading storage credentials.
 
 History selects workspace collection. PR preparation freezes the event's real head/base,
-checks the checkout head and computes the merge-base diff. The detector's read-only query
-resolves package ownership, including deleted paths through surviving ancestors; workspace-wide
-changes select workspace. The companion expands reverse path dependents across dependency kinds
+checks the checkout head and computes the merge-base diff. Cargo metadata supplies the member
+directory boundaries. The detector's read-only query resolves the nearest declared member,
+not an independent fixture manifest below it. Deleted files retain their surviving member;
+paths outside all declared members and removed members select workspace scope.
+The companion expands reverse path dependents across dependency kinds
 and conditions, then filters explicit benchmark targets and exclusions. Visited membership
 bounds cyclic dependency traversal. The native adapters and in-memory action host execute the
 same orchestration.

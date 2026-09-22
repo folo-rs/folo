@@ -231,7 +231,12 @@ async fn affected_packages(
         if !path.starts_with(&workspace.root) {
             return Ok(None);
         }
-        match host.package(&workspace.root, &path)? {
+        // A separate nested workspace is not part of this Cargo inventory. Resolve the
+        // declared owner boundary so its test fixtures cannot become foreign package names.
+        let Some(directory) = workspace.package_directory(&path) else {
+            return Ok(None);
+        };
+        match host.package(&workspace.root, directory)? {
             Some(name) => {
                 owners.insert(name);
             }
