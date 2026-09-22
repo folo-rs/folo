@@ -1,6 +1,6 @@
 name: Benchmark history backfill
 
-# Folo owns the trigger and rolling window; the reusable workflow owns the backfill job graph.
+# Folo supplies the schedule and window parameters; shared Rust calculates the frozen range.
 # Ref: design.md#nightly-history-backfill and implementation.md#benchmark-backfill-caller.
 on:
   schedule:
@@ -9,12 +9,12 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      # Optional escape hatch: the SHA to use as the range END instead of the computed one (the
+      # Optional escape hatch: the ref to use as the range END instead of the computed one (the
       # newest commit at least 24 hours old). A commit that fails slowly is re-selected every night
       # and can eat a whole run before anything is stored, so this lets an operator step over it by
       # aiming the window at an older commit. Leave empty for a normal run.
       to_commit:
-        description: Commit SHA to backfill up to (leave empty for the newest commit at least 24 hours old)
+        description: Commit ref to backfill up to (leave empty for the newest commit at least 24 hours old)
         required: false
         type: string
         default: ''
@@ -29,73 +29,24 @@ concurrency:
 permissions: {}
 
 jobs:
-  configuration:
+  backfill:
     # The production identity trusts this repository's main branch, not forks or feature dispatches.
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      client-id: ${{ steps.values.outputs.AZURE_CLIENT_ID }}
-      tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
-      exclude: ${{ steps.values.outputs.exclude }}
-      all-features: ${{ steps.values.outputs.all-features }}
-      best-of: ${{ steps.values.outputs.best-of }}
-      has-range: ${{ steps.values.outputs.has-range }}
-      from: ${{ steps.values.outputs.from }}
-      to: ${{ steps.values.outputs.to }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          # Window selection walks the invocation's complete first-parent history.
-          fetch-depth: 0
-          persist-credentials: false
-      # No Azure login: these non-secret IDs must remain exportable as cross-job outputs.
-      # Window selection runs before tool/bootstrap setup; generic ref resolution stays in Rust.
-      # Ref: implementation.md#benchmark-backfill-caller.
-      - name: Read Folo configuration and backfill window
-        id: values
-        shell: pwsh
-        env:
-          BACKFILL_TO_COMMIT: ${{ inputs.to_commit }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_OUTPUT | Out-Null
-          $policy = Get-BenchHistoryCollectionPolicy
-          $window = Get-BenchHistoryBackfillWindow -ToCommitId $env:BACKFILL_TO_COMMIT -Verbose
-          @(
-            "exclude=$($policy.ExcludedPackages -join ',')"
-            "all-features=$($policy.AllFeatures.ToString().ToLowerInvariant())"
-            "best-of=$($policy.BestOf)"
-            "has-range=$(($null -ne $window).ToString().ToLowerInvariant())"
-            if ($null -ne $window) {
-              "from=$($window.From)"
-              "to=$($window.To)"
-            }
-          ) | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
-
-  backfill:
-    needs: configuration
-    # No eligible window is a successful no-op, not a call with invalid empty refs.
-    if: needs.configuration.outputs.has-range == 'true'
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@ac551c157b01c1657dbb07b39fb54bc466287148 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
     permissions:
       contents: read
       id-token: write
     with:
-      azure-client-id: ${{ needs.configuration.outputs.client-id }}
-      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
-      from: ${{ needs.configuration.outputs.from }}
-      to: ${{ needs.configuration.outputs.to }}
-      exclude: ${{ needs.configuration.outputs.exclude }}
-      all-features: ${{ fromJSON(needs.configuration.outputs.all-features) }}
-      best-of: ${{ fromJSON(needs.configuration.outputs.best-of) }}
+      azure-client-id: ${{ vars.AZURE_PROD_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      lookback: 14 days
+      minimum-age: 24 hours
+      to: ${{ inputs.to_commit }}
+      exclude: benchmarks,infinity_pool
+      all-features: true
+      best-of: 3
+      # Ref: design.md#benchmark-setup-hook.
+      rustflags: -Cllvm-args=-align-all-functions=6
       # Folo opts into per-commit continuation and whole-job best effort at the hosted ceiling.
       # The generic flow keeps failures visible unless a caller opts in.
       # Ref: design.md#nightly-history-backfill.

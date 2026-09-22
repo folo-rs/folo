@@ -414,9 +414,11 @@ registered on that identity. The subject encodes the triggering event: a push to
 presents `repo:folo-rs/folo:ref:refs/heads/<branch>` (e.g. `…:ref:refs/heads/main`), while a
 pull-request run presents `repo:folo-rs/folo:pull_request`. The audience is always
 `api://AzureADTokenExchange`. The two non-secret identifiers a job needs — the managed
-identity's client id and the tenant id — live in `constants.env` and are remapped to the
-standard `AZURE_*` names by the shared federation helper. All production-history consumers
-select `AZURE_PROD_CLIENT_ID`; analysis does not need another identity.
+identity's client id and the tenant id — are non-secret repository variables for the
+production benchmark callers. They pass `vars.AZURE_PROD_CLIENT_ID` and `vars.AZURE_TENANT_ID`
+directly to the shared workflows. `constants.env` retains the infrastructure and test
+configuration; keep the corresponding repository variables aligned when those identities
+change. Analysis does not need another identity.
 
 Azure-touching work selects **same-repo** PRs. Under GitHub's default fork permissions,
 GitHub removes the capability to request an OIDC token after evaluating workflow YAML;
@@ -454,8 +456,9 @@ because their fixtures are created and deleted independently. See
 
 Folo's history, PR and backfill callers delegate their job graphs to the action repository's
 `history.yml`, `pr.yml` and `backfill.yml` reusable workflows. Folo owns their triggers,
-identity configuration and shared measurement settings; the nightly caller also selects its
-historical window. Shared orchestration owns checkout, setup and tool installation.
+identity configuration and measurement settings, including the nightly window parameters.
+The callers contain configuration only: shared Rust plans the historical window and effective
+compiler flags, and shared orchestration owns checkout, setup and tool installation.
 
 History collection runs on every push to `main`, measuring the pushed tip rather than
 repeatedly measuring an unchanged scheduled tip. A push may contain several commits, including
@@ -507,9 +510,9 @@ minutes producing series no one reads.
 
 Every selected package is benchmarked with all Cargo features enabled. This makes Cargo include
 benchmark targets guarded by `required-features` and builds each selected package in its
-all-features configuration. The push, PR and nightly-backfill paths all obtain this
-feature selection from the same collection policy, so a stored point is never made incomparable by
-one path using narrower feature coverage.
+all-features configuration. The push, PR and nightly-backfill callers specify matching
+feature, exclusion, repetition and compiler-flag inputs so one path does not narrow the
+measurement configuration of a stored point.
 
 Unsuitable measurements are removed by a maintainer's manual `prune` invocation. A gap after
 pruning is acceptable; ordinary backfill may fill it within its scope. The workflows expose
@@ -547,8 +550,10 @@ fits while complete results, including quiet or partial reports, remain accessib
 
 Benchmark preparation uses the fixed repository-local
 `.github/actions/bench-history-setup/action.yml` convention. Folo's hook wraps its ordinary
-setup action with the Valgrind requirement enabled and exports the configured stability flags.
-Collection/backfill share those settings. The reusable workflows own tool installation and
+setup action with the Valgrind requirement enabled. Compiler stability flags are measurement
+inputs, not setup code: every production caller supplies the same `rustflags` value.
+The companion combines it with the effective ambient Cargo flags for measurement child
+processes, preserving unrelated options. The reusable workflows own tool installation and
 their remaining job preparation.
 
 Requirements for reusable workflows and their composite-action building blocks in the external
@@ -573,6 +578,12 @@ and its retained failure-time evidence belong to the canary,
 not the reusable backfill flow, which remains collection-only with no reports or publication.
 Same-runner installed-tool tests separately cover skip-existing resumption.
 
+A rolling-window call uses zero minimum age and a sub-second horizon to exercise automatic
+selection and the single-commit fallback at the real event head. It writes to a separate
+test project so explicit-range data cannot satisfy its verification. A no-eligible call
+uses a minimum age older than the repository and must finish without executing a backfill
+matrix. Exact duration boundaries and calendar arithmetic use frozen-clock Rust tests.
+
 See [canary implementation](implementation.md#reusable-workflow-canary) for the job boundaries.
 
 ### Nightly history backfill
@@ -586,15 +597,18 @@ reports, and has no publication sink or alert.
 Analysis stays with the push workflow, which surveys a densified series the next time one of its
 runners draws that same machine key.
 
-The caller computes the window once per invocation using full Git history, before any benchmark
+The caller supplies `lookback: 14 days` and `minimum-age: 24 hours`. Shared Rust preparation
+computes the window once using full Git history and one clock snapshot, before any benchmark
 setup or Azure access. Its newest end is the newest first-parent commit at least 24 hours old,
 which keeps the nightly from racing a push-collect that may still
 be measuring a recent commit (collection runs for hours). Its oldest end is 14 days
 back: history older than that has no comparison value against the current tip, since detection
 reads only a short window of recent points, and the same bound caps how far back the
 measurement-configuration caveat below can plant an odd-looking point. With no eligible commit,
-the configuration job explains the no-op and skips the reusable call rather than passing empty
-refs. Scheduled and manual runs are restricted to `main` in this repository.
+shared preparation explains the successful no-op and starts no benchmark jobs. The horizon
+is relative to preparation time, not to the selected end. Quiet history and an override
+older than that horizon produce a single-commit range. Scheduled and manual runs are
+restricted to `main` in this repository.
 
 Folo explicitly opts into best-effort execution: being killed by the clock is an expected outcome.
 One commit costs as much as a push-collect and more — the backfill worktree's build directory sits

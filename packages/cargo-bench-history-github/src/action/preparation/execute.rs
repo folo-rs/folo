@@ -4,6 +4,7 @@ use std::path::{Component, Path};
 
 use cbh_config::rebase;
 use ohno::AppError;
+use tick::Clock;
 
 use crate::action::environment::Environment;
 use crate::action::errors::{InvalidInput, InvalidOutput};
@@ -20,13 +21,14 @@ use crate::workflow::projection::{matrix_outputs, platform_outputs};
 // Native adapter selection has integration coverage; prepare_with owns fake-driven policy.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) async fn prepare_workflow(args: PrepareWorkflowArgs) -> Result<(), AppError> {
-    prepare_with(args, &NativeHost).await
+    prepare_with(args, &NativeHost, &Clock::new_tokio()).await
 }
 
 /// Freezes event identity, canonical configuration and concrete scope before emitting outputs.
 pub(crate) async fn prepare_with(
     args: PrepareWorkflowArgs,
     host: &impl Host,
+    clock: &Clock,
 ) -> Result<(), AppError> {
     let invocation = host.current_dir()?;
     let inputs = WorkflowInputs::parse(
@@ -54,6 +56,8 @@ pub(crate) async fn prepare_with(
         outputs.push_str("skipped=true\nskip-reason=fork-pull-request\n");
         if args.flow != Flow::Backfill {
             outputs.push_str("skip-all=true\npackages=\n");
+        } else {
+            outputs.push_str("has-work=false\n");
         }
         return host.append_outputs(&output, &outputs);
     }
@@ -85,22 +89,15 @@ pub(crate) async fn prepare_with(
     }
     let base = match args.flow {
         Flow::Backfill => {
-            let from = resolve(
-                host,
-                &cwd,
-                inputs
-                    .get("from")
-                    .expect("backfill input validation requires its range start"),
-            )
-            .await?;
-            let to = resolve(
-                host,
-                &cwd,
-                inputs
-                    .get("to")
-                    .expect("backfill input validation requires its range end"),
-            )
-            .await?;
+            let range = inputs
+                .backfill
+                .as_ref()
+                .expect("the backfill flow validates its exact or rolling selection");
+            let Some((from, to)) = range.select(host, &cwd, &head, clock).await? else {
+                outputs
+                    .push_str("skipped=false\nhas-work=false\nno-work-reason=no-eligible-commit\n");
+                return host.append_outputs(&output, &outputs);
+            };
             // Historical commits own their benchmark inventories, not this invocation's HEAD.
             // The core backfill command owns first-parent range validation and traversal.
             host.note(&format!(
@@ -109,7 +106,7 @@ pub(crate) async fn prepare_with(
             ));
             writeln!(
                 outputs,
-                "from={}\nto={}\nskipped=false",
+                "from={}\nto={}\nskipped=false\nhas-work=true",
                 from.as_str(),
                 to.as_str()
             )
@@ -145,6 +142,7 @@ pub(crate) async fn prepare_with(
             .collect(),
             cwd: cwd.clone(),
             output: Output::Capture,
+            env: Vec::new(),
         })
         .await?;
     let workspace = Workspace::parse(&metadata, host)?;
@@ -172,7 +170,11 @@ pub(crate) async fn prepare_with(
 }
 
 /// Resolves an actual commit without fetching or accepting an option as a revision.
-async fn resolve(host: &impl Host, cwd: &Path, reference: &str) -> Result<CommitSha, AppError> {
+pub(crate) async fn resolve(
+    host: &impl Host,
+    cwd: &Path,
+    reference: &str,
+) -> Result<CommitSha, AppError> {
     git(
         host,
         cwd,

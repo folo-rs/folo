@@ -826,12 +826,24 @@ The action repo publishes these consumption layers:
   workflow is a convenience, not a privileged path.
 
 **`backfill.yml` owns the densification job graph.** Callers supply required `azure-client-id`,
-`azure-tenant-id`, `from` and `to` inputs. The refs name an inclusive range; a caller may select
-them directly or compute a rolling window before the call. Scheduling and date-window policy
-belong to the caller, not the shared workflow. Folo's nightly policy is one such caller (§10).
+`azure-tenant-id`, and either an explicit inclusive `from`/`to` range or rolling
+`lookback`/`minimum-age` durations with an optional `to` override. The caller chooses the
+schedule and parameter values; shared Rust calculates and freezes the range. Folo's nightly
+policy is one such configuration (§10), not a separate planning implementation.
+
+Rolling durations use the same calendar-aware Jiff span conventions as `--since`, including
+`24 hours`, `24 hours ago` and ISO spans. Their magnitudes are subtracted from one preparation-time
+UTC clock snapshot. `lookback` must be nonzero; `minimum-age` may be zero. Both are required
+for rolling selection, and neither accompanies an explicit `from`.
+The automatic end is the newest eligible first-parent commit at least `minimum-age` old.
+An explicit `to` bypasses that age selection. The start is the oldest first-parent commit
+reachable from the selected end within `lookback` of preparation time, not of that end.
+When the selected history is older than the horizon, the range collapses to the end alone.
+No eligible automatic end is a successful, explained no-work result that starts no benchmark
+jobs, distinct from fork-policy skipping and from empty current-head benchmark scope.
 
 The workflow accepts the shared `platforms`, `working-directory`, `config`, `exclude`, `bench`,
-`best-of`, `all-features`, `no-default-features`, `features`, `install-method` and `source-path`
+`best-of`, `all-features`, `no-default-features`, `features`, `rustflags`, `install-method` and `source-path`
 inputs. Collection covers the workspace at each historical commit, subject to exclusions.
 There is no public package allowlist, scope/instance selector or setup-path input.
 `ignore-errors` and `best-effort` are independent Boolean inputs, both defaulting to false:
@@ -839,7 +851,7 @@ the former continues past per-commit build/benchmark failures, while the latter 
 matrix-job `continue-on-error`, including a hosted-runner timeout. Infrastructure errors remain
 errors in the core tool even when `ignore-errors` is enabled.
 
-Preparation uses full Git history to resolve both nonblank, single-line refs safely to full
+Preparation uses full Git history to resolve selected nonblank, single-line refs safely to full
 commit SHAs. It does not filter scope against current-head Cargo metadata or benchmark inventory:
 historical commits can carry benchmarks absent from the invocation head. Execution checks out
 the resolved `to` SHA with full history; configuration, optional source-built tools and the fixed
@@ -1015,8 +1027,8 @@ that gap.
   commits already stored for this key are skipped, so a truncated run simply continues
   next time, and only an explicit overwrite re-measures.
   The CLI takes inclusive `FROM TO` commit refs, not a duration flag. A reusable-workflow
-  caller supplies `from` and `to`, optionally computing its own rolling window first; shared
-  preparation freezes them to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
+  caller supplies either `from`/`to` or rolling duration parameters; shared preparation calculates
+  the range and freezes it to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
   should continue past a commit that cannot build or benchmark. It does not suppress
   infrastructure failures; `best-effort` separately opts into tolerating matrix-job failures.
 * **It has no analysis phase and no sink.** Densification only *writes*; the next
@@ -1392,6 +1404,14 @@ flows' need to reach benchmark targets gated behind `required-features`),
 `no-default-features`, and `features` (a list). Without these a repo whose benches sit behind
 a feature would silently measure nothing.
 
+`rustflags` optionally appends rustc arguments using Cargo's whitespace-separated `RUSTFLAGS`
+syntax, not shell quoting. The companion preserves effective ambient arguments, preferring
+`CARGO_ENCODED_RUSTFLAGS` when present over `RUSTFLAGS`, and supplies the combined arguments
+only to measurement child processes and the associated machine-key query. An empty input
+leaves the environment unchanged. Rustc owns option interpretation; the action does not
+invent a flag-normalization language. Callers choose any stability settings and use matching
+inputs across history, PR and backfill.
+
 **`collect` inputs:** `packages` (comma-separated list → `--package` per name; empty → whole
 workspace); `exclude`, `bench` (→ repeated flags); `best-of` (→ `--best-of`, default 1);
 `on-existing` (`error` (default here) | `skip` |
@@ -1512,7 +1532,7 @@ test their tool/action selection; the action does not add a `report-schema` or t
     cancel superseded runs keyed on the ref, and the close event is handled by `pr.yml` itself
     (§4.7) rather than a second workflow; the push flow deduplicates the same commit instead.
   Folo's history, PR and backfill callers use the shared orchestration; triggers and the
-  backfill window remain repository-owned.
+  backfill parameter values remain repository-owned.
 * **Marketplace publish** from the action repo's release UI (root `action.yml` + branding)
   once a `vX.Y.Z` release exists. Only the composite action is listed; the reusable workflows
   ship in the same repo under the same tags but are referenced by path (§4.7).
@@ -1646,6 +1666,10 @@ so both the install branching and the actual installs are exercised, not just mo
    not part of the public backfill workflow, which has no analysis, receipts or reports.
    Installed-tool smoke tests on the same runner separately prove skip-existing resumption;
    the hosted caller does not assume later invocations receive the same machine fingerprint.
+   A Linux rolling call verifies automatic selection and single-commit fallback in a separate
+   test project. A no-eligible call must show successful preparation with no executed
+   benchmark jobs in current-attempt GitHub evidence. Exact cutoff, calendar and override
+   behavior belongs to frozen-clock Rust tests rather than hosted-runner timing.
 
 **Fork-gate validation exercises behavior.** Event fixtures cover same-repository and fork
 heads, asserting the fork skip result (§6) and that credentialed and publication jobs cannot
@@ -1758,17 +1782,17 @@ belongs to the companion, and configurable workflow policy belongs to the shared
 Repository choices are inputs rather than duplicated shell logic.
 
 The nightly densification caller keeps Folo's 02:00 UTC schedule, same-repository `main` gate
-and repository-wide non-cancelling concurrency group. A read-only configuration job uses full
-history to select the newest first-parent commit outside the 24-hour quarantine and the oldest
-eligible ancestor within the 14-day horizon. An optional `to_commit` overrides the newest endpoint;
-an empty eligible window logs a no-op and skips the reusable call rather than passing empty refs.
-The job exports non-secret identity values without Azure login so masking cannot remove its outputs.
+and repository-wide non-cancelling concurrency group. It passes `lookback: 14 days`,
+`minimum-age: 24 hours` and an optional `to_commit` override as parameters. Shared preparation
+owns the full-history queries, date arithmetic, frozen endpoints and successful no-work result.
 
-The caller passes that range, shared exclusions, all features and `best-of: 3` to `backfill.yml`,
-with `install-method: path` and `source-path: .`. The invocation-owned setup hook supplies the same
-stability flags as history/PR. Folo explicitly selects `ignore-errors: true` and `best-effort: true`
-at the shared hosted-job ceiling; neither is the generic default. The shared workflow freezes refs,
-owns the matrix and skip-existing execution, and leaves first-parent traversal to the core.
+Every production caller passes non-secret repository identity variables, exclusions, all
+features, `best-of: 3` and matching compiler stability flags directly in `with`, with
+`install-method: path` and `source-path: .`. The invocation-owned setup hook supplies genuine
+build prerequisites only. There are no caller configuration jobs, shell calculations or
+calculated outputs. Folo explicitly selects `ignore-errors: true` and `best-effort: true`
+at the shared hosted-job ceiling; neither is the generic default. The shared workflow owns
+the matrix and skip-existing execution, and leaves first-parent traversal to the core.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
@@ -1863,7 +1887,7 @@ The tool, companion and workflow layer have separate responsibilities:
   ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
   artifact and reporting decisions belong to the shared Rust and workflow layers.
-  Folo retains its triggers, backfill window and best-effort choice in the thin caller, while the
+  Folo retains its triggers, window parameters and best-effort choice in the thin caller, while the
   source-built CLI owns measurement and storage. PowerShell handles bootstrap, repository
   workflow wiring and the independently executable Azure deployment bundle; its driver is
   shared by `setup-azure` and export, not reimplemented in Rust. PR-close cancellation belongs

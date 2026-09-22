@@ -10,26 +10,31 @@ param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Workspace,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $From,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $To,
-    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $OutputPath
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $OutputPath,
+    [ValidateNotNullOrEmpty()][string] $Config = '.cargo/backfill_history.toml',
+    [ValidateNotNullOrEmpty()][string] $Project = 'reusable-backfill-canary',
+    [ValidateNotNullOrEmpty()][string[]] $TargetTriple = @(
+        'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin'
+    )
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+$VerbosePreference = 'Continue'
 
 $fixture = Join-Path -Path $Workspace -ChildPath '.github' -AdditionalChildPath 'fixtures', 'bench-history-caller'
-$config = Join-Path -Path $fixture -ChildPath '.cargo' -AdditionalChildPath 'backfill_history.toml'
+$configPath = Join-Path $fixture $Config
 $manifest = Join-Path $Workspace 'Cargo.toml'
 cargo run --manifest-path $manifest --locked --package cargo-bench-history --bin cargo-bench-history -- `
-    list runs --repo $fixture --config $config --context $To --base $To `
+    list runs --repo $fixture --config $configPath --context $To --base $To `
     --engine criterion --target-triple all --machine-key all --no-dirty --no-text --json $OutputPath
 $report = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
-if ($report.project -cne 'reusable-backfill-canary') {
+if ($report.project -cne $Project) {
     throw 'Backfill verification did not read the expected synthetic project.'
 }
 
 # Each supported target needs both current endpoints in one comparable hardware
 # partition. Existing matching data is valid resumption; another range or target is not.
-$expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
 $completeTargets = @(foreach ($set in $report.sets) {
         if ($set.engine -cne 'criterion' -or $set.series -le 0) { continue }
         $complete = $true
@@ -41,6 +46,6 @@ $completeTargets = @(foreach ($set in $report.sets) {
         }
         if ($complete) { $set.target_triple }
     }) | Sort-Object -Unique
-if (($completeTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
+if (($completeTargets -join ',') -cne (($TargetTriple | Sort-Object -Unique) -join ',')) {
     throw 'Backfill did not store both current endpoint commits for every target.'
 }

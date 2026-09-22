@@ -104,7 +104,7 @@ there is no success default.
 
 | Command | Inputs |
 | --- | --- |
-| `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features` |
+| `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features`, `rustflags` |
 | `backfill` | Collection inputs plus required `from`, `to`, and optional `ignore-errors` |
 | `analyze-history` | `local-path`, `cache`, required `machine-keys`, `context`, `since`, required `expected-platforms`, `completed-platforms` |
 | `analyze-pr` | The history inputs except `since`, plus optional `base` |
@@ -139,6 +139,25 @@ At least one key is required. Other files and filesystem links within this tree 
 Expected and completed platform CSVs are required independently of these keys and use the
 existing platform-coverage validation.
 
+### Compiler flags
+
+Collection and backfill accept optional `rustflags`: additional rustc arguments using Cargo's
+`RUSTFLAGS` whitespace splitting, without shell quoting or expansion. A supplied value must be
+nonblank and single-line. Empty or omitted input leaves the environment untouched.
+
+Additional arguments follow the effective ambient flags: `CARGO_ENCODED_RUSTFLAGS` takes
+precedence when present, otherwise `RUSTFLAGS` supplies the inherited arguments. Encoded
+argument boundaries, including arguments containing spaces, and unrelated options are preserved.
+The resulting flags use a child-only `CARGO_ENCODED_RUSTFLAGS` override for the core command
+and its descendants. Collection's machine-key query receives the same override.
+The companion's own environment and every unrelated environment variable remain unchanged.
+
+For example, `-Cllvm-args=-align-all-functions=6` follows any inherited alignment setting;
+rustc applies the last occurrence of that LLVM option. The action does not normalize or
+replace arbitrary compiler options. Arguments containing spaces must come from the ambient
+encoded flags, not shell quoting in this input. The encoded argument separator is reserved
+in both the additional input and ordinary ambient flags.
+
 ## Execution context and skips
 
 Publication obtains its repository from `GITHUB_REPOSITORY`, or the event's repository.
@@ -159,7 +178,8 @@ work. Shape validation and local namespace resolution still apply.
 
 For offline commands, the companion does not read `GITHUB_TOKEN` or `GH_TOKEN` or
 initialize GitHub authentication. Core and Git child processes inherit the caller's environment
-unchanged, including variables needed by build helpers or benchmarks. The credentialed adapter
+including variables needed by build helpers or benchmarks. Only a nonempty collection/backfill
+`rustflags` input adds the compiler-flag override described above. The credentialed adapter
 is constructed only for publication, after input and fork checks.
 
 ## Artifacts and outputs

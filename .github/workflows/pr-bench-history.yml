@@ -8,58 +8,28 @@ on:
 permissions: {}
 
 jobs:
-  configuration:
+  benchmark:
     # This selects supported work; GitHub enforces the default fork OIDC permission cap.
     # Closed events still call the shared graph so its concurrency group cancels prior work.
     # Ref: design.md#pr-benchmark-history.
     if: >-
       github.repository == 'folo-rs/folo'
       && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      client-id: ${{ steps.values.outputs.AZURE_CLIENT_ID }}
-      tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
-      exclude: ${{ steps.values.outputs.exclude }}
-      all-features: ${{ steps.values.outputs.all-features }}
-      best-of: ${{ steps.values.outputs.best-of }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Read Folo configuration
-        id: values
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
-          Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
-          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_OUTPUT | Out-Null
-          $policy = Get-BenchHistoryCollectionPolicy
-          @(
-            "exclude=$($policy.ExcludedPackages -join ',')"
-            "all-features=$($policy.AllFeatures.ToString().ToLowerInvariant())"
-            "best-of=$($policy.BestOf)"
-          ) | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
-
-  benchmark:
-    needs: configuration
     # The shared workflow derives affected scope and frozen PR head/base; Folo supplies
     # only repository-specific settings. Ref: implementation.md#benchmark-workflow-artifacts.
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@ac551c157b01c1657dbb07b39fb54bc466287148 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
     permissions:
       contents: read
       actions: read
       id-token: write
       pull-requests: write
     with:
-      azure-client-id: ${{ needs.configuration.outputs.client-id }}
-      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
-      exclude: ${{ needs.configuration.outputs.exclude }}
-      all-features: ${{ fromJSON(needs.configuration.outputs.all-features) }}
-      best-of: ${{ fromJSON(needs.configuration.outputs.best-of) }}
+      azure-client-id: ${{ vars.AZURE_PROD_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      exclude: benchmarks,infinity_pool
+      all-features: true
+      best-of: 3
+      # Ref: design.md#benchmark-setup-hook.
+      rustflags: -Cllvm-args=-align-all-functions=6
       install-method: path
       source-path: .

@@ -5,12 +5,15 @@ use ohno::AppError;
 use crate::action::errors::InvalidInput;
 use crate::action::inputs::InputObject;
 use crate::action::preparation::Flow;
+use crate::action::preparation::backfill::BackfillInput;
 use crate::result::platform_list;
 
 /// Checked workflow configuration, collection exclusions and historical range inputs.
 pub(crate) struct WorkflowInputs {
     values: BTreeMap<String, String>,
     pub(crate) excluded: BTreeSet<String>,
+    /// Only the backfill flow has a historical selection.
+    pub(crate) backfill: Option<BackfillInput>,
 }
 
 impl WorkflowInputs {
@@ -24,7 +27,8 @@ impl WorkflowInputs {
                 key.as_str(),
                 "working-directory" | "config" | "platforms" | "exclude"
             );
-            let range = flow == Flow::Backfill && matches!(key.as_str(), "from" | "to");
+            let range = flow == Flow::Backfill
+                && matches!(key.as_str(), "from" | "to" | "lookback" | "minimum-age");
             if !common && !range {
                 return Err(InvalidInput::new(key, "unknown workflow input").into());
             }
@@ -33,24 +37,15 @@ impl WorkflowInputs {
                 return Err(InvalidInput::new(key, "expected a nonblank single-line value").into());
             }
         }
+        // Empty adapter defaults do not select a range mode; unknown keys still fail above.
+        // Ref: docs/implementation.md, Workflow preparation.
         values.retain(|_, value| !value.is_empty());
+        let backfill = (flow == Flow::Backfill)
+            .then(|| BackfillInput::parse(&values))
+            .transpose()?;
         platform_list(values.get("platforms").ok_or_else(|| {
             InvalidInput::new("platforms", "expected collection platforms are required")
         })?)?;
-        if flow == Flow::Backfill {
-            for key in ["from", "to"] {
-                let reference = values
-                    .get(key)
-                    .ok_or_else(|| InvalidInput::new(key, "backfill range endpoint is required"))?;
-                if reference.starts_with('-') {
-                    return Err(InvalidInput::new(
-                        key,
-                        "expected a commit reference, not an option",
-                    )
-                    .into());
-                }
-            }
-        }
         let excluded = values
             .get("exclude")
             .map(|value| {
@@ -69,7 +64,11 @@ impl WorkflowInputs {
             })
             .transpose()?
             .unwrap_or_default();
-        Ok(Self { values, excluded })
+        Ok(Self {
+            values,
+            excluded,
+            backfill,
+        })
     }
 
     /// Returns the selected path or normalized input source without applying global defaults.

@@ -140,15 +140,13 @@ want to seed earlier commits. Create `.github/workflows/benchmark-backfill.yml`:
 name: Benchmark backfill
 
 on:
+  schedule:
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      from:
-        description: Oldest commit ref in the inclusive range
-        required: true
-        type: string
       to:
-        description: Newest commit ref in the inclusive range
-        required: true
+        description: Optional range-end override
+        required: false
         type: string
 
 jobs:
@@ -161,16 +159,31 @@ jobs:
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-      from: ${{ inputs.from }}
+      lookback: 14 days
+      minimum-age: 24 hours
       to: ${{ inputs.to }}
 ```
 
-Dispatch on `main`, matching the Azure branch trust configured above. Both range refs
-are required, nonblank and single-line; the start must be a first-parent ancestor of
-the end. The workflow resolves them to full commit SHAs using full Git history and
-checks out the resolved `to` commit for execution. The core tool visits the inclusive
-range newest-first, using the workspace at each historical commit rather than
-filtering against benchmarks present at the invocation head.
+This example runs nightly and permits manual dispatch on `main`, matching the Azure
+branch trust configured above. Shared preparation chooses the newest first-parent
+commit at least `minimum-age` old, then finds its oldest first-parent ancestor within
+`lookback` of preparation time. The optional `to` input overrides the age-based end
+selection; the lookback still runs from preparation time, not from the selected end.
+If that history is older than the horizon, backfill measures just the selected end.
+If no automatic end is eligible, the workflow explains the no-op and starts no
+benchmark jobs.
+
+Both duration inputs are required for rolling selection. They accept friendly spans
+such as `24 hours` or `24 hours ago`, and ISO spans such as `P14D`; their magnitudes are
+resolved from one UTC clock snapshot, including calendar units. `lookback` must be
+nonzero; `minimum-age` may be zero.
+
+To select an explicit range instead, replace the duration inputs with `from` and
+`to`, each a nonblank, single-line commit reference. Do not combine `from` with
+`lookback` or `minimum-age`. The start must be a first-parent ancestor of the end.
+Preparation freezes the range to full commit SHAs and execution checks out its end.
+The core tool visits the inclusive range newest-first, using each historical workspace
+rather than filtering against benchmarks present at the invocation head.
 
 Already-stored commits are skipped in the current platform/machine partition, so you
 can resume an interrupted run by dispatching the same range. Each platform job has a
@@ -186,7 +199,7 @@ that is an acceptable policy for your caller.
 
 Backfill accepts the same measurement and installation settings as the other workflows:
 `platforms`, `working-directory`, `config`, `exclude`, `bench`, `best-of`, `all-features`,
-`no-default-features`, `features`, `install-method` and `source-path`. Match your history
+`no-default-features`, `features`, `rustflags`, `install-method` and `source-path`. Match your history
 caller's feature and repetition settings so measurements remain comparable. There is
 no package allowlist or overwrite option in the reusable workflow.
 
@@ -196,9 +209,14 @@ not the historical commits. The shared workflow invokes that fixed hook before
 benchmarking; no setup-path input is needed. A nested `working-directory` selects the
 same relative project directory in each historical worktree.
 
-For a scheduled rolling window, add a caller-owned configuration job that selects
-`from` and `to` and skips the call when no commit is eligible. The reusable workflow
-does not impose a schedule, quarantine or date horizon. It emits no receipts, report
+`rustflags` appends rustc arguments using Cargo's whitespace-separated `RUSTFLAGS`
+syntax, without shell quoting. Existing encoded Cargo arguments take precedence over
+ambient `RUSTFLAGS` and keep their argument boundaries. An empty input preserves the
+environment. Set the same compiler options for history, PR and backfill; custom setup
+hooks need only prepare repository-specific build prerequisites.
+
+The reusable workflow calculates the range; your caller supplies only parameters
+and a schedule. It emits no receipts, report
 artifacts or public outputs, and has no analysis or publication sink; later history
 runs analyze the stored measurements. See [backfill](commands/backfill.md) for core
 range, storage and measurement semantics.

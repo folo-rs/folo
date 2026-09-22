@@ -69,6 +69,24 @@ Describe 'Backfill caller report verification' {
         { & $script:Verify @script:Invocation } | Should -Not -Throw
     }
 
+    It 'checks a separate single-commit rolling project on its selected target' {
+        $script:Invocation.From = $script:Invocation.To
+        $script:Invocation.Config = '.cargo/rolling.toml'
+        $script:Invocation.Project = 'rolling-fixture'
+        $script:Invocation.TargetTriple = @('x86_64-unknown-linux-gnu')
+        $script:Report.project = 'rolling-fixture'
+        $script:Report.sets = @($script:Report.sets[0])
+        $script:Report.sets[0].commits = @($script:Report.sets[0].commits[1])
+        & $script:Verify @script:Invocation
+        Should -Invoke cargo -Times 1 -Exactly -ParameterFilter {
+            $selected = $args[[array]::IndexOf($args, '--config') + 1]
+            $selected -ceq (Join-Path -Path $TestDrive -ChildPath 'invocation workspace' `
+                -AdditionalChildPath '.github', 'fixtures', 'bench-history-caller', '.cargo', 'rolling.toml')
+        }
+        $script:Report.project = 'reusable-backfill-canary'
+        { & $script:Verify @script:Invocation } | Should -Throw
+    }
+
     It 'rejects <Case> instead of treating it as successful historical coverage' -ForEach @(
         @{ Case = 'wrong project' }
         @{ Case = 'stale range with the same run counts' }

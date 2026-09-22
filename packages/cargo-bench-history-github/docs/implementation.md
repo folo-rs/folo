@@ -65,8 +65,9 @@ The temporary outcome file is an internal consistency check against JSON. Caller
 the validated verdict as the scalar `outcome` output; it is not an additional report-path API.
 
 Native process invocation uses argument vectors, an explicit working directory and inherited
-streams for the main work. Child processes inherit the caller's environment unchanged, including
-variables used by private dependency helpers or benchmarks. Only dedicated Git and machine-key
+streams for the main work. Child processes inherit the caller's environment, including
+variables used by private dependency helpers or benchmarks. Explicit process-local overrides
+are applied without changing the companion's global environment. Only dedicated Git and machine-key
 commands capture stdout; stderr remains visible. Report directory creation is unique and atomic,
 outside the canonical Git checkout, and ownership persists beyond the command for artifact upload.
 
@@ -84,6 +85,20 @@ Native I/O, existing-ancestor resolution and checkout containment continue using
 canonical paths; no filesystem case-folding is added.
 
 See [action execution](action.md) for the bootstrap invocation and input/output contract.
+
+### Compiler-flag composition
+
+Collection and backfill compose additional flags once before execution. An omitted or empty
+input neither reads nor overrides ambient flags. Otherwise, ambient encoded flags are retained
+verbatim when present; ordinary ambient flags and additional input use Cargo's whitespace
+splitting. The arguments are joined with Cargo's reserved encoded separator and supplied only
+through the child process environment. No shell interpretation or compiler-option normalization
+is involved. In particular, repeated LLVM alignment options use rustc's last-occurrence behavior.
+
+The collection process and its subsequent machine-key query reuse the same override so measurement
+and receipt capture share their execution context. Backfill descendants inherit it, including
+historical builds whose toolchain selection is independently managed by the core runner.
+Git queries, analysis and publication do not request compiler-flag overrides.
 
 ## Execution scale
 
@@ -228,8 +243,11 @@ the request and response policy is not excluded with them.
 `prepare-workflow --flow history|pr|backfill --inputs-file PATH --github-output PATH` prepares
 configuration-derived identity, frozen Git revisions, collection platforms and benchmark scope
 before a reusable workflow starts collection. Its JSON contains only string-valued
-`working-directory`, `config`, `platforms` and `exclude` inputs, with `from` and `to` required
-only for backfill. Preparation is offline:
+`working-directory`, `config`, `platforms` and `exclude` inputs. Backfill additionally accepts
+an exact `from`/`to` range or rolling `lookback`/`minimum-age` with an optional `to` override;
+unknown keys and whitespace-only values are rejected before empty adapter defaults are removed.
+Mode selection then uses the remaining values, rejecting incompatible nonempty inputs before
+any host operations. Preparation is offline:
 it uses the action host's Git/Cargo/filesystem operations, without constructing a GitHub client
 or reading storage credentials.
 
@@ -252,10 +270,26 @@ same-repository PR also uses the real PR head, not a synthetic merge commit.
 Backfill uses the shared namespace/platform normalization but does not derive work from the
 invocation head's Cargo metadata: a historical workspace can contain benchmarks absent there.
 After checking full history and the frozen event checkout, option-safe Git resolution freezes
-both endpoints. It emits the canonical namespace, matrix, expected platforms, `from`, `to`
-and policy-skip fields. The core backfill command validates first-parent membership and owns
-historical scope and traversal. The workflow uses the frozen range end for its execution
-checkout, retaining invocation-owned configuration and tool sources.
+exact endpoints and rolling overrides. Rolling selection takes one snapshot from an injected
+`tick::Clock`; native preparation constructs a Tokio clock and tests supply a frozen clock.
+Pure Jiff span parsing takes absolute magnitudes, and UTC zoned calendar subtraction produces
+the minimum-age and now-relative lookback cutoffs. Git owns first-parent traversal and date
+filtering rather than an independently implemented timestamp filter, including its handling of
+nonmonotonic commit dates. Numeric revision-walk age bounds avoid Git's approximate human date
+parser. The inclusive lower bound rounds up and the inclusive upper bound rounds down to Git's
+whole-second commit precision; a subsecond window must not admit an earlier same-second commit.
+A cutoff before Git's Unix epoch admits every commit as a lookback start but no automatic
+endpoint as old enough. An empty endpoint query produces no work; an empty lookback query
+produces the single selected endpoint.
+
+Backfill emits the canonical namespace, matrix, expected platforms, `has-work` and policy-skip
+fields. Only a selected range includes `from` and `to`; an automatic range without an eligible
+endpoint carries `no-work-reason=no-eligible-commit`. A fork skip also sets `has-work=false`.
+The core backfill command validates first-parent membership and owns historical scope and
+traversal. Execution receives explicit frozen endpoints, using the range end for its checkout
+and retaining invocation-owned configuration and tool sources. Native Git selection tests use
+fixed commit dates and an injected clock through the same range planner, independently of
+ambient GitHub event variables and process working-directory changes.
 
 ## Workflow evidence adapters
 

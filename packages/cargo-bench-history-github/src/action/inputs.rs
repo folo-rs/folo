@@ -8,6 +8,7 @@ use serde::de::{Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use crate::action::errors::InvalidInput;
+use crate::action::flags::ENCODED_SEPARATOR;
 use crate::result::PlatformCoverage;
 
 /// Validated post-install command inputs consumed by process and publication planning.
@@ -101,6 +102,11 @@ impl Inputs {
             }
             if value.trim().is_empty() || value.contains(['\r', '\n', '\0']) {
                 return Err(InvalidInput::new(key, "expected a nonblank single-line value").into());
+            }
+            if key == "rustflags" && value.contains(ENCODED_SEPARATOR) {
+                return Err(
+                    InvalidInput::new(key, "encoded argument separator is reserved").into(),
+                );
             }
         }
         for key in [
@@ -337,6 +343,7 @@ const BUILD_INPUTS: &[&str] = &[
     "all-features",
     "no-default-features",
     "features",
+    "rustflags",
 ];
 const REPORT_INPUTS: &[&str] = &[
     "body-file",
@@ -359,6 +366,7 @@ const ALL_INPUTS: &[&str] = &[
     "all-features",
     "no-default-features",
     "features",
+    "rustflags",
     "machine-keys",
     "cache",
     "context",

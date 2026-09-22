@@ -25,7 +25,14 @@ work and drives the selected command. The measured working directory independent
 checkout and configuration; the project namespace uses the core tool's canonical storage identity.
 
 Collection and backfill preserve the core tool's scope, feature, repetition and write-mode
-choices. Analysis validates full Git history, resolves the context commit and uses only the
+choices. Optional compiler flags append additional rustc arguments to the effective ambient
+flags, preserving encoded argument boundaries and unrelated options. Empty input preserves the
+environment unchanged. Composition uses Cargo's whitespace splitting rather than a shell
+parser or option-rewriting language; repeated options retain rustc's own semantics.
+The composed environment applies only to measured child processes and collection's machine-key
+query, never to the companion process globally.
+
+Analysis validates full Git history, resolves the context commit and uses only the
 actual supplied machine keys. History analysis selects that commit as both context and base;
 PR analysis accepts the caller's base or the core default and requires a branch-mode report.
 Platform coverage is explicit workflow evidence, never inferred from deduplicated fingerprints.
@@ -220,11 +227,36 @@ that list without applying exclusions a second time; history collection retains 
 selection and passes its exclusions to Cargo. There is no consumer scope switch.
 Jobs, receipts and analysis reuse the prepared namespace, frozen commits and expected-platform set.
 
-Backfill preparation freezes the caller's inclusive `from` and `to` references. It does not
-select work from the invocation head's benchmark inventory: historical commits own their
-workspace scope. The core tool validates the first-parent range and traverses it, retaining
-skip-existing behavior and the caller's exclusions and measurement settings. This flow emits
-range and platform identity, not single-commit collection receipts or analysis verdicts.
+Backfill preparation freezes an inclusive historical range in either exact or rolling mode.
+Empty adapter defaults are treated as absent before selecting the mode.
+Exact mode requires nonblank `from` and `to` references and does not accept rolling inputs.
+Rolling mode requires both `lookback` and `minimum-age`, forbids `from`, and permits a `to`
+override. Durations accept Jiff friendly or ISO spans, including `ago`, and use their magnitudes:
+`lookback` must be nonzero, while `minimum-age` may be zero. Absolute dates are not durations.
+Unrecognized keys, whitespace-only values, missing required values and incompatible nonempty
+range inputs are errors before outputs are written.
+
+A rolling range uses one snapshot of the current time and calendar arithmetic in UTC.
+Automatic endpoint selection takes the first commit on the frozen invocation head's
+first-parent history at or before the minimum-age cutoff. An explicit `to` resolves to a
+full commit ID and bypasses that age selection. The start is the oldest first-parent commit
+reachable from the selected endpoint within the lookback window, using Git's date-filter
+traversal semantics. The lookback horizon is relative to the same current-time snapshot, not
+to the endpoint's commit date. If no commit falls within that window, the range contains only
+the selected endpoint. Subsecond spans retain their precision when compared with Git's
+whole-second commit timestamps.
+
+Every backfill result includes `has-work`. A selected range emits `skipped=false`,
+`has-work=true` and full `from`/`to` commit IDs. No eligible automatic endpoint emits
+`skipped=false`, `has-work=false` and `no-work-reason=no-eligible-commit`, without endpoints.
+A fork skip emits `skipped=true`, `has-work=false` and the fork skip reason, without endpoints.
+Neither no-work result starts execution jobs. History and PR result fields are unchanged.
+
+Backfill does not select work from the invocation head's benchmark inventory: historical commits
+own their workspace scope. Execution receives only the frozen explicit range. The core tool
+validates first-parent membership and traverses it, retaining skip-existing behavior and the
+caller's exclusions and measurement settings. This flow emits range and platform identity,
+not single-commit collection receipts or analysis verdicts.
 
 ### Collection and analysis evidence
 

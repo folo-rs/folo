@@ -55,15 +55,18 @@ used through a step-level `uses:` reference. It installs and invokes `cargo-benc
 for measurements and analysis, and `cargo-bench-history-github` (the **companion**) for
 workflow evidence and GitHub issue/comment management.
 
-Folo's caller files retain triggers, permissions and repository configuration. A read-only
-configuration job supplies identity values and `Get-BenchHistoryCollectionPolicy` settings.
+Folo's caller files retain only triggers, gates, permissions and parameter values. Azure
+client and tenant IDs come directly from repository variables; measurement settings are
+literal workflow inputs rather than calculated job outputs.
 Folo selects source installation, building the tools from the checkout that started the run
 rather than selecting individual tool versions.
 
 The fixed `bench-history-setup` hook selects Folo's ordinary cached setup environment with
-Valgrind enabled and exports its benchmark-stability compiler flags. Backfill consumes the
-same collection policy and flag helper. This keeps repository-specific setup and measurement
-choices outside the reusable workflow implementation.
+Valgrind enabled. The callers supply matching `rustflags` values; the companion appends them
+to effective ambient Cargo arguments using child-only environment overrides. It honors
+`CARGO_ENCODED_RUSTFLAGS` precedence and preserves argument boundaries, and uses the same
+environment for collection and its machine-key query. No configuration job or flag-merging
+script is required in a consumer repository.
 
 The shared workflows also use an internal composite action at
 `.github/actions/workflow-tools` in the action repository. It prepares the caller's checkouts,
@@ -149,26 +152,23 @@ Manual Azure provisioning remains a separate maintainer operation through `setup
 ### Benchmark backfill caller
 
 `bench-history-backfill.yml` retains Folo's nightly trigger, main-only same-repository dispatch
-gate and repository-wide non-cancelling concurrency group. Its read-only configuration job
-checks out full history and calls `Get-BenchHistoryBackfillWindow` to select the rolling
-window or the operator's `to_commit` escape hatch. This small PowerShell boundary runs before
-Rust setup; it owns Folo's date policy, not generic ref resolution or backfill execution.
+gate and repository-wide non-cancelling concurrency group. It passes `lookback: 14 days`,
+`minimum-age: 24 hours` and the optional `to_commit` override directly to the reusable workflow.
+Identity variables and literal measurement inputs need no caller-side execution.
 
-The configuration job reads the same non-secret Azure identifiers and
-`Get-BenchHistoryCollectionPolicy` settings as the history/PR callers. It does not sign in to
-Azure: masking the client ID would prevent its cross-job export. It emits the selected `from`
-and `to` inputs and an internal `has-range` flag. An empty eligible window logs its reason and
-gates the call off; it never reaches shared preparation as empty required refs.
-
-The shared workflow's `prepare-workflow --flow backfill` resolves both refs to full commit
-SHAs using the invocation's full history. It does not ask current-head Cargo metadata whether
+The shared workflow's `prepare-workflow --flow backfill` uses one injected clock snapshot and
+the invocation's full first-parent history to calculate the range. Explicit `from`/`to`
+ranges remain available to other callers. Preparation freezes selected refs to full commit
+SHAs and emits a separate successful no-work result when no automatic endpoint is old enough;
+the workflow then skips its benchmark matrix. This is distinct from a fork-policy skip.
+It does not ask current-head Cargo metadata whether
 there are benchmarks: historical workspaces can contain benchmarks absent from the invocation.
 The matrix checks out the resolved `to` commit with full history, while configuration, the fixed
 setup hook and source installation remain invocation-owned. The core tool validates and traverses
 the inclusive first-parent range, preserving the selected project directory in its worktrees.
 
 Folo passes `install-method: path`, `source-path: .`, shared exclusions, all features and the
-shared repetition count. The setup hook supplies stability flags. Fixed skip-existing behavior
+shared repetition count and compiler stability flags. Fixed skip-existing behavior
 makes each platform resumable. `ignore-errors: true` continues past per-commit build/benchmark
 failures; `best-effort: true` separately opts into whole-matrix-job `continue-on-error`, including
 the shared hosted-runner timeout. Generic callers default both policies to false.
@@ -228,6 +228,13 @@ its acceptance and rejection behavior without Azure access.
 The hosted caller proves historical storage across native targets. Same-runner installed-tool
 smoke coverage in the action repository proves skip-existing resumption without relying on
 separate hosted invocations receiving the same hardware fingerprint.
+
+An additional Linux rolling call supplies zero minimum age and a sub-second lookback,
+selecting only the event head through the quiet-window fallback. Its isolated project and
+endpoint query establish actual stored results independently of the explicit-range call.
+A separate no-eligible call uses an age older than all repository history; job evidence must
+show successful preparation and no executed backfill matrix. Neither scenario copies the
+planner into the caller. Frozen-clock tests own exact cutoff and calendar assertions.
 
 Invalid input, failed collection, stale attempts and lifecycle mutation cases remain covered
 by the companion's mock/native suites and the action adapter tests. A successful synthetic
