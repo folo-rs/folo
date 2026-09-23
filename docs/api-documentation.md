@@ -76,6 +76,12 @@ example. This is important to verify that the example actually works.
 If the two are out of sync, use the `package_name_readme.rs` as the authoritative
 source and update the `README.md` file to match it.
 
+Repository-only executable setup is an exception to this mirroring rule. README
+example targets follow the [executable allocator policy](testing.md#executable-allocators),
+while consumer-facing snippets may select any supported allocator without depending
+on the unpublished `testing` helper. Keep the demonstrated API usage synchronized,
+not the repository's allocator-selection boilerplate.
+
 It is fine to disable Clippy rules in the `package_name_readme.rs` file, as it is
 not production code and often needs to take shortcuts to be short and simple.
 

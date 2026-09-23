@@ -21,12 +21,6 @@ all-features = true
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["many_cpus_impl::*"]
 
-# `testing` is used by the Windows-only `*_obey_job_*` examples (inside
-# `#[cfg(windows)]` modules) but not by anything on Linux, so cargo-udeps
-# reports it as unused there.
-[package.metadata.cargo-udeps.ignore]
-development = ["testing"]
-
 [features]
 default = []
 # Enables test utilities including the fake platform for simulating hardware configurations.

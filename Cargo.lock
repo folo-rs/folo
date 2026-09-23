@@ -635,6 +635,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
+ "testing",
  "toml_edit",
 ]
 

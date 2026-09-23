@@ -22,6 +22,8 @@ that helper alone does not install an allocator. The macro leaves Miri's default
 allocator unchanged. A library's test declaration
 does not cover its separate integration executables, which each need their own
 root invocation. Platform-disabled targets contain no code to configure.
+A benchmark explicitly listed in a package's `include` set declares mimalloc
+directly, because the unpublished `testing` dependency does not survive packaging.
 
 Allocation-instrumented targets instead declare
 `alloc_tracker::Allocator<testing::DefaultAllocator>` and construct it with
