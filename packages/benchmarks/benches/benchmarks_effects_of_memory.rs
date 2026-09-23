@@ -1,6 +1,12 @@
 //! We compare typical algorithms under different execution conditions, with collaborating threads
 //! being organized in various ways supported by the `many_cpus_benchmarking` package. Of particular
 //! interest are the effects of data locality (i.e. memory regions and processor caching).
+//!
+//! These are manual, large-working-set experiments, not routine performance-history benchmarks.
+//! Correctness smoke runs use Criterion test mode (`cargo test --benches`, or an explicit `--test`),
+//! which executes one iteration per scenario with reduced maps and header collections. Measurement
+//! and profiling runs retain the full exploratory inputs, independently of the compilation profile.
+//! Identifiers always describe measurement inputs, so listing and exact smoke filters stay consistent.
 
 #![allow(
     missing_docs,
@@ -13,6 +19,7 @@ use std::hint::black_box;
 use std::iter::repeat_with;
 use std::sync::{Arc, RwLock, mpsc};
 
+use benchmarks::memory_workload_size;
 use criterion::{Criterion, criterion_group, criterion_main};
 use fake_headers::Headers;
 use frozen_collections::{FzHashMap, FzScalarMap};
@@ -22,40 +29,28 @@ use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
-#[cfg(not(test))]
-mod real_constants {
-    /// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
-    /// access on typically cached data).
-    pub(crate) const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
+// Cargo also enables cfg(test) for optimized harness=false benchmark binaries. Workload sizes
+// must not depend on that flag. Select smoke sizes only during setup, and store each map's count
+// with its payload so measured loops do not parse arguments or inspect shared runtime mode.
+// execute_runs prepares at most the iteration count regardless of the batch-size upper bound.
 
-    /// The small maps fit into memory very easily. 512 KB * 1000 = 512 MB per worker.
-    pub(crate) const SMALL_MAP_BATCH_SIZE: u64 = 1000;
+/// A cache-friendly baseline for comparing memory locality and repeated reads.
+/// Keys and container overhead also contribute to each map's working set.
+const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024;
 
-    /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
-    /// likely require trips to main memory for repeated access.
-    pub(crate) const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
+/// Bound prepared small maps while amortizing thread setup and cache clearing.
+/// Budget for keys, spare capacity and container metadata in addition to value storage.
+const SMALL_MAP_BATCH_SIZE: u64 = 1000;
 
-    /// The large maps are large, so we try conserve memory. 128 MB * 10 = 1.28 GB per worker.
-    pub(crate) const LARGE_MAP_BATCH_SIZE: u64 = 10;
+/// A larger working set to expose cache-capacity and memory-locality effects.
+/// Whether it exceeds the last-level cache depends on the machine and map overhead.
+const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024;
 
-    pub(crate) const HEADERS_COUNT: usize = 10_000;
-}
+/// Limit simultaneously prepared large maps to constrain memory use.
+const LARGE_MAP_BATCH_SIZE: u64 = 10;
 
-#[cfg(test)]
-mod test_constants {
-    // Small values to make tests fast but still run the real logic.
-    pub(crate) const SMALL_MAP_ENTRY_COUNT: usize = 10;
-    pub(crate) const SMALL_MAP_BATCH_SIZE: u64 = 10;
-    pub(crate) const LARGE_MAP_ENTRY_COUNT: usize = 10;
-    pub(crate) const LARGE_MAP_BATCH_SIZE: u64 = 10;
-
-    pub(crate) const HEADERS_COUNT: usize = 10;
-}
-
-#[cfg(not(test))]
-use real_constants::*;
-#[cfg(test)]
-use test_constants::*;
+/// Exercise allocation and memory locality across independently serialized header sets.
+const HEADERS_COUNT: usize = 10_000;
 
 fn entrypoint(c: &mut Criterion) {
     let prefix = "benchmarks_effects_of_memory";
@@ -152,8 +147,8 @@ fn entrypoint(c: &mut Criterion) {
         WorkDistribution::all_without_self(),
     );
 
-    // This is extremely slow due to giant payload but what can we do, the giant payload is the
-    // point of this scenario - to show what happens when data that does not fit in caches.
+    // The large working set is intentional: compare cache-capacity and memory-locality effects
+    // against the small map, rather than limiting the scenario to an elementary operation.
     execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, LARGE_MAP_BATCH_SIZE>(
         c,
         prefix,
@@ -217,6 +212,7 @@ impl Payload for ChannelExchange {
 #[derive(Debug, Default)]
 struct HashMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: HashMap<u64, u64>,
+    entry_count: usize,
 }
 
 impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
@@ -227,16 +223,17 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 
     fn prepare(&mut self) {
-        self.map = HashMap::with_capacity(MAP_ENTRY_COUNT);
+        self.entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        self.map = HashMap::with_capacity(self.entry_count);
 
-        for i in 0..MAP_ENTRY_COUNT {
+        for i in 0..self.entry_count {
             self.map.insert(i as u64, i.wrapping_mul(2) as u64);
         }
     }
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
-            for k in 0..MAP_ENTRY_COUNT {
+            for k in 0..self.entry_count {
                 black_box(self.map.get(&(k as u64)));
             }
         }
@@ -248,6 +245,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 #[derive(Debug, Default)]
 struct HashMapBothRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<RwLock<HashMap<u64, u64>>>,
+    entry_count: usize,
 
     // Only needs to be filled by one of the workers, where is is true.
     is_filler: bool,
@@ -257,14 +255,17 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     for HashMapBothRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
 {
     fn new_pair() -> (Self, Self) {
-        let map = Arc::new(RwLock::new(HashMap::with_capacity(MAP_ENTRY_COUNT)));
+        let entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        let map = Arc::new(RwLock::new(HashMap::with_capacity(entry_count)));
 
         let worker1 = Self {
             map: Arc::clone(&map),
+            entry_count,
             is_filler: true,
         };
         let worker2 = Self {
             map,
+            entry_count,
             is_filler: false,
         };
 
@@ -278,7 +279,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
         let mut map = self.map.write().unwrap();
 
-        for i in 0..MAP_ENTRY_COUNT {
+        for i in 0..self.entry_count {
             map.insert(i as u64, i.wrapping_mul(2) as u64);
         }
     }
@@ -287,7 +288,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         let map = self.map.read().unwrap();
 
         for _ in 0..REPEAT_COUNT {
-            for k in 0..MAP_ENTRY_COUNT {
+            for k in 0..self.entry_count {
                 black_box(map.get(&(k as u64)));
             }
         }
@@ -299,6 +300,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 #[derive(Debug, Default)]
 struct FzHashMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: FzHashMap<u64, u64>,
+    entry_count: usize,
 }
 
 impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
@@ -309,7 +311,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 
     fn prepare(&mut self) {
-        let entries = (0..MAP_ENTRY_COUNT)
+        self.entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        let entries = (0..self.entry_count)
             .map(|i| (i as u64, i.wrapping_mul(2) as u64))
             .collect();
 
@@ -318,7 +321,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
-            for k in 0..MAP_ENTRY_COUNT {
+            for k in 0..self.entry_count {
                 black_box(self.map.get(&(k as u64)));
             }
         }
@@ -330,6 +333,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 #[derive(Debug, Default)]
 struct FzScalarMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: FzScalarMap<u64, u64>,
+    entry_count: usize,
 }
 
 impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
@@ -340,7 +344,8 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 
     fn prepare(&mut self) {
-        let entries = (0..MAP_ENTRY_COUNT)
+        self.entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        let entries = (0..self.entry_count)
             .map(|i| (i as u64, i.wrapping_mul(2) as u64))
             .collect();
 
@@ -349,7 +354,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
-            for k in 0..MAP_ENTRY_COUNT {
+            for k in 0..self.entry_count {
                 black_box(self.map.get(&(k as u64)));
             }
         }
@@ -361,6 +366,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 #[derive(Debug, Default)]
 struct SccMapRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: scc::HashMap<u64, u64>,
+    entry_count: usize,
 }
 
 impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
@@ -371,9 +377,10 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     }
 
     fn prepare(&mut self) {
-        self.map = scc::HashMap::with_capacity(MAP_ENTRY_COUNT);
+        self.entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        self.map = scc::HashMap::with_capacity(self.entry_count);
 
-        for i in 0..MAP_ENTRY_COUNT {
+        for i in 0..self.entry_count {
             self.map
                 .insert_sync(i as u64, i.wrapping_mul(2) as u64)
                 .unwrap();
@@ -382,7 +389,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
-            for k in 0..MAP_ENTRY_COUNT {
+            for k in 0..self.entry_count {
                 black_box(self.map.get_sync(&(k as u64)));
             }
         }
@@ -394,6 +401,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 #[derive(Debug, Default)]
 struct SccMapBothRead<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<scc::HashMap<u64, u64>>,
+    entry_count: usize,
 
     // Only needs to be filled by one of the workers, where is is true.
     is_filler: bool,
@@ -403,14 +411,17 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     for SccMapBothRead<MAP_ENTRY_COUNT, REPEAT_COUNT>
 {
     fn new_pair() -> (Self, Self) {
-        let map = Arc::new(scc::HashMap::with_capacity(MAP_ENTRY_COUNT));
+        let entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        let map = Arc::new(scc::HashMap::with_capacity(entry_count));
 
         let worker1 = Self {
             map: Arc::clone(&map),
+            entry_count,
             is_filler: true,
         };
         let worker2 = Self {
             map,
+            entry_count,
             is_filler: false,
         };
 
@@ -422,7 +433,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
             return;
         }
 
-        for i in 0..MAP_ENTRY_COUNT {
+        for i in 0..self.entry_count {
             self.map
                 .insert_sync(i as u64, i.wrapping_mul(2) as u64)
                 .unwrap();
@@ -431,7 +442,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
-            for k in 0..MAP_ENTRY_COUNT {
+            for k in 0..self.entry_count {
                 black_box(self.map.get_sync(&(k as u64)));
             }
         }
@@ -445,6 +456,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
 #[derive(Debug, Default)]
 struct SccMapSharedReadWrite<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> {
     map: Arc<scc::HashMap<u64, u64>>,
+    entry_count: usize,
 
     // Determines whether it does the initial fill and which direction it iterates.
     is_worker_1: bool,
@@ -463,14 +475,17 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     for SccMapSharedReadWrite<MAP_ENTRY_COUNT, REPEAT_COUNT>
 {
     fn new_pair() -> (Self, Self) {
-        let map = Arc::new(scc::HashMap::with_capacity(MAP_ENTRY_COUNT));
+        let entry_count = memory_workload_size(MAP_ENTRY_COUNT);
+        let map = Arc::new(scc::HashMap::with_capacity(entry_count));
 
         let worker1 = Self {
             map: Arc::clone(&map),
+            entry_count,
             is_worker_1: true,
         };
         let worker2 = Self {
             map,
+            entry_count,
             is_worker_1: false,
         };
 
@@ -482,7 +497,7 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
             return;
         }
 
-        for i in 0..MAP_ENTRY_COUNT {
+        for i in 0..self.entry_count {
             self.map
                 .insert_sync(i as u64, i.wrapping_mul(2) as u64)
                 .unwrap();
@@ -492,11 +507,11 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
     fn process(&mut self) {
         for _ in 0..REPEAT_COUNT {
             if self.is_worker_1 {
-                for key in 0..MAP_ENTRY_COUNT as u64 {
+                for key in 0..self.entry_count as u64 {
                     self.increment(key);
                 }
             } else {
-                for key in (0..MAP_ENTRY_COUNT as u64).rev() {
+                for key in (0..self.entry_count as u64).rev() {
                     self.increment(key);
                 }
             }
@@ -529,7 +544,7 @@ impl Payload for HttpHeadersParse {
 
                 result.into_bytes()
             })
-            .take(HEADERS_COUNT)
+            .take(memory_workload_size(HEADERS_COUNT))
             .collect(),
         );
     }
