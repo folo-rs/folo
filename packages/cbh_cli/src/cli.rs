@@ -867,6 +867,13 @@ struct BackfillCommand {
     #[arg(value_name = "TO")]
     to: String,
 
+    /// Attempt at most N commits after skipping recorded results (default: unlimited).
+    /// Failed, empty, and write-time duplicate results count as attempts. Each commit
+    /// finishes all repetitions and storage before stopping. With --overwrite, each
+    /// invocation starts again at the newest commit rather than resuming.
+    #[arg(long, value_name = "N", help_heading = HEADING_ENV)]
+    max_commits: Option<NonZeroUsize>,
+
     #[command(flatten)]
     env: EnvArgs,
 
@@ -933,6 +940,7 @@ impl BackfillCommand {
             local: local_selection(self.env.local),
             from: self.from,
             to: self.to,
+            max_commits: self.max_commits,
             packages: resolve_packages(self.workspace, self.package),
             excludes: self.exclude,
             benches: self.bench,
@@ -2300,6 +2308,57 @@ pub(crate) mod tests {
             &["backfill", "abc123", "def456", "--best-of", "0"],
         );
         assert!(parsed.is_err(), "--best-of 0 must be rejected");
+    }
+
+    #[test]
+    fn backfill_max_commits_defaults_to_unlimited() {
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456"]) else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(options.max_commits, None);
+        assert_eq!(BackfillOptions::default().max_commits, None);
+    }
+
+    #[test]
+    fn backfill_max_commits_accepts_positive_usize_values() {
+        for limit in [1, usize::MAX] {
+            let Command::Backfill(options) = parse(&[
+                "backfill",
+                "abc123",
+                "def456",
+                "--max-commits",
+                &limit.to_string(),
+            ]) else {
+                panic!("expected backfill command");
+            };
+            assert_eq!(options.max_commits.unwrap().get(), limit);
+        }
+    }
+
+    #[test]
+    fn backfill_max_commits_rejects_invalid_values() {
+        let overflow = format!("{}0", usize::MAX);
+        // Native runs cover lexical variants; Miri keeps the nonzero and target-width boundaries.
+        let values: &[&str] = if cfg!(miri) {
+            &["0", &overflow]
+        } else {
+            &["0", "-1", "1.5", "many", &overflow]
+        };
+        for value in values {
+            let error = from_args(
+                &["cargo-bench-history"],
+                &["backfill", "abc123", "def456", "--max-commits", value],
+            )
+            .unwrap_err();
+            assert!(error.status.is_err());
+        }
+    }
+
+    #[test]
+    fn max_commits_is_not_a_collect_option() {
+        let error =
+            from_args(&["cargo-bench-history"], &["collect", "--max-commits", "1"]).unwrap_err();
+        assert!(error.status.is_err());
     }
 
     #[test]

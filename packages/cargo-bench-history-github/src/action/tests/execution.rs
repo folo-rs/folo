@@ -99,6 +99,11 @@ fn build_defaults_exclusions_and_write_modes_are_per_command() {
         assert!(args.contains(&"--exclude=other".into()));
         assert!(args.contains(&"--all-features".into()));
         assert!(args.contains(&"--best-of=1".into()));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().starts_with("--max-commits"))
+        );
         assert!(!args.contains(&"--skip-existing".into()));
         assert!(
             !args
@@ -116,6 +121,32 @@ fn build_defaults_exclusions_and_write_modes_are_per_command() {
                 "instance=action-test\n"
             );
         }
+    }
+}
+
+#[test]
+fn backfill_forwards_only_a_nonempty_commit_limit() {
+    for limit in ["", "2"] {
+        let input = json!({
+            "command":"backfill", "from":"HEAD~2", "to":"HEAD", "max-commits":limit,
+        });
+        let host = FakeHost::new(&input);
+        host.reply("");
+        block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap();
+        let processes = host.processes.borrow();
+        assert_eq!(processes.len(), 1);
+        let expected: Vec<OsString> = if limit == "2" {
+            vec!["--max-commits=2".into()]
+        } else {
+            Vec::new()
+        };
+        let actual: Vec<_> = processes[0]
+            .args
+            .iter()
+            .filter(|arg| arg.to_string_lossy().starts_with("--max-commits"))
+            .cloned()
+            .collect();
+        assert_eq!(actual, expected);
     }
 }
 

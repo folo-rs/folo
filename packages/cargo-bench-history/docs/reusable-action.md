@@ -119,10 +119,10 @@ root**, and a Marketplace listing is tied to a whole repository's release/tag
 stream. The monorepo already spends its tag namespace on automated `release-plz` package
 releases and per-binary-package GitHub Releases (`cargo-bench-history-vX.Y.Z`, etc.; see
 [`../../../docs/release-automation.md`](../../../docs/release-automation.md)), so it cannot
-also carry the clean, independently-moving `v1` / `vX.Y.Z` action tags the Marketplace and
+also carry the clean, independently-moving `v2` / `vX.Y.Z` action tags the Marketplace and
 the floating-major convention expect. A dedicated repo gives the action its own semver
 stream, its own README/Marketplace page, and a `uses:
-folo-rs/cargo-bench-history-action@v1` reference that does not drag in the monorepo.
+folo-rs/cargo-bench-history-action@v2` reference that does not drag in the monorepo.
 
 *Rejected — an in-monorepo sub-path action* (`folo-rs/folo/.github/actions/
 bench-history@<ref>`). Sub-path actions work for `uses:` but **cannot be published
@@ -812,7 +812,7 @@ The action repo publishes these consumption layers:
         actions: read       # cross-attempt artifact download (§4.6)
         id-token: write     # Entra OIDC, if using cloud storage
         issues: write       # rolling issue + failure alert
-      uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v1
+      uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v2
       with:
         platforms: ubuntu-latest, windows-latest
         azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -846,10 +846,14 @@ The workflow accepts the shared `platforms`, `working-directory`, `config`, `exc
 `best-of`, `all-features`, `no-default-features`, `features`, `rustflags`, `install-method` and `source-path`
 inputs. Collection covers the workspace at each historical commit, subject to exclusions.
 There is no public package allowlist, scope/instance selector or setup-path input.
-`ignore-errors` and `best-effort` are independent Boolean inputs, both defaulting to false:
-the former continues past per-commit build/benchmark failures, while the latter opts into
-matrix-job `continue-on-error`, including a hosted-runner timeout. Infrastructure errors remain
-errors in the core tool even when `ignore-errors` is enabled.
+Optional `max-commits` is a string containing a positive integer within the executing
+platform's `usize` range; empty or absent means unlimited replay. It reaches the core
+as `--max-commits` without changing range preparation. The bound applies to replay attempts
+after skipping recorded commits in the current partition, not to range endpoints.
+`ignore-errors` is a Boolean input defaulting to false. It continues past per-commit
+build/benchmark failures without suppressing infrastructure errors. The workflow preserves
+unsuccessful job conclusions; there is no whole-job failure-suppression input. A hosted-runner
+timeout is not a successful bounded pass.
 
 Preparation uses full Git history to resolve selected nonblank, single-line refs safely to full
 commit SHAs. It does not filter scope against current-head Cargo metadata or benchmark inventory:
@@ -898,13 +902,13 @@ control, which is the trade the two-layer split exists to offer.
 These platform constraints shape the split, and none is worked around:
 
 * **The Marketplace lists actions, not workflows.** Reusable workflows are referenced by
-  repository path and ref (`owner/repo/.github/workflows/x.yml@v1`) and cannot be published
+  repository path and ref (`owner/repo/.github/workflows/x.yml@v2`) and cannot be published
   to the Marketplace. The composite action therefore stays the Marketplace-listed artifact
   and the discovery surface (§8); the reusable workflows ride the same repo and the same
-  `v1` floating tag, so both layers version in lockstep with one release. Inside the
+  `v2` floating tag, so both layers version in lockstep with one release. Inside the
   reusable workflows the root action is referenced through the **self-repository syntax**
   (`$/`), which resolves at the exact commit the workflow is running from — a hardcoded
-  `@v1` there would let a workflow pinned to `v1.2.3` silently invoke a newer action.
+  `@v2` there would let a workflow pinned to `v2.0.0` silently invoke a newer action.
 * **`workflow_call` inputs are scalars.** Only `string`, `number`, and `boolean` exist, so
   list-shaped inputs (the platform matrix, package scopes) are passed as
   **comma-separated strings** and split inside the reusable workflow. JSON-in-a-string is the
@@ -1022,15 +1026,19 @@ empty series — a series can stay too sparse to judge for a long time. A third 
 that gap.
 
 * **`backfill` replays collection across a window of recent history**, walking **newest
-  first** so a run that exhausts its time budget has spent it on the most
-  comparison-relevant commits rather than the oldest ones. It is **resumable by default**:
-  commits already stored for this key are skipped, so a truncated run simply continues
-  next time, and only an explicit overwrite re-measures.
+  first** to prioritize the most comparison-relevant commits. Optional `max-commits` bounds
+  attempts after skipping recorded commits, while completing each attempt's repetitions,
+  engine storage and normal cleanup. Empty harvests, failed benchmarks and write-time
+  duplicates consume attempts; pre-check skips do not. Bounded completion reports deferred
+  work instead of claiming the entire range completed. It is **resumable by default**:
+  commits already stored for this key are skipped, so later passes fill the next gaps.
+  With explicit overwrite, a bounded pass starts at the newest commit on every invocation
+  rather than advancing a cursor.
   The CLI takes inclusive `FROM TO` commit refs, not a duration flag. A reusable-workflow
   caller supplies either `from`/`to` or rolling duration parameters; shared preparation calculates
   the range and freezes it to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
   should continue past a commit that cannot build or benchmark. It does not suppress
-  infrastructure failures; `best-effort` separately opts into tolerating matrix-job failures.
+  infrastructure failures or unsuccessful job conclusions.
 * **It has no analysis phase and no sink.** Densification only *writes*; the next
   push-triggered `analyze-history` picks up whatever landed. This keeps the flow free of
   report-sink concerns entirely — no issue, no comment, no staleness, receipts or reports.
@@ -1462,12 +1470,14 @@ Attempts share the same run identity. It has no resolution counterpart or auto-c
 The names and required evidence agree between the composite and companion layers.
 
 **Composite `backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
-`best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
+`best-of`), inclusive `from` / `to` refs, `ignore-errors`, optional `max-commits`, and `on-existing` (`skip` by default
 or `overwrite`; `error` is invalid here, §4.5). The reusable workflow accepts either explicit
 `from`/`to` or rolling `lookback`/`minimum-age` with an optional `to` override. Shared preparation
 calculates and freezes the range; callers supply parameters only. The workflow fixes skip-existing
-workspace collection with configurable exclusions and additionally exposes the whole-job
-`best-effort` opt-in (§4.7).
+workspace collection with configurable exclusions and preserves unsuccessful job conclusions (§4.7).
+Both layers accept `max-commits` as an optional string with no default cap. The companion
+validates its positive platform-sized integer value only for backfill and forwards it
+unchanged to the core. Range preparation receives no attempt limit.
 
 **History/PR reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
 GitHub writes as one policy (§5.2). It is not an input to the individual composite commands:
@@ -1769,7 +1779,8 @@ The monorepo's Azure-backend test jobs cover the backend's authentication branch
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo's history, PR and backfill workflows consume a selected revision of the shared action.
+Folo's deployed history, PR and backfill workflows consume a selected v1 revision of the
+shared action. This section describes that deployment, not the v2 input contract above.
 **`install-method: path`** and **`source-path: .`** build the required tools from the invocation
 checkout, so unreleased monorepo changes are exercised without waiting for tool publication.
 The selected action revision supplies orchestration independently of those tool sources.
@@ -1792,9 +1803,10 @@ Every production caller passes non-secret repository identity variables, exclusi
 features, `best-of: 3` and matching compiler stability flags directly in `with`, with
 `install-method: path` and `source-path: .`. The invocation-owned setup hook supplies genuine
 build prerequisites only. There are no caller configuration jobs, shell calculations or
-calculated outputs. Folo explicitly selects `ignore-errors: true` and `best-effort: true`
-at the shared hosted-job ceiling; neither is the generic default. The shared workflow owns
-the matrix and skip-existing execution, and leaves first-parent traversal to the core.
+calculated outputs. The deployed v1 backfill caller explicitly selects `ignore-errors: true`
+and `best-effort: true` at the shared hosted-job ceiling. That selected v1 revision accepts
+both opt-ins; the v2 workflow has no `best-effort` input. The shared workflow owns the matrix
+and skip-existing execution, and leaves first-parent traversal to the core.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
@@ -1889,8 +1901,9 @@ The tool, companion and workflow layer have separate responsibilities:
   ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
   artifact and reporting decisions belong to the shared Rust and workflow layers.
-  Folo retains its triggers, window parameters and best-effort choice in the thin caller, while the
-  source-built CLI owns measurement and storage. PowerShell handles bootstrap, repository
+  Folo retains its triggers, window parameters and deployment-specific inputs in the thin caller
+  described under [Dogfooding](#10-dogfooding--folos-own-workflows), while the source-built CLI
+  owns measurement and storage. PowerShell handles bootstrap, repository
   workflow wiring and the independently executable Azure deployment bundle; its driver is
   shared by `setup-azure` and export, not reimplemented in Rust. PR-close cancellation belongs
   to the PR workflow itself.

@@ -166,7 +166,7 @@ when a test only needs to exercise a subsequent collection, rather than executin
 again as fixture setup.
 
 **Backfill coverage.** Planning/skip/overwrite/error logic is exhaustively covered by
-fake-driven unit tests in `commands/backfill.rs`; keep the real-git integration drives a small
+fake-driven unit tests under `commands/backfill/tests/`; keep the real-git integration drives a small
 smoke subset (each spawns many git subprocesses and dominates mutation cost) — add new
 coverage at the fake level.
 
