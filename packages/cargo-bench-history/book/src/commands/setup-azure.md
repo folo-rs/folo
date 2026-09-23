@@ -83,7 +83,7 @@ GitHub settings. Make the following configuration changes:
 | Blob endpoint | Use it for connectivity diagnostics or Azure tools. There is no endpoint field to add to the standard benchmark configuration. |
 
 Create the variables under **Settings → Secrets and variables → Actions → Variables**,
-not under Secrets. Pass them to the prebuilt `history.yml@v2` and `pr.yml@v2`
+not under Secrets. Pass them to the prebuilt `history.yml` and `pr.yml`
 workflows in your caller jobs:
 
 ```yaml
@@ -93,9 +93,11 @@ with:
 ```
 
 Grant each caller job `id-token: write` alongside the other permissions required
-by its benchmark flow. The [GitHub automation guide](../github-automation.md)
-shows the complete prebuilt-workflow callers. These workflows obtain their own
-short-lived tokens; a separate `azure/login` step is not required.
+by its benchmark flow. This identity configuration applies to both action v1 and v2;
+it does not select or upgrade the workflow revision. The
+[GitHub automation guide](../github-automation.md) shows the complete caller examples
+for v2. These workflows obtain their own short-lived tokens; a separate `azure/login`
+step is not required.
 
 Advanced CI jobs that invoke the CLI or root action directly set `AZURE_CLIENT_ID`
 and `AZURE_TENANT_ID` in their job environment instead.

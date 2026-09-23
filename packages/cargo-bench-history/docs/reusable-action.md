@@ -1779,7 +1779,8 @@ The monorepo's Azure-backend test jobs cover the backend's authentication branch
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo's history, PR and backfill workflows consume a selected revision of the shared action.
+Folo's deployed history, PR and backfill workflows consume a selected v1 revision of the
+shared action. This section describes that deployment, not the v2 input contract above.
 **`install-method: path`** and **`source-path: .`** build the required tools from the invocation
 checkout, so unreleased monorepo changes are exercised without waiting for tool publication.
 The selected action revision supplies orchestration independently of those tool sources.
@@ -1802,9 +1803,10 @@ Every production caller passes non-secret repository identity variables, exclusi
 features, `best-of: 3` and matching compiler stability flags directly in `with`, with
 `install-method: path` and `source-path: .`. The invocation-owned setup hook supplies genuine
 build prerequisites only. There are no caller configuration jobs, shell calculations or
-calculated outputs. Folo explicitly selects `ignore-errors: true` and `best-effort: true`
-at the shared hosted-job ceiling; neither is the generic default. The shared workflow owns
-the matrix and skip-existing execution, and leaves first-parent traversal to the core.
+calculated outputs. The deployed v1 backfill caller explicitly selects `ignore-errors: true`
+and `best-effort: true` at the shared hosted-job ceiling. That selected v1 revision accepts
+both opt-ins; the v2 workflow has no `best-effort` input. The shared workflow owns the matrix
+and skip-existing execution, and leaves first-parent traversal to the core.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
@@ -1899,8 +1901,9 @@ The tool, companion and workflow layer have separate responsibilities:
   ships a single binary (`DESIGN.md` §9). The action installs the plain package name.
 * **Monorepo helpers do not duplicate the shared implementation.** Collection, scope,
   artifact and reporting decisions belong to the shared Rust and workflow layers.
-  Folo retains its triggers, window parameters and best-effort choice in the thin caller, while the
-  source-built CLI owns measurement and storage. PowerShell handles bootstrap, repository
+  Folo retains its triggers, window parameters and deployment-specific inputs in the thin caller
+  described under [Dogfooding](#10-dogfooding--folos-own-workflows), while the source-built CLI
+  owns measurement and storage. PowerShell handles bootstrap, repository
   workflow wiring and the independently executable Azure deployment bundle; its driver is
   shared by `setup-azure` and export, not reimplemented in Rust. PR-close cancellation belongs
   to the PR workflow itself.
