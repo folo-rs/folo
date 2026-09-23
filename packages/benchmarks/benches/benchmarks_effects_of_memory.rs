@@ -1,6 +1,11 @@
 //! We compare typical algorithms under different execution conditions, with collaborating threads
 //! being organized in various ways supported by the `many_cpus_benchmarking` package. Of particular
 //! interest are the effects of data locality (i.e. memory regions and processor caching).
+//!
+//! These are manual, large-working-set experiments, not routine performance-history benchmarks.
+//! Correctness smoke runs use Criterion test mode (`cargo test --benches`, or an explicit `--test`),
+//! which executes one iteration per scenario without collecting measurements. They retain the same
+//! working sets and identifiers as real runs.
 
 #![allow(
     missing_docs,
@@ -22,40 +27,27 @@ use many_cpus_benchmarking::{Payload, WorkDistribution, execute_runs};
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
-#[cfg(not(test))]
-mod real_constants {
-    /// A "small" data set is likely to fit into processor caches, demonstrating the effect of memory
-    /// access on typically cached data).
-    pub(crate) const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024; // x u64 = 512 KB of useful payload, cache-friendly
+// Cargo also enables cfg(test) for optimized harness=false benchmark binaries. Workload sizes
+// must not depend on that flag. Criterion test mode keeps smoke runs bounded, and execute_runs
+// prepares at most that iteration count regardless of the batch-size upper bound.
 
-    /// The small maps fit into memory very easily. 512 KB * 1000 = 512 MB per worker.
-    pub(crate) const SMALL_MAP_BATCH_SIZE: u64 = 1000;
+/// A cache-friendly baseline for comparing memory locality and repeated reads.
+/// Keys and container overhead also contribute to each map's working set.
+const SMALL_MAP_ENTRY_COUNT: usize = 64 * 1024;
 
-    /// A large data set is unlikely to fit into processor caches, even into large L3 caches, and will
-    /// likely require trips to main memory for repeated access.
-    pub(crate) const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024; // x u64 -> 128 MB, not very cache-friendly.
+/// Bound prepared small maps while amortizing thread setup and cache clearing.
+/// Budget for keys, spare capacity and container metadata in addition to value storage.
+const SMALL_MAP_BATCH_SIZE: u64 = 1000;
 
-    /// The large maps are large, so we try conserve memory. 128 MB * 10 = 1.28 GB per worker.
-    pub(crate) const LARGE_MAP_BATCH_SIZE: u64 = 10;
+/// A larger working set to expose cache-capacity and memory-locality effects.
+/// Whether it exceeds the last-level cache depends on the machine and map overhead.
+const LARGE_MAP_ENTRY_COUNT: usize = 16 * 128 * 1024;
 
-    pub(crate) const HEADERS_COUNT: usize = 10_000;
-}
+/// Limit simultaneously prepared large maps to constrain memory use.
+const LARGE_MAP_BATCH_SIZE: u64 = 10;
 
-#[cfg(test)]
-mod test_constants {
-    // Small values to make tests fast but still run the real logic.
-    pub(crate) const SMALL_MAP_ENTRY_COUNT: usize = 10;
-    pub(crate) const SMALL_MAP_BATCH_SIZE: u64 = 10;
-    pub(crate) const LARGE_MAP_ENTRY_COUNT: usize = 10;
-    pub(crate) const LARGE_MAP_BATCH_SIZE: u64 = 10;
-
-    pub(crate) const HEADERS_COUNT: usize = 10;
-}
-
-#[cfg(not(test))]
-use real_constants::*;
-#[cfg(test)]
-use test_constants::*;
+/// Exercise allocation and memory locality across independently serialized header sets.
+const HEADERS_COUNT: usize = 10_000;
 
 fn entrypoint(c: &mut Criterion) {
     let prefix = "benchmarks_effects_of_memory";
@@ -152,8 +144,8 @@ fn entrypoint(c: &mut Criterion) {
         WorkDistribution::all_without_self(),
     );
 
-    // This is extremely slow due to giant payload but what can we do, the giant payload is the
-    // point of this scenario - to show what happens when data that does not fit in caches.
+    // The large working set is intentional: compare cache-capacity and memory-locality effects
+    // against the small map, rather than limiting the scenario to an elementary operation.
     execute_runs::<SccMapSharedReadWrite<LARGE_MAP_ENTRY_COUNT, 1>, LARGE_MAP_BATCH_SIZE>(
         c,
         prefix,
