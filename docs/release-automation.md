@@ -209,8 +209,9 @@ with no hardcoded or human-supplied crate list. The job:
    the established references without moving them.
 4. Lists each release's assets (`gh release view`) and computes which expected
    per-target archive/checksum pairs are incomplete.
-5. Emits exactly the incomplete `(crate, target)` pairs, including each tag's
-   resolved `source_sha`, as its `matrix` and `has_binaries` step outputs.
+5. Groups the incomplete `(crate, target)` pairs into one matrix entry per target,
+   with an explicit `binaries` array, runner, and timeout. Each binary carries its
+   tag's resolved `source_sha`. The outputs remain `matrix` and `has_binaries`.
 
 The binary-crate derivation is shared by GitHub release creation and asset planning. In
 `cargo metadata --format-version 1` the `publish` field is `null` (publishable to
@@ -223,64 +224,61 @@ Against the current workspace this yields the crates tabulated above. On a norma
 push that just published, every target pair is missing → the whole matrix builds.
 On an ordinary push that changed nothing, every archive and checksum exists → the
 matrix is empty and `build-binaries` is skipped. On a re-run after a partial
-failure, only the incomplete `(crate, target)` pairs are emitted. The upload
-action clobbers an existing archive when only its checksum is missing, so retries
-always restore the complete pair.
+failure, only incomplete pairs are emitted. Both assets must have GitHub state
+`uploaded`; a failed/in-progress upload is not complete. When either member is
+missing, publication replaces both, restoring the complete pair.
 
 ### `build-binaries` — build, package, checksum, upload
 
-Runs when the plan produced any missing pairs. The matrix is precisely those
-reconciled `(crate, target)` pairs (`matrix.include`), each carrying its
-`tag`/`version` so uploads target the actual release tag, never a reconstructed
-guess.
+Runs when the plan produced missing pairs. Each platform job processes its
+`binaries` sequentially, with separate Cargo invocations and independently named
+release assets. Platforms run in parallel. This reduces repeated runner setup
+and compatible dependency compilation, without combining package feature sets.
 
 **Standard environment.** These jobs use the shared
 [`./.github/actions/setup-environment`](../.github/actions/setup-environment)
 composite — the same one every other CI job uses — rather than a bespoke
-toolchain setup. Its Rust cache (`shared-key: prerequisites`) is warm across the
-repo, so the "extra" tooling it installs is mostly cached, and using the standard
-environment keeps release builds identical to the validated CI build rather than
-introducing a second, subtly-different build environment.
+toolchain setup. Setup runs once from the workflow event checkout, which also
+builds the private `release-binaries` controller. The shared cache policy is
+unchanged. All source builds use its absolute Cargo target directory; fingerprints
+decide which artifacts are compatible. Explicit-target release artifacts need not
+match those from host-mode validation, so intra-job reuse is the main benefit.
 
-**Build + package + checksum + upload — `taiki-e/upload-rust-binary-action`.** It
-builds the named binary for the target, produces the archive, writes a `.sha256`
-sidecar, and uploads both to the release for the given tag. Archives are `.zip`
-on **every** platform (`tar: none`, `zip: all`) — `.zip` is universally
-extractable, and a single format keeps the `[package.metadata.binstall]` blocks
-free of per-OS overrides.
+**Pinned source.** The controller creates a separate worktree for each distinct
+tag commit. Tags may refer to different snapshots, including snapshots predating
+the controller. Neither later main commits nor the original version anchor replace
+the tag target. Each worktree supplies its pinned toolchain, Cargo configuration,
+package/version/bin and committed lockfile. Cargo's working directory is that
+worktree, not merely a `--manifest-path` override:
 
-```yaml
-# Illustrative.
-build-binaries:
-  needs: [publish, plan-binaries]
-  if: needs.plan-binaries.outputs.has_binaries == 'true'
-  strategy:
-    fail-fast: false   # one target's failure must not abandon the others' archives
-    # The matrix is computed by plan-binaries: one entry per incomplete (crate, target)
-    # pair, carrying {name, bin, tag, version, source_sha, triple, os}.
-    matrix:
-      include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
-  runs-on: ${{ matrix.os }}
-  permissions:
-    contents: write   # upload assets to the release
-  steps:
-    - uses: actions/checkout@v7
-      with:
-        ref: ${{ matrix.source_sha }}   # immutable source, independent of the upload label
-    - uses: ./.github/actions/setup-environment
-    - uses: taiki-e/upload-rust-binary-action@v1
-      with:
-        bin: ${{ matrix.bin }}
-        package: ${{ matrix.name }}
-        target: ${{ matrix.triple }}
-        archive: ${{ matrix.name }}-v${{ matrix.version }}-$target
-        tar: none
-        zip: all
-        checksum: sha256
-        ref: refs/tags/${{ matrix.tag }}
-        locked: true
-        token: ${{ secrets.GITHUB_TOKEN }}
+```text
+cargo build --release --locked --target <triple> --package <name> --bin <bin>
 ```
+
+The helper stages only the executable reported by a successful matching Cargo
+artifact message, including valid cache hits. Native `zip` (Unix) or `7za` (Windows),
+installed and verified by `just install-tools`,
+creates a ZIP with one executable at its root. Unix executable permissions,
+archive naming and SHA-256 sidecar naming remain compatible with binstall.
+`sha2` supplies hashing and `gh release upload --clobber` supplies uploads. Tokens
+are passed only to GitHub operations, not Cargo, build scripts or archive tools.
+
+**Recovery.** Each batch rechecks its frozen items before preparing sources, so
+rerunning failed jobs skips pairs completed by the earlier attempt. Query failures
+are errors, not empty inventories. An item failure does not suppress independent
+items; any failed item or cleanup fails the job, with per-item diagnostics and
+a job summary. GitHub operations and source-toolchain installation have bounded
+retries; deterministic compiler failures do not.
+
+The planner budgets 90 minutes for setup plus 60 minutes per item, capped at the
+hosted 360-minute limit. Native item deadlines terminate owned process groups/job
+objects. An exhausted job can be rerun to drain remaining incomplete pairs.
+
+**Nonpublishing verification.** `release-binaries run --no-upload` builds and
+stages every supplied item without release queries or mutations. `just
+release-binary-smoke` uses disposable source history to exercise this path,
+archive contents and checksums on Linux, macOS and Windows in Standard validation.
+See the [controller implementation](../packages/release-binaries/docs/implementation.md).
 
 #### Target matrix
 

@@ -465,10 +465,33 @@ the original diagnostic rather than replacing it.
 
 Missing binary releases use `gh release create --verify-tag` against the established
 reference. Asset planning resolves each tag to a commit and carries `source_sha` in
-the build matrix. Checkout consumes that immutable SHA; upload consumes the versioned
+each build batch's binary records. Source worktrees consume that immutable SHA; upload consumes the versioned
 tag name. Existing references are not rewritten to match a newer preferred snapshot.
 See [Release-equivalent snapshots](design.md#release-equivalent-snapshots) for the
 identity contract and credential rationale.
+
+### Release binary batches
+
+`ReleasePublication.psm1` supplies discovered package/bin identities, target restrictions,
+the canonical runner table and resolved tag commits to the private `release-binaries`
+planner. The Rust controller owns asset completeness, grouping and compact JSON output.
+A matrix entry contains `triple`, `os`, `timeout_minutes` and a `binaries` array.
+Planning and in-job refresh share the predicate requiring both assets to be uploaded.
+
+The build job checks out the workflow event SHA with full history and without persistent
+credentials, runs shared setup once and builds the controller there. Exact source worktrees
+use their own toolchain and configuration but a shared absolute controller target directory.
+Cargo builds one package/bin at a time with the tagged lockfile. Native ZIP tools, `sha2`
+and `gh` provide archive, checksum and upload mechanics; `command-group` owns process-tree
+supervision instead of platform-specific release code.
+The [package implementation guide](../../packages/release-binaries/docs/implementation.md)
+owns the internal execution boundaries.
+
+`clippy-dev-docs` also runs `just release-binary-smoke` on Linux, macOS and Windows before
+minimum-dependency freezing. The explicit `release_binary_smoke` selection combines path
+inputs with Cargo impact on the helper. Script-only smoke selection starts the job without
+expanding empty Cargo scope into a workspace-wide check. The required-checks fan-in
+reconstructs this selection and rejects a skipped or absent selected platform job.
 
 ## Merge-blocking result
 

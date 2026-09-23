@@ -197,6 +197,17 @@ or invocation code and runs it inside the existing script-validation job. Main a
 validation retain full scope. See
 [workflow implementation](../.github/workflows/implementation.md#bicep-validation).
 
+## Release archive tools
+
+`just install-tools` installs and verifies the ZIP tools used by `release-binaries`
+and `just release-binary-smoke`; runner images are not assumed to provide them.
+Windows receives the checksum-verified standalone `7za` executable from the pinned
+official 7-Zip extra archive in the Cargo bin directory. Windows ARM64 uses the x64
+executable under emulation. The installer uses Windows' bundled `tar` to extract it.
+Linux uses the distribution's `zip` and `unzip` packages through APT; macOS installs
+missing tools through Homebrew. Package-manager failures are setup failures.
+Already available Unix tools are verified rather than reinstalled.
+
 ## Multiplatform codebase
 
 This is a multiplatform codebase. In some packages you will find folders named

@@ -143,9 +143,9 @@ Describe 'Get-RequiredCheckFailure' {
 
 Describe 'Planned tooling results' {
     BeforeEach {
-        $script:plan = @{ workflows = $false; script_analysis = $false; bicep = $false; script_domains = @() }
+        $script:plan = @{ workflows = $false; script_analysis = $false; bicep = $false; release_binary_smoke = $false; script_domains = @() }
         $script:needs = @{
-            prepare = @{ result = 'success'; outputs = @{ packages_json = '[]'; script_domains = '[]' } }
+            prepare = @{ result = 'success'; outputs = @{ packages_json = '[]'; script_domains = '[]'; release_binary_smoke = 'false' } }
             'test-scripts' = @{ result = 'skipped' }
             'validate-workflows' = @{ result = 'skipped' }
         }
@@ -189,6 +189,27 @@ Describe 'Planned tooling results' {
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
+    It 'requires the platform job when the release smoke is selected' {
+        $plan.release_binary_smoke = $true
+        { Assert-PlannedResult } | Should -Throw
+        $needs.prepare.outputs.release_binary_smoke = 'true'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['clippy-dev-docs'] = @{ result = 'skipped' }
+        { Assert-PlannedResult } | Should -Throw
+        $needs['clippy-dev-docs'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'rejects a lost native-helper smoke selection' {
+        $needs.prepare.outputs.packages_json = '["release-binaries"]'
+        $needs.prepare.outputs.script_domains = '["release"]'
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Throw
+        $needs.prepare.outputs.release_binary_smoke = 'true'
+        $needs['clippy-dev-docs'] = @{ result = 'success' }
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
     It 'requires the combined script job for analysis=<Analysis> and tests=<Tests>' -ForEach @(
         @{ Analysis = $false; Tests = $false },
         @{ Analysis = $true; Tests = $false },
@@ -226,7 +247,7 @@ Describe 'Planned tooling results' {
     }
 
     It 'rejects absent preparation output <_>' -ForEach @(
-        'plan', 'packages_json', 'script_domains'
+        'plan', 'packages_json', 'script_domains', 'release_binary_smoke'
     ) {
         $needs.prepare.outputs.plan = ConvertTo-Json -InputObject $plan -Compress
         $needs.prepare.outputs.Remove($_)

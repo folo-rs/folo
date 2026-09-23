@@ -798,6 +798,19 @@ Binary build jobs receive the tag's resolved commit ID separately from the relea
 so source checkout remains pinned while assets are uploaded to the correct versioned release.
 Partial successes survive a retry; reconciliation creates only what remains missing.
 
+### Platform-grouped binary builds
+
+A platform has one batch job containing its incomplete binary releases. It shares
+environment preparation and compatible Cargo artifacts while preserving separate
+package builds and separate release assets. Each binary retains its own version,
+tag and immutable source commit; batching never combines package feature selection
+or changes which source a release represents.
+
+Recovery refreshes each frozen item's archive/checksum completeness before doing
+build work. Independent failures do not suppress remaining work, and any failed
+required item fails the job. A nonpublishing mode retains source and archive
+verification without release queries or writes.
+
 ## Cache warmup
 
 A scheduled workflow recompiles the shared dependency cache on every runner image daily so

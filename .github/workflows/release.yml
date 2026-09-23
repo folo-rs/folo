@@ -10,8 +10,8 @@ name: Release
 # depend on token-authored tags triggering another workflow.
 # Ref: .github/workflows/design.md#publication-and-recovery.
 #
-# The non-trivial logic lives in PowerShell `just` recipes (justfiles/just_release.just)
-# so it can be run and tested locally; the steps here are thin `just` calls.
+# Native helpers own structured release decisions; PowerShell/Just provide process boundaries.
+# The steps here remain thin local entry points.
 on:
   push:
     branches: [main]
@@ -143,6 +143,7 @@ jobs:
           just gh-plan-release-binaries
 
   build-binaries:
+    name: build-binaries (${{ matrix.triple }})
     needs: [publish, plan-binaries]
     if: needs.plan-binaries.outputs.has_binaries == 'true'
     strategy:
@@ -150,45 +151,42 @@ jobs:
       # in plan-binaries means the next run rebuilds only whatever is still missing.
       fail-fast: false
       matrix:
-        # One entry per incomplete (crate, target) pair:
-        # {name, bin, version, tag, source_sha, triple, os}.
+        # One entry per target: {triple, os, timeout_minutes, binaries: [{name, bin,
+        # version, tag, source_sha}]}. Items build separately but reuse one Cargo cache.
+        # Ref: .github/workflows/implementation.md#release-binary-batches.
         include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    # Release build/package/upload budget plus up to 90 min for a cold-cache setup-environment.
-    timeout-minutes: 150
+    # The planner budgets cold setup plus each item, capped at the hosted runner ceiling.
+    timeout-minutes: ${{ matrix.timeout_minutes }}
 
     permissions:
       # Upload the archive + checksum as assets on the crate's release.
       contents: write
 
     steps:
-      - name: Checkout immutable released source
+      - name: Checkout release controller
         uses: actions/checkout@v7
-        # Source identity is frozen separately from the versioned release used for upload.
-        # Ref: .github/workflows/design.md#publication-and-recovery.
+        # Automation comes from the triggering commit; the helper creates distinct tag-pinned
+        # source worktrees, including for historical tags that predate this controller.
         with:
-          ref: ${{ matrix.source_sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Build, package, checksum and upload
-        uses: taiki-e/upload-rust-binary-action@v1
-        with:
-          bin: ${{ matrix.bin }}
-          package: ${{ matrix.name }}
-          target: ${{ matrix.triple }}
-          # `$target` is expanded by the action. Archives are `.zip` on every platform
-          # (tar: none, zip: all) so each crate's [package.metadata.binstall] block needs
-          # no per-OS override; the binary sits at the archive root.
-          archive: ${{ matrix.name }}-v${{ matrix.version }}-$target
-          tar: none
-          zip: all
-          checksum: sha256
-          locked: true
-          # Upload to the crate's release (its own tag), not github.ref (the branch).
-          ref: refs/tags/${{ matrix.tag }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish platform batch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_BINARY_BATCH: ${{ toJSON(matrix) }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          just gh-build-release-binaries
 
   alert:
     # File a GitHub issue unique to this run whenever any job above fails, so every failed

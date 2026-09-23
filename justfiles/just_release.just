@@ -286,7 +286,7 @@ gh-reconcile-releases COMMIT:
 
 # Reconciles the desired prebuilt-binary archive and checksum pairs against each
 # published binary crate's GitHub release, and emits the matrix of incomplete
-# (crate, target) pairs still to build as the `matrix` / `has_binaries` step outputs
+# platform batches still to build as the `matrix` / `has_binaries` step outputs
 # (also printed). Missing GitHub releases are an error because the workflow creates
 # them in the preceding step. This is what makes retries self-healing: a re-run
 # rebuilds only whatever is still missing, with no hardcoded crate list. See
@@ -300,3 +300,22 @@ gh-plan-release-binaries:
     Import-Module ./scripts/release/ReleasePublication.psm1 -Force
 
     Invoke-ReleaseBinaryPlan -Repository $env:GH_REPO -Verbose
+
+# Runs the frozen matrix batch supplied through RELEASE_BINARY_BATCH, rebuilding only incomplete
+# asset pairs. The controller stays at the workflow SHA while Rust owns pinned source worktrees.
+[group('automation')]
+[script]
+gh-build-release-binaries:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/release/ReleaseBinaries.psm1 -Force
+
+    $output = Join-Path $env:RUNNER_TEMP "release-binaries-$([guid]::NewGuid().ToString('N'))"
+    Invoke-ReleaseBinariesHelper -Operation run -InputJson $env:RELEASE_BINARY_BATCH -Repository $env:GH_REPO -OutputPath $output
+
+# Native ZIP/checksum smoke on the same no-upload path used for local release verification.
+# The fixture creates its own pinned Git history and never queries or modifies GitHub releases.
+[group('release')]
+release-binary-smoke:
+    cargo test --locked --package release-binaries --test smoke -- --nocapture
