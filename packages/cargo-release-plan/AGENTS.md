@@ -19,9 +19,11 @@ every `git` invocation rather than relying on the user or host config:
 * `commit.gpgsign=false`
 * `gc.auto=0`
 
-Use the helper in `tests/integration/fixture.rs`. Do not add real-time delays.
+Use the helper in `tests/integration/fixture.rs` for executable-connected tests
+or `../crp_impl/tests/boundaries/git_fixture.rs` for implementation boundaries.
+Do not add real-time delays.
 
-The integration suite is one test binary, `tests/integration/`, split into a
+The executable-connected integration suite is one test binary, `tests/integration/`, split into a
 topic module per area of behavior over the shared `harness`. Add a new case to
 the module that matches its subject rather than growing a single file.
 
@@ -34,13 +36,15 @@ Keep real Git/Cargo tests for boundary behavior; see
 Library unit tests must not acquire real Git, Cargo or filesystem state, including
 through fixture helpers or production acquisition methods. Small temporary Git
 repositories and filesystem probes belong in `tests/integration/`, not `src/`.
+Implementation-boundary assertions belong in `crp_impl/tests/boundaries/`; its
+ordinary internal operations may be public within the implementation partition.
 Inject acquired observations into decision tests; do not recreate subprocesses
-behind a fake protocol or expose ordinary internals solely to move assertions.
+behind a fake protocol or widen the supported `cargo-release-plan` facade.
 
 ## Modules own subjects, not categories
 
-Put a new type, constant, or helper in the module that owns its subject, and
-re-export it from `lib.rs` if it is public. Do not add a shared module for
+Put implementation in `crp_impl`, in the module that owns its subject. Re-export
+only supported application API from the shell's `lib.rs`. Do not add a shared module for
 "types", "constants", or "utilities"; there is deliberately none to add to.
 
 A subject-owned module keeps an item next to the code that gives it meaning, so

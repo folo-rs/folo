@@ -5,8 +5,12 @@ describes the internal boundaries that keep that behavior consistent.
 
 ## Architecture
 
-The binary is intentionally thin. `main` parses Cargo's injected subcommand
-argument, then delegates to the library `run()` entry used by integration tests.
+The binary and library facade are intentionally thin. `main` parses Cargo's injected
+subcommand argument, then delegates to the library `run()` entry used by integration
+tests. The facade explicitly re-exports its supported API from
+[`crp_impl`](../../crp_impl/docs/implementation.md), which owns the implementation,
+unit tests, implementation-boundary integrations and benchmarks. Both packages
+share an exact dependency and release version.
 The selected command drives command-specific paths through shared components:
 
 ```text
@@ -89,6 +93,17 @@ applies to every fixture and acquisition call. Avoiding Cargo metadata or keepin
 a real Git history small does not make an acquisition test a unit test. Tests of
 real Git, Cargo and filesystem adapters belong in Cargo integration targets;
 decision tests supply acquired values without calling those adapters.
+
+`crp_impl/tests/boundaries/` preserves direct assertions on acquisition, files,
+repository state and private error conditions. Its Git fixture cannot be imported
+by library unit tests. The unit-only Git helpers construct inert handles and
+tree entries without observing the host.
+
+The executable-connected `cargo-release-plan/tests/integration/` suite stays in
+the binary's package: Cargo supplies `CARGO_BIN_EXE_cargo-release-plan` only to that
+package's integration targets. This is the executable-ownership exception to the
+usual implementation-crate test layout, not a second implementation or nested
+build harness. The shell also checks its explicit re-export surface.
 
 Captured-input decisions use acquired metadata and a read-only per-directory case
 probe. Unit tests supply regular-file, missing-file and error observations, mixed

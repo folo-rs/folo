@@ -1,0 +1,78 @@
+[package]
+name = "crp_impl"
+description = "Implementation crate for cargo-release-plan - do not reference directly"
+publish = true
+version = "0.3.17"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Cargo retains this explicit benchmark target in the published manifest.
+include = ["src/**", "benches/cargo_release_plan_algorithms.rs"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.cargo-udeps.ignore]
+development = ["criterion"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "clap_builder::derive::Args",
+    "clap_builder::derive::CommandFactory",
+    "clap_builder::derive::FromArgMatches",
+    "clap_builder::derive::Parser",
+    "ignore::gitignore::Gitignore",
+    "ignore::overrides::Override",
+    "ohno::app::error::AppError",
+    "ohno::enrichable::Enrichable",
+    "ohno::error_ext::ErrorExt",
+    "semver::Version",
+    "semver::VersionReq",
+    "serde_core::de::Deserialize",
+    "serde_core::ser::Serialize",
+    "serde_json::value::Value",
+    "tempfile::file::NamedTempFile",
+    "toml_edit::document::DocumentMut",
+    "toml_edit::item::Item",
+    "toml_edit::table::TableLike",
+]
+
+[package.metadata.release-plan]
+private-api = true
+
+[lib]
+# User-facing documentation is rendered through the cargo-release-plan facade.
+doc = false
+
+[features]
+# Internal benchmark drivers; never forwarded by the public shell.
+private-test-util = []
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+ignore = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+toml_edit = { workspace = true, features = ["parse", "display"] }
+
+[dev-dependencies]
+# Tests and doctests exercise the supported facade as a consumer would.
+cargo-release-plan = { path = "../cargo-release-plan" }
+criterion = { workspace = true }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+
+[[bench]]
+name = "cargo_release_plan_algorithms"
+harness = false
+required-features = ["private-test-util"]
+
+[lints]
+workspace = true
