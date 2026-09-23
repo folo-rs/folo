@@ -21,7 +21,9 @@ library-root invocations. Use a path-only dev-dependency on `testing`; depending
 that helper alone does not install an allocator. The macro leaves Miri's default
 allocator unchanged. A library's test declaration
 does not cover its separate integration executables, which each need their own
-root invocation. Platform-disabled targets contain no code to configure.
+root invocation. Targets excluded entirely by conditional compilation contain no
+code to configure. Unsupported-platform executable stubs still follow the native
+allocator policy.
 A benchmark explicitly listed in a package's `include` set declares mimalloc
 directly, because the unpublished `testing` dependency does not survive packaging.
 
