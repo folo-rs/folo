@@ -433,13 +433,12 @@ boundary. The two patterns coexist:
 
 ## Canonical examples
 
-The full `foo`/`foo_impl` split has been applied to three crate pairs in this
-workspace. A fourth example shows the simplified, shell-less form private-use
-packages take.
+These examples cover library facades, an application facade, and the simplified,
+shell-less form private-use packages take.
 
 ### `nm` / `nm_impl`
 
-The original worked example. Concrete files to study:
+Concrete files to study:
 
 - `packages/nm/Cargo.toml` — thin shell manifest with
   `nm_impl = { workspace = true }`.
@@ -458,7 +457,7 @@ The original worked example. Concrete files to study:
 
 ### `nm_otel` / `nm_otel_impl`
 
-The second worked example. Concrete files to study:
+Concrete files to study:
 
 - `packages/nm_otel/Cargo.toml` — thin shell manifest with
   `nm_otel_impl = { workspace = true }`.
@@ -481,8 +480,8 @@ The second worked example. Concrete files to study:
 
 ### `many_cpus` / `many_cpus_impl`
 
-The third worked example, and the first split that combines a forwarded
-public `test-util` feature with internal benches that reach into the PAL.
+This pair combines a forwarded public `test-util` feature with internal benches
+that reach into the PAL.
 Concrete files to study:
 
 - `packages/many_cpus/Cargo.toml` — thin shell manifest with
@@ -520,6 +519,17 @@ Concrete files to study:
   notice.
 - `Cargo.toml` (workspace) — the exact `many_cpus_impl` entry in
   `[workspace.dependencies]` derives the pair's version group.
+
+### `cargo-release-plan` / `crp_impl`
+
+The application shell owns the CLI executable, the supported library facade, and
+the executable-connected integration suite. `crp_impl` owns the implementation,
+direct boundary integration tests, and algorithm benchmarks. The exact dependency
+keeps both packages in one version group.
+
+See [the application implementation guide](../packages/cargo-release-plan/docs/implementation.md)
+for the ownership boundaries and the split between pure unit tests and real-system
+integration tests.
 
 ### `cbh_*` (private-use impl crates, no shell)
 
