@@ -74,7 +74,7 @@ jobs:
       actions: read
       id-token: write
       issues: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -111,7 +111,7 @@ jobs:
       actions: read
       id-token: write
       pull-requests: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/pr.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -155,7 +155,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v1
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@v2
     with:
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -199,11 +199,9 @@ Each attempt completes all repetitions and engine storage, and a bounded pass ex
 with a deferred-work count after cleanup. This bounds work, not elapsed time.
 
 Build or benchmark failures stop by default. Set `ignore-errors: true` to continue
-past individual failing commits; infrastructure errors still fail. Independently,
-`best-effort: true` tolerates ordinary platform-job failures but does not turn a
-hosted-runner timeout into a successful bounded pass. Both default to false. Best effort
-can also hide credential or storage failures, so use it only when that is an acceptable
-policy for your caller.
+past individual failing commits; infrastructure errors still fail. The workflow preserves
+unsuccessful job conclusions and has no whole-job failure-suppression option.
+A hosted-runner timeout is not a successful bounded pass.
 
 Backfill accepts the same measurement and installation settings as the other workflows:
 `platforms`, `working-directory`, `config`, `exclude`, `bench`, `best-of`, `all-features`,

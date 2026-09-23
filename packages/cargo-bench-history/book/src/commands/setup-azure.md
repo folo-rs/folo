@@ -83,7 +83,7 @@ GitHub settings. Make the following configuration changes:
 | Blob endpoint | Use it for connectivity diagnostics or Azure tools. There is no endpoint field to add to the standard benchmark configuration. |
 
 Create the variables under **Settings → Secrets and variables → Actions → Variables**,
-not under Secrets. Pass them to the prebuilt `history.yml@v1` and `pr.yml@v1`
+not under Secrets. Pass them to the prebuilt `history.yml@v2` and `pr.yml@v2`
 workflows in your caller jobs:
 
 ```yaml

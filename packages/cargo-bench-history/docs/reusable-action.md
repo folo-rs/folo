@@ -119,10 +119,10 @@ root**, and a Marketplace listing is tied to a whole repository's release/tag
 stream. The monorepo already spends its tag namespace on automated `release-plz` package
 releases and per-binary-package GitHub Releases (`cargo-bench-history-vX.Y.Z`, etc.; see
 [`../../../docs/release-automation.md`](../../../docs/release-automation.md)), so it cannot
-also carry the clean, independently-moving `v1` / `vX.Y.Z` action tags the Marketplace and
+also carry the clean, independently-moving `v2` / `vX.Y.Z` action tags the Marketplace and
 the floating-major convention expect. A dedicated repo gives the action its own semver
 stream, its own README/Marketplace page, and a `uses:
-folo-rs/cargo-bench-history-action@v1` reference that does not drag in the monorepo.
+folo-rs/cargo-bench-history-action@v2` reference that does not drag in the monorepo.
 
 *Rejected — an in-monorepo sub-path action* (`folo-rs/folo/.github/actions/
 bench-history@<ref>`). Sub-path actions work for `uses:` but **cannot be published
@@ -812,7 +812,7 @@ The action repo publishes these consumption layers:
         actions: read       # cross-attempt artifact download (§4.6)
         id-token: write     # Entra OIDC, if using cloud storage
         issues: write       # rolling issue + failure alert
-      uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v1
+      uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@v2
       with:
         platforms: ubuntu-latest, windows-latest
         azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -850,11 +850,10 @@ Optional `max-commits` is a string containing a positive integer within the exec
 platform's `usize` range; empty or absent means unlimited replay. It reaches the core
 as `--max-commits` without changing range preparation. The bound applies to replay attempts
 after skipping recorded commits in the current partition, not to range endpoints.
-`ignore-errors` and `best-effort` are independent Boolean inputs, both defaulting to false:
-the former continues past per-commit build/benchmark failures, while the latter opts into
-matrix-job `continue-on-error` for ordinary failures. Neither makes a hosted-runner timeout
-a successful bounded pass. Infrastructure errors remain errors in the core tool even when
-`ignore-errors` is enabled.
+`ignore-errors` is a Boolean input defaulting to false. It continues past per-commit
+build/benchmark failures without suppressing infrastructure errors. The workflow preserves
+unsuccessful job conclusions; there is no whole-job failure-suppression input. A hosted-runner
+timeout is not a successful bounded pass.
 
 Preparation uses full Git history to resolve selected nonblank, single-line refs safely to full
 commit SHAs. It does not filter scope against current-head Cargo metadata or benchmark inventory:
@@ -903,13 +902,13 @@ control, which is the trade the two-layer split exists to offer.
 These platform constraints shape the split, and none is worked around:
 
 * **The Marketplace lists actions, not workflows.** Reusable workflows are referenced by
-  repository path and ref (`owner/repo/.github/workflows/x.yml@v1`) and cannot be published
+  repository path and ref (`owner/repo/.github/workflows/x.yml@v2`) and cannot be published
   to the Marketplace. The composite action therefore stays the Marketplace-listed artifact
   and the discovery surface (§8); the reusable workflows ride the same repo and the same
-  `v1` floating tag, so both layers version in lockstep with one release. Inside the
+  `v2` floating tag, so both layers version in lockstep with one release. Inside the
   reusable workflows the root action is referenced through the **self-repository syntax**
   (`$/`), which resolves at the exact commit the workflow is running from — a hardcoded
-  `@v1` there would let a workflow pinned to `v1.2.3` silently invoke a newer action.
+  `@v2` there would let a workflow pinned to `v2.0.0` silently invoke a newer action.
 * **`workflow_call` inputs are scalars.** Only `string`, `number`, and `boolean` exist, so
   list-shaped inputs (the platform matrix, package scopes) are passed as
   **comma-separated strings** and split inside the reusable workflow. JSON-in-a-string is the
@@ -1039,7 +1038,7 @@ that gap.
   caller supplies either `from`/`to` or rolling duration parameters; shared preparation calculates
   the range and freezes it to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
   should continue past a commit that cannot build or benchmark. It does not suppress
-  infrastructure failures; `best-effort` separately opts into tolerating matrix-job failures.
+  infrastructure failures or unsuccessful job conclusions.
 * **It has no analysis phase and no sink.** Densification only *writes*; the next
   push-triggered `analyze-history` picks up whatever landed. This keeps the flow free of
   report-sink concerns entirely — no issue, no comment, no staleness, receipts or reports.
@@ -1475,8 +1474,7 @@ The names and required evidence agree between the composite and companion layers
 or `overwrite`; `error` is invalid here, §4.5). The reusable workflow accepts either explicit
 `from`/`to` or rolling `lookback`/`minimum-age` with an optional `to` override. Shared preparation
 calculates and freezes the range; callers supply parameters only. The workflow fixes skip-existing
-workspace collection with configurable exclusions and additionally exposes the whole-job
-`best-effort` opt-in (§4.7).
+workspace collection with configurable exclusions and preserves unsuccessful job conclusions (§4.7).
 Both layers accept `max-commits` as an optional string with no default cap. The companion
 validates its positive platform-sized integer value only for backfill and forwards it
 unchanged to the core. Range preparation receives no attempt limit.
