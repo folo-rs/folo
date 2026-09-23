@@ -20,6 +20,7 @@ default = []
 [dependencies]
 
 [dev-dependencies]
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

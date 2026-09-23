@@ -8,7 +8,7 @@
 //!
 //! Callgrind counts the user-space allocator's instructions but does not model the latency
 //! of an allocation, so these numbers are **not** a measure of what allocation costs. They
-//! measure the instruction count of the tracking wrapper that sits in front of the system
+//! measure the instruction count of the tracking wrapper that sits in front of the workspace
 //! allocator, which is precisely the quantity this package promises to keep small.
 //!
 //! Only additive event counts may be compared by subtraction: executed instructions,
@@ -37,9 +37,10 @@
 )]
 
 use alloc_tracker::Allocator;
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
@@ -54,7 +55,7 @@ pub use linux::*;
 
 // `--collect-bus=yes` makes Callgrind emit the global bus event (`Ge`), which counts every
 // lock-prefixed instruction in the collected call graph. A non-zero `Ge` is not by itself a
-// counter regression: the allocator cases include whatever the system allocator does, and
+// counter regression: the allocator cases include whatever the underlying allocator does, and
 // the span cases deliberately perform `Arc` ownership operations and lock the operation's
 // metrics, with process spans additionally locking the counter registry. In the allocator
 // pairs, only the excess over the matching untracked case is a candidate for wrapper work,
@@ -79,13 +80,13 @@ mod linux {
     use alloc_tracker::{Operation, Session};
     use gungraun::prelude::*;
 
-    use crate::ALLOCATOR;
+    use crate::{ALLOCATOR, DefaultAllocator};
 
     /// Representative of an ordinary short-lived object, comfortably inside the size
-    /// classes that system allocators serve from a thread-local fast path.
+    /// classes that allocators serve from a thread-local fast path.
     const SMALL_SIZE: usize = 64;
 
-    /// Past the size classes that system allocators serve from their fast path.
+    /// Past the size classes that allocators serve from their fast path.
     const LARGE_SIZE: usize = 64 * 1024;
 
     /// Growth target for the reallocation cases.
@@ -123,7 +124,7 @@ mod linux {
     /// the difference between a pair be read as tracking work.
     fn warmed(size: usize) -> Layout {
         let layout = layout(size);
-        alloc_dealloc(&std::alloc::System, layout);
+        alloc_dealloc(&DefaultAllocator, layout);
         layout
     }
 
@@ -194,7 +195,7 @@ mod linux {
     #[library_benchmark]
     #[bench::run(warmed(SMALL_SIZE))]
     fn allocator_untracked_alloc_dealloc_small(layout: Layout) {
-        alloc_dealloc(&std::alloc::System, black_box(layout));
+        alloc_dealloc(&DefaultAllocator, black_box(layout));
     }
 
     #[library_benchmark]
@@ -206,7 +207,7 @@ mod linux {
     #[library_benchmark]
     #[bench::run(warmed(LARGE_SIZE))]
     fn allocator_untracked_alloc_dealloc_large(layout: Layout) {
-        alloc_dealloc(&std::alloc::System, black_box(layout));
+        alloc_dealloc(&DefaultAllocator, black_box(layout));
     }
 
     #[library_benchmark]
@@ -216,9 +217,9 @@ mod linux {
     }
 
     #[library_benchmark]
-    #[bench::run(allocate(&std::alloc::System, layout(SMALL_SIZE)))]
+    #[bench::run(allocate(&DefaultAllocator, layout(SMALL_SIZE)))]
     fn allocator_untracked_dealloc_small(block: (*mut u8, Layout)) {
-        dealloc(&std::alloc::System, black_box(block));
+        dealloc(&DefaultAllocator, black_box(block));
     }
 
     #[library_benchmark]
@@ -228,10 +229,10 @@ mod linux {
     }
 
     #[library_benchmark]
-    #[bench::run(growable(&std::alloc::System))]
+    #[bench::run(growable(&DefaultAllocator))]
     fn allocator_untracked_realloc_grow(prepared: ((*mut u8, Layout), Layout)) {
         let (block, grown_layout) = black_box(prepared);
-        realloc_grow(&std::alloc::System, block, grown_layout);
+        realloc_grow(&DefaultAllocator, block, grown_layout);
     }
 
     #[library_benchmark]

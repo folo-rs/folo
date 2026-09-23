@@ -353,3 +353,5 @@ serde = "garbage-version"
     let after = fs::read_to_string(&path).unwrap();
     assert_eq!(after, input, "input file must not be partially rewritten");
 }
+
+::testing::set_allocator!();

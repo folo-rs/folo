@@ -41,6 +41,7 @@ new_zealand = { path = "../new_zealand" }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 seq-macro = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }

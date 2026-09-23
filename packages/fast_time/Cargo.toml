@@ -30,6 +30,7 @@ criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }

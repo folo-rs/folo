@@ -214,3 +214,6 @@ pub use report::*;
 pub use session::*;
 pub use statistics::OperationStatistics;
 pub use thread_span::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

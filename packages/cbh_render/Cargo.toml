@@ -48,6 +48,7 @@ serde_json = { workspace = true }
 mutants = { workspace = true }
 nonempty = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

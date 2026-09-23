@@ -180,3 +180,5 @@ fn ambiguous_step() -> Vec<f64> {
 fn count_f64(count: usize) -> f64 {
     count as f64
 }
+
+::testing::set_allocator!();

@@ -35,3 +35,6 @@ pub(crate) use normal::*;
 pub(crate) use p_value::*;
 pub use selection::*;
 pub use stats::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

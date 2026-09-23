@@ -341,3 +341,6 @@ pub use many_cpus_impl::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, ProcessorSetBuilder,
     RelativeSpeed, ResourceQuota, SystemHardware,
 };
+
+#[cfg(test)]
+::testing::set_allocator!();

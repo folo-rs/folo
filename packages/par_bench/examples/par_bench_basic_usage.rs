@@ -94,3 +94,5 @@ fn measure_atomic_increments(pool: &mut ThreadPool) -> Duration {
 
     stats.mean_duration()
 }
+
+::testing::set_allocator!();

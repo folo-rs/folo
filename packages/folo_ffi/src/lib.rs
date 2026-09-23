@@ -6,3 +6,6 @@
 mod native_buffer;
 
 pub use native_buffer::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -28,9 +28,10 @@ use std::time::{Duration, Instant};
 use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Report, Session};
 use criterion::{Criterion, criterion_group, criterion_main};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Number of spans folded into each operation of the report fixtures.
 ///

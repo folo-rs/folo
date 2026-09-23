@@ -64,3 +64,5 @@ fn publish_forever_collects_metrics_on_timer_tick() {
         drop(provider);
     });
 }
+
+::testing::set_allocator!();

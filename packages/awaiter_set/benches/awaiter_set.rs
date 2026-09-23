@@ -201,3 +201,5 @@ fn notify_one_prior_generation(c: &mut Criterion) {
 
     group.finish();
 }
+
+::testing::set_allocator!();

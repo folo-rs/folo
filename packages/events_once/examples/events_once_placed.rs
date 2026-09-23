@@ -52,3 +52,5 @@ async fn main() -> Result<(), JoinError> {
 
     Ok(())
 }
+
+::testing::set_allocator!();

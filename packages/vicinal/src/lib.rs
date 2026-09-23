@@ -76,3 +76,6 @@ pub(crate) use processor_state::ProcessorState;
 pub use scheduler::*;
 pub(crate) use task::*;
 pub(crate) use worker::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

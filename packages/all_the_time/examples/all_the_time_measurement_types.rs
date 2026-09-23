@@ -93,3 +93,5 @@ fn measure_process_time(session: &Session) {
         multithreaded_work();
     }
 }
+
+::testing::set_allocator!();

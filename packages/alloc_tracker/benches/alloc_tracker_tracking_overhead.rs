@@ -3,7 +3,7 @@
 //! The `overhead` subgroup benchmarks empty spans — spans that do no work but still pay for
 //! span creation and destruction. The `allocator` subgroup benchmarks the [`GlobalAlloc`]
 //! paths themselves, running each operation through the tracking wrapper and through the
-//! bare system allocator so the difference between the pair is the tracking cost.
+//! bare workspace allocator so the difference between the pair is the tracking cost.
 //!
 //! # Scenario contract with the Callgrind benchmarks
 //!
@@ -34,17 +34,18 @@ use std::hint::black_box;
 
 use alloc_tracker::{Allocator, Session};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Representative of an ordinary short-lived object, comfortably inside the size
-/// classes that system allocators serve from a thread-local fast path. This is the
+/// classes that allocators serve from a thread-local fast path. This is the
 /// case where the tracking wrapper's fixed cost is largest relative to the work it
 /// wraps.
 const SMALL_SIZE: usize = 64;
 
-/// Past the size classes that system allocators serve from their fast path, so the
+/// Past the size classes that allocators serve from their fast path, so the
 /// wrapper's fixed cost is measured against a materially more expensive underlying
 /// operation.
 const LARGE_SIZE: usize = 64 * 1024;
@@ -109,14 +110,14 @@ fn allocator_overhead(c: &mut Criterion) {
     alloc_dealloc(&ALLOCATOR, small);
 
     group.bench_function("untracked_alloc_dealloc_small", |b| {
-        b.iter(|| alloc_dealloc(&std::alloc::System, black_box(small)));
+        b.iter(|| alloc_dealloc(&DefaultAllocator, black_box(small)));
     });
     group.bench_function("tracked_alloc_dealloc_small", |b| {
         b.iter(|| alloc_dealloc(&ALLOCATOR, black_box(small)));
     });
 
     group.bench_function("untracked_alloc_dealloc_large", |b| {
-        b.iter(|| alloc_dealloc(&std::alloc::System, black_box(large)));
+        b.iter(|| alloc_dealloc(&DefaultAllocator, black_box(large)));
     });
     group.bench_function("tracked_alloc_dealloc_large", |b| {
         b.iter(|| alloc_dealloc(&ALLOCATOR, black_box(large)));
@@ -124,8 +125,8 @@ fn allocator_overhead(c: &mut Criterion) {
 
     group.bench_function("untracked_dealloc_small", |b| {
         b.iter_batched(
-            || allocate(&std::alloc::System, small),
-            |block| dealloc(&std::alloc::System, block),
+            || allocate(&DefaultAllocator, small),
+            |block| dealloc(&DefaultAllocator, block),
             BatchSize::SmallInput,
         );
     });
@@ -139,8 +140,8 @@ fn allocator_overhead(c: &mut Criterion) {
 
     group.bench_function("untracked_realloc_grow", |b| {
         b.iter_batched(
-            || allocate(&std::alloc::System, small),
-            |block| realloc_grow(&std::alloc::System, block, grown),
+            || allocate(&DefaultAllocator, small),
+            |block| realloc_grow(&DefaultAllocator, block, grown),
             BatchSize::SmallInput,
         );
     });

@@ -24,3 +24,6 @@ pub(crate) use errors::*;
 pub use query::query_package;
 pub use run::run;
 pub use types::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

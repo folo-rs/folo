@@ -42,3 +42,6 @@ pub use publish_model::*;
 pub use pusher::*;
 pub(crate) use registries::*;
 pub use reports::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

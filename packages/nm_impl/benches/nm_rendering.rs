@@ -100,3 +100,5 @@ const HIGH_CARDINALITY_BUCKET_BOUNDS: &[Magnitude] = &[
 
 /// Produces a full-width bar for every bucket without approaching arithmetic limits.
 const OBSERVATIONS_PER_BUCKET: u64 = 100;
+
+::testing::set_allocator!();

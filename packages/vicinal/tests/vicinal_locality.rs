@@ -140,3 +140,5 @@ fn tasks_execute_on_spawning_processor_with_fake_hardware() {
         );
     });
 }
+
+::testing::set_allocator!();

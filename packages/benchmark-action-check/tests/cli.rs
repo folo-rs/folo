@@ -109,3 +109,5 @@ fn missing_required_argument_is_an_error() {
         assert!(!output.stderr.is_empty());
     });
 }
+
+::testing::set_allocator!();

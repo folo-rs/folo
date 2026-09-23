@@ -37,3 +37,5 @@ async fn main() {
     println!("Waiting for tasks to complete...");
     futures::future::join_all(handles).await;
 }
+
+::testing::set_allocator!();

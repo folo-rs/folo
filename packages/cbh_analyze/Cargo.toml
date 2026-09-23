@@ -70,6 +70,7 @@ cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 tick = { workspace = true, features = ["test-util"] }
 
 [lints]

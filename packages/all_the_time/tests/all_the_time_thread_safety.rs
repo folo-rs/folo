@@ -134,3 +134,5 @@ fn reports_can_be_merged_across_threads() {
     // Reports may be empty but the merge operation should work
     let _operation_count = merged.operations().count();
 }
+
+::testing::set_allocator!();

@@ -19,3 +19,5 @@ fn main() {
 
     println!("Received message: {message}");
 }
+
+::testing::set_allocator!();

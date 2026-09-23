@@ -25,3 +25,5 @@ mod machine_key;
 mod prune;
 mod reports;
 mod storage;
+
+::testing::set_allocator!();

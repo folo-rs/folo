@@ -45,6 +45,7 @@ toml = { workspace = true, features = ["parse", "serde"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

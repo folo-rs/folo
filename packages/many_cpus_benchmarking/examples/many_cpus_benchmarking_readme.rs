@@ -48,3 +48,5 @@ fn main() {
     println!("In real usage, this would be called by Criterion benchmark framework");
     println!("README example completed successfully!");
 }
+
+::testing::set_allocator!();

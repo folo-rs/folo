@@ -73,3 +73,5 @@ fn run_one_iteration_computes_deltas_across_collections() {
     );
     drop(provider);
 }
+
+::testing::set_allocator!();

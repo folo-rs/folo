@@ -59,3 +59,5 @@ fn unknown_flag_is_a_failure_early_exit() {
         "a parse error should be a failure exit"
     );
 }
+
+::testing::set_allocator!();

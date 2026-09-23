@@ -117,3 +117,5 @@ fn report_exposes_event_metrics_via_re_exports() {
 fn observe_report_fixture(event: &Event<Pull>) {
     event.observe(REPORT_MAGNITUDE);
 }
+
+::testing::set_allocator!();

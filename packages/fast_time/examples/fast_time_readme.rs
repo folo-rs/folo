@@ -32,3 +32,5 @@ fn main() {
     println!("Collected {} timestamps", timestamps.len());
     println!("Converted instant: {std_instant:?}");
 }
+
+::testing::set_allocator!();

@@ -93,3 +93,6 @@ mod instant;
 
 pub use clock::*;
 pub use instant::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

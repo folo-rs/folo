@@ -218,6 +218,7 @@ dependencies = [
  "mutants",
  "simple-mermaid",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -388,6 +389,7 @@ name = "benchmark-action-check"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "mimalloc",
  "mutants",
  "ohno",
  "serde",
@@ -408,6 +410,7 @@ dependencies = [
  "many_cpus",
  "many_cpus_benchmarking",
  "scc",
+ "testing",
  "windows",
 ]
 
@@ -518,6 +521,7 @@ dependencies = [
  "folo_utils",
  "mimalloc",
  "serde_json",
+ "testing",
 ]
 
 [[package]]
@@ -531,8 +535,10 @@ dependencies = [
  "cbh_render",
  "cbh_stats",
  "clap",
+ "mimalloc",
  "plotters",
  "tempfile",
+ "testing",
 ]
 
 [[package]]
@@ -554,6 +560,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
+ "testing",
  "tick",
  "tokio",
 ]
@@ -576,6 +583,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "testing",
  "tick",
  "tokio",
 ]
@@ -592,6 +600,7 @@ dependencies = [
  "serial_test",
  "static_assertions",
  "tempfile",
+ "testing",
  "toml",
 ]
 
@@ -607,6 +616,7 @@ dependencies = [
  "serial_test",
  "static_assertions",
  "tempfile",
+ "testing",
  "toml_edit",
 ]
 
@@ -656,6 +666,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+ "testing",
  "tick",
 ]
 
@@ -667,6 +678,7 @@ dependencies = [
  "cbh_model",
  "clap",
  "mutants",
+ "testing",
 ]
 
 [[package]]
@@ -679,6 +691,7 @@ dependencies = [
  "flate2",
  "gungraun",
  "nonempty",
+ "testing",
 ]
 
 [[package]]
@@ -687,6 +700,7 @@ version = "0.2.16"
 dependencies = [
  "cbh_model",
  "mutants",
+ "testing",
 ]
 
 [[package]]
@@ -699,6 +713,7 @@ dependencies = [
  "serde",
  "static_assertions",
  "tempfile",
+ "testing",
  "tokio",
  "toml",
 ]
@@ -720,6 +735,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "testing",
  "thread_aware",
 ]
 
@@ -728,6 +744,7 @@ name = "cbh_diag"
 version = "0.2.16"
 dependencies = [
  "mutants",
+ "testing",
 ]
 
 [[package]]
@@ -746,6 +763,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
+ "testing",
  "tokio",
 ]
 
@@ -757,6 +775,7 @@ dependencies = [
  "futures",
  "jiff",
  "mutants",
+ "testing",
  "tokio",
 ]
 
@@ -772,6 +791,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -783,6 +803,7 @@ dependencies = [
  "many_cpus",
  "mutants",
  "sha2",
+ "testing",
 ]
 
 [[package]]
@@ -798,6 +819,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -806,6 +828,7 @@ version = "0.2.16"
 dependencies = [
  "criterion",
  "mutants",
+ "testing",
 ]
 
 [[package]]
@@ -831,6 +854,7 @@ dependencies = [
  "serial_test",
  "static_assertions",
  "tempfile",
+ "testing",
  "tokio",
 ]
 
@@ -1068,6 +1092,7 @@ dependencies = [
  "new_zealand",
  "ohno",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -1278,7 +1303,9 @@ dependencies = [
 name = "dure-test-helper"
 version = "0.0.0"
 dependencies = [
+ "mimalloc",
  "serde_json",
+ "testing",
  "windows",
 ]
 
@@ -1394,6 +1421,7 @@ dependencies = [
  "mockall",
  "mutants",
  "static_assertions",
+ "testing",
  "windows",
 ]
 
@@ -1432,6 +1460,7 @@ version = "0.1.17"
 dependencies = [
  "mutants",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -1441,6 +1470,7 @@ dependencies = [
  "mutants",
  "serde",
  "serde_json",
+ "testing",
 ]
 
 [[package]]
@@ -2203,6 +2233,7 @@ dependencies = [
  "seq-macro",
  "simple-mermaid",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -2220,6 +2251,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+ "testing",
 ]
 
 [[package]]
@@ -2292,6 +2324,7 @@ dependencies = [
  "nonempty",
  "rand 0.10.2",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -2412,6 +2445,9 @@ checksum = "add0ac067452ff1aca8c5002111bd6b1c895baee6e45fcbc44e0193aea17be56"
 [[package]]
 name = "new_zealand"
 version = "1.0.9"
+dependencies = [
+ "testing",
+]
 
 [[package]]
 name = "nm"
@@ -2419,6 +2455,7 @@ version = "0.1.50"
 dependencies = [
  "nm_impl",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -2447,6 +2484,7 @@ dependencies = [
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "static_assertions",
+ "testing",
  "tick",
  "tokio",
 ]
@@ -2652,6 +2690,7 @@ dependencies = [
  "num-integer",
  "oneshot",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -3146,6 +3185,7 @@ name = "release-target-check"
 version = "0.0.0"
 dependencies = [
  "cargo-release-plan",
+ "mimalloc",
  "mutants",
  "ohno",
  "semver",
@@ -3683,6 +3723,7 @@ name = "testing"
 version = "0.0.1-never"
 dependencies = [
  "deranged",
+ "mimalloc",
  "mutants",
  "new_zealand",
  "static_assertions",
@@ -4147,6 +4188,7 @@ name = "ui_tests"
 version = "0.0.0-never"
 dependencies = [
  "new_zealand",
+ "testing",
  "trybuild",
 ]
 

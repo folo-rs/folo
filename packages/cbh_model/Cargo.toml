@@ -48,6 +48,7 @@ smallvec = { workspace = true, features = ["serde"] }
 [dev-dependencies]
 criterion = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "cbh_model"

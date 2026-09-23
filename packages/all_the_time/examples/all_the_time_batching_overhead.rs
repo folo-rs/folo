@@ -104,3 +104,5 @@ fn main() {
         "- The 'substantial_work' operation shows processor times when overhead is negligible"
     );
 }
+
+::testing::set_allocator!();
