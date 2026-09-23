@@ -4,29 +4,21 @@
 use std::os::unix::fs::symlink;
 
 use super::*;
-use crate::git::testing::Repository;
+use crate::git::testing::{Repository, unopened};
 use crate::manifest::parse_package_manifest;
 
 #[test]
-#[cfg_attr(miri, ignore = "uses a real filesystem fixture")]
 fn only_tracked_manifests_are_workspace_members() {
-    let fixture = Repository::new();
-    let git = fixture.repo();
+    let root = Path::new("workspace");
+    let git = unopened(root);
     let tracked = TrackedMetadata {
         git: &git,
-        workspace_root: fixture.path(),
+        workspace_root: root,
         paths: vec!["pkg/Cargo.toml".to_string()],
         case: PathCase::Sensitive,
     };
-    assert!(tracked.contains_manifest(&fixture.path().join("pkg/Cargo.toml").to_string_lossy()));
-    assert!(
-        !tracked.contains_manifest(
-            &fixture
-                .path()
-                .join("untracked/Cargo.toml")
-                .to_string_lossy()
-        )
-    );
+    assert!(tracked.contains_manifest(&root.join("pkg/Cargo.toml").to_string_lossy()));
+    assert!(!tracked.contains_manifest(&root.join("untracked/Cargo.toml").to_string_lossy()));
     assert!(!tracked.contains_manifest("outside/Cargo.toml"));
 }
 

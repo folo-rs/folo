@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 use semver::Version;
@@ -24,41 +24,106 @@ use crate::resolved::write_json;
 use crate::text::{Quotable as _, quote_path};
 use crate::verbose::Verbose;
 
+// Only connects proposal orchestration to real artifact operations; the core below
+// owns input protection, invalidation, generation and failed-publication cleanup.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_propose(
     report: &Path,
     decisions: &Path,
     out: &Path,
     verbose: Verbose,
 ) -> Result<String, AppError> {
-    let report = if report.is_dir() {
-        report.join("report.json")
-    } else {
-        report.to_path_buf()
-    };
+    propose(report, decisions, out, verbose, &mut FileArtifacts)
+}
+
+fn propose(
+    report: &Path,
+    decisions: &Path,
+    out: &Path,
+    verbose: Verbose,
+    artifacts: &mut impl ProposalArtifacts,
+) -> Result<String, AppError> {
+    let report = artifacts.report_path(report);
     // An invalid rerun invalidates its previous proposal, but never its own source evidence.
     // Canonical comparison also protects inputs addressed through a symlink or a relative path.
     for input in [&report, decisions] {
-        if same_path(input, out)? {
+        if artifacts.same_path(input, out)? {
             return Err(ProposalInputCollision::new().into());
         }
     }
-    remove_marker(out)?;
-    let report = read_report(&report)?;
-    let decisions = Decisions::read(decisions)?;
+    artifacts.remove(out)?;
+    let report = artifacts.read_report(&report)?;
+    let decisions = artifacts.read_decisions(decisions)?;
     let plan = Proposal::new(&report).generate(&decisions, verbose)?;
-    if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(|error| WriteFileError::caused_by(parent, error))?;
-    }
     // Generation has no fallible steps after publication. A write failure must not leave a
     // partially written plan that another workflow step could mistake for a completed proposal.
-    if let Err(error) = write_json(out, &plan) {
-        remove_marker(out)?;
+    artifacts.prepare_output(out)?;
+    if let Err(error) = artifacts.write_plan(out, &plan) {
+        artifacts.remove(out)?;
         return Err(error);
     }
     Ok(format!(
         "Wrote cargo-release-plan input to {}",
         quote_path(&out.display().to_string())
     ))
+}
+
+/// Artifact operations required by proposal orchestration, without filesystem-shaped fakes.
+///
+/// The core owns ordering and cleanup decisions; implementations acquire and publish evidence.
+trait ProposalArtifacts {
+    fn report_path(&mut self, path: &Path) -> PathBuf;
+    fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError>;
+    fn remove(&mut self, path: &Path) -> Result<(), AppError>;
+    fn read_report(&mut self, path: &Path) -> Result<ReportFile, AppError>;
+    fn read_decisions(&mut self, path: &Path) -> Result<Decisions, AppError>;
+    fn prepare_output(&mut self, path: &Path) -> Result<(), AppError>;
+    fn write_plan(&mut self, path: &Path, plan: &PlanFile) -> Result<(), AppError>;
+}
+
+/// Acquires and publishes proposal artifacts on the host filesystem.
+struct FileArtifacts;
+
+// Real path inspection, file reads and writes belong to integration coverage.
+#[cfg_attr(test, mutants::skip)]
+impl ProposalArtifacts for FileArtifacts {
+    fn report_path(&mut self, path: &Path) -> PathBuf {
+        if path.is_dir() {
+            path.join("report.json")
+        } else {
+            path.to_path_buf()
+        }
+    }
+
+    fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError> {
+        same_path(left, right)
+    }
+
+    fn remove(&mut self, path: &Path) -> Result<(), AppError> {
+        remove_marker(path)
+    }
+
+    fn read_report(&mut self, path: &Path) -> Result<ReportFile, AppError> {
+        read_report(path)
+    }
+
+    fn read_decisions(&mut self, path: &Path) -> Result<Decisions, AppError> {
+        Decisions::read(path)
+    }
+
+    fn prepare_output(&mut self, path: &Path) -> Result<(), AppError> {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).map_err(|error| WriteFileError::caused_by(parent, error))?;
+        }
+        Ok(())
+    }
+
+    fn write_plan(&mut self, path: &Path, plan: &PlanFile) -> Result<(), AppError> {
+        write_json(path, plan)
+    }
 }
 
 /// Validated report evidence indexed for repeated, entirely in-memory resolution.
@@ -449,7 +514,6 @@ struct UnpropagatedPublicDependency {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use serde_json::json;
-    use tempfile::tempdir_in;
 
     use super::*;
     use crate::propose::tests::{
@@ -457,29 +521,211 @@ mod tests {
     };
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "resolves missing output directories around real input artifacts"
-    )]
-    fn missing_output_parents_cannot_make_an_input_writable_as_a_proposal() {
-        let directory = tempdir_in(".").unwrap();
-        let report_path = directory.path().join("report.json");
-        let decisions_path = directory.path().join("decisions.json");
-        write_json(&report_path, &report(Vec::new(), Vec::new(), &[])).unwrap();
-        fs::write(&decisions_path, r#"{"schema_version":1,"changes":[]}"#).unwrap();
-        for input in [&report_path, &decisions_path] {
-            let before = fs::read(input).unwrap();
-            let output = directory
-                .path()
-                .join("missing")
-                .join("..")
-                .join(input.file_name().unwrap());
-            let error = run_propose(&report_path, &decisions_path, &output, Verbose::new(false))
-                .unwrap_err();
-            assert!(error.find_source::<ProposalInputCollision>().is_some());
-            assert_eq!(fs::read(input).unwrap(), before);
-            assert!(!directory.path().join("missing").exists());
+    fn proposal_publication_orders_acquisition_and_cleans_failed_writes() {
+        let expected = [
+            "report-path",
+            "compare-report",
+            "compare-decisions",
+            "remove",
+            "read-report",
+            "read-decisions",
+            "prepare-output",
+            "write",
+        ];
+        for failure in std::iter::once(None).chain((1..expected.len()).map(Some)) {
+            let mut artifacts = ArtifactObservations {
+                failure,
+                ..ArtifactObservations::default()
+            };
+            let result = propose(
+                Path::new("evidence"),
+                Path::new("decisions.json"),
+                Path::new("output/plan.json"),
+                Verbose::new(false),
+                &mut artifacts,
+            );
+            if let Some(index) = failure {
+                assert_eq!(
+                    result
+                        .unwrap_err()
+                        .find_source::<ArtifactFailure>()
+                        .unwrap()
+                        .operation,
+                    *expected.get(index).unwrap()
+                );
+                let mut reached: Vec<_> = expected.iter().take(index + 1).copied().collect();
+                if expected.get(index) == Some(&"write") {
+                    reached.push("remove");
+                }
+                assert_eq!(artifacts.calls, reached);
+            } else {
+                assert!(result.unwrap().contains("output/plan.json"));
+                assert_eq!(artifacts.calls, expected);
+            }
         }
+    }
+
+    #[test]
+    fn proposal_collisions_precede_marker_removal_and_input_reads() {
+        for collision in ["evidence/report.json", "decisions.json"] {
+            let mut artifacts = ArtifactObservations {
+                collision: Some(PathBuf::from(collision)),
+                ..ArtifactObservations::default()
+            };
+            let error = propose(
+                Path::new("evidence"),
+                Path::new("decisions.json"),
+                Path::new("output/plan.json"),
+                Verbose::new(false),
+                &mut artifacts,
+            )
+            .unwrap_err();
+            assert!(error.find_source::<ProposalInputCollision>().is_some());
+            assert_eq!(
+                artifacts.calls,
+                if collision == "decisions.json" {
+                    vec!["report-path", "compare-report", "compare-decisions"]
+                } else {
+                    vec!["report-path", "compare-report"]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn proposal_reports_cleanup_failure_after_a_failed_write() {
+        let mut artifacts = ArtifactObservations {
+            failed_publication: true,
+            ..ArtifactObservations::default()
+        };
+        let error = propose(
+            Path::new("evidence"),
+            Path::new("decisions.json"),
+            Path::new("output/plan.json"),
+            Verbose::new(false),
+            &mut artifacts,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.find_source::<ArtifactFailure>().unwrap().operation,
+            "remove"
+        );
+        assert!(artifacts.calls.ends_with(&["write", "remove"]));
+    }
+
+    #[test]
+    fn proposal_generation_failure_does_not_prepare_or_publish_output() {
+        let mut artifacts = ArtifactObservations {
+            missing_decision: true,
+            ..ArtifactObservations::default()
+        };
+        let error = propose(
+            Path::new("evidence"),
+            Path::new("decisions.json"),
+            Path::new("output/plan.json"),
+            Verbose::new(false),
+            &mut artifacts,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<MissingIncrement>().is_some());
+        assert_eq!(
+            artifacts.calls,
+            [
+                "report-path",
+                "compare-report",
+                "compare-decisions",
+                "remove",
+                "read-report",
+                "read-decisions",
+            ]
+        );
+    }
+
+    /// Records artifact operations without acquiring filesystem or process state.
+    #[derive(Default)]
+    struct ArtifactObservations {
+        calls: Vec<&'static str>,
+        failure: Option<usize>,
+        collision: Option<PathBuf>,
+        failed_publication: bool,
+        missing_decision: bool,
+    }
+
+    impl ArtifactObservations {
+        fn visit(&mut self, operation: &'static str) -> Result<(), AppError> {
+            let index = self.calls.len();
+            self.calls.push(operation);
+            if self.failure == Some(index)
+                || (self.failed_publication && self.calls.contains(&"write"))
+            {
+                return Err(ArtifactFailure::new(operation).into());
+            }
+            Ok(())
+        }
+    }
+
+    impl ProposalArtifacts for ArtifactObservations {
+        fn report_path(&mut self, path: &Path) -> PathBuf {
+            assert_eq!(path, Path::new("evidence"));
+            self.calls.push("report-path");
+            path.join("report.json")
+        }
+
+        fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError> {
+            assert_eq!(right, Path::new("output/plan.json"));
+            if left == Path::new("evidence/report.json") {
+                self.visit("compare-report")?;
+            } else {
+                assert_eq!(left, Path::new("decisions.json"));
+                self.visit("compare-decisions")?;
+            }
+            Ok(self.collision.as_deref() == Some(left))
+        }
+
+        fn remove(&mut self, path: &Path) -> Result<(), AppError> {
+            assert_eq!(path, Path::new("output/plan.json"));
+            self.visit("remove")
+        }
+
+        fn read_report(&mut self, path: &Path) -> Result<ReportFile, AppError> {
+            assert_eq!(path, Path::new("evidence/report.json"));
+            self.visit("read-report")?;
+            Ok(report(
+                vec![needs(package("library", "1.0.0", Some("1.0.0")))],
+                vec![],
+                &[],
+            ))
+        }
+
+        fn read_decisions(&mut self, path: &Path) -> Result<Decisions, AppError> {
+            assert_eq!(path, Path::new("decisions.json"));
+            self.visit("read-decisions")?;
+            Ok(Decisions::for_test(if self.missing_decision {
+                &[]
+            } else {
+                &[("library", "patch")]
+            }))
+        }
+
+        fn prepare_output(&mut self, path: &Path) -> Result<(), AppError> {
+            assert_eq!(path, Path::new("output/plan.json"));
+            self.visit("prepare-output")
+        }
+
+        fn write_plan(&mut self, path: &Path, plan: &PlanFile) -> Result<(), AppError> {
+            assert_eq!(path, Path::new("output/plan.json"));
+            assert_eq!(
+                entries(plan),
+                json!([{"name": "library", "level": "patch"}])
+            );
+            self.visit("write")
+        }
+    }
+
+    /// An injected acquisition or publication failure independent of filesystem permissions.
+    #[ohno::error]
+    struct ArtifactFailure {
+        operation: &'static str,
     }
 
     #[test]
@@ -500,28 +746,6 @@ mod tests {
             levels,
             BTreeMap::from([("app".to_owned(), ChangeLevel::Breaking)])
         );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "reads proposal inputs and attempts a real filesystem write"
-    )]
-    fn output_write_failure_is_returned_without_a_completed_proposal() {
-        let directory = tempdir_in(".").unwrap();
-        let report_path = directory.path().join("report.json");
-        let decisions_path = directory.path().join("decisions.json");
-        // A NUL cannot form a filesystem filename on either supported platform. This reaches
-        // the write-failure cleanup without permission assumptions or a concurrent mutation.
-        let output = directory.path().join("invalid\0.json");
-        write_json(&report_path, &report(vec![], vec![], &[])).unwrap();
-        fs::write(&decisions_path, r#"{"schema_version":1,"changes":[]}"#).unwrap();
-        let error =
-            run_propose(&report_path, &decisions_path, &output, Verbose::new(false)).unwrap_err();
-        assert!(error.find_source::<WriteFileError>().is_some());
-        assert!(!output.exists());
-        assert!(report_path.is_file());
-        assert!(decisions_path.is_file());
     }
 
     #[test]
@@ -709,59 +933,5 @@ mod tests {
             .validate_result(&resolved, &levels)
             .unwrap_err();
         assert!(error.find_source::<InsufficientIncrement>().is_some());
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "reads and writes real proposal artifacts")]
-    fn failed_reruns_remove_stale_proposals_and_preserve_inputs() {
-        let directory = tempdir_in(".").unwrap();
-        let report_path = directory.path().join("report.json");
-        let decisions_path = directory.path().join("decisions.json");
-        let output = directory.path().join("output").join("plan.json");
-        let report = report(
-            vec![package("library", "1.0.0", Some("1.0.0"))],
-            vec![],
-            &[],
-        );
-        write_json(&report_path, &report).unwrap();
-        fs::write(
-            &decisions_path,
-            r#"{"schema_version":1,"changes":[{"name":"library","level":"patch"}]}"#,
-        )
-        .unwrap();
-        run_propose(
-            directory.path(),
-            &decisions_path,
-            &output,
-            Verbose::new(false),
-        )
-        .unwrap();
-        let written: PlanFile = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-        assert_eq!(
-            entries(&written),
-            json!([{"name": "library", "level": "patch"}])
-        );
-        fs::write(&decisions_path, "null").unwrap();
-        _ = run_propose(&report_path, &decisions_path, &output, Verbose::new(false)).unwrap_err();
-        assert!(!output.exists());
-        let before = fs::read(&report_path).unwrap();
-        let error = run_propose(
-            directory.path(),
-            &decisions_path,
-            &report_path,
-            Verbose::new(false),
-        )
-        .unwrap_err();
-        assert!(error.find_source::<ProposalInputCollision>().is_some());
-        assert_eq!(fs::read(&report_path).unwrap(), before);
-        let error = run_propose(
-            &report_path,
-            &decisions_path,
-            &decisions_path,
-            Verbose::new(false),
-        )
-        .unwrap_err();
-        assert!(error.find_source::<ProposalInputCollision>().is_some());
-        assert_eq!(fs::read_to_string(&decisions_path).unwrap(), "null");
     }
 }

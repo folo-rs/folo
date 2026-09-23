@@ -1,15 +1,10 @@
-use std::fs;
-
 use semver::Version;
 use serde_json::json;
-use tempfile::tempdir_in;
 
 use crate::plan::{IncrementLevel, increment_version, resolve_plan};
-use crate::propose::run_propose;
 use crate::propose::tests::{
     assert_invariants, depends, entries, generate, helper, package, report,
 };
-use crate::resolved::write_json;
 use crate::verbose::Verbose;
 
 #[test]
@@ -98,34 +93,6 @@ fn empty_and_consistent_reports_generate_empty_proposals() {
         ),
     ] {
         assert!(generate(&report, &[]).unwrap().increments.is_empty());
-    }
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "reads and writes malformed report artifacts")]
-fn malformed_versions_anywhere_in_the_report_invalidate_stale_output() {
-    let directory = tempdir_in(".").unwrap();
-    let report_path = directory.path().join("report.json");
-    let decisions_path = directory.path().join("decisions.json");
-    let output = directory.path().join("plan.json");
-    fs::write(&decisions_path, r#"{"schema_version":1,"changes":[]}"#).unwrap();
-    let report = report(
-        vec![package("library", "1.0.0", Some("1.0.0"))],
-        vec![helper("helper", "1.0.0"), helper("support", "1.1.0")],
-        &[&["helper", "support"]],
-    );
-    for pointer in [
-        "/packages/0/declared_version",
-        "/packages/0/anchor/version",
-        "/non_publishable_packages/0/declared_version",
-        "/groups/helper/version",
-    ] {
-        let mut value = serde_json::to_value(&report).unwrap();
-        *value.pointer_mut(pointer).unwrap() = json!("invalid");
-        write_json(&report_path, &value).unwrap();
-        fs::write(&output, "stale").unwrap();
-        _ = run_propose(&report_path, &decisions_path, &output, Verbose::new(false)).unwrap_err();
-        assert!(!output.exists());
     }
 }
 

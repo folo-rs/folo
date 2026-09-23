@@ -198,6 +198,15 @@ impl Inputs {
 
     pub(crate) fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
         let identity = PathIdentity::new(&self.root, &PathCase::probe);
+        let replacements = self.artifact_replacements(files, &identity)?;
+        fingerprint(&self.root, &self.paths, &replacements)
+    }
+
+    fn artifact_replacements(
+        &self,
+        files: &[Artifact],
+        identity: &PathIdentity<'_>,
+    ) -> Result<BTreeMap<PathBuf, Vec<u8>>, AppError> {
         let mut seen = BTreeSet::new();
         for file in files {
             if !identity.supports_artifact(&file.path)
@@ -208,11 +217,10 @@ impl Inputs {
             }
             seen.insert(file.path.clone());
         }
-        let replacements = files
+        Ok(files
             .iter()
             .map(|file| (file.path.clone(), file.contents.as_bytes().to_vec()))
-            .collect();
-        fingerprint(&self.root, &self.paths, &replacements)
+            .collect())
     }
 }
 
@@ -785,7 +793,12 @@ mod tests {
             let error = inputs.compare(&current, Some("final")).unwrap_err();
             assert!(error.find_source::<StaleInputs>().is_some());
             if field != "root" {
-                let error = inputs.compare_candidate(&current, "initial").unwrap_err();
+                let identity = PathIdentity::new(&current.root, &|_| PathCase::Sensitive);
+                let error = inputs
+                    .compare_candidate_with(&current, "initial", &identity, || {
+                        panic!("different membership must fail before fingerprint acquisition")
+                    })
+                    .unwrap_err();
                 assert!(error.find_source::<StaleInputs>().is_some());
             }
         }
@@ -818,10 +831,15 @@ mod tests {
         let mut candidate = inputs.clone();
         candidate.root = PathBuf::from("retained-workspace");
         candidate.base_revision.clone_from(&inputs.base);
-        let error = inputs.compare_candidate(&candidate, "final").unwrap_err();
+        let identity = PathIdentity::new(&candidate.root, &|_| panic!("exact paths need no probe"));
+        let error = inputs
+            .compare_candidate_with(&candidate, "final", &identity, || panic!())
+            .unwrap_err();
         assert!(error.find_source::<StaleInputs>().is_some());
         candidate.digest = "final".to_owned();
-        inputs.compare_candidate(&candidate, "final").unwrap();
+        inputs
+            .compare_candidate_with(&candidate, "final", &identity, || panic!())
+            .unwrap();
     }
 
     #[test]
@@ -1035,9 +1053,41 @@ mod tests {
                     contents: String::new(),
                 })
                 .collect();
-            let error = inputs.final_digest(&artifacts).unwrap_err();
+            let identity = PathIdentity::new(&inputs.root, &|_| PathCase::Sensitive);
+            let error = inputs
+                .artifact_replacements(&artifacts, &identity)
+                .unwrap_err();
             assert!(error.find_source::<ResolutionRequired>().is_some());
         }
+    }
+
+    #[test]
+    fn artifact_replacements_preserve_captured_paths_and_exact_bytes() {
+        let inputs = inputs();
+        let identity = PathIdentity::new(&inputs.root, &|_| panic!("exact paths need no probe"));
+        let files = [
+            Artifact {
+                path: "Cargo.toml".into(),
+                contents: "manifest\n".to_owned(),
+            },
+            Artifact {
+                path: "Cargo.lock".into(),
+                contents: String::new(),
+            },
+        ];
+        assert_eq!(
+            inputs.artifact_replacements(&files, &identity).unwrap(),
+            BTreeMap::from([
+                (PathBuf::from("Cargo.toml"), b"manifest\n".to_vec()),
+                (PathBuf::from("Cargo.lock"), Vec::new()),
+            ])
+        );
+        assert!(
+            inputs
+                .artifact_replacements(&[], &identity)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1412,5 +1462,13 @@ mod tests {
             parse_artifact::<PlanFile>(Path::new("prepared.json"), r#"{"schema_version":3}"#)
                 .unwrap_err();
         assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+        let future = serde_json::json!({"schema_version": SCHEMA_VERSION + 1});
+        let error = parse_artifact::<PlanFile>(Path::new("prepared.json"), &future.to_string())
+            .unwrap_err();
+        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+        let current = serde_json::json!({"schema_version": SCHEMA_VERSION});
+        let error = parse_artifact::<PlanFile>(Path::new("prepared.json"), &current.to_string())
+            .unwrap_err();
+        assert!(error.find_source::<ParsePlanError>().is_some());
     }
 }

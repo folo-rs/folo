@@ -14,7 +14,7 @@ use serde::Serialize;
 use tempfile::NamedTempFile;
 
 use crate::artifact_path::same_path;
-use crate::metadata::load_tracked_work_tree;
+use crate::metadata::{WorkTree, load_tracked_work_tree};
 use crate::plan::{PlanFile, SCHEMA_VERSION, resolve_plan};
 use crate::resolved::read_json;
 use crate::text::plural;
@@ -43,6 +43,9 @@ struct ExpandedPackageVersion {
     version: String,
 }
 
+// This adapter only selects filesystem acquisition; the shared core owns command ordering,
+// collision rejection and rendering, which remain in-process unit-test responsibilities.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_expand(
     plan_path: &Path,
     out_path: &Path,
@@ -50,12 +53,30 @@ pub(crate) fn run_expand(
     preserve_input: bool,
     verbose: Verbose,
 ) -> Result<String, AppError> {
-    if preserve_input && same_path(plan_path, out_path)? {
+    expand(
+        plan_path,
+        out_path,
+        manifest_path,
+        preserve_input,
+        verbose,
+        &mut FileArtifacts,
+    )
+}
+
+fn expand(
+    plan_path: &Path,
+    out_path: &Path,
+    manifest_path: &Path,
+    preserve_input: bool,
+    verbose: Verbose,
+    artifacts: &mut impl ExpansionArtifacts,
+) -> Result<String, AppError> {
+    if preserve_input && artifacts.same_path(plan_path, out_path)? {
         return Err(ExpansionInputCollision::new().into());
     }
-    let plan: PlanFile = read_json(plan_path)?;
+    let plan = artifacts.read_plan(plan_path)?;
 
-    let (work_tree, _) = load_tracked_work_tree(manifest_path)?;
+    let work_tree = artifacts.workspace(manifest_path)?;
     // Every Git-tracked member is a valid version target, and a group increments
     // from the highest version any of its members declares.
     // Ref: docs/implementation.md, "Plan resolution and application".
@@ -86,13 +107,44 @@ pub(crate) fn run_expand(
     let mut json = serde_json::to_string_pretty(&document)
         .expect("an expanded plan holds only strings and a number, which always serialize");
     json.push('\n');
-    write_expansion(out_path, &json, preserve_input)?;
+    artifacts.write(out_path, &json, preserve_input)?;
 
     Ok(format!(
         "Expanded {} to {}",
         plural(resolved.packages.len(), "package version"),
         quote_path(&out_path.to_string_lossy())
     ))
+}
+
+/// Acquisition and publication required by expansion, separate from its decision ordering.
+trait ExpansionArtifacts {
+    fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError>;
+    fn read_plan(&mut self, path: &Path) -> Result<PlanFile, AppError>;
+    fn workspace(&mut self, manifest: &Path) -> Result<WorkTree, AppError>;
+    fn write(&mut self, path: &Path, json: &str, preserve_input: bool) -> Result<(), AppError>;
+}
+
+/// Connects expansion to the real filesystem and tracked Cargo workspace.
+struct FileArtifacts;
+
+// Real acquisition is integration-owned; the core above retains every expansion decision.
+#[cfg_attr(test, mutants::skip)]
+impl ExpansionArtifacts for FileArtifacts {
+    fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError> {
+        same_path(left, right)
+    }
+
+    fn read_plan(&mut self, path: &Path) -> Result<PlanFile, AppError> {
+        read_json(path)
+    }
+
+    fn workspace(&mut self, manifest: &Path) -> Result<WorkTree, AppError> {
+        load_tracked_work_tree(manifest).map(|(work_tree, _)| work_tree)
+    }
+
+    fn write(&mut self, path: &Path, json: &str, preserve_input: bool) -> Result<(), AppError> {
+        write_expansion(path, json, preserve_input)
+    }
 }
 
 fn write_expansion(out_path: &Path, json: &str, preserve_input: bool) -> Result<(), AppError> {
@@ -139,10 +191,141 @@ struct ExpansionInputCollision;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use serde_json::{Value, json};
     use tempfile::tempdir;
 
     use super::*;
-    use crate::ParsePlanError;
+    use crate::classify::PackageStatus;
+    use crate::classify::fixture::{classification, package};
+    use crate::plan::{PlanIncrement, PlanStage};
+
+    #[test]
+    fn expansion_protects_inputs_before_acquisition_only_when_requested() {
+        let mut artifacts = ArtifactObservations {
+            collision: true,
+            ..ArtifactObservations::default()
+        };
+        let error = expand(
+            Path::new("proposal.json"),
+            Path::new("expanded.json"),
+            Path::new("Cargo.toml"),
+            true,
+            Verbose::new(false),
+            &mut artifacts,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<ExpansionInputCollision>().is_some());
+        assert_eq!(artifacts.calls, ["compare"]);
+    }
+
+    #[test]
+    fn expansion_acquires_resolves_renders_and_publishes_in_order() {
+        for preserve in [false, true] {
+            let expected = if preserve {
+                vec!["compare", "read", "workspace", "write"]
+            } else {
+                vec!["read", "workspace", "write"]
+            };
+            for failure in std::iter::once(None).chain((0..expected.len()).map(Some)) {
+                let mut artifacts = ArtifactObservations {
+                    failure,
+                    preserve,
+                    ..ArtifactObservations::default()
+                };
+                let result = expand(
+                    Path::new("proposal.json"),
+                    Path::new("expanded.json"),
+                    Path::new("Cargo.toml"),
+                    preserve,
+                    Verbose::new(false),
+                    &mut artifacts,
+                );
+                if let Some(index) = failure {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .find_source::<ArtifactFailure>()
+                            .is_some()
+                    );
+                    assert_eq!(
+                        artifacts.calls,
+                        expected.iter().take(index + 1).copied().collect::<Vec<_>>()
+                    );
+                } else {
+                    let message = result.unwrap();
+                    assert!(message.contains("1 package version"));
+                    assert!(message.contains("expanded.json"));
+                    assert_eq!(artifacts.calls, expected);
+                }
+            }
+        }
+    }
+
+    /// Records expansion observations and failures without acquiring external resources.
+    #[derive(Default)]
+    struct ArtifactObservations {
+        calls: Vec<&'static str>,
+        failure: Option<usize>,
+        collision: bool,
+        preserve: bool,
+    }
+
+    impl ArtifactObservations {
+        fn visit(&mut self, operation: &'static str) -> Result<(), AppError> {
+            let index = self.calls.len();
+            self.calls.push(operation);
+            if self.failure == Some(index) {
+                return Err(ArtifactFailure::new().into());
+            }
+            Ok(())
+        }
+    }
+
+    impl ExpansionArtifacts for ArtifactObservations {
+        fn same_path(&mut self, left: &Path, right: &Path) -> Result<bool, AppError> {
+            assert_eq!(left, Path::new("proposal.json"));
+            assert_eq!(right, Path::new("expanded.json"));
+            self.visit("compare")?;
+            Ok(self.collision)
+        }
+
+        fn read_plan(&mut self, path: &Path) -> Result<PlanFile, AppError> {
+            assert_eq!(path, Path::new("proposal.json"));
+            self.visit("read")?;
+            Ok(PlanFile::new(
+                PlanStage::Proposed,
+                vec![PlanIncrement {
+                    name: "library".to_owned(),
+                    level: Some("patch".to_owned()),
+                    version: None,
+                }],
+            ))
+        }
+
+        fn workspace(&mut self, manifest: &Path) -> Result<WorkTree, AppError> {
+            assert_eq!(manifest, Path::new("Cargo.toml"));
+            self.visit("workspace")?;
+            Ok(classification(vec![package("library", PackageStatus::Unchanged, "")]).work_tree)
+        }
+
+        fn write(&mut self, path: &Path, json: &str, preserve_input: bool) -> Result<(), AppError> {
+            assert_eq!(path, Path::new("expanded.json"));
+            assert_eq!(preserve_input, self.preserve);
+            assert_eq!(
+                serde_json::from_str::<Value>(json).unwrap(),
+                json!({
+                    "schema_version": SCHEMA_VERSION, "expanded": true,
+                    "increments": [{"name": "library", "version": "1.0.1"}]
+                })
+            );
+            assert!(json.ends_with('\n'));
+            self.visit("write")
+        }
+    }
+
+    /// An injected expansion operation failure, without platform-dependent permissions.
+    #[ohno::error]
+    struct ArtifactFailure;
 
     #[test]
     #[cfg_attr(miri, ignore = "creates missing output directories")]
@@ -174,34 +357,6 @@ mod tests {
         assert_eq!(fs::read_to_string(staged.path()).unwrap(), "complete");
         assert_eq!(fs::read_to_string(&output).unwrap(), "previous");
         drop(staged);
-        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "reads proposal files without acquiring a workspace")]
-    fn accepted_destinations_reach_plan_validation_in_both_modes() {
-        let directory = tempdir().unwrap();
-        let input = directory.path().join("plan.json");
-        fs::write(&input, "invalid plan, retained").unwrap();
-        for (preserve_input, output) in [
-            (true, directory.path().join("expanded.json")),
-            (false, directory.path().join("expanded.json")),
-            (false, input.clone()),
-        ] {
-            let error = run_expand(
-                &input,
-                &output,
-                Path::new("unused.toml"),
-                preserve_input,
-                Verbose::new(false),
-            )
-            .unwrap_err();
-            assert!(error.find_source::<ParsePlanError>().is_some());
-            assert_eq!(
-                fs::read_to_string(&input).unwrap(),
-                "invalid plan, retained"
-            );
-        }
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
@@ -242,32 +397,5 @@ mod tests {
         let output = Path::new(owned.file_name().unwrap());
         write_expansion(output, "complete", true).unwrap();
         assert_eq!(fs::read_to_string(output).unwrap(), "complete");
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "protects input paths before writing artifacts")]
-    fn protected_expansion_rejects_input_aliases_before_reading() {
-        let directory = tempdir().unwrap();
-        let input = directory.path().join("plan.json");
-        fs::write(&input, "retained").unwrap();
-        for output in [
-            input.clone(),
-            directory
-                .path()
-                .join("missing")
-                .join("..")
-                .join("plan.json"),
-        ] {
-            let error = run_expand(
-                &input,
-                &output,
-                Path::new("unused.toml"),
-                true,
-                Verbose::new(false),
-            )
-            .unwrap_err();
-            assert!(error.find_source::<ExpansionInputCollision>().is_some());
-            assert_eq!(fs::read_to_string(&input).unwrap(), "retained");
-        }
     }
 }

@@ -14,13 +14,13 @@
 //! the single-span (no interval), multi-span (interval) and zero-iteration
 //! (null slope, dropped as unmeasured) shapes the producer can emit.
 //!
-//! They touch the filesystem and, for `all_the_time`, the processor clock, so they
-//! are `#[cfg_attr(miri, ignore)]`.
+//! These integration tests exercise real producer files and processor clocks.
 
+#![cfg(not(miri))]
+
+use cbh_engines::{parse_all_the_time_operation, parse_alloc_tracker_operation};
 use cbh_model::{BenchmarkResult, Metric, MetricKind};
 use tempfile::tempdir;
-
-use super::{parse_all_the_time_operation, parse_alloc_tracker_operation};
 
 fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
     record

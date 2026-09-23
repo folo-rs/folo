@@ -179,10 +179,7 @@ struct InvalidReportGroup {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-
     use serde_json::{Value, json};
-    use tempfile::tempdir;
 
     use super::*;
     use crate::report::fixture::{package, report};
@@ -556,30 +553,5 @@ mod tests {
                     .is_some()
             );
         }
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore = "reads report artifacts from a real filesystem")]
-    fn reads_file_or_directory_and_rejects_unsupported_schema() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("report.json");
-        let report = grouped();
-        fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
-        assert_eq!(read_report(&path).unwrap().head, report.head);
-        assert_eq!(read_report(directory.path()).unwrap().head, report.head);
-        // Schema rejection precedes interpreting fields from a different protocol.
-        fs::write(
-            &path,
-            json!({"schema_version": SCHEMA_VERSION.checked_add(1).unwrap()}).to_string(),
-        )
-        .unwrap();
-        assert!(
-            read_report(&path)
-                .unwrap_err()
-                .find_source::<UnsupportedPlanSchemaError>()
-                .is_some()
-        );
-        fs::remove_file(&path).unwrap();
-        _ = read_report(&path).unwrap_err();
     }
 }

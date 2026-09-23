@@ -53,6 +53,13 @@ Keep Rust unit tests in `#[cfg(test)]` modules and real-system tests in Cargo
 Cargo's target selection is a mechanism, not a definition of test scope: placing
 an I/O test under `src/` does not make it a unit test.
 
+Apply this boundary transitively: fixture constructors, cleanup, and production
+acquisition called by a test count as part of that test. A helper that initializes
+Git, hashes through a subprocess, probes real filesystem path aliases, or checks a missing file
+still performs external I/O even when the assertions only inspect in-memory
+results. Small or hermetic fixtures are not exceptions. Review the call path, not
+only imports and explicit process launches in the test body.
+
 Test parsing, serialization, decisions and transformations using in-memory values,
 buffers and simple fakes. Separate these from the small adapters that perform I/O.
 Do not introduce subprocess protocols, environment-variable dispatch or child test

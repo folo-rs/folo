@@ -31,6 +31,12 @@ Reuse one classification report for assertions about the same unchanged state.
 Keep real Git/Cargo tests for boundary behavior; see
 [test boundaries](docs/implementation.md#test-boundaries).
 
+Library unit tests must not acquire real Git, Cargo or filesystem state, including
+through fixture helpers or production acquisition methods. Small temporary Git
+repositories and filesystem probes belong in `tests/integration/`, not `src/`.
+Inject acquired observations into decision tests; do not recreate subprocesses
+behind a fake protocol or expose ordinary internals solely to move assertions.
+
 ## Modules own subjects, not categories
 
 Put a new type, constant, or helper in the module that owns its subject, and
@@ -45,8 +51,9 @@ dependencies on every subject and every subject depends back on it.
 
 ## Miri
 
-Tests that spawn `git` or `cargo`, or that touch the real filesystem beyond
-in-memory data, must be `#[cfg_attr(miri, ignore)]` with a reason. Pure unit
+Tests that spawn `git` or `cargo`, or that touch the real filesystem,
+must be `#[cfg_attr(miri, ignore = "specific reason")]`. A Miri ignore is not
+permission to put external I/O in the library harness. Pure unit
 tests (packaging rules, group verdicts, plan expansion, inherited-value
 comparison, anchor resolution over a synthetic timeline) must keep running
 under Miri.

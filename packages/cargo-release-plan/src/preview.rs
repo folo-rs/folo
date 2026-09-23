@@ -103,24 +103,28 @@ pub(crate) fn run_preview(
     )?;
     require_semantic_decisions(&classification.packages, &resolved)?;
 
-    let (resolved, files) = resolve_until_stable(resolved, &prospective.root, |resolved| {
-        let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
-        install_preview_edits(compute_edits(&work_tree, resolved, verbose)?, |edit| {
-            fs::write(&edit.path, &edit.updated)
-                .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
-        })?;
-        prospective.resolve(verbose)?;
-        classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
-        let files = prospective.artifacts(&prepared.inputs)?;
-        let mut expanded = resolved.clone();
-        add_consequences(
-            &classification.packages,
-            &classification.groups,
-            &classification.work_tree,
-            &mut expanded,
-        )?;
-        Ok((expanded, files))
-    })?;
+    let (resolved, files) = resolve_until_stable(
+        resolved,
+        |bytes| hash_bytes(bytes, &prospective.root),
+        |resolved| {
+            let (work_tree, _) = load_tracked_work_tree(&prospective.manifest)?;
+            install_preview_edits(compute_edits(&work_tree, resolved, verbose)?, |edit| {
+                fs::write(&edit.path, &edit.updated)
+                    .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
+            })?;
+            prospective.resolve(verbose)?;
+            classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+            let files = prospective.artifacts(&prepared.inputs)?;
+            let mut expanded = resolved.clone();
+            add_consequences(
+                &classification.packages,
+                &classification.groups,
+                &classification.work_tree,
+                &mut expanded,
+            )?;
+            Ok((expanded, files))
+        },
+    )?;
     let (passed, message, _) = run_check(
         Some(&prepared.inputs.base),
         &prospective.manifest,
@@ -169,7 +173,7 @@ fn install_preview_edits(
 
 fn resolve_until_stable(
     mut resolved: ResolvedVersions,
-    root: &Path,
+    mut hash: impl FnMut(&[u8]) -> Result<String, AppError>,
     mut pass: impl FnMut(&ResolvedVersions) -> Result<(ResolvedVersions, Vec<Artifact>), AppError>,
 ) -> Result<(ResolvedVersions, Vec<Artifact>), AppError> {
     // The callback owns rewriting, offline resolution and recapture; this loop owns convergence.
@@ -182,7 +186,7 @@ fn resolve_until_stable(
             return Ok((resolved, files));
         }
         // Remember actual states rather than imposing an arbitrary iteration deadline.
-        record_state(&mut visited, &expanded, &files, root)?;
+        record_state(&mut visited, &expanded, &files, &mut hash)?;
         previous_files = files;
         resolved = expanded;
     }
@@ -235,13 +239,13 @@ fn record_state(
     visited: &mut BTreeSet<String>,
     resolved: &ResolvedVersions,
     files: &[Artifact],
-    root: &Path,
+    hash: impl FnOnce(&[u8]) -> Result<String, AppError>,
 ) -> Result<(), AppError> {
     let state = serde_json::to_vec(&(explicit_plan(resolved), files))
         .expect("version plans and artifacts contain only JSON-compatible data");
     // Keep a bounded digest per iteration, not another retained copy of every resolved file.
     // Hash the complete state so a version, path, or content change cannot look like a cycle.
-    if !visited.insert(hash_bytes(&state, root)?) {
+    if !visited.insert(hash(&state)?) {
         return Err(ResolutionCycle::new().into());
     }
     Ok(())
@@ -429,6 +433,8 @@ struct ResolutionCycle;
 mod tests {
     use std::cell::Cell;
     use std::collections::HashSet;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     use std::iter;
     use std::path::PathBuf;
 
@@ -483,13 +489,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "captures owned files and hashes convergence states with Git"
-    )]
     fn resolution_waits_for_stable_captured_files_without_changing_versions() {
-        let directory = tempdir().unwrap();
-        let lockfile = directory.path().join("Cargo.lock");
         let initial = ResolvedVersions {
             packages: BTreeMap::from([("tool".to_owned(), Version::new(1, 0, 1))]),
         };
@@ -501,19 +501,21 @@ mod tests {
             "reselected dependency",
         ]
         .into_iter();
-        let (resolved, files) =
-            resolve_until_stable(initial.clone(), directory.path(), |resolved| {
+        let (resolved, files) = resolve_until_stable(
+            initial.clone(),
+            |bytes| Ok(digest(bytes)),
+            |resolved| {
                 assert_eq!(resolved, &initial);
-                fs::write(&lockfile, writes.next().unwrap()).unwrap();
                 Ok((
                     resolved.clone(),
                     vec![Artifact {
                         path: "Cargo.lock".into(),
-                        contents: fs::read_to_string(&lockfile).unwrap(),
+                        contents: writes.next().unwrap().to_owned(),
                     }],
                 ))
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(writes.next().is_none());
         assert_eq!(resolved, initial);
         assert_eq!(
@@ -526,9 +528,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
     fn resolution_applies_new_versions_even_when_captured_files_are_stable() {
-        let directory = tempdir().unwrap();
         let initial = ResolvedVersions {
             packages: BTreeMap::new(),
         };
@@ -545,13 +545,16 @@ mod tests {
             (&expanded, &expanded),
         ]
         .into_iter();
-        let (resolved, captured) =
-            resolve_until_stable(initial.clone(), directory.path(), |resolved| {
+        let (resolved, captured) = resolve_until_stable(
+            initial.clone(),
+            |bytes| Ok(digest(bytes)),
+            |resolved| {
                 let (expected, next) = passes.next().unwrap();
                 assert_eq!(resolved, expected);
                 Ok((next.clone(), files.clone()))
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(passes.next().is_none());
         assert_eq!(resolved, expanded);
         assert_eq!(captured, files);
@@ -563,44 +566,47 @@ mod tests {
             packages: BTreeMap::new(),
         };
         let mut passes = iter::once(());
-        let (resolved, files) =
-            resolve_until_stable(initial.clone(), Path::new("unused"), |resolved| {
+        let (resolved, files) = resolve_until_stable(
+            initial.clone(),
+            |_| panic!("an unchanged state needs no hash"),
+            |resolved| {
                 passes.next().unwrap();
                 Ok((resolved.clone(), Vec::new()))
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(passes.next().is_none());
         assert_eq!(resolved, initial);
         assert!(files.is_empty());
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
     fn resolution_rejects_a_captured_file_cycle_without_accepting_stable_versions() {
-        let directory = tempdir().unwrap();
         let initial = ResolvedVersions {
             packages: BTreeMap::new(),
         };
         let mut contents = ["first resolution", "other resolution", "first resolution"].into_iter();
-        let error = resolve_until_stable(initial.clone(), directory.path(), |resolved| {
-            assert_eq!(resolved, &initial);
-            Ok((
-                resolved.clone(),
-                vec![Artifact {
-                    path: "Cargo.lock".into(),
-                    contents: contents.next().unwrap().to_owned(),
-                }],
-            ))
-        })
+        let error = resolve_until_stable(
+            initial.clone(),
+            |bytes| Ok(digest(bytes)),
+            |resolved| {
+                assert_eq!(resolved, &initial);
+                Ok((
+                    resolved.clone(),
+                    vec![Artifact {
+                        path: "Cargo.lock".into(),
+                        contents: contents.next().unwrap().to_owned(),
+                    }],
+                ))
+            },
+        )
         .unwrap_err();
         assert!(error.find_source::<ResolutionCycle>().is_some());
         assert!(contents.next().is_none());
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
     fn resolution_propagates_a_failed_pass_instead_of_accepting_previous_files() {
-        let directory = tempdir().unwrap();
         let initial = ResolvedVersions {
             packages: BTreeMap::new(),
         };
@@ -612,13 +618,17 @@ mod tests {
             Err(StaleInputs::new().into()),
         ]
         .into_iter();
-        let error = resolve_until_stable(initial.clone(), directory.path(), |resolved| {
-            assert_eq!(resolved, &initial);
-            passes
-                .next()
-                .unwrap()
-                .map(|files| (resolved.clone(), files))
-        })
+        let error = resolve_until_stable(
+            initial.clone(),
+            |bytes| Ok(digest(bytes)),
+            |resolved| {
+                assert_eq!(resolved, &initial);
+                passes
+                    .next()
+                    .unwrap()
+                    .map(|files| (resolved.clone(), files))
+            },
+        )
         .unwrap_err();
         assert!(error.find_source::<StaleInputs>().is_some());
         assert!(passes.next().is_none());
@@ -1140,9 +1150,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "uses Git to hash convergence states")]
     fn history_detects_repetition_without_retaining_artifact_contents() {
-        let directory = tempdir().unwrap();
         let mut visited = BTreeSet::new();
         let mut resolved = ResolvedVersions {
             packages: BTreeMap::from([("tool".to_owned(), Version::new(1, 0, 0))]),
@@ -1151,22 +1159,62 @@ mod tests {
             path: "Cargo.lock".into(),
             contents: "initial resolution".to_owned(),
         }];
-        record_state(&mut visited, &resolved, &files, directory.path()).unwrap();
-        let key_length = visited.first().unwrap().len();
-        let error = record_state(&mut visited, &resolved, &files, directory.path()).unwrap_err();
+        record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
+        let error =
+            record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap_err();
         assert!(error.find_source::<ResolutionCycle>().is_some());
         assert_eq!(visited.len(), 1);
 
         resolved
             .packages
             .insert("tool".to_owned(), Version::new(1, 0, 1));
-        record_state(&mut visited, &resolved, &files, directory.path()).unwrap();
+        record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
         files[0].path = "Cargo.toml".into();
-        record_state(&mut visited, &resolved, &files, directory.path()).unwrap();
-        // Larger content establishes that retained key size is independent of artifact size.
+        record_state(&mut visited, &resolved, &files, |bytes| Ok(digest(bytes))).unwrap();
         files[0].contents = "resolved dependency\n".repeat(1024);
-        record_state(&mut visited, &resolved, &files, directory.path()).unwrap();
+        let token = "digest supplied by the acquisition boundary";
+        record_state(&mut visited, &resolved, &files, |bytes| {
+            let state: Value = serde_json::from_slice(bytes).unwrap();
+            assert_eq!(state.pointer("/0/increments/0/name").unwrap(), "tool");
+            assert_eq!(state.pointer("/0/increments/0/version").unwrap(), "1.0.1");
+            assert_eq!(state.pointer("/1/0/path").unwrap(), "Cargo.toml");
+            assert_eq!(state.pointer("/1/0/contents").unwrap(), &files[0].contents);
+            Ok(token.to_owned())
+        })
+        .unwrap();
         assert_eq!(visited.len(), 4);
-        assert!(visited.iter().all(|key| key.len() == key_length));
+        assert!(visited.contains(token));
+    }
+
+    #[test]
+    fn resolution_propagates_hash_failure_before_another_pass() {
+        let mut passes = iter::once(());
+        let error = resolve_until_stable(
+            ResolvedVersions {
+                packages: BTreeMap::new(),
+            },
+            |_| Err(StaleInputs::new().into()),
+            |resolved| {
+                passes.next().unwrap();
+                Ok((
+                    resolved.clone(),
+                    vec![Artifact {
+                        path: "Cargo.lock".into(),
+                        contents: "resolved".to_owned(),
+                    }],
+                ))
+            },
+        )
+        .unwrap_err();
+        assert!(error.find_source::<StaleInputs>().is_some());
+        assert!(passes.next().is_none());
+    }
+
+    fn digest(bytes: &[u8]) -> String {
+        // Convergence depends on state identity, not Git's digest encoding. The real
+        // hash adapter runs in preview integration tests, never in this decision suite.
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
     }
 }
