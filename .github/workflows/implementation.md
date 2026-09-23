@@ -548,6 +548,9 @@ commit, installs the environment and invokes the same Just recipe used locally.
 The catalog defines recipes, platforms, packages and shards; there
 is no hosted selection of a different source commit or reduced scope.
 
+Mutation checks use `1/2` and `2/2` on Linux and Windows. The shared `checks` job
+timeout is 360 minutes, allowing for cold-cache setup and the workload per shard.
+
 Each execution leg runs independently with fail-fast disabled. Jobs combining independent
 checks use the same setup-gated continuation as standard validation: release compilation
 continues after release Clippy fails, and ARM benchmark smoke tests continue after test or
