@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.3.18"
+version = "0.3.17"
 dependencies = [
  "clap",
  "criterion",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.2.13"
+version = "0.2.12"
 dependencies = [
  "cpulist",
  "criterion",
