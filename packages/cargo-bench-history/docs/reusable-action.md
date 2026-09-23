@@ -1983,7 +1983,7 @@ are documented in the
 | # | Action | Gates | Notes |
 | --- | --- | --- | --- |
 | 1 | **Configure production storage and its identity** | Using the Azure-backed workflows | Use one federated managed identity for history and PR collection and analysis, record its non-secret identifiers, and verify storage access. |
-| 2 | **Bootstrap new crates, then configure Trusted Publishing** | Installing published tool and companion versions | Follow `RELEASING.md`: first publication is a maintainer operation from clean `main` after review and merge; subsequent releases use the configured `folo-rs/folo` / `release.yml` Trusted Publisher. |
+| 2 | **Bootstrap new crates, then configure Trusted Publishing** | First merge introducing new crates | Follow [RELEASING.md](../../../RELEASING.md#first-publish-of-a-new-crate): the maintainer publishes the bootstrap version from the feature branch before its first merge and configures the `folo-rs/folo` / `release.yml` Trusted Publisher. Merge a higher version for the second publication, the first automated release. |
 | 3 | **Configure Marketplace publishing** — agreement, category and listing | Public action release | A one-time UI flow tied to the account, not to a release run (§8.1). |
 | 4 | **Define the `v1` compatibility promise** | Publishing and moving the floating major tag | Consumers inherit the release that the tag identifies; breaking changes require an appropriate new major. |
 | 5 | **Require the action installation gate** (§12.2) | Merging and releasing the action | Protect `main` with PR review and a required check that cannot pass unless `install-tools` succeeds; asynchronous tool publication does not waive it. |
