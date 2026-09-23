@@ -12,10 +12,10 @@
 //! `DESIGN.md`).
 //!
 //! The range is walked **newest commit first**. The newest gaps are the ones
-//! current comparisons draw on, so a run that is cut short (a CI job timeout) has
-//! spent its time on the most valuable commits. The endpoints are independent of
-//! that walk: `--from` names the oldest commit of the range and `--to` the newest,
-//! both inclusive.
+//! current comparisons draw on, so bounded passes prioritize those commits.
+//! `--max-commits` limits replay attempts after the skip pre-check, completing each
+//! attempted commit before stopping normally. The endpoints remain independent of
+//! that limit: `--from` names the oldest commit and `--to` the newest, both inclusive.
 //!
 //! Like `collect`, the orchestration is generic over small ports so the loop logic is
 //! exercised with in-memory fakes (Miri-safe): a [`BackfillGit`] port for the git
@@ -37,6 +37,7 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -282,17 +283,15 @@ async fn resolve_required<G: BackfillGit>(
 
 /// Runs each commit of the range in the worktree, aggregating a [`BackfillReport`].
 ///
-/// `commits` arrives newest-first, so the most recent gaps are filled before a run
-/// is cut short. A per-commit build/bench failure stops the loop unless
+/// `commits` arrives newest-first, so the most recent gaps are filled first.
+/// The optional attempt limit applies after the skip pre-check and before resetting
+/// the next commit. A per-commit build/bench failure stops the loop unless
 /// `--ignore-errors` is set — which, in this order, means the run stops at the
 /// *newest* failing commit and leaves the older ones untouched; an infrastructure
 /// error always aborts (propagated as `Err`).
 ///
-/// What the skip pre-check decided is announced before the loop rather than left
-/// to [`BackfillReport::render`]: a run that is cut short by a job timeout — the
-/// designed steady state of a nightly backfill — never reaches the summary, and
-/// the pre-check is precisely the step whose misbehaviour would show up as a run
-/// that quietly measures nothing.
+/// The pre-check and attempt budget are announced before any expensive replay, so
+/// operators can distinguish a bounded pass from a range with nothing to measure.
 async fn run_commits<G, C>(
     options: &BackfillOptions,
     git: &G,
@@ -314,18 +313,9 @@ where
     } else {
         runner.recorded_commits().await?
     };
-    // Only the overlap with this range matters: the listings cover the partition's
-    // whole history, which reaches beyond `--from`..`--to`.
-    let already_recorded = commits
-        .iter()
-        .filter(|commit| recorded.contains(*commit))
-        .count();
-    reporter.announce(&scan_outcome_summary(
-        commits.len(),
-        already_recorded,
-        options.overwrite,
-    ));
-
+    // Classify the entire range before limiting attempts: an older recorded commit
+    // is already covered, not deferred work, even if the loop stops before it.
+    let mut pending = Vec::new();
     for commit in commits {
         if recorded.contains(commit) {
             reporter.note_with(|| {
@@ -335,11 +325,27 @@ where
                 )
             });
             report.skipped_existing.push(commit.clone());
-            continue;
+        } else {
+            pending.push(commit);
         }
+    }
+    report.deferred = pending.len();
+    reporter.announce(&scan_outcome_summary(
+        commits.len(),
+        report.skipped_existing.len(),
+        options.overwrite,
+        options.max_commits,
+    ));
+
+    let attempts = options.max_commits.map_or(pending.len(), NonZeroUsize::get);
+    for commit in pending.into_iter().take(attempts) {
         git.reset_to(worktree, commit)
             .await
             .map_err(|error| ResetWorktreeFailedError::caused_by(worktree, commit, error))?;
+        report.deferred = report
+            .deferred
+            .checked_sub(1)
+            .expect("each attempt consumes one distinct pending commit");
         match runner.run(worktree, commit).await? {
             CommitOutcome::Stored { cases } => report.stored.push((commit.clone(), cases)),
             CommitOutcome::SkippedExisting => report.skipped_existing.push(commit.clone()),
@@ -365,24 +371,37 @@ where
 /// this partition.
 ///
 /// It names the rule that produced the split and the flag that changes it, so a
-/// run whose measured count is surprising can be diagnosed from this one line —
-/// which, in a run that a job timeout ends before the summary, is the only record
-/// of the decision.
+/// run whose measured count is surprising can be diagnosed from this one line,
+/// including the optional bound on replay attempts.
 ///
 /// A pure formatter so the wording is unit-tested without a store.
-fn scan_outcome_summary(total: usize, already_recorded: usize, overwrite: bool) -> String {
+fn scan_outcome_summary(
+    total: usize,
+    already_recorded: usize,
+    overwrite: bool,
+    max_commits: Option<NonZeroUsize>,
+) -> String {
     let range = format!("backfilling {}, newest first", count_noun(total, "commit"));
-    if overwrite {
-        return format!(
+    let pending = total.saturating_sub(already_recorded);
+    let summary = if overwrite {
+        format!(
             "{range}: --overwrite disables the skip pre-check, so every commit is \
-             re-measured and its stored result replaced"
-        );
+             eligible for re-measurement and replacement"
+        )
+    } else {
+        format!(
+            "{range}: {already_recorded} already recorded in this partition and skipped \
+             without benchmarking (pass --overwrite to re-measure them), {pending} pending"
+        )
+    };
+    if let Some(limit) = max_commits {
+        format!(
+            "{summary}; --max-commits {limit} allows at most {} this invocation",
+            count_noun(pending.min(limit.get()), "replay attempt"),
+        )
+    } else {
+        summary
     }
-    let to_measure = total.saturating_sub(already_recorded);
-    format!(
-        "{range}: {already_recorded} already recorded in this partition and skipped \
-         without benchmarking (pass --overwrite to re-measure them), {to_measure} to measure"
-    )
 }
 
 /// The per-commit outcomes a backfill accumulated, rendered into a summary.
@@ -398,6 +417,8 @@ struct BackfillReport {
     failures: Vec<FailedCommit>,
     /// The entry in `failures` that stopped the run without `--ignore-errors`.
     stopped_failure: Option<usize>,
+    /// Eligible commits left unattempted by the limit or a stopping benchmark failure.
+    deferred: usize,
 }
 
 /// A commit and its typed benchmark failure.
@@ -415,14 +436,22 @@ struct FailedCommit {
 impl BackfillReport {
     /// Renders the multi-line summary for a range of `total` commits.
     fn render(&self, total: usize) -> String {
+        let reason = if self.stopped_failure.is_some() {
+            "Stopped on benchmark failure."
+        } else if self.deferred > 0 {
+            "Commit limit reached."
+        } else {
+            "Range exhausted."
+        };
         let mut lines = vec![format!(
             "Backfill range of {}: {} stored, {} skipped (existing), \
-             {} skipped (empty), {} failed.",
+             {} skipped (empty), {} failed, {} deferred. {reason}",
             count_noun(total, "commit"),
             self.stored.len(),
             self.skipped_existing.len(),
             self.skipped_empty.len(),
             self.failures.len(),
+            self.deferred,
         )];
         for (commit, cases) in &self.stored {
             lines.push(format!(
@@ -1413,9 +1442,7 @@ mod tests {
 
     #[test]
     fn run_commits_announces_what_the_skip_pre_check_decided() {
-        // A nightly backfill is designed to be killed by a job timeout and never
-        // reaches the summary, so the split between skipped and to-be-measured
-        // commits has to be stated up front or the run leaves no record of it.
+        // The scan explains why expensive work will or will not run.
         let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().complete("c1");
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
@@ -1435,7 +1462,7 @@ mod tests {
         assert!(
             announcements.iter().any(|line| line.contains("3 commits")
                 && line.contains("1 already recorded")
-                && line.contains("2 to measure")),
+                && line.contains("2 pending")),
             "{announcements:?}"
         );
         // Progress is visible per commit under --verbose, so a run cut short still
@@ -1445,28 +1472,231 @@ mod tests {
 
     #[test]
     fn scan_outcome_summary_states_the_split_and_the_rule_behind_it() {
-        let partial = scan_outcome_summary(10, 4, false);
+        let partial = scan_outcome_summary(10, 4, false, None);
         assert!(
             partial.contains("backfilling 10 commits, newest first"),
             "{partial}"
         );
         assert!(partial.contains("4 already recorded"), "{partial}");
-        assert!(partial.contains("6 to measure"), "{partial}");
+        assert!(partial.contains("6 pending"), "{partial}");
         // The flag that changes the decision is named, so a surprising count is
         // actionable from this line alone.
         assert!(partial.contains("--overwrite"), "{partial}");
 
         // A range with nothing left to do still says so rather than staying silent.
-        let complete = scan_outcome_summary(10, 10, false);
-        assert!(complete.contains("0 to measure"), "{complete}");
+        let complete = scan_outcome_summary(10, 10, false, None);
+        assert!(complete.contains("0 pending"), "{complete}");
 
         // With --overwrite the pre-check never ran, so no count is invented for it.
-        let overwriting = scan_outcome_summary(10, 0, true);
+        let overwriting = scan_outcome_summary(10, 0, true, None);
         assert!(
             overwriting.contains("--overwrite disables the skip pre-check"),
             "{overwriting}"
         );
         assert!(!overwriting.contains("to measure"), "{overwriting}");
+        assert!(!overwriting.contains("already recorded"));
+    }
+
+    #[test]
+    fn bounded_backfill_skips_before_limiting_and_reports_the_whole_range() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new()
+            .complete("f2")
+            .complete("c0")
+            .complete("c3");
+        let mut opts = options("c0", "f2");
+        opts.max_commits = NonZeroUsize::new(1);
+        let reporter = RecordingReporter::new();
+
+        let RunOutcome::Completed { message } = block_on(execute_backfill(
+            &opts,
+            &git,
+            &runner,
+            &worktree(),
+            &reporter,
+        ))
+        .unwrap() else {
+            panic!("expected a completed outcome");
+        };
+
+        assert_eq!(*runner.ran.borrow(), ["f1"]);
+        assert_eq!(*git.resets.borrow(), [(worktree(), "f1".to_owned())]);
+        assert_eq!(*git.removed.borrow(), [worktree()]);
+        assert!(message.contains(
+            "4 commits: 1 stored, 2 skipped (existing), 0 skipped (empty), 0 failed, 1 deferred. Commit limit reached."
+        ));
+        assert!(reporter.announced("2 already recorded"));
+        assert!(reporter.announced("2 pending"));
+        assert!(reporter.announced("--max-commits 1 allows at most 1 replay attempt"));
+    }
+
+    #[test]
+    fn every_runner_outcome_consumes_a_commit_attempt() {
+        for outcome in [
+            FakeResult::Stored(3),
+            FakeResult::SkippedExisting,
+            FakeResult::SkippedEmpty,
+            FakeResult::BenchFailed,
+        ] {
+            let git = FakeBackfillGit::new(fixture());
+            let runner = FakeCommitRunner::new().with("c2", outcome.clone());
+            let commits = ["c2", "c1", "c0"].map(str::to_owned);
+            let mut opts = options("c0", "c2");
+            opts.max_commits = NonZeroUsize::new(1);
+            opts.ignore_errors = true;
+
+            let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
+
+            assert_eq!(*runner.ran.borrow(), ["c2"]);
+            assert_eq!(*git.resets.borrow(), [(worktree(), "c2".to_owned())]);
+            assert_eq!(report.deferred, 2);
+            assert!(report.stopped_failure.is_none());
+            assert!(report.render(3).contains("Commit limit reached."));
+            assert_eq!(
+                report.stored.len(),
+                usize::from(matches!(outcome, FakeResult::Stored(_)))
+            );
+            assert_eq!(
+                report.skipped_existing.len(),
+                usize::from(matches!(outcome, FakeResult::SkippedExisting))
+            );
+            assert_eq!(
+                report.skipped_empty.len(),
+                usize::from(matches!(outcome, FakeResult::SkippedEmpty))
+            );
+            assert_eq!(
+                report.failures.len(),
+                usize::from(matches!(outcome, FakeResult::BenchFailed))
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_backfill_attempts_n_commits_before_the_next_reset() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new().complete("c2");
+        let commits = ["c3", "c2", "c1", "c0"].map(str::to_owned);
+        let mut opts = options("c0", "c3");
+        opts.max_commits = NonZeroUsize::new(2);
+
+        let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
+
+        assert_eq!(*runner.ran.borrow(), ["c3", "c1"]);
+        assert_eq!(
+            *git.resets.borrow(),
+            [(worktree(), "c3".to_owned()), (worktree(), "c1".to_owned()),]
+        );
+        assert_eq!(report.deferred, 1);
+        assert_eq!(report.stored.len(), 2);
+        assert_eq!(report.skipped_existing, ["c2"]);
+    }
+
+    #[test]
+    fn bounded_backfill_continues_after_ignored_failure_with_remaining_budget() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new().with("c2", FakeResult::BenchFailed);
+        let commits = ["c2", "c1", "c0"].map(str::to_owned);
+        let mut opts = options("c0", "c2");
+        opts.max_commits = NonZeroUsize::new(2);
+        opts.ignore_errors = true;
+
+        let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
+
+        assert_eq!(*runner.ran.borrow(), ["c2", "c1"]);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.stored, [("c1".to_owned(), 1)]);
+        assert_eq!(report.deferred, 1);
+        assert!(report.stopped_failure.is_none());
+        assert!(report.render(3).contains("Commit limit reached."));
+    }
+
+    #[test]
+    fn bounded_backfill_exhausts_the_range_when_all_pending_commits_fit() {
+        for limit in [1, 2] {
+            let git = FakeBackfillGit::new(fixture());
+            let runner = FakeCommitRunner::new().complete("c1").complete("c0");
+            let commits = ["c2", "c1", "c0"].map(str::to_owned);
+            let mut opts = options("c0", "c2");
+            opts.max_commits = NonZeroUsize::new(limit);
+
+            let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
+
+            assert_eq!(*runner.ran.borrow(), ["c2"]);
+            assert_eq!(report.skipped_existing, ["c1", "c0"]);
+            assert_eq!(report.deferred, 0);
+            assert!(report.render(3).contains("Range exhausted."));
+            assert!(!report.render(3).contains("limit reached"));
+        }
+    }
+
+    #[test]
+    fn bounded_backfill_with_every_commit_recorded_succeeds_without_replay() {
+        let git = FakeBackfillGit::new(fixture()).with_reset_failure();
+        let runner = FakeCommitRunner::new().complete("c1").complete("c0");
+        let mut opts = options("c0", "c1");
+        opts.max_commits = NonZeroUsize::new(1);
+        let reporter = RecordingReporter::new();
+
+        let RunOutcome::Completed { message } = block_on(execute_backfill(
+            &opts,
+            &git,
+            &runner,
+            &worktree(),
+            &reporter,
+        ))
+        .unwrap() else {
+            panic!("expected a completed outcome");
+        };
+
+        assert!(runner.ran.borrow().is_empty());
+        assert!(git.resets.borrow().is_empty());
+        assert_eq!(*git.removed.borrow(), [worktree()]);
+        assert!(message.contains("0 stored, 2 skipped (existing)"));
+        assert!(message.contains("0 deferred. Range exhausted."));
+        assert!(reporter.announced("0 pending"));
+        assert!(reporter.announced("at most 0 replay attempts"));
+    }
+
+    #[test]
+    fn bounded_overwrite_starts_at_the_newest_commit_on_every_invocation() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new().complete("c2");
+        let commits = ["c2", "c1", "c0"].map(str::to_owned);
+        let mut opts = options("c0", "c2");
+        opts.max_commits = NonZeroUsize::new(1);
+        opts.overwrite = true;
+
+        for _ in 0..2 {
+            let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
+            assert_eq!(report.stored, [("c2".to_owned(), 1)]);
+            assert!(report.skipped_existing.is_empty());
+            assert_eq!(report.deferred, 2);
+        }
+        assert_eq!(*runner.ran.borrow(), ["c2", "c2"]);
+        let summary = scan_outcome_summary(3, 0, true, opts.max_commits);
+        assert!(summary.contains("eligible for re-measurement"));
+        assert!(summary.contains("at most 1 replay attempt"));
+        assert!(!summary.contains("already recorded"));
+    }
+
+    #[test]
+    fn a_benchmark_failure_takes_precedence_over_the_commit_limit() {
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new()
+            .with("c2", FakeResult::BenchFailed)
+            .complete("c0");
+        let commits = ["c2", "c1", "c0"].map(str::to_owned);
+        let mut opts = options("c0", "c2");
+        opts.max_commits = NonZeroUsize::new(1);
+
+        let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
+
+        assert_eq!(report.stopped_failure, Some(0));
+        assert_eq!(report.deferred, 1);
+        assert_eq!(report.skipped_existing, ["c0"]);
+        assert!(report.render(3).contains("Stopped on benchmark failure."));
+        assert!(!report.render(3).contains("Commit limit reached."));
+        assert_eq!(*runner.ran.borrow(), ["c2"]);
     }
 
     #[test]
@@ -1619,6 +1849,7 @@ mod tests {
                 error: EngineFailedError::new("cargo bench", 1).into(),
             }],
             stopped_failure: Some(0),
+            deferred: 1,
         };
 
         let rendered = report.render(5);
@@ -1626,7 +1857,7 @@ mod tests {
         assert!(
             rendered.contains(
                 "Backfill range of 5 commits: 1 stored, 1 skipped (existing), \
-                 1 skipped (empty), 1 failed."
+                 1 skipped (empty), 1 failed, 1 deferred. Stopped on benchmark failure."
             ),
             "{rendered}"
         );
@@ -1798,6 +2029,45 @@ mod tests {
 
         assert!(error.find_source::<StorageError>().is_some());
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
+    }
+
+    #[test]
+    fn bounded_backfill_preserves_failure_and_cleanup_errors() {
+        for (outcome, fail_remove) in [
+            (FakeResult::BenchFailed, false),
+            (FakeResult::Infra, false),
+            (FakeResult::Stored(1), true),
+        ] {
+            let mut git = FakeBackfillGit::new(fixture());
+            git.fail_remove = fail_remove;
+            let runner = FakeCommitRunner::new().with("c1", outcome.clone());
+            let mut opts = options("c0", "c1");
+            opts.max_commits = NonZeroUsize::new(1);
+            // Ignoring per-commit failures never suppresses infrastructure errors.
+            opts.ignore_errors = matches!(outcome, FakeResult::Infra);
+            let reporter = RecordingReporter::new();
+
+            let error = block_on(execute_backfill(
+                &opts,
+                &git,
+                &runner,
+                &worktree(),
+                &reporter,
+            ))
+            .unwrap_err();
+
+            match outcome {
+                FakeResult::BenchFailed => {
+                    assert!(error.find_source::<EngineFailedError>().is_some());
+                }
+                FakeResult::Infra => assert!(error.find_source::<StorageError>().is_some()),
+                _ => assert!(error.find_source::<RemoveWorktreeFailedError>().is_some()),
+            }
+            assert_eq!(*runner.ran.borrow(), ["c1"]);
+            assert_eq!(*git.resets.borrow(), [(worktree(), "c1".to_owned())]);
+            assert_eq!(*git.removed.borrow(), [worktree()]);
+            assert!(reporter.announced("--max-commits 1"));
+        }
     }
 
     #[test]

@@ -191,11 +191,19 @@ six-hour ceiling and runs independently of other platforms' failures. Backfill r
 queue without deduplicating or cancelling earlier invocations; project/platform
 queues also serialize config paths that identify the same storage project.
 
+Set `max-commits: '1'` to attempt at most one missing commit per platform job, or choose
+another positive integer. Omitted or empty input leaves replay unlimited. The limit applies
+after skipping recorded commits in the current partition and does not shorten the inclusive
+range. Failed, empty and write-time duplicate attempts count, while pre-check skips do not.
+Each attempt completes all repetitions and engine storage, and a bounded pass exits normally
+with a deferred-work count after cleanup. This bounds work, not elapsed time.
+
 Build or benchmark failures stop by default. Set `ignore-errors: true` to continue
 past individual failing commits; infrastructure errors still fail. Independently,
-`best-effort: true` tolerates a platform job's failure or timeout. Both default to
-false. Best effort can also hide credential or storage failures, so use it only when
-that is an acceptable policy for your caller.
+`best-effort: true` tolerates ordinary platform-job failures but does not turn a
+hosted-runner timeout into a successful bounded pass. Both default to false. Best effort
+can also hide credential or storage failures, so use it only when that is an acceptable
+policy for your caller.
 
 Backfill accepts the same measurement and installation settings as the other workflows:
 `platforms`, `working-directory`, `config`, `exclude`, `bench`, `best-of`, `all-features`,

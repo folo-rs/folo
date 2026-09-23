@@ -49,6 +49,9 @@ pub(crate) fn build_process(
             inputs.required("from")?.into(),
             inputs.required("to")?.into(),
         ]);
+        if let Some(limit) = inputs.get("max-commits") {
+            option(&mut args, "--max-commits", limit);
+        }
     }
     common_arguments(inputs, cwd, &mut args);
     let packages = inputs.list("packages")?;

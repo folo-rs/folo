@@ -127,7 +127,7 @@ there is no success default.
 | Command | Inputs |
 | --- | --- |
 | `collect` | `local-path`, `packages`, `exclude`, `bench`, `best-of`, `on-existing`, `all-features`, `no-default-features`, `features`, `rustflags` |
-| `backfill` | Collection inputs plus required `from`, `to`, and optional `ignore-errors` |
+| `backfill` | Collection inputs plus required `from`, `to`, and optional `ignore-errors`, `max-commits` |
 | `analyze-history` | `local-path`, `cache`, required `machine-keys`, `context`, `since`, required `expected-platforms`, `completed-platforms` |
 | `analyze-pr` | The history inputs except `since`, plus optional `base` |
 | `publish-comment-findings`, `publish-comment-clean` | Report inputs, run ownership, `pr-number`, required `packages` |
@@ -139,6 +139,10 @@ there is no success default.
 | `publish-comment-failed` | Run ownership, `pr-number`, `head`, `run-url`, required `conclusion` |
 | `publish-issue-failed` | Run ownership, `head`, `run-url`, required `conclusion` |
 | `alert` | `run-id`, `run-url` |
+
+`max-commits` is a backfill-only positive integer within the executing platform's `usize`
+range. It is forwarded as `--max-commits` only when supplied; empty or absent input leaves
+replay unlimited. The core counts attempts after its partition skip check, not range endpoints.
 
 Collection defaults to workspace scope, including any exclusions. Explicit `packages`
 conflicts with `exclude`. `bench`, packages, exclusions and features become repeated core

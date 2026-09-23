@@ -846,10 +846,15 @@ The workflow accepts the shared `platforms`, `working-directory`, `config`, `exc
 `best-of`, `all-features`, `no-default-features`, `features`, `rustflags`, `install-method` and `source-path`
 inputs. Collection covers the workspace at each historical commit, subject to exclusions.
 There is no public package allowlist, scope/instance selector or setup-path input.
+Optional `max-commits` is a string containing a positive integer within the executing
+platform's `usize` range; empty or absent means unlimited replay. It reaches the core
+as `--max-commits` without changing range preparation. The bound applies to replay attempts
+after skipping recorded commits in the current partition, not to range endpoints.
 `ignore-errors` and `best-effort` are independent Boolean inputs, both defaulting to false:
 the former continues past per-commit build/benchmark failures, while the latter opts into
-matrix-job `continue-on-error`, including a hosted-runner timeout. Infrastructure errors remain
-errors in the core tool even when `ignore-errors` is enabled.
+matrix-job `continue-on-error` for ordinary failures. Neither makes a hosted-runner timeout
+a successful bounded pass. Infrastructure errors remain errors in the core tool even when
+`ignore-errors` is enabled.
 
 Preparation uses full Git history to resolve selected nonblank, single-line refs safely to full
 commit SHAs. It does not filter scope against current-head Cargo metadata or benchmark inventory:
@@ -1022,10 +1027,14 @@ empty series — a series can stay too sparse to judge for a long time. A third 
 that gap.
 
 * **`backfill` replays collection across a window of recent history**, walking **newest
-  first** so a run that exhausts its time budget has spent it on the most
-  comparison-relevant commits rather than the oldest ones. It is **resumable by default**:
-  commits already stored for this key are skipped, so a truncated run simply continues
-  next time, and only an explicit overwrite re-measures.
+  first** to prioritize the most comparison-relevant commits. Optional `max-commits` bounds
+  attempts after skipping recorded commits, while completing each attempt's repetitions,
+  engine storage and normal cleanup. Empty harvests, failed benchmarks and write-time
+  duplicates consume attempts; pre-check skips do not. Bounded completion reports deferred
+  work instead of claiming the entire range completed. It is **resumable by default**:
+  commits already stored for this key are skipped, so later passes fill the next gaps.
+  With explicit overwrite, a bounded pass starts at the newest commit on every invocation
+  rather than advancing a cursor.
   The CLI takes inclusive `FROM TO` commit refs, not a duration flag. A reusable-workflow
   caller supplies either `from`/`to` or rolling duration parameters; shared preparation calculates
   the range and freezes it to full SHAs. `ignore-errors` maps to `--ignore-errors` when it
@@ -1462,12 +1471,15 @@ Attempts share the same run identity. It has no resolution counterpart or auto-c
 The names and required evidence agree between the composite and companion layers.
 
 **Composite `backfill` inputs:** the same scope inputs as `collect` (`packages`, `exclude`, `bench`,
-`best-of`), inclusive `from` / `to` refs, `ignore-errors`, and `on-existing` (`skip` by default
+`best-of`), inclusive `from` / `to` refs, `ignore-errors`, optional `max-commits`, and `on-existing` (`skip` by default
 or `overwrite`; `error` is invalid here, §4.5). The reusable workflow accepts either explicit
 `from`/`to` or rolling `lookback`/`minimum-age` with an optional `to` override. Shared preparation
 calculates and freezes the range; callers supply parameters only. The workflow fixes skip-existing
 workspace collection with configurable exclusions and additionally exposes the whole-job
 `best-effort` opt-in (§4.7).
+Both layers accept `max-commits` as an optional string with no default cap. The companion
+validates its positive platform-sized integer value only for backfill and forwards it
+unchanged to the core. Range preparation receives no attempt limit.
 
 **History/PR reusable-workflow publication control:** `publish` (Boolean, default `true`) controls all
 GitHub writes as one policy (§5.2). It is not an input to the individual composite commands:
