@@ -35,6 +35,26 @@ Standard validation and its close companion share the `standard-validation-`
 ref-specific concurrency group. The merge-blocking job/check name and ruleset
 target are exactly `required-checks`.
 
+## Development tool bootstrap and caching
+
+`setup-environment` restores caches before invoking `scripts/setup/install-just.ps1`
+and then the ordinary `just install-tools` recipe. Both use the same verified binstall
+bootstrap and publisher-first policy as local development. Bootstrap constants are loaded
+through `scripts/utility/Constants.psm1`, also used by the pre-setup benchmark canary.
+See [development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
+
+The Cargo tool cache owns the installed executables and their `.crates.toml`,
+`.crates2.json` and `binstall` metadata. It excludes rustup proxies. Its key includes
+the platform, runner image and tool pins/installer inputs; a same-image fallback may
+restore older versions, which the installer reconciles before a new cache is saved.
+This cache is separate from `rust-cache`, whose binary caching is disabled, so changing
+a tool pin does not discard workspace compilation artifacts. Standalone lint tools and
+Bicep retain their independent caches.
+
+The install steps supply the job's ephemeral GitHub token for public release discovery.
+Local installation does not require authentication or modify credential configuration.
+No step bootstraps binstall through compilation or disables signature verification.
+
 ## Benchmark workflow artifacts
 
 Folo delegates its ordinary benchmark job graphs to

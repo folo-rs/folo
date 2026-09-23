@@ -819,6 +819,13 @@ the mostly-cached setup time it would save. Toolchain versions are defined once 
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
 
+Development tools prefer publisher binaries with locked source fallback. The bootstrap
+executable is checksum-pinned; subsequent tools follow the publisher-build trust policy in
+[development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
+Quickinstall is disabled. Source-only and Git-pinned tools keep their source installation,
+and platform restrictions and version pairings remain intact. Tool caches reconcile exact
+pins independently of workspace build artifacts.
+
 The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
 installed only where a job actually executes Callgrind measurements — the benchmark
 collection jobs, the test jobs that smoke-run every bench target, and the cache warmup that

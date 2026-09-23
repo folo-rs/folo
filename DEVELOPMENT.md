@@ -20,7 +20,6 @@ Prerequisites:
 * PowerShell 7
 * Node.js with npm (used to install and run the Azurite Azure Blob emulator for `just test-azurite`)
 * `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
-* `cargo install just`
 * (Only if publishing releases) GitHub CLI + `gh auth login`
 
 Setup:
@@ -28,7 +27,14 @@ Setup:
 1. Clone the repo to a directory of your choosing.
 1. Open a terminal in the repo root.
 1. Execute `git config --local include.path ./.gitconfig` to attach the repo-specific Git configuration.
+1. Execute `pwsh -File scripts\setup\install-just.ps1` to bootstrap the pinned `cargo-binstall` and `just` binaries.
 1. Execute `just install-tools` to install development tools.
+
+The bootstrap verifies a pinned checksum before running `cargo-binstall`; it does not compile
+it or change execution policy. The Cargo bin directory must be on PATH (normally configured
+by rustup). Tool installation prefers publisher binaries and retains source fallback, so the
+C++ build tools remain prerequisites. See [development tool installation](docs/build-and-tooling.md#development-tool-installation)
+for the trust policy and source-build troubleshooting.
 
 # Development environment setup (Linux)
 
@@ -46,13 +52,13 @@ Prerequisites:
   sudo apt install -y powershell
   ```
 * `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
-* `cargo install just`
 * Node.js with npm (used to install and run the Azurite Azure Blob emulator for `just test-azurite`)
 * If first time Git setup, execute `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"` to setup authentication flow
 
 Setup:
 
 1. Navigate to repo shared with Windows host (under `/mnt/c/`). Do not create a separate clone of the repo for Linux.
+1. Execute `pwsh -File scripts/setup/install-just.ps1` to bootstrap the pinned `cargo-binstall` and `just` binaries.
 1. Execute `just install-tools` to install development tools.
 1. Optionally, open Visual Studio Code via `code .` and install its development extensions:
     * C/C++

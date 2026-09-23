@@ -77,9 +77,11 @@ jobs:
 
       - name: Install mdbook
         # mdbook and mdbook-mermaid are not part of `just install-tools`, so install them here,
-        # pinned and --locked for reproducibility. They are not carried in the shared
-        # setup-environment cache, so this compiles mdbook from source (a couple of minutes).
+        # using the same publisher-first policy and exact version pairing as local book builds.
+        # Ref: ../../docs/build-and-tooling.md#development-tool-installation.
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'

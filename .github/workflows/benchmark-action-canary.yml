@@ -47,7 +47,7 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Import-Module ./scripts/utility/Constants.psm1 -Force
           $values = Read-DotEnvFile -Path constants.env
           foreach ($name in @('AZURE_TEST_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'BENCH_HISTORY_TEST_AZURE_ACCOUNT')) {
             $value = Get-RequiredConstant -Values $values -Name $name
