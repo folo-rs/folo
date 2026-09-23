@@ -9,6 +9,8 @@ use linked::{InstancePerThread, InstancePerThreadSync};
 use region_cached::{RegionCached, RegionCachedCopyExt, RegionCachedExt, region_cached};
 use testing::with_watchdog;
 
+::testing::set_allocator!();
+
 #[test]
 fn real_smoke_test() {
     region_cached! {

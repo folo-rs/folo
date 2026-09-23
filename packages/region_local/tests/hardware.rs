@@ -9,6 +9,8 @@ use linked::{InstancePerThread, InstancePerThreadSync};
 use region_local::{RegionLocal, RegionLocalExt, region_local};
 use testing::with_watchdog;
 
+::testing::set_allocator!();
+
 #[test]
 fn real_smoke_test() {
     region_local! {

@@ -8,6 +8,8 @@ use std::task::{Context, Poll, Waker};
 use cbh_probe::{EnvironmentProbe, HardwareProfile, SystemProbe, resolve_machine_key};
 use many_cpus::{Processor, SystemHardware};
 
+::testing::set_allocator!();
+
 /// Width of the hardware fingerprint's stored hexadecimal representation.
 const FINGERPRINT_HEX_LEN: usize = 16;
 
