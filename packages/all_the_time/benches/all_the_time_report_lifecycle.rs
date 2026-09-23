@@ -1,10 +1,9 @@
-//! Full-lifecycle benchmarks for the `all_the_time` processor time tracker.
+//! In-memory lifecycle benchmarks for the `all_the_time` processor time tracker.
 //!
 //! Where `all_the_time_tracking_overhead` measures only the per-span record
-//! path, this benchmark covers every remaining lifecycle stage — session and
-//! operation setup, report snapshotting, merging, human rendering (which
-//! resolves the recorded spans into per-iteration figures and sorts operations —
-//! the work that regressed in issue #328), and JSON output. Each stage is
+//! path, this benchmark covers session and operation setup, report snapshotting,
+//! merging, and human rendering (which resolves the recorded spans into
+//! per-iteration figures and sorts operations). Each stage is
 //! measured for all three cost dimensions at once:
 //!
 //! * **wall-clock time** — Criterion, the harness.
@@ -49,7 +48,6 @@ fn entrypoint(c: &mut Criterion) {
     snapshot(c, &alloc, &time);
     merge(c, &alloc, &time);
     render(c, &alloc, &time);
-    write(c, &alloc, &time);
 }
 
 /// Wraps the measured `body` in an allocation span and a processor-time span so
@@ -179,26 +177,6 @@ fn render(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
             });
         });
     }
-
-    group.finish();
-}
-
-fn write(c: &mut Criterion, alloc: &AllocSession, time: &Session) {
-    let mut group = c.benchmark_group("all_the_time_report_lifecycle/write");
-    let alloc_op = alloc.operation("all_the_time_report_lifecycle/write/ops_25");
-    let time_op = time.operation("all_the_time_report_lifecycle/write/ops_25");
-
-    // JSON output is I/O-bound, so keep the operation count modest.
-    let report = build_report(25);
-    let directory = tempfile::tempdir().expect("creating a temp directory cannot fail in a bench");
-
-    group.bench_function("ops_25", |b| {
-        b.iter_custom(|iters| {
-            measured(iters, &alloc_op, &time_op, || {
-                report.write_to_directory(directory.path());
-            })
-        });
-    });
 
     group.finish();
 }
