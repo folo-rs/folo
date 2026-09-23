@@ -41,6 +41,7 @@ jobs:
     uses: ./.github/workflows/standard-validation.yml
     permissions:
       contents: read
+      actions: read
       id-token: write
       issues: write
     secrets:

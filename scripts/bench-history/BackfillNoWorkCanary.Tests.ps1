@@ -50,6 +50,21 @@ Describe 'No-work backfill caller verification' {
         { & $script:Verify @script:Invocation } | Should -Not -Throw
     }
 
+    It 'classifies no-work jobs under <Prefix> without accepting a similar job segment' -ForEach @(
+        @{ Prefix = 'benchmark-canary / ' }
+        @{ Prefix = 'standard / benchmark-canary / ' }
+    ) {
+        foreach ($page in $script:Evidence.pages) {
+            foreach ($job in $page.jobs) { $job.name = "$Prefix$($job.name)" }
+        }
+        $script:Evidence.pages[1].jobs += @{
+            name = "${Prefix}other-no-eligible-backfill / backfill"; conclusion = 'success'
+        }
+        { & $script:Verify @script:Invocation } | Should -Not -Throw
+        $script:Evidence.pages[1].jobs[0].conclusion = 'success'
+        { & $script:Verify @script:Invocation } | Should -Throw
+    }
+
     It 'rejects <Case> rather than claiming a successful no-work result' -ForEach @(
         @{ Case = 'missing preparation' }
         @{ Case = 'failed preparation' }

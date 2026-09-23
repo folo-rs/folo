@@ -82,6 +82,19 @@ validate-workflows:
 
     actionlint -color
 
+# The synthetic caller is a standalone Cargo workspace, so root-workspace checks do not
+# validate its lockfile. Run from a clean checkout before collection, including on fork PRs.
+# Ref: .github/workflows/implementation.md#reusable-workflow-canary.
+[group('quality')]
+[script]
+verify-caller-fixture:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/CallerFixture.psm1 -Force
+    Assert-CallerFixture -Workspace "{{justfile_directory()}}"
+
 # Validates that every publishable binary crate declares the `[package.metadata.binstall]` block
 # the release workflow relies on, so a binary crate can never ship without installable prebuilt
 # binaries (see scripts/release/BinstallValidation.psm1 and docs/release-automation.md). Fast and
