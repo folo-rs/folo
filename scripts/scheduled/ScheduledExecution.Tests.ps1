@@ -39,7 +39,7 @@ Describe 'Shared recipe invocation' {
     It 'runs the existing <recipe> recipe with the matrix scope' -ForEach @(
         @{ id = 'miri-ubuntu-latest'; recipe = 'miri'; packages = @('example', 'another'); shard = '' },
         @{ id = 'miri-harder-events-1'; recipe = 'miri-harder'; packages = @('events'); shard = '1/1' },
-        @{ id = 'mutants-windows-latest-2'; recipe = 'mutants'; packages = @('example'); shard = '2/8' },
+        @{ id = 'mutants-windows-latest-2'; recipe = 'mutants'; packages = @('example'); shard = '2/2' },
         @{ id = 'careful-windows-latest'; recipe = 'careful'; packages = @(); shard = '' }
     ) {
         $check = @(Get-ScheduledCheck | Where-Object id -EQ $id)[0]
@@ -126,10 +126,7 @@ Describe 'Shared recipe invocation' {
     }
 
     It 'keeps shard <Shard> diagnostics outside source copying and preserves verdict <Code>' -ForEach @(
-        @{ Shard = '1/8'; Code = 0 }, @{ Shard = '2/8'; Code = 3 },
-        @{ Shard = '3/8'; Code = 0 }, @{ Shard = '4/8'; Code = 3 },
-        @{ Shard = '5/8'; Code = 0 }, @{ Shard = '6/8'; Code = 3 },
-        @{ Shard = '7/8'; Code = 0 }, @{ Shard = '8/8'; Code = 3 }
+        @{ Shard = '1/2'; Code = 0 }, @{ Shard = '2/2'; Code = 3 }
     ) {
         # A sibling sharing the source prefix is outside it, not a forbidden descendant.
         $output = $recipeRoot + "-results-$([guid]::NewGuid())"
