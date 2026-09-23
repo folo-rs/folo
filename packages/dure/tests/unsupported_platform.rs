@@ -11,3 +11,5 @@
 
 #[test]
 fn there_is_nothing_to_supervise_here() {}
+
+::testing::set_allocator!();

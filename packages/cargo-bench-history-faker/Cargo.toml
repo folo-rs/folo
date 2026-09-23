@@ -45,5 +45,8 @@ folo_utils = { workspace = true }
 mimalloc = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+testing = { path = "../testing" }
+
 [lints]
 workspace = true

@@ -25,12 +25,15 @@ private-api = true
 [lib]
 proc-macro = true
 doc = false
+# This compiler-only shell has no unit tests. Implementation tests belong in
+# linked_macros_impl; macro expansion is covered by consumers' integration tests.
+# Its dynamic-std unit harness is incompatible with a custom allocator on Windows
+# at the MSRV.
+test = false
 
 [dependencies]
 linked_macros_impl = { workspace = true }
 proc-macro2 = { workspace = true, features = ["proc-macro"] }
-
-[dev-dependencies]
 
 [lints]
 workspace = true

@@ -10,10 +10,12 @@ use std::time::Duration;
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
+use testing::DefaultAllocator;
 
 // Set up global allocator for allocation tracking tests
 #[global_allocator]
-static ALLOCATOR: alloc_tracker::Allocator<std::alloc::System> = alloc_tracker::Allocator::system();
+static ALLOCATOR: alloc_tracker::Allocator<DefaultAllocator> =
+    alloc_tracker::Allocator::new(DefaultAllocator);
 
 #[test]
 fn resource_usage_output_provides_meaningful_allocation_data() {

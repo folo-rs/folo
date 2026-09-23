@@ -28,3 +28,5 @@ fn publisher_builder_reachable_via_re_exports() {
 
     let _publisher: Publisher = builder.build();
 }
+
+::testing::set_allocator!();

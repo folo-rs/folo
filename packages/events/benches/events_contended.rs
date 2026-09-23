@@ -143,3 +143,5 @@ fn contended_manual_reset(c: &mut Criterion) {
 
     group.finish();
 }
+
+::testing::set_allocator!();

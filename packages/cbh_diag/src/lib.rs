@@ -25,3 +25,6 @@ mod text;
 pub use report::RecordingReporter;
 pub use report::{Notes, Reporter, ReporterExt, StderrReporter};
 pub use text::count_noun;
+
+#[cfg(test)]
+::testing::set_allocator!();

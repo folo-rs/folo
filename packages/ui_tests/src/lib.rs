@@ -6,3 +6,6 @@
 //! correctly result in compilation errors, particularly for lifetime and soundness requirements.
 //!
 //! The package consists only of a single integration test.
+
+#[cfg(test)]
+::testing::set_allocator!();

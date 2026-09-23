@@ -83,3 +83,5 @@ mod with_test_util {
         assert!(hardware.max_processor_count() >= 2);
     }
 }
+
+::testing::set_allocator!();

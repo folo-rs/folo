@@ -25,3 +25,6 @@ mod cli;
 mod setup_azure;
 
 pub use cli::{Cli, EarlyExit};
+
+#[cfg(test)]
+::testing::set_allocator!();

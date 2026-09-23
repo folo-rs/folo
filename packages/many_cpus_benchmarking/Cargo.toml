@@ -36,6 +36,7 @@ rand = { workspace = true }
 [dev-dependencies]
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "many_cpus_benchmarking_harness_demo"

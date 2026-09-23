@@ -148,3 +148,5 @@ fn naming_no_command_is_a_failure() {
     let output = run_dure(Vec::<&OsStr>::new());
     assert!(!output.status.success());
 }
+
+::testing::set_allocator!();

@@ -16,9 +16,10 @@ use all_the_time::{Report as TimeReport, Session as TimeSession};
 use alloc_tracker::{Allocator, Report as AllocReport, Session as AllocSession};
 use many_cpus::SystemHardware;
 use par_bench::{Run, ThreadPool};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 const ITERATIONS: u64 = 100;
 

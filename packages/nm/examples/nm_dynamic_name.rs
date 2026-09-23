@@ -46,3 +46,5 @@ thread_local! {
         .name("bagels_cooked_weight_grams")
         .build();
 }
+
+::testing::set_allocator!();

@@ -73,3 +73,5 @@ fn format_ids(ids: &[impl Display]) -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
+
+::testing::set_allocator!();

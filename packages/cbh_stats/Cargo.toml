@@ -25,6 +25,7 @@ doc = false
 [dev-dependencies]
 criterion = { workspace = true }
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "cbh_stats_significance"

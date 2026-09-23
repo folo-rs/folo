@@ -14,7 +14,7 @@ rust-version.workspace = true
 # external type here trips the check so accidental exposures are caught.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["deranged::RangedU8"]
+allowed_external_types = ["deranged::RangedU8", "mimalloc::MiMalloc"]
 
 [lib]
 doc = false
@@ -23,6 +23,7 @@ doc = false
 default = []
 
 [dependencies]
+mimalloc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 deranged = { workspace = true, features = ["macros"] }

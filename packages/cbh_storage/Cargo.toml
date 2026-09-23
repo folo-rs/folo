@@ -64,6 +64,7 @@ reqwest = { workspace = true, features = ["gzip", "rustls"] }
 serial_test = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

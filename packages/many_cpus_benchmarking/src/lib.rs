@@ -369,3 +369,6 @@ mod work_distribution;
 pub use payload::*;
 pub use run::*;
 pub use work_distribution::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

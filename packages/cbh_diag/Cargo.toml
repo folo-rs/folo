@@ -34,6 +34,7 @@ private-test-util = []
 
 [dev-dependencies]
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

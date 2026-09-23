@@ -25,3 +25,5 @@ async fn main() {
         // The next iteration will reuse the resources associated with the first event.
     }
 }
+
+::testing::set_allocator!();

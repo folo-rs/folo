@@ -5,9 +5,10 @@
 
 use alloc_tracker::{Allocator, Session};
 use nm_otel_impl::EventState;
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 // Multiple bounds exercise cumulative conversion and retained per-bucket state.
 const HISTOGRAM_BUCKET_BOUNDS: [i64; 4] = [10, 50, 100, 500];

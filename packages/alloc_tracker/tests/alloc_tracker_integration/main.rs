@@ -6,9 +6,10 @@
 //! allocator and the helpers that read results the way a user does.
 
 use alloc_tracker::{Allocator, ReportOperation, Session};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Reads an operation's total bytes allocated the way a user inspects results:
 /// through the session report rather than the live `Operation` handle.

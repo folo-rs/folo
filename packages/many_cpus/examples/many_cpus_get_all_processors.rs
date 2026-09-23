@@ -14,3 +14,5 @@ fn main() {
         println!("{processor:?}");
     }
 }
+
+::testing::set_allocator!();

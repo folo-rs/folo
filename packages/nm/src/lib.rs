@@ -320,3 +320,6 @@ pub use nm_impl::{
     Event, EventBuilder, EventMetrics, EventName, Histogram, Magnitude, MetricsPusher,
     ObservationBatch, Observe, PublishModel, Pull, Push, Report,
 };
+
+#[cfg(test)]
+::testing::set_allocator!();

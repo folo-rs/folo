@@ -237,3 +237,5 @@ fn binary_cleans_only_its_owned_bundle_after_driver_failure() {
         .collect::<Vec<_>>();
     assert_eq!(entries, ["keep"]);
 }
+
+::testing::set_allocator!();

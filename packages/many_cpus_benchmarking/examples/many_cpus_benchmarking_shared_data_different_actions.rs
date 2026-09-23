@@ -120,3 +120,5 @@ impl Payload for ProducerConsumerChannels {
         }
     }
 }
+
+::testing::set_allocator!();

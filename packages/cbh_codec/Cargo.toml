@@ -32,6 +32,7 @@ alloc_tracker = { path = "../alloc_tracker" }
 cbh_model = { path = "../cbh_model" }
 criterion = { workspace = true }
 nonempty = { workspace = true }
+testing = { path = "../testing" }
 
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

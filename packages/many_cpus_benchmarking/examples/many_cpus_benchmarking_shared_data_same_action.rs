@@ -93,3 +93,5 @@ impl<const MAP_ENTRY_COUNT: usize, const REPEAT_COUNT: usize> Payload
         }
     }
 }
+
+::testing::set_allocator!();

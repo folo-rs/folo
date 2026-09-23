@@ -33,3 +33,5 @@ fn par_bench_overhead(c: &mut Criterion) {
         })
         .execute_criterion_on(&mut thread_pool, &mut group, "par_bench_overhead");
 }
+
+::testing::set_allocator!();

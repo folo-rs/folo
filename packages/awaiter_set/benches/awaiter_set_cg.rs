@@ -261,3 +261,5 @@ mod linux {
         benchmarks = [notify_one_prior_generation_eligible]
     );
 }
+
+::testing::set_allocator!();

@@ -91,3 +91,5 @@ mod windows {
         diff < CLOSE_ENOUGH
     }
 }
+
+::testing::set_allocator!();

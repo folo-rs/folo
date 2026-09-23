@@ -43,3 +43,5 @@ fn query_handles_existing_deleted_and_standalone_workspace_paths() {
     .unwrap();
     query_package(workspace.path(), Path::new("member")).unwrap_err();
 }
+
+::testing::set_allocator!();

@@ -79,8 +79,10 @@ build matrix. Today that set is:
 derivation correctly excludes it.
 
 The `mimalloc` global allocator is orthogonal to distribution and is applied to
-every binary regardless of whether it is published (tracked separately in
-[#304](https://github.com/folo-rs/folo/issues/304)).
+Cargo executable targets regardless of whether they are published, with a
+system-allocator fallback under Miri. Development harnesses select it explicitly
+rather than inheriting it from library dependencies; see
+[executable allocators](testing.md#executable-allocators).
 
 ## The `release.yml` workflow
 

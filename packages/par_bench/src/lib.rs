@@ -215,3 +215,6 @@ pub use run::*;
 pub use run_configured::*;
 pub use run_meta::*;
 pub use threadpool::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

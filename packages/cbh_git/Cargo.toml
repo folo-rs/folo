@@ -44,6 +44,7 @@ tokio = { workspace = true, features = ["process"] }
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

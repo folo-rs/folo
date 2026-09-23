@@ -41,3 +41,6 @@ pub use writers::{
 mod locate;
 #[cfg(any(test, feature = "private-test-util"))]
 pub use locate::binary_path;
+
+#[cfg(test)]
+::testing::set_allocator!();
