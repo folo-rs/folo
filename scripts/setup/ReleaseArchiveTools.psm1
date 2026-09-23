@@ -57,8 +57,9 @@ function Install-StandaloneSevenZip {
         Write-Host "Standalone 7-Zip $script:SevenZipVersion is available."
         return
     }
-    # Windows' bundled libarchive tar can extract 7z, so installing 7-Zip does not require 7-Zip.
-    $null = Get-Command tar -ErrorAction Stop
+    # Windows' libarchive supports 7z. Select it explicitly: Git's GNU tar can precede it on
+    # PATH and interprets a Windows drive letter in the archive path as a remote hostname.
+    $tar = Get-Command (Join-Path $env:SystemRoot 'System32' 'tar.exe') -CommandType Application -ErrorAction Stop
     $work = Join-Path ([IO.Path]::GetTempPath()) "release-archive-tools-$([guid]::NewGuid().ToString('N'))"
     $null = New-Item -ItemType Directory -Path $work
     try {
@@ -70,7 +71,7 @@ function Install-StandaloneSevenZip {
                 throw 'Standalone 7-Zip archive checksum does not match the pinned official asset.'
             }
         }
-        tar -xf $archive -C $work
+        & $tar.Source -xf $archive -C $work
         $null = New-Item -ItemType Directory -Path $Destination -Force
         Copy-Item -LiteralPath (Join-Path $work 'x64' '7za.exe') -Destination (Join-Path $Destination '7za.exe') -Force
         Copy-Item -LiteralPath (Join-Path $work 'License.txt') -Destination (Join-Path $Destination 'release-7zip-license.txt') -Force

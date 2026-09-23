@@ -6,6 +6,7 @@ BeforeAll {
     InModuleScope ReleaseArchiveTools {
         function script:zip {}
         function script:unzip {}
+        function script:Invoke-ArchiveExtractorFixture {}
     }
 }
 
@@ -43,5 +44,46 @@ Describe 'Release archive prerequisite setup' {
         Mock Invoke-ArchivePackageInstall -ModuleName ReleaseArchiveTools { throw 'package failure canary' }
         { Install-ReleaseArchiveTool } | Should -Throw '*package failure canary*'
         Should -Invoke zip -ModuleName ReleaseArchiveTools -Times 0 -Exactly
+    }
+
+    It 'uses the Windows system extractor only after a matching checksum; mismatch=<Mismatch>' -ForEach @(
+        @{ Mismatch = $false }, @{ Mismatch = $true }
+    ) {
+        InModuleScope ReleaseArchiveTools -Parameters @{ Mismatch = $Mismatch } {
+            param($Mismatch)
+            Mock Test-Path { $false }
+            Mock New-Item {}
+            Mock Invoke-WebRequest {}
+            Mock Get-FileHash {
+                [pscustomobject]@{ Hash = $(if ($Mismatch) { '0' * 64 } else { $script:SevenZipHash }) }
+            }
+            Mock Invoke-WithRetry { & $Action }
+            Mock Copy-Item {}
+            Mock Remove-Item {}
+            Mock Invoke-ArchiveExtractorFixture {}
+            Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-ArchiveExtractorFixture' } }
+
+            $previousRoot = $env:SystemRoot
+            try {
+                # The mocked application boundary makes this Windows bootstrap policy test
+                # portable, without creating files or downloading an executable.
+                $env:SystemRoot = [IO.Path]::GetTempPath()
+                if ($Mismatch) {
+                    { Install-StandaloneSevenZip -Destination 'managed-tools' } | Should -Throw
+                    Should -Invoke Invoke-ArchiveExtractorFixture -Times 0 -Exactly
+                    Should -Invoke Copy-Item -Times 0 -Exactly
+                } else {
+                    Install-StandaloneSevenZip -Destination 'managed-tools'
+                    Should -Invoke Invoke-ArchiveExtractorFixture -Times 1 -Exactly
+                    Should -Invoke Copy-Item -Times 2 -Exactly
+                }
+                Should -Invoke Get-Command -Times 1 -Exactly -ParameterFilter {
+                    $Name -contains (Join-Path $env:SystemRoot 'System32' 'tar.exe') -and
+                    $CommandType -eq 'Application'
+                }
+            } finally {
+                $env:SystemRoot = $previousRoot
+            }
+        }
     }
 }
