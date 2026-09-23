@@ -69,6 +69,9 @@ Each selected package runs its full seed budget in one shard by default. Additio
 shards are reserved for packages approaching the job timeout; scheduled validation
 does not need extra horizontal scaling solely to shorten already-small jobs.
 
+Mutation testing favors runner availability over maximum parallelism. Each platform
+uses two shards, with a longer job budget to accommodate their work.
+
 Nightly runs execute the entire standard and deep suites even on unchanged source. Build caches
 remain ordinary performance aids, not receipts used to skip validation. Hosted
 execution and reporting do not depend on the availability of a Local App.
