@@ -47,6 +47,12 @@ out when its side is ambiguous. Histories too short for this separation still su
 complete-window range comparison; a strongly separated recent group too short to establish a
 regime makes the series explicitly unjudged.
 
+Branch boundary screening locates the same Pettitt split used by calibration and applies
+magnitude and population-separation gates first. These gates can veto a boundary independently
+of significance, so rejected candidates need no exact-tail or permutation work. An unsupported
+split still divides the recursive search: screening must not hide supported boundaries on either
+side. Candidates that pass retain the complete selection-adjusted calibration and shared budget.
+
 Range judgment retains every observation in the selected regime. A value is a branch excursion
 only outside the recorded minimum or maximum, and its magnitude is excess beyond the nearest edge.
 No isolated observation is deleted: doing so would strengthen a finding by hiding contrary
@@ -102,3 +108,9 @@ Test data comes from two sources with different jobs. A deterministic generator 
 realistic *shape* — bimodality and one-sided excursions — which no generator here produces. A gate
 whose purpose is to survive a pathological shape is pinned against a recording of that shape
 rather than against a model of it.
+
+The signal-validation matrix uses minimum-sized complete comparison regimes for synthetic
+shapes and retains every mode, scale and report-size combination. Its independently seeded noisy
+companions carry only enough observations to be judged, with a sparse jump to the context commit;
+their size does not grow with the curated history. Recorded series remain verbatim, and dedicated
+branch tests retain long histories needed to exercise segmentation and the supported window cap.
