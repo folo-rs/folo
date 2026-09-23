@@ -193,8 +193,7 @@ fn reader(pipe: impl Read + Send + 'static, stream: bool) -> JoinHandle<std::io:
     })
 }
 
-// Joining a native pipe reader cannot be exercised without an external process.
-#[cfg_attr(test, mutants::skip)]
+// Reader failures remain errors, including unexpected reader-thread panics.
 fn join_reader(reader: JoinHandle<std::io::Result<String>>) -> Result<String, AppError> {
     reader
         .join()
@@ -210,6 +209,8 @@ fn join_reader(reader: JoinHandle<std::io::Result<String>>) -> Result<String, Ap
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::io::{Error, ErrorKind};
+
     use super::*;
 
     #[test]
@@ -219,5 +220,22 @@ mod tests {
         assert!(interruption(false, true).is_some());
         assert_eq!(interruption(true, true), interruption(false, true));
         assert_ne!(interruption(true, false), interruption(false, true));
+    }
+
+    #[test]
+    fn reader_results_preserve_text_and_propagate_errors() {
+        testing::with_watchdog(|| {
+            assert_eq!(
+                join_reader(reader(&b"first\nsecond"[..], false)).unwrap(),
+                "first\nsecond\n"
+            );
+            let error = join_reader(reader(&b"\xff"[..], false)).unwrap_err();
+            assert_eq!(
+                error.find_source::<Error>().unwrap().kind(),
+                ErrorKind::InvalidData
+            );
+            let error = join_reader(thread::spawn(|| panic!("fixture reader panic"))).unwrap_err();
+            assert!(error.find_source::<CommandFailed>().is_some());
+        });
     }
 }

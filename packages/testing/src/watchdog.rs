@@ -71,7 +71,8 @@ where
 ///
 /// # Panics
 ///
-/// Propagates a panic from the test closure.
+/// Panics on the calling thread if the test closure exceeds the timeout, or propagates
+/// a panic from that closure. Mutation testing disables the timeout.
 pub fn with_watchdog_timeout<F, R>(timeout: Duration, test_fn: F) -> R
 where
     F: FnOnce() -> R + Send + 'static,

@@ -170,6 +170,15 @@ mod tests {
 
     #[test]
     fn invalid_input_is_rejected_before_queries() {
+        let mut empty = input();
+        empty.targets.clear();
+        plan(empty, |_| panic!()).unwrap_err();
+        let mut duplicate = input();
+        duplicate.binaries.push(Request {
+            binary: binary("alpha"),
+            release_targets: vec![],
+        });
+        plan(duplicate, |_| panic!()).unwrap_err();
         let mut input = input();
         input.binaries[0].release_targets.push("unknown".into());
         plan(input, |_| panic!()).unwrap_err();

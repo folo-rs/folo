@@ -112,6 +112,8 @@ mod tests {
                 .unwrap(),
             Cli::Plan { .. }
         ));
+        Cli::parse(["plan", "--input", "a", "--repository", "owner/repo.name"].map(Into::into))
+            .unwrap();
         assert!(matches!(
             Cli::parse(
                 [
@@ -137,6 +139,9 @@ mod tests {
         for args in [
             vec![],
             vec!["invalid"],
+            vec!["plan", "--unknown"],
+            vec!["plan", "--input", "a", "--repository", "owner/.repo"],
+            vec!["plan", "--input", "a", "--repository", "owner/a?b"],
             vec!["plan", "--input"],
             vec!["plan", "--input", "a", "--input", "b"],
             vec!["plan", "--input", "a", "--repository", "../bad"],

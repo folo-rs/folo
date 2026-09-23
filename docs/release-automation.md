@@ -386,8 +386,8 @@ publish step is built to ride out both without bespoke complexity:
   re-running the workflow — or a bare `workflow_dispatch` — restores the release
   and recomputes the incomplete `(crate, target)` pairs across *all* affected
   crates. The recovery set is always self-determined; there is no per-crate
-  dispatch and no human-supplied tag list. `taiki-e` overwrites existing assets,
-  so re-uploading restores complete archive/checksum pairs.
+  dispatch and no human-supplied tag list. `release-binaries` uploads with
+  `--clobber`, so re-uploading restores complete archive/checksum pairs.
 
 Missing-tag recovery requires the requested version to remain available at an
 eligible main snapshot. A newer version is not relabeled as the older version;
@@ -435,10 +435,10 @@ One convention governs both:
 
 * The **tag** follows the reconciler's package/version convention. Release-plz uses
   the same pinned `git_tag_name` when recognizing existing releases.
-* The **archive base** is `taiki-e`'s `archive:` input,
-  `{crate}-v{version}-$target` (the action expands `$target`) — the single source
-  of truth for the filename; the binstall blocks mirror it.
-* `.zip` on all platforms (`tar: none`, `zip: all`).
+* The **archive base** is the release tag followed by the target triple,
+  `{crate}-v{version}-{target}`. `release-binaries` applies this convention to
+  both asset discovery and packaging; the binstall blocks mirror it.
+* `.zip` on all platforms.
 
 ### `[package.metadata.binstall]` block
 
@@ -455,13 +455,13 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 ```
 
-`bin-dir` is `{ bin }{ binary-ext }` because `taiki-e` places the binary at the
-archive root (`leading-dir` defaults to false); `{ binary-ext }` adds `.exe` on
+`bin-dir` is `{ bin }{ binary-ext }` because `release-binaries` places the binary at the
+archive root; `{ binary-ext }` adds `.exe` on
 Windows. The `.sha256` sidecar supports explicit or manual verification; current
 `cargo-binstall` versions do not discover checksum sidecars automatically.
 
 The convention table is the contract: any change to it must touch, together,
-`taiki-e`'s `archive:` input, the `git_tag_name` pin, and every crate's binstall
+the controller's archive naming, the `git_tag_name` pin, and every crate's binstall
 block. A new binary crate copies the block above verbatim into its `Cargo.toml`
 (the build/upload side is already handled by the derivation). CI enforces this:
 `just validate-binstall` fails the build when a publishable binary crate is

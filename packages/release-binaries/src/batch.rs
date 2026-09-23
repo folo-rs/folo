@@ -64,6 +64,7 @@ pub(crate) fn execute(
             }
             continue;
         }
+        let source_outcomes_start = outcomes.len();
         match executor.prepare(first) {
             Ok(()) => {
                 for binary in binaries {
@@ -95,10 +96,9 @@ pub(crate) fn execute(
         }
         if let Err(error) = executor.cleanup() {
             eprintln!("Source {} cleanup failed: {error}", first.source_sha);
-            for outcome in &mut outcomes {
-                if outcome.binary.source_sha == first.source_sha {
-                    outcome.cleanup_error = Some(error.to_string());
-                }
+            // Refresh failures and completed releases did not use this group's worktree.
+            for outcome in outcomes.iter_mut().skip(source_outcomes_start) {
+                outcome.cleanup_error = Some(error.to_string());
             }
         }
     }
@@ -166,12 +166,12 @@ mod tests {
     use crate::model::tests::binary;
     use crate::model::{InvalidPlan, timeout_minutes};
 
-    /// Records ordered native operations and injects a single chosen stage failure.
+    /// Records ordered native operations and injects selected stage failures.
     #[derive(Default)]
     struct Fake {
         calls: Vec<String>,
-        fail: String,
-        complete: bool,
+        failures: Vec<String>,
+        complete: Vec<&'static str>,
         cancel_after: String,
     }
 
@@ -179,7 +179,7 @@ mod tests {
         fn call(&mut self, stage: &str, name: &str) -> Result<(), AppError> {
             let call = format!("{stage}:{name}");
             self.calls.push(call.clone());
-            if self.fail == call {
+            if self.failures.contains(&call) {
                 return Err(InvalidPlan::new("injected failure".to_owned()).into());
             }
             Ok(())
@@ -192,7 +192,7 @@ mod tests {
         }
         fn assets(&mut self, binary: &Binary) -> Result<Vec<Asset>, AppError> {
             self.call("refresh", &binary.name)?;
-            Ok(if self.complete {
+            Ok(if self.complete.contains(&binary.name.as_str()) {
                 ["zip", "sha256"]
                     .map(|extension| Asset {
                         name: format!("{}.{extension}", binary.archive_base("native")),
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn complete_releases_require_neither_source_nor_build() {
         let mut fake = Fake {
-            complete: true,
+            complete: vec!["alpha", "beta"],
             ..Fake::default()
         };
         let outcomes = execute(&batch(), false, &mut fake).unwrap();
@@ -262,7 +262,7 @@ mod tests {
     fn item_failures_preserve_independent_work_and_cleanup() {
         for stage in ["refresh", "build", "package", "upload"] {
             let mut fake = Fake {
-                fail: format!("{stage}:alpha"),
+                failures: vec![format!("{stage}:alpha")],
                 ..Fake::default()
             };
             let outcomes = execute(&batch(), false, &mut fake).unwrap();
@@ -285,7 +285,7 @@ mod tests {
         let mut batch = batch();
         batch.binaries[1].source_sha = "b".repeat(40);
         let mut fake = Fake {
-            fail: "source:alpha".into(),
+            failures: vec!["source:alpha".into()],
             ..Fake::default()
         };
         let outcomes = execute(&batch, false, &mut fake).unwrap();
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn cleanup_errors_are_retained_without_hiding_item_errors() {
         let mut fake = Fake {
-            fail: "cleanup:".into(),
+            failures: vec!["cleanup:".into()],
             ..Fake::default()
         };
         let outcomes = execute(&batch(), false, &mut fake).unwrap();
@@ -321,5 +321,41 @@ mod tests {
         assert_eq!(outcomes[1].status, "unattempted");
         assert!(!fake.calls.iter().any(|call| call.starts_with("upload:")));
         assert_eq!(fake.calls.last().unwrap(), "cleanup:");
+    }
+
+    #[test]
+    fn cleanup_errors_only_apply_to_items_in_the_source_group() {
+        for refresh_fails in [false, true] {
+            let mut fake = Fake {
+                failures: vec!["cleanup:".into()],
+                complete: vec!["alpha"],
+                ..Fake::default()
+            };
+            if refresh_fails {
+                fake.failures.push("refresh:alpha".into());
+            }
+            let outcomes = execute(&batch(), false, &mut fake).unwrap();
+            assert_eq!(outcomes.len(), 2);
+            assert_eq!(outcomes[0].stage, "refresh");
+            assert!(outcomes[0].cleanup_error.is_none());
+            assert_eq!(outcomes[1].status, "published");
+            assert!(outcomes[1].cleanup_error.is_some());
+        }
+    }
+
+    #[test]
+    fn cancellation_during_refresh_leaves_all_sources_unattempted() {
+        let mut fake = Fake {
+            cancel_after: "refresh:alpha".into(),
+            ..Fake::default()
+        };
+        let outcomes = execute(&batch(), false, &mut fake).unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| outcome.status == "unattempted")
+        );
+        assert_eq!(fake.calls, ["refresh:alpha"]);
     }
 }

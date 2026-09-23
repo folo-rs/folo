@@ -27,7 +27,9 @@ pair. Only GitHub subprocesses receive the upload token. Worktree materializatio
 retains checkout's no-LFS-download behavior.
 
 Independent item failures do not suppress remaining items, but any failed item
-fails the batch. Worktree cleanup failures are retained alongside operation errors.
+fails the batch. Worktree cleanup failures are retained alongside operation errors
+for items in that source group, not releases already complete during refresh.
+If Git removal and directory cleanup both fail, the outcome retains both diagnostics.
 The item deadline bounds source preparation, compilation and publication together.
 The command adapter terminates an owned process tree before returning a deadline
 failure. Signal handling marks the batch cancelled, terminates active child groups and
@@ -36,8 +38,10 @@ overall job deadline.
 
 `--no-upload` stages the exact requested items without querying release completeness
 or writing to GitHub. It retains all source/build/archive checks and needs no upload
-credential. Integration fixtures and the three-platform validation smoke use this
-path; no test creates or modifies a production release.
+credential. Integration fixtures and the three-platform validation smoke exercise this
+path. A native fake GitHub client also exercises query/upload arguments, credential
+isolation, partial-publication recovery and summary reporting without network access.
+No test creates or modifies a production release.
 
 ## Tests
 
@@ -45,3 +49,6 @@ Pure protocol validation, grouping, completeness, artifact selection and batch
 transitions are library unit tests. Git, Cargo, process and archive interactions
 are integration tests. Native adapters have narrow mutation exclusions; the
 decisions they execute remain covered in process.
+Source fixtures include exact-object fetching from a local origin whose tip has advanced,
+mixed source commits and native-host rejection. Cleanup failure coverage preserves
+successful publication outcomes while retaining the cleanup diagnostic and failing the job.

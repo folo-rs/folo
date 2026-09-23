@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use std::{env, fs, thread};
+use std::{env, fs, io, thread};
 
 use ohno::AppError;
 use tempfile::TempDir;
@@ -30,6 +30,13 @@ pub(crate) struct Native {
 pub(crate) struct Github {
     repository: String,
     token: Option<OsString>,
+}
+
+/// Retains a directory cleanup failure alongside the original Git cleanup error.
+#[ohno::error]
+#[display("Source directory cleanup also failed: {directory}")]
+struct CleanupFailed {
+    directory: io::Error,
 }
 
 // Release queries/uploads are idempotent. Match the existing short infrastructure retry window.
@@ -403,19 +410,23 @@ impl Executor for Native {
                 &self.controller,
                 deadline_after(QUERY_BUDGET),
             );
-            let cleanup = source.close();
-            match (result, cleanup) {
-                (Err(operation), Err(cleanup)) => {
-                    // Both native operations have failed; retain both diagnostics at this boundary.
-                    eprintln!("Source directory cleanup also failed: {cleanup}");
-                    return Err(operation);
-                }
-                (Err(error), Ok(())) => return Err(error),
-                (Ok(_), Err(error)) => return Err(error.into()),
-                (Ok(_), Ok(())) => {}
-            }
+            return finish_cleanup(result, source.close());
         }
         Ok(())
+    }
+}
+
+fn finish_cleanup(
+    operation: Result<String, AppError>,
+    directory: Result<(), io::Error>,
+) -> Result<(), AppError> {
+    match (operation, directory) {
+        (Err(operation), Err(directory)) => {
+            Err(CleanupFailed::caused_by(directory, operation).into())
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Ok(_), Ok(())) => Ok(()),
     }
 }
 
@@ -429,4 +440,31 @@ fn deadline_after(budget: Duration) -> Instant {
     Instant::now()
         .checked_add(budget)
         .expect("bounded release deadline fits in Instant")
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_retains_each_failure_and_the_original_source() {
+        finish_cleanup(Ok(String::new()), Ok(())).unwrap();
+        let operation = || AppError::from(InvalidPlan::new("operation canary".to_owned()));
+        let directory = || io::Error::other("directory canary");
+
+        let error = finish_cleanup(Err(operation()), Ok(())).unwrap_err();
+        assert!(error.find_source::<InvalidPlan>().is_some());
+        let error = finish_cleanup(Ok(String::new()), Err(directory())).unwrap_err();
+        assert!(error.find_source::<io::Error>().is_some());
+
+        let error = finish_cleanup(Err(operation()), Err(directory())).unwrap_err();
+        assert!(error.find_source::<InvalidPlan>().is_some());
+        let combined = error.find_source::<CleanupFailed>().unwrap();
+        assert_eq!(combined.directory.kind(), io::ErrorKind::Other);
+        // Both independent diagnostics must survive serialization into the batch outcome.
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("operation canary"));
+        assert!(diagnostic.contains("directory canary"));
+    }
 }

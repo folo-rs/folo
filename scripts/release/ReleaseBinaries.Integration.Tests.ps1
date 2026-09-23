@@ -1,7 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Real controller compilation/JSON boundary with the canonical target policy, without GitHub
-# queries or publication. Nonempty build/archive fixtures live in release-binaries/tests/smoke.rs.
+# queries or publication. Nonempty build/archive fixtures live in release-binaries/tests/smoke/.
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ReleaseBinaries.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
