@@ -28,6 +28,8 @@ const CLOSURE_COUNT: usize = 16;
 criterion_group!(benches, patch_rendering, lockfile_closure);
 criterion_main!(benches);
 
+::testing::set_allocator!();
+
 fn patch_rendering(c: &mut Criterion) {
     let mut group = c.benchmark_group("cargo_release_plan_algorithms/patch_rendering");
 

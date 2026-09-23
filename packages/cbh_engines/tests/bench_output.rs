@@ -13,6 +13,8 @@ use cbh_engines::{
 use cbh_model::Engine;
 use tempfile::tempdir;
 
+::testing::set_allocator!();
+
 /// Output directory written by Gungraun.
 const GUNGRAUN_DIR: &str = "gungraun";
 /// Output directory written by Criterion.

@@ -6,3 +6,6 @@
 #[doc(hidden)]
 pub use crp_impl::{CheckFormat, RunInput, RunOutcome, run};
 pub use crp_impl::{Cli, EarlyExit};
+
+#[cfg(test)]
+::testing::set_allocator!();

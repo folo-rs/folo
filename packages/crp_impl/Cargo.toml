@@ -68,6 +68,7 @@ cargo-release-plan = { path = "../cargo-release-plan" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "cargo_release_plan_algorithms"

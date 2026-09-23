@@ -30,3 +30,5 @@ mod preview_safety;
 mod propose;
 mod report;
 mod status;
+
+::testing::set_allocator!();

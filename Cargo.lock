@@ -629,6 +629,7 @@ dependencies = [
  "ohno",
  "serde_json",
  "tempfile",
+ "testing",
 ]
 
 [[package]]
@@ -1170,6 +1171,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
+ "testing",
  "toml_edit",
 ]
 

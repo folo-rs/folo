@@ -3,6 +3,8 @@
 use cargo_release_plan::{CheckFormat, Cli, EarlyExit, RunInput, RunOutcome, run};
 use ohno::AppError;
 
+::testing::set_allocator!();
+
 #[test]
 fn supported_items_are_reexported() {
     let cli: Cli = Cli::from_args_os(["cargo-release-plan", "check"]).unwrap();

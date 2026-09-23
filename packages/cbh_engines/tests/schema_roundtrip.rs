@@ -22,6 +22,8 @@ use cbh_engines::{parse_all_the_time_operation, parse_alloc_tracker_operation};
 use cbh_model::{BenchmarkResult, Metric, MetricKind};
 use tempfile::tempdir;
 
+::testing::set_allocator!();
+
 fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
     record
         .metrics

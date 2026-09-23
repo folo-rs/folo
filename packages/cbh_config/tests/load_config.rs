@@ -8,6 +8,8 @@ use cbh_config::{CloudStorageConfig, Config, load_config};
 use ohno::ErrorExt;
 use tempfile::tempdir;
 
+::testing::set_allocator!();
+
 #[tokio::test]
 async fn reads_and_parses_config() {
     let dir = tempdir().unwrap();
