@@ -66,7 +66,7 @@ validation, so detection does not prevent a regression from being released.
 The report job has ordinary issue-write permission and can report planning or
 toolchain setup failures before checker artifacts exist.
 
-Each failed run attempt gets a normal `scheduled-run-failure` issue titled
+Each failed run attempt gets a normal issue titled
 **Scheduled validation failed on &lt;UTC date&gt;**. It contains the workflow and
 run/attempt link, tested commit and start date, unsuccessful jobs with their
 conclusions and direct links, observed error summaries and useful diagnostic
@@ -81,8 +81,8 @@ Useful failure details remain on GitHub after Actions logs expire; successful-jo
 inventories and whole logs do not belong in issues. Diagnostic verbosity does not
 create an unlimited sequence of comments.
 
-The visible run URL and attempt identify a report. Reporter retries search open
-and closed reports for that attempt before creating one, then publish only missing
+The visible run URL and attempt identify the execution within an eligible report.
+Reporter retries search open reports for that attempt before creating one, then publish only missing
 sections without rewriting completed snapshots. Writes are paced; explicit rate
 limits receive bounded backoff and ambiguous outcomes are checked for persistence,
 not blindly replayed. Each failed rerun gets
@@ -90,6 +90,37 @@ its own report; a successful rerun neither files a failure nor silently closes
 older reports or problems. If reporting fails, the report job's failure remains
 visible in **Deep validation**. Resolve an ambiguous duplicate with an ordinary
 linked duplicate explanation.
+
+### Run-report recognition
+
+Run reports are open issues whose titles start with the exact, case-sensitive
+prefix `Scheduled validation failed on `, including its trailing space. The
+publisher appends the UTC date, but discovery does not parse the suffix. Human
+reports use the same prefix; changing it makes an issue ineligible. Labels,
+authorship and body wording do not classify an issue as a run report.
+The reporter does not create or apply `scheduled-run-failure`; existing labels
+have no effect on recognition and need no cleanup.
+
+Discovery searches open issue titles in this repository, then checks the exact
+prefix before reading report content or discussion. It has no recent-date cutoff
+and no general-inventory or closed-report fallback. Incomplete discovery, including
+a reported total that changes between search pages, is an error, not an empty
+queue. Closed reports are finished triage work: replaying
+publication for the same attempt after closure may create a new report.
+An ordinary Actions rerun has a new attempt number and receives its own report
+when it fails.
+
+Within an eligible report, an exact attempt link in the body identifies its
+execution. If the body has no attempt link, discussion can supply it; comparison
+links in comments do not override an attempt already identified by the body.
+Distinct executions remain distinct even when their report titles share a date.
+The title prefix selects triage candidates, but actual Actions provenance must
+be verified before triage changes an issue.
+
+GitHub search indexing can lag issue creation. An ambiguous creation response
+with no visible matching report remains a publication failure, not permission
+to repeat the write. A later invocation can reconcile visible open duplicates.
+There is no exactly-once guarantee across separate publication invocations.
 
 ## Running checks manually
 
@@ -167,11 +198,16 @@ standard checks. Standalone PR/push CI, benchmark history, releases and other
 workflows are outside its scope, even when they run on a schedule.
 
 Verify the linked run and reported attempt before applying ownership, labels or
-closure rules. A generic triage request or a `scheduled-run-failure` label is not
-proof of an eligible run. Leave out-of-scope or unverified reports unchanged under
-this procedure; ordinary triage must not enroll them in scheduled repair intake.
-Process an explicitly requested eligible report, or select open
-`scheduled-run-failure` issues oldest first. Claim verified reports and process
+closure rules. A generic triage request, title prefix or label is not
+proof of an eligible run. A confirmed provenance mismatch receives a
+[one-time notification](#provenance-mismatch-notifications), not ownership,
+labels, findings or closure. Unverified reports remain unchanged; ordinary triage
+must not enroll them in scheduled repair intake.
+Process an explicitly requested eligible report, or discover reports using
+[run-report recognition](#run-report-recognition), oldest first. An explicitly
+requested pull request, closed issue or nonmatching title is out of scope;
+leave it unchanged, without a mismatch notification.
+Claim verified reports and process
 them sequentially. Read the report, relevant jobs/logs and source, then search
 relevant open and closed issues and related PRs, including human-filed issues
 without automation labels.
@@ -218,10 +254,33 @@ and the linked issues contain the handoff information. Missing decisive evidence
 keeps it open with a concrete blocker. Report closure means triage is complete,
 not that its problems are fixed.
 
+### Provenance mismatch notifications
+
+An open, prefix-matching report whose linked run demonstrably falls outside the
+triage scope receives an explanatory comment so its author can correct the
+report. State the observed mismatch, the required workflow scope, the relevant
+run/attempt link and a concrete corrective action, such as supplying the intended
+failed attempt or removing the report prefix from an unrelated issue. Missing
+evidence or unavailable GitHub metadata is uncertainty, not a confirmed mismatch.
+
+Post this notification only once per issue. Begin with `[Copilot speaking]` and
+include the stable, visible marker `scheduled-triage:provenance-mismatch` on its
+own line. Read all comment pages and check for an existing notification carrying
+that marker before posting; recheck current issue eligibility and discussion
+immediately before the write. Failed or incomplete reads block posting, and an
+ambiguous write is reconciled through discussion rather than blindly retried.
+The marker deduplicates this notification only, following the
+[automation guidelines](automation.md#make-notifications-useful-and-repeatable).
+
+The notification does not claim, relabel, close or enroll the issue for repair.
+Reevaluate the report's current provenance on later visits regardless of the
+marker, so an author correction permits normal triage without another warning.
+Closed issues, pull requests and nonmatching titles remain outside this procedure.
+
 ## Ownership and handoff
 
-`scheduled-run-failure` identifies triage work; `scheduled-finding` identifies the
-repair backlog. Assignment on an open issue records ownership, not whether a worker
+Open run-report titles identify triage work; `scheduled-finding` identifies the
+repair backlog, excluding run reports. Assignment on an open issue records ownership, not whether a worker
 is currently executing. `needs-human` records a human-action blocker. Issue state
 and linked PRs supply the remaining lifecycle.
 

@@ -19,6 +19,12 @@ issue when planning or checks fail. A triager investigates all reported
 failures and creates or updates separate problem issues. The report closes when its
 failures have been accounted for; the problem issues stay open until resolved.
 
+Report discovery uses only open issues with the fixed title prefix defined by
+[run-report recognition](../../docs/scheduled-validation.md#run-report-recognition).
+Labels do not identify reports. The exact workflow attempt distinguishes executions;
+the title's date is descriptive. Closed reports and alternative titles are outside
+discovery, so replaying publication after triage closes a report can create another.
+
 Problem grouping follows the cause or independently actionable symptom, not job
 boundaries or log fingerprints. Infrastructure failures are problems too; checks
 blocked by a failed prerequisite are not themselves evidence of source defects.
@@ -825,6 +831,14 @@ deviating from it to hand-pick a minimal per-job toolchain costs more in mainten
 the mostly-cached setup time it would save. Toolchain versions are defined once in
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
+
+The Linux ARM64 PowerShell bootstrap uses an upstream release archive because the
+Microsoft APT repository does not provide a native package. Its pinned runtime must
+satisfy the Azure deployment bundle's PowerShell prerequisite and the native integration
+fixture's requirement. Regression tests in the `bench-history` script domain compare the
+pin with those executable requirements, so both bootstrap and bundle changes select them.
+The bundle integration tests exercise parameter validation, cleanup and mocked deployment
+without Azure access.
 
 The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
 installed only where a job actually executes Callgrind measurements — the benchmark

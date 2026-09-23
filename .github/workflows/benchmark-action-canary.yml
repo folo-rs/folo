@@ -98,7 +98,7 @@ jobs:
 
   exercise:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
     permissions:
       contents: read
       actions: read
@@ -120,7 +120,7 @@ jobs:
 
   backfill:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
     permissions:
       contents: read
       id-token: write
@@ -140,7 +140,7 @@ jobs:
 
   rolling-backfill:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
     permissions:
       contents: read
       id-token: write
@@ -163,7 +163,7 @@ jobs:
 
   no-eligible-backfill:
     needs: configuration
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@946d16f19c575f29d3ae43cbc8d2369d4911c090 # v1.1.0 candidate
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
     permissions:
       contents: read
       id-token: write
