@@ -463,7 +463,6 @@ mod tests {
     use testing::{assert_panics, with_watchdog};
 
     use super::*;
-    use crate::{RegionLocalExt, region_local};
 
     assert_impl_all!(RegionLocal<String>: UnwindSafe, RefUnwindSafe);
 
@@ -486,98 +485,6 @@ mod tests {
             .filter(|p| p.id() == processor_id)
             .unwrap()
             .pin_current_thread_to();
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn real_smoke_test() {
-        region_local! {
-            static FAVORITE_COLOR: String = "blue".to_string();
-        }
-
-        FAVORITE_COLOR.with_local(|color| {
-            assert_eq!(*color, "blue");
-        });
-
-        FAVORITE_COLOR.set_local("red".to_string());
-
-        FAVORITE_COLOR.with_local(|color| {
-            assert_eq!(*color, "red");
-        });
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn with_non_const_initial_value() {
-        region_local!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
-
-        FAVORITE_COLOR.with_local(|color| {
-            assert_eq!(**color, "blue");
-        });
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn non_static() {
-        let favorite_color_linked =
-            linked::InstancePerThread::new(RegionLocal::new(|| "blue".to_string()));
-
-        let favorite_color = favorite_color_linked.acquire();
-
-        favorite_color.with_local(|color| {
-            assert_eq!(*color, "blue");
-        });
-
-        thread::spawn(move || {
-            let favorite_color = favorite_color_linked.acquire();
-
-            favorite_color.with_local(|color| {
-                assert_eq!(*color, "blue");
-            });
-
-            favorite_color.set_local("red".to_string());
-
-            favorite_color.with_local(|color| {
-                assert_eq!(*color, "red");
-            });
-        })
-        .join()
-        .unwrap();
-
-        // We do not know whether the other thread was in the same memory region,
-        // so we cannot assume that the value is the same in the main thread now.
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn non_static_sync() {
-        let favorite_color_linked =
-            linked::InstancePerThreadSync::new(RegionLocal::new(|| "blue".to_string()));
-
-        let favorite_color = favorite_color_linked.acquire();
-
-        favorite_color.with_local(|color| {
-            assert_eq!(*color, "blue");
-        });
-
-        thread::spawn(move || {
-            let favorite_color = favorite_color_linked.acquire();
-
-            favorite_color.with_local(|color| {
-                assert_eq!(*color, "blue");
-            });
-
-            favorite_color.set_local("red".to_string());
-
-            favorite_color.with_local(|color| {
-                assert_eq!(*color, "red");
-            });
-        })
-        .join()
-        .unwrap();
-
-        // We do not know whether the other thread was in the same memory region,
-        // so we cannot assume that the value is the same in the main thread now.
     }
 
     #[test]

@@ -96,6 +96,7 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::slice;
+use std::sync::Arc;
 
 use cbh_model::MetricKind;
 
@@ -360,15 +361,10 @@ fn run_of(value: f64, count: usize) -> Vec<f64> {
 
 /// How many companion series join a case in the crowd of dimension 3.
 ///
-/// The count is bounded on both sides by the cases themselves, and both bounds are
-/// measured rather than predicted. The deliberately marginal case survives up to seven
-/// companions and falls silent at eight, so eight is the floor below which dimension 3
-/// stops discriminating anything. The weakest genuine case — the context run above a
-/// freshly shifted base, whose branch-side evidence is a single point — survives up to
-/// 309 companions and falls silent at 310, so 309 is the ceiling above which the suite
-/// starts denying real signals. Neither edge is a place to sit, so the crowd is the
-/// geometric midpoint of the admissible window, `floor(sqrt(8 * 309))`, which leaves a
-/// factor of roughly six of margin on each side.
+/// A representative multi-benchmark report: the matrix requires its marginal history
+/// step to fail at this size while every obvious signal survives. Exact family boundaries
+/// have dedicated detector tests; this matrix needs clear separation, not another boundary
+/// search. Branch excursions must remain independent of report size.
 const CROWD_COMPANIONS: usize = 49;
 
 /// The crowd size of a case analysed on its own, with no companions at all.
@@ -439,40 +435,49 @@ const RARE_HIGH_MODE_TIP: f64 = 135.0;
 
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
 fn cases() -> Vec<SignalCase> {
+    // Synthetic regimes use the smallest complete branch comparison window. Their job is
+    // to distinguish shapes and matrix verdicts, not to recalibrate long histories; native
+    // branch-length tests cover scaling, and recorded pathological series stay verbatim.
     vec![
         // An unmistakable sustained doubling halfway through. History and branch (split
         // at the step) both see a rise.
         SignalCase::new("doubling_step", MetricKind::WallTime)
-            .base(run_of(100.0, 50))
-            .branch(run_of(200.0, 50))
+            .base(run_of(100.0, MIN_SERIES_POINTS))
+            .branch(run_of(200.0, MIN_SERIES_POINTS))
             .expects(Outcome::Rise, Outcome::Rise),
         // The same obvious doubling as the first case, but with no base side. Branch
         // mode has nothing to compare the branch against, so it must stay quiet even
         // though history still sees the rise over the whole series.
         SignalCase::new("doubling_without_base", MetricKind::WallTime)
-            .branch([run_of(100.0, 50), run_of(200.0, 50)].concat())
+            .branch(
+                [
+                    run_of(100.0, MIN_SERIES_POINTS),
+                    run_of(200.0, MIN_SERIES_POINTS),
+                ]
+                .concat(),
+            )
             .expects(Outcome::Rise, Outcome::Quiet),
         // The mirror image: a sustained halving. Same mode geometry, opposite direction,
         // so it exercises the improvement-reporting path (surfaced only by branch mode).
         SignalCase::new("halving_step", MetricKind::WallTime)
-            .base(run_of(200.0, 50))
-            .branch(run_of(100.0, 50))
+            .base(run_of(200.0, MIN_SERIES_POINTS))
+            .branch(run_of(100.0, MIN_SERIES_POINTS))
             .expects(Outcome::Fall, Outcome::Fall),
         // A jump confined to the final commit. Branch (split just before the jump) sees
         // the rise; history does not, since one trailing point is not a sustained trend.
         SignalCase::new("tip_spike", MetricKind::WallTime)
-            .base(run_of(100.0, 99))
+            .base(run_of(100.0, MIN_SERIES_POINTS))
             .branch(run_of(200.0, 1))
             .expects(Outcome::Quiet, Outcome::Rise),
         // The mirror image at the tip: the final commit drops.
         SignalCase::new("tip_drop", MetricKind::WallTime)
-            .base(run_of(200.0, 99))
+            .base(run_of(200.0, MIN_SERIES_POINTS))
             .branch(run_of(100.0, 1))
             .expects(Outcome::Quiet, Outcome::Fall),
         // A dead-flat line: nothing moved, so no mode should ever flag it.
         SignalCase::new("flat_line", MetricKind::WallTime)
-            .base(run_of(100.0, 50))
-            .branch(run_of(100.0, 50)),
+            .base(run_of(100.0, MIN_SERIES_POINTS))
+            .branch(run_of(100.0, MIN_SERIES_POINTS)),
         // A stationary but very noisy real-world series (a wall-time metric whose value
         // oscillates between ~13 and ~25-29 across its whole history). A human reads the
         // chart as "noisy, nothing changed", yet a naive change-point split lands on the
@@ -571,16 +576,16 @@ fn cases() -> Vec<SignalCase> {
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.
         SignalCase::new("branch_with_regression_then_fix", MetricKind::WallTime)
-            .base(run_of(100.0, 50))
-            .branch([run_of(200.0, 49), run_of(100.0, 1)].concat())
+            .base(run_of(100.0, MIN_SERIES_POINTS))
+            .branch([run_of(200.0, MIN_SERIES_POINTS - 1), run_of(100.0, 1)].concat())
             .expects(Outcome::Rise, Outcome::Quiet),
         // A short history whose final commit sits a little high — the shape the batch
         // false positives of issue #428 take. Both modes stay quiet, for two unrelated
         // reasons worth having pinned together: history rejects a one-point regime
         // (`MIN_REGIME` demands five), and branch mode sees only nine base-side commit
         // levels, under the `MIN_SERIES_POINTS` evidence floor, so it declines to test
-        // the series at all. This is deliberately distinct from `tip_spike`, which has a
-        // long base and where branch mode legitimately does report.
+        // the series at all. This is deliberately distinct from `tip_spike`, whose base
+        // reaches the evidence floor and where branch mode legitimately does report.
         SignalCase::new(
             "a_lone_elevated_final_point_is_not_a_step",
             MetricKind::WallTime,
@@ -673,8 +678,8 @@ fn cases() -> Vec<SignalCase> {
 ///
 /// A companion counts towards the family only if it is *judged*, which is why each
 /// carries as much evidence as its position allows: the base-side commits ending at the
-/// merge base, capped at `MIN_SERIES_POINTS`, plus a branch-side tip that pads the
-/// series out whenever the base side alone falls short of that floor. History mode
+/// merge base, capped at `MIN_SERIES_POINTS`, plus just enough branch-side evidence to
+/// meet that floor, including a point at the context commit. History mode
 /// therefore always judges a companion. Branch mode judges one exactly when the merge
 /// base sits at least `MIN_SERIES_POINTS` commits in, since a companion cannot reach
 /// further back than the shared merge-base split allows — so for a case whose own base
@@ -683,7 +688,8 @@ fn cases() -> Vec<SignalCase> {
 ///
 /// Holding them at the floor is deliberate rather than incidental: the crowd is rebuilt
 /// for every case, mode, and scale, so its cost must not grow with the case's own
-/// length. Each draws its metric kind's realistic scatter from its own seed, so the
+/// length. A gap before the context commit needs no intermediate observations.
+/// Each draws its metric kind's realistic scatter from its own seed, so the
 /// crowd is a set of independent noisy series rather than an artificially clean backdrop.
 fn companions(
     count: usize,
@@ -695,22 +701,83 @@ fn companions(
     let branch_start = merge_base.map_or(0, |index| index.checked_add(1).unwrap());
     let base_points = branch_start.min(MIN_SERIES_POINTS);
     let topo_start = branch_start.checked_sub(base_points).unwrap();
-    let branch_points = merge_base.map_or(MIN_SERIES_POINTS, |index| {
-        tip_index.saturating_sub(index).max(1)
-    });
+    let branch_points = MIN_SERIES_POINTS.saturating_sub(base_points).max(1);
     let points = base_points.checked_add(branch_points).unwrap();
+    assert!(
+        tip_index
+            >= topo_start
+                .checked_add(points)
+                .unwrap()
+                .checked_sub(1)
+                .unwrap()
+    );
 
     (0..count)
         .map(|index| {
             let name = format!("companion{index}");
             let values = with_noise(&run_of(level, points), kind, seed_of(&name));
-            let series = examples::series(&name, &values, kind, topo_start);
+            let mut series = examples::series(&name, &values, kind, topo_start);
+            let tip = series.points.last_mut().unwrap();
+            tip.topo_index = tip_index;
+            tip.object_ordinal = u32::try_from(tip_index).unwrap();
+            tip.commit = Some(Arc::from(format!("commit{tip_index}")));
             match merge_base {
                 Some(base_ref) => examples::with_base_window(series, base_ref),
                 None => series,
             }
         })
         .collect()
+}
+
+#[test]
+fn companions_bound_evidence_without_losing_the_context_commit() {
+    // Sparse topology needs no extra statistical observations. Include absent, incomplete
+    // and complete base evidence, with the context far beyond the retained base window.
+    for merge_base in [
+        None,
+        Some(MIN_REGIME - 1),
+        Some(MIN_SERIES_POINTS - 1),
+        Some(10 * MIN_SERIES_POINTS),
+    ] {
+        let tip_index = 20 * MIN_SERIES_POINTS;
+        let crowd = companions(1, MetricKind::WallTime, 100.0, merge_base, tip_index);
+        let one = crowd.first().unwrap();
+        let base_points = merge_base.map_or(0, |index| (index + 1).min(MIN_SERIES_POINTS));
+        assert_eq!(one.base_window.len(), base_points);
+        assert_eq!(one.points.len(), (base_points + 1).max(MIN_SERIES_POINTS));
+        assert_eq!(one.points.last().unwrap().topo_index, tip_index);
+        assert_eq!(
+            one.points.last().unwrap().commit.as_deref(),
+            Some(format!("commit{tip_index}").as_str())
+        );
+        assert!(
+            one.points
+                .array_windows()
+                .all(|[left, right]| left.topo_index < right.topo_index)
+        );
+        assert!(
+            one.base_window
+                .iter()
+                .all(|level| Some(level.topo_index) <= merge_base)
+        );
+    }
+    let crowd = companions(
+        1,
+        MetricKind::WallTime,
+        100.0,
+        Some(MIN_SERIES_POINTS - 1),
+        MIN_SERIES_POINTS,
+    );
+    assert_eq!(
+        crowd
+            .first()
+            .unwrap()
+            .points
+            .iter()
+            .map(|point| point.topo_index)
+            .collect::<Vec<_>>(),
+        (0..=MIN_SERIES_POINTS).collect::<Vec<_>>()
+    );
 }
 
 /// The arithmetic mean of `values` — the level companions sit at, so a crowd shares the

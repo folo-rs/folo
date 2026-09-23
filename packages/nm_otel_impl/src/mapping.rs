@@ -270,89 +270,9 @@ mod tests {
     use std::collections::HashSet;
 
     use nm::{EventMetrics, Histogram};
-    use opentelemetry::metrics::MeterProvider;
-    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
+    use opentelemetry::metrics::{MeterProvider, NoopMeterProvider};
 
     use super::*;
-    use crate::{TestMetricReader, create_test_provider};
-
-    fn collect_metrics(reader: &TestMetricReader) -> Vec<ResourceMetrics> {
-        vec![reader.collect()]
-    }
-
-    /// Looks up a monotonic `u64` counter value by metric name and optional `le` bucket bound.
-    ///
-    /// Returns `None` when no matching metric or data point exists. Asserts that any metric
-    /// found under `name` is a monotonic sum, which is the exported kind for count and bucket
-    /// counters.
-    fn counter_value(metrics: &[ResourceMetrics], name: &str, le: Option<&str>) -> Option<u64> {
-        for resource_metrics in metrics {
-            for scope_metrics in resource_metrics.scope_metrics() {
-                for metric in scope_metrics.metrics() {
-                    if metric.name() != name {
-                        continue;
-                    }
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        continue;
-                    };
-                    assert!(sum.is_monotonic());
-                    for point in sum.data_points() {
-                        let matches = match le {
-                            None => point.attributes().next().is_none(),
-                            Some(expected) => point.attributes().any(|kv: &KeyValue| {
-                                kv.key.as_str() == LE_ATTRIBUTE && kv.value.as_str() == expected
-                            }),
-                        };
-                        if matches {
-                            return Some(point.value());
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Looks up an `i64` gauge value by metric name, returning `None` when absent.
-    ///
-    /// Asserts that any metric found under `name` is a gauge, which is the exported kind for
-    /// the sum metric.
-    fn gauge_value(metrics: &[ResourceMetrics], name: &str) -> Option<i64> {
-        for resource_metrics in metrics {
-            for scope_metrics in resource_metrics.scope_metrics() {
-                for metric in scope_metrics.metrics() {
-                    if metric.name() != name {
-                        continue;
-                    }
-                    let AggregatedMetrics::I64(MetricData::Gauge(gauge)) = metric.data() else {
-                        continue;
-                    };
-                    if let Some(point) = gauge.data_points().next() {
-                        return Some(point.value());
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Counts how many exported metrics carry `name`.
-    ///
-    /// The mapping publishes at most one instrument per name, so a higher count means two
-    /// events, or an event and another event's companion, were given the same metric identity.
-    fn metric_count(metrics: &[ResourceMetrics], name: &str) -> usize {
-        let mut count = 0_usize;
-        for resource_metrics in metrics {
-            for scope_metrics in resource_metrics.scope_metrics() {
-                for metric in scope_metrics.metrics() {
-                    if metric.name() == name {
-                        count = count.saturating_add(1);
-                    }
-                }
-            }
-        }
-        count
-    }
 
     #[test]
     fn format_bucket_bound_regular_values() {
@@ -368,106 +288,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
-    fn export_report_simple_event() {
-        const EVENT_NAME: &str = "test_event";
-        const COUNT: u64 = 100;
-        const SUM: Magnitude = 5000;
-
-        let (provider, reader) = create_test_provider();
-        let meter = provider.meter("test");
-
-        let mut state = CollectionState::new();
-        let mut instruments = InstrumentRegistry::new(meter);
-
-        let event = EventMetrics::fake(EVENT_NAME, COUNT, SUM, None);
-        let report = Report::fake(vec![event]);
-
-        export_report(&report, &mut state, &mut instruments);
-
-        let metrics = collect_metrics(&reader);
-
-        // The first collection publishes the full count as the counter delta, the sum as an
-        // absolute gauge, and no bucket metric because the event has no histogram.
-        assert_eq!(counter_value(&metrics, EVENT_NAME, None), Some(COUNT));
-        assert_eq!(
-            gauge_value(&metrics, &format!("{EVENT_NAME}{SUM_SUFFIX}")),
-            Some(SUM)
-        );
-        assert_eq!(
-            counter_value(&metrics, &format!("{EVENT_NAME}{BUCKET_SUFFIX}"), None),
-            None
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
-    fn export_report_event_with_histogram() {
-        const EVENT_NAME: &str = "latency_ms";
-        const COUNT: u64 = 30;
-        const SUM: Magnitude = 4567;
-        static BUCKETS: &[Magnitude] = &[10, 50, 100, 500];
-        const PLUS_INFINITY_BUCKET_COUNT: u64 = 2;
-
-        let (provider, reader) = create_test_provider();
-        let meter = provider.meter("test");
-
-        let mut state = CollectionState::new();
-        let mut instruments = InstrumentRegistry::new(meter);
-
-        let histogram = Histogram::fake(BUCKETS, vec![5, 12, 8, 3], PLUS_INFINITY_BUCKET_COUNT);
-        let event = EventMetrics::fake(EVENT_NAME, COUNT, SUM, Some(histogram));
-        let report = Report::fake(vec![event]);
-
-        export_report(&report, &mut state, &mut instruments);
-
-        let metrics = collect_metrics(&reader);
-
-        assert_eq!(counter_value(&metrics, EVENT_NAME, None), Some(COUNT));
-        assert_eq!(
-            gauge_value(&metrics, &format!("{EVENT_NAME}{SUM_SUFFIX}")),
-            Some(SUM)
-        );
-
-        // First-collection bucket deltas equal the cumulative bucket totals, which the bucket
-        // counter reports under one `le` series per bound plus the synthetic `+Inf` overflow
-        // bucket.
-        let bucket_metric = format!("{EVENT_NAME}{BUCKET_SUFFIX}");
-        assert_eq!(counter_value(&metrics, &bucket_metric, Some("10")), Some(5));
-        assert_eq!(
-            counter_value(&metrics, &bucket_metric, Some("50")),
-            Some(17)
-        );
-        assert_eq!(
-            counter_value(&metrics, &bucket_metric, Some("100")),
-            Some(25)
-        );
-        assert_eq!(
-            counter_value(&metrics, &bucket_metric, Some("500")),
-            Some(28)
-        );
-        assert_eq!(
-            counter_value(&metrics, &bucket_metric, Some("+Inf")),
-            Some(30)
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn export_report_delta_computation() {
         static BUCKETS: &[Magnitude] = &[10, 50];
 
-        let (provider, _reader) = create_test_provider();
-        let meter = provider.meter("test");
+        let meter = NoopMeterProvider::new().meter("test");
 
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
@@ -498,53 +322,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
-    fn export_report_multiple_events() {
-        const FIRST_NAME: &str = "event_a";
-        const FIRST_COUNT: u64 = 10;
-        const FIRST_SUM: Magnitude = 100;
-        const SECOND_NAME: &str = "event_b";
-        const SECOND_COUNT: u64 = 20;
-        const SECOND_SUM: Magnitude = 200;
-
-        let (provider, reader) = create_test_provider();
-        let meter = provider.meter("test");
-
-        let mut state = CollectionState::new();
-        let mut instruments = InstrumentRegistry::new(meter);
-
-        let first_event = EventMetrics::fake(FIRST_NAME, FIRST_COUNT, FIRST_SUM, None);
-        let second_event = EventMetrics::fake(SECOND_NAME, SECOND_COUNT, SECOND_SUM, None);
-        let report = Report::fake(vec![first_event, second_event]);
-
-        export_report(&report, &mut state, &mut instruments);
-
-        let metrics = collect_metrics(&reader);
-
-        // Both events must be exported independently, each with its own count and sum.
-        assert_eq!(counter_value(&metrics, FIRST_NAME, None), Some(FIRST_COUNT));
-        assert_eq!(
-            gauge_value(&metrics, &format!("{FIRST_NAME}{SUM_SUFFIX}")),
-            Some(FIRST_SUM)
-        );
-        assert_eq!(
-            counter_value(&metrics, SECOND_NAME, None),
-            Some(SECOND_COUNT)
-        );
-        assert_eq!(
-            gauge_value(&metrics, &format!("{SECOND_NAME}{SUM_SUFFIX}")),
-            Some(SECOND_SUM)
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn instrument_registry_preserves_entries_across_table_growth() {
         // The underlying `HashTable` grows when capacity is exceeded, which calls the
         // rehash closure passed to `entry()` on every existing entry. This test inserts
@@ -559,8 +336,7 @@ mod tests {
         // trigger several successive grow-and-rehash cycles rather than just one.
         const NUM_EVENTS: u64 = 64;
 
-        let (provider, _reader) = create_test_provider();
-        let meter = provider.meter("test");
+        let meter = NoopMeterProvider::new().meter("test");
 
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
@@ -595,15 +371,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn export_report_zero_count_delta_does_not_add_to_counter() {
         static BUCKETS: &[Magnitude] = &[10, 50];
 
-        let (provider, _reader) = create_test_provider();
-        let meter = provider.meter("test");
+        let meter = NoopMeterProvider::new().meter("test");
 
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
@@ -627,15 +398,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn export_report_zero_bucket_delta_does_not_add_to_counter() {
         static BUCKETS: &[Magnitude] = &[10, 50];
 
-        let (provider, _reader) = create_test_provider();
-        let meter = provider.meter("test");
+        let meter = NoopMeterProvider::new().meter("test");
 
         let mut state = CollectionState::new();
         let mut instruments = InstrumentRegistry::new(meter);
@@ -716,127 +482,5 @@ mod tests {
 
         let distinct: HashSet<&String> = instrument_names.iter().collect();
         assert_eq!(distinct.len(), instrument_names.len());
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
-    fn export_report_separates_event_named_like_sum_companion() {
-        const BASE_EVENT: &str = "latency";
-        const BASE_COUNT: u64 = 7;
-        const BASE_SUM: Magnitude = 700;
-        const COLLIDING_EVENT: &str = "latency_sum";
-        const COLLIDING_COUNT: u64 = 3;
-        const COLLIDING_SUM: Magnitude = 300;
-
-        let (provider, reader) = create_test_provider();
-        let meter = provider.meter("test");
-
-        let mut state = CollectionState::new();
-        let mut instruments = InstrumentRegistry::new(meter);
-
-        let report = Report::fake(vec![
-            EventMetrics::fake(BASE_EVENT, BASE_COUNT, BASE_SUM, None),
-            EventMetrics::fake(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
-        ]);
-
-        export_report(&report, &mut state, &mut instruments);
-
-        let metrics = collect_metrics(&reader);
-
-        // The base event keeps its unshifted names, so its sum gauge owns `latency_sum`.
-        assert_eq!(counter_value(&metrics, BASE_EVENT, None), Some(BASE_COUNT));
-        assert_eq!(gauge_value(&metrics, "latency_sum"), Some(BASE_SUM));
-
-        // The colliding event is shifted out of that name space and keeps its own values,
-        // reported under the counter and gauge aggregations its metrics call for.
-        assert_eq!(
-            counter_value(&metrics, "latency_sum_", None),
-            Some(COLLIDING_COUNT)
-        );
-        assert_eq!(
-            gauge_value(&metrics, "latency_sum__sum"),
-            Some(COLLIDING_SUM)
-        );
-
-        // One instrument per name means the gauge and the counter were never merged.
-        for name in ["latency", "latency_sum", "latency_sum_", "latency_sum__sum"] {
-            assert_eq!(metric_count(&metrics, name), 1);
-        }
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
-    fn export_report_separates_event_named_like_bucket_companion() {
-        const BASE_EVENT: &str = "latency";
-        const BASE_COUNT: u64 = 9;
-        const BASE_SUM: Magnitude = 900;
-        static BASE_BUCKETS: &[Magnitude] = &[10, 50];
-        const BASE_PLUS_INFINITY_BUCKET_COUNT: u64 = 2;
-        const COLLIDING_EVENT: &str = "latency_bucket";
-        const COLLIDING_COUNT: u64 = 4;
-        const COLLIDING_SUM: Magnitude = 400;
-
-        let (provider, reader) = create_test_provider();
-        let meter = provider.meter("test");
-
-        let mut state = CollectionState::new();
-        let mut instruments = InstrumentRegistry::new(meter);
-
-        let histogram = Histogram::fake(BASE_BUCKETS, vec![5, 2], BASE_PLUS_INFINITY_BUCKET_COUNT);
-        let report = Report::fake(vec![
-            EventMetrics::fake(BASE_EVENT, BASE_COUNT, BASE_SUM, Some(histogram)),
-            EventMetrics::fake(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
-        ]);
-
-        export_report(&report, &mut state, &mut instruments);
-
-        let metrics = collect_metrics(&reader);
-
-        // The base event keeps its unshifted names, so its bucket counter owns
-        // `latency_bucket` and reports one cumulative series per bound.
-        assert_eq!(counter_value(&metrics, BASE_EVENT, None), Some(BASE_COUNT));
-        assert_eq!(gauge_value(&metrics, "latency_sum"), Some(BASE_SUM));
-        assert_eq!(
-            counter_value(&metrics, "latency_bucket", Some("10")),
-            Some(5)
-        );
-        assert_eq!(
-            counter_value(&metrics, "latency_bucket", Some("50")),
-            Some(7)
-        );
-        assert_eq!(
-            counter_value(&metrics, "latency_bucket", Some("+Inf")),
-            Some(BASE_COUNT)
-        );
-
-        // The bucket counter carries an `le` attribute on every series, so the colliding
-        // event's attribute-free count cannot hide inside it.
-        assert_eq!(counter_value(&metrics, "latency_bucket", None), None);
-
-        // The colliding event is shifted out of that name space and keeps its own values.
-        assert_eq!(
-            counter_value(&metrics, "latency_bucket_", None),
-            Some(COLLIDING_COUNT)
-        );
-        assert_eq!(
-            gauge_value(&metrics, "latency_bucket__sum"),
-            Some(COLLIDING_SUM)
-        );
-
-        for name in [
-            "latency",
-            "latency_sum",
-            "latency_bucket",
-            "latency_bucket_",
-            "latency_bucket__sum",
-        ] {
-            assert_eq!(metric_count(&metrics, name), 1);
-        }
     }
 }

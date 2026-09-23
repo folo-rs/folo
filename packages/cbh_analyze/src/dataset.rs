@@ -2,6 +2,7 @@
 //! objects into a `SelectedDataSet`, and explain an empty outcome.
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -134,6 +135,7 @@ pub(crate) async fn select_dataset<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Result<SelectedDataSet, AnalyzeError>
 where
     G: GitHistory,
@@ -261,6 +263,7 @@ where
         let series = load_branch_base_series(
             storage,
             spawner,
+            available_parallelism,
             &candidates,
             history,
             since,
@@ -396,6 +399,7 @@ where
     } = fold_runs_chunked(
         storage,
         spawner,
+        available_parallelism,
         ranked,
         &order,
         &dirty_base_exception,
@@ -603,9 +607,14 @@ where
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the branch window load shares the injected storage and execution capabilities"
+)]
 async fn load_branch_base_series<S>(
     storage: &S,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
     candidates: &[(String, StorageKey)],
     history: &BaseRefHistory,
     since: Option<Timestamp>,
@@ -668,6 +677,7 @@ where
     let WorkerFold { builder, .. } = fold_runs_chunked(
         storage,
         spawner,
+        available_parallelism,
         ranked,
         &order,
         &empty_dirty_exceptions,

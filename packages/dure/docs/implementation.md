@@ -259,6 +259,8 @@ production behavior that does not change under `cfg(test)` except by swapping
 PAL implementations.
 
 Logic above the PAL is unit-tested against mocks so it stays Miri-compatible.
+Startup-failure tests inject directory resolution through the session-store mock, and kill-command
+tests retain and remove records in the in-memory store. Neither needs a real session directory.
 Those tests cover command parsing, session discovery and garbage collection,
 the supervisor steal loop, and the client attach handshake, including failure
 paths that must not delete a live supervisor record.

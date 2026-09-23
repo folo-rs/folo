@@ -176,7 +176,14 @@ happens to need today.
 | `tests/**` (integration tests)    | `foo_impl` | Same reasoning as benches: they are for maintainers, and proximity to `foo_impl` internals is occasionally needed. |
 | `examples/**` (user-facing)       | `foo`      | Examples are a form of end-user documentation. They must compile against the same public API a user gets from `cargo add foo`. Keeping them in the public crate is what enforces that they cannot accidentally reach for internals. |
 | Maintainer-only demo/dev binaries | `foo_impl/examples/` (optional) | If you do want a runnable internal demo (e.g. a load-generator, a profiling harness, a "wire up the internals to see what they do" app), put it under `foo_impl/examples/`. Treat it explicitly as "examples and dev apps for maintainers", a different category from end-user examples. |
-| Re-export smoke test              | `foo`      | The one and only `tests/` file in `foo`. It exists specifically to assert that the explicit re-export list in `foo/src/lib.rs` keeps reaching every advertised item. See "How to do the split" below. |
+| Re-export smoke test              | `foo`      | Asserts that the explicit re-export list in `foo/src/lib.rs` keeps reaching every advertised item. See "How to do the split" below. |
+
+An executable-connected integration suite stays in the package that owns the tested
+binary. Cargo supplies `CARGO_BIN_EXE_<name>` only to that package's test targets.
+Do not duplicate the executable, compile production source into another target,
+or launch a nested Cargo build merely to move its harness. Implementation-boundary
+tests and benchmarks still belong beside the implementation; the application guide
+records the executable ownership.
 
 Two principles fall out of the table:
 
@@ -426,13 +433,12 @@ boundary. The two patterns coexist:
 
 ## Canonical examples
 
-The full `foo`/`foo_impl` split has been applied to three crate pairs in this
-workspace. A fourth example shows the simplified, shell-less form private-use
-packages take.
+These examples cover library facades, an application facade, and the simplified,
+shell-less form private-use packages take.
 
 ### `nm` / `nm_impl`
 
-The original worked example. Concrete files to study:
+Concrete files to study:
 
 - `packages/nm/Cargo.toml` — thin shell manifest with
   `nm_impl = { workspace = true }`.
@@ -451,7 +457,7 @@ The original worked example. Concrete files to study:
 
 ### `nm_otel` / `nm_otel_impl`
 
-The second worked example. Concrete files to study:
+Concrete files to study:
 
 - `packages/nm_otel/Cargo.toml` — thin shell manifest with
   `nm_otel_impl = { workspace = true }`.
@@ -474,8 +480,8 @@ The second worked example. Concrete files to study:
 
 ### `many_cpus` / `many_cpus_impl`
 
-The third worked example, and the first split that combines a forwarded
-public `test-util` feature with internal benches that reach into the PAL.
+This pair combines a forwarded public `test-util` feature with internal benches
+that reach into the PAL.
 Concrete files to study:
 
 - `packages/many_cpus/Cargo.toml` — thin shell manifest with
@@ -513,6 +519,17 @@ Concrete files to study:
   notice.
 - `Cargo.toml` (workspace) — the exact `many_cpus_impl` entry in
   `[workspace.dependencies]` derives the pair's version group.
+
+### `cargo-release-plan` / `crp_impl`
+
+The application shell owns the CLI executable, the supported library facade, and
+the executable-connected integration suite. `crp_impl` owns the implementation,
+direct boundary integration tests, and algorithm benchmarks. The exact dependency
+keeps both packages in one version group.
+
+See [the application implementation guide](../packages/cargo-release-plan/docs/implementation.md)
+for the ownership boundaries and the split between pure unit tests and real-system
+integration tests.
 
 ### `cbh_*` (private-use impl crates, no shell)
 

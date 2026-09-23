@@ -61,7 +61,7 @@ edition.workspace = true
     .unwrap();
 
     fs::write(package_a.join("src/lib.rs"), "// package_a lib\n").unwrap();
-    fs::write(package_a.join("src/main.rs"), "// package_a main\n").unwrap();
+    fs::write(package_a.join("src/main.rs"), "fn main() {}\n").unwrap();
     fs::write(package_a.join("src/utils.rs"), "// package_a utils\n").unwrap();
 
     // Create package_b
@@ -512,16 +512,12 @@ fn workspace_scope_cargo_integration() {
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(workspace_root).unwrap();
 
-    // Test workspace scope with cargo integration
+    // `tree` validates workspace selection without compiling a fixture package.
     let input = RunInput {
         path: PathBuf::from("README.md"),
         via_env: None,
         outside_package: OutsidePackageAction::Workspace,
-        subcommand: vec![
-            "check".to_string(),
-            "--message-format=json".to_string(),
-            "--quiet".to_string(),
-        ],
+        subcommand: vec!["tree".to_string(), "--depth".to_string(), "0".to_string()],
     };
 
     let result = run(&input);
@@ -530,7 +526,9 @@ fn workspace_scope_cargo_integration() {
 
     // Should use --workspace flag for workspace-scope files
     match result {
-        Ok(RunOutcome::WorkspaceScope { .. }) => {}
+        Ok(RunOutcome::WorkspaceScope {
+            subcommand_succeeded,
+        }) => assert!(subcommand_succeeded),
         other => panic!("Expected WorkspaceScope, got {other:?}"),
     }
 }
@@ -679,7 +677,7 @@ fn subcommand_with_double_dash_separator() {
     std::env::set_current_dir(workspace_root).unwrap();
 
     // Test clippy-style command with "--" separator
-    let input = RunInput {
+    let mut input = RunInput {
         path: PathBuf::from("package_a/src/lib.rs"),
         via_env: None,
         outside_package: OutsidePackageAction::Workspace,
@@ -693,6 +691,8 @@ fn subcommand_with_double_dash_separator() {
     };
 
     let result = run(&input);
+    input.path = PathBuf::from("README.md");
+    let workspace_result = run(&input);
 
     std::env::set_current_dir(original_dir).unwrap();
 
@@ -703,6 +703,10 @@ fn subcommand_with_double_dash_separator() {
         }
         other => panic!("Expected PackageDetected, got {other:?}"),
     }
+    assert!(matches!(
+        workspace_result.unwrap(),
+        RunOutcome::WorkspaceScope { .. }
+    ));
 }
 
 #[test]

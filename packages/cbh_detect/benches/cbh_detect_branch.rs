@@ -54,6 +54,34 @@ fn whole_report(c: &mut Criterion) {
     group.finish();
 }
 
+fn noisy_base(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cbh_detect_branch/noisy_base");
+    for (base_commits, name) in [
+        (LOW_BASE_COMMITS, "20-commits"),
+        (HIGH_BASE_COMMITS, "128-commits"),
+    ] {
+        // Stable noisy histories exercise boundary screening, unlike an exactly flat base
+        // whose first Pettitt split already fails persistence.
+        let mut values = examples::scattered(
+            &vec![BASE_VALUE; base_commits],
+            examples::TIMING_NOISE_CV,
+            examples::seed_of("noisy_base"),
+        );
+        values.push(BRANCH_VALUE);
+        let merge_base = base_commits.saturating_sub(1);
+        let series = examples::with_base_window(
+            examples::series("noisy_base", &values, MetricKind::WallTime, 0),
+            merge_base,
+        );
+        let context = examples::branch_context(&series, merge_base);
+        let suite = [series];
+        group.bench_function(name, |b| {
+            b.iter(|| black_box(find_changes(black_box(&suite), black_box(&context))));
+        });
+    }
+    group.finish();
+}
+
 fn branch_suite(base_commits: usize, series_count: usize) -> (Vec<Series>, AnalysisContext) {
     let values: Vec<f64> = std::iter::repeat_n(BASE_VALUE, base_commits)
         .chain(std::iter::once(BRANCH_VALUE))
@@ -101,7 +129,7 @@ fn diversify_base_evidence(suite: &mut [Series]) {
     }
 }
 
-criterion_group!(benches, whole_report);
+criterion_group!(benches, whole_report, noisy_base);
 criterion_main!(benches);
 
 ::testing::set_allocator!();

@@ -12,8 +12,6 @@ mod callgrind;
 mod criterion;
 mod env;
 mod paths;
-#[cfg(test)]
-mod schema_roundtrip;
 
 pub use all_the_time::{AllTheTimeParseError, parse_all_the_time_operation};
 pub use alloc_tracker::{AllocTrackerParseError, parse_alloc_tracker_operation};

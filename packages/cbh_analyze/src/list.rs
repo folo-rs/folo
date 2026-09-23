@@ -13,7 +13,9 @@
 //! and, like that listing, needs no repository.
 
 use std::collections::BTreeSet;
+use std::num::NonZero;
 use std::path::Path;
+use std::thread;
 
 use anyspawn::Spawner;
 use cbh_command::{ListOptions, ListSubject};
@@ -84,6 +86,7 @@ pub async fn execute(
     // The object-load and detection work shares the ambient Tokio worker threads
     // (mirrors `analyze::execute`).
     let spawner = Spawner::new_tokio();
+    let available_parallelism = thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN);
     let outcome = list_with(
         &git,
         &storage,
@@ -94,6 +97,7 @@ pub async fn execute(
         now,
         &reporter,
         &spawner,
+        available_parallelism,
     )
     .await;
     storage.report_cache_tally(&reporter);
@@ -117,6 +121,7 @@ pub(crate) async fn list_with<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Result<RenderedReports, AnalyzeError>
 where
     G: GitHistory,
@@ -153,7 +158,16 @@ where
         }
         ListSubject::Blessings => {
             let (head_label, entries) = list_blessings(
-                git, storage, project_id, config, options, auto, now, reporter, spawner,
+                git,
+                storage,
+                project_id,
+                config,
+                options,
+                auto,
+                now,
+                reporter,
+                spawner,
+                available_parallelism,
             )
             .await?;
             Ok(request.render(|format| {
@@ -163,8 +177,18 @@ where
         ListSubject::Runs => {
             let filter = SeriesFilter::default();
             let dataset = select_dataset(
-                git, storage, project_id, config, &selection, filter, false, auto, now, reporter,
+                git,
+                storage,
+                project_id,
+                config,
+                &selection,
+                filter,
+                false,
+                auto,
+                now,
+                reporter,
                 spawner,
+                available_parallelism,
             )
             .await?;
             let series = dataset.series;
@@ -554,6 +578,7 @@ async fn list_blessings<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
     G: GitHistory,
@@ -563,7 +588,16 @@ where
 
     let (head_label, mut entries) = if options.all {
         blessings_across_window(
-            git, storage, project_id, config, &selection, auto, now, reporter, spawner,
+            git,
+            storage,
+            project_id,
+            config,
+            &selection,
+            auto,
+            now,
+            reporter,
+            spawner,
+            available_parallelism,
         )
         .await?
     } else {
@@ -657,6 +691,7 @@ async fn blessings_across_window<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
     G: GitHistory,
@@ -664,7 +699,18 @@ where
 {
     let filter = SeriesFilter::default();
     let dataset = select_dataset(
-        git, storage, project_id, config, selection, filter, false, auto, now, reporter, spawner,
+        git,
+        storage,
+        project_id,
+        config,
+        selection,
+        filter,
+        false,
+        auto,
+        now,
+        reporter,
+        spawner,
+        available_parallelism,
     )
     .await?;
     let mut series = dataset.series;
@@ -1193,6 +1239,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         rendered
@@ -1217,6 +1264,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         rendered
@@ -1245,6 +1293,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         rendered
@@ -1397,6 +1446,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<UnresolvedRefError>().unwrap();
@@ -1457,6 +1507,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         assert!(error.find_source::<NoOutputSelectedError>().is_some());
@@ -1534,6 +1585,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         assert!(error.find_source::<ListAllUnsupportedError>().is_some());
@@ -1733,6 +1785,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err()
     }

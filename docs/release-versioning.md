@@ -372,9 +372,15 @@ membership, consistency, version bases, expansion, and alignment.
 
 Whether a crate has ever reached crates.io is a different question, answered by the existing
 `check-never-published` recipe. crates.io Trusted Publishing cannot perform a crate's first
-publish, so a new crate needs one manual `cargo publish` as documented in
-[`RELEASING.md`](../RELEASING.md). The skill's preflight runs that recipe as a best-effort,
-workspace-wide advisory. After the plan is expanded, `check-increment-published` fails closed
+publish, so a maintainer publishes the bootstrap version from the feature branch before the
+crate's first merge and configures Trusted Publishing, as documented in
+[`RELEASING.md`](../RELEASING.md#first-publish-of-a-new-crate). The first merge carries a
+version strictly higher than the bootstrap version and triggers the crate's second publication,
+its first automated release. An absent Git release anchor does not mean the bootstrap version
+is absent from crates.io.
+
+The skill's preflight runs that recipe as a best-effort, workspace-wide advisory. After the
+plan is expanded, `check-increment-published` fails closed
 unless every publishable package the plan reaches is already published; non-publishable targets
 are skipped. First-publish is not folded into `apply`, because the OIDC publisher cannot perform
 it. The version check itself does not change: a never-published crate with a version increment is
@@ -521,8 +527,10 @@ release set.
    dependent, and group movements. Retained pending increments remain visible. Explain levels
    above the SemVer floor. Supporting local artifact citations stay in working evidence rather
    than the PR. State explicitly when there are no release or version changes, and identify
-   first-publication handoffs separately. Non-publishable helpers are alignment-only, with
-   current declared versions as their alignment starting points. No approval pause follows.
+   pre-merge first-publication handoffs separately, including the bootstrap version and the
+   higher version intended for the first automated release. Non-publishable helpers are
+   alignment-only, with current declared versions as their alignment starting points. No
+   approval pause follows.
 5. **Apply and verify.** Confirm the evidence and release baseline are current, then
    `just check-increment-published <expanded>`, then
    `just apply-release-plan <expanded>`, then `just verify-lockfile`, then re-run `check` and the
@@ -662,8 +670,9 @@ crates.io throttles publishing with a per-user token bucket, and the applicable 
 for **new versions of existing crates**: a burst of 30 with one token refilled per minute. (The
 much tighter new-crate limit — burst 5, one per ten minutes — does not apply here, because Trusted
 Publishing cannot perform a crate's first publish, so bootstrapping a new crate is a manual step
-outside this flow.) A full-workspace reconciliation can therefore require roughly one minute per
-crate after the initial burst, while any single version-group release fits inside the burst.
+before its first merge, outside this flow.) A full-workspace reconciliation can therefore require
+roughly one minute per crate after the initial burst, while any single version-group release fits
+inside the burst.
 
 `release-plz release` is idempotent — it re-checks the registry and skips already-published
 versions — so a throttled run resumes rather than restarting. The retry around it is **three**

@@ -129,7 +129,7 @@ Describe 'Non-Cargo change domains' {
 
 Describe 'Cargo helper integration selection' {
     It 'adds release tests for affected helper <_>' -ForEach @(
-        'cargo-release-plan', 'release-target-check'
+        'cargo-release-plan', 'crp_impl', 'release-target-check'
     ) {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('scripts/book/BookSite.psm1'))
         $packages = ConvertTo-Json -InputObject @($_) -Compress

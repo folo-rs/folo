@@ -192,7 +192,7 @@ function Get-ValidationScriptDomain {
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
         if ($package -isnot [string]) { throw 'Affected package names must be strings.' }
-        if ($package -cin @('cargo-release-plan', 'release-target-check')) {
+        if ($package -cin @('cargo-release-plan', 'crp_impl', 'release-target-check')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }

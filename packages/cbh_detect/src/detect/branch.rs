@@ -107,9 +107,10 @@ pub(crate) async fn find_changes_spawned(
     series: Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Detection {
     let len = series.len();
-    let workers = worker_count(len);
+    let workers = worker_count(len, available_parallelism);
     let mut handles = Vec::with_capacity(workers);
     let mut start = 0_usize;
     for size in balanced_chunk_sizes(len, workers) {
@@ -462,6 +463,22 @@ fn strongest_split(
     search_alpha: f64,
 ) -> Option<StrongestSplit> {
     let values: Vec<f64> = selector.iter().map(|level| level.value).collect();
+    let split = stats::pettitt(&values)?.index;
+    let (before, after) = values.split_at(split);
+    if before.len().min(after.len()) < noise_gates::MIN_REGIME {
+        return None;
+    }
+    let superiority = stats::mann_whitney_superiority(before, after)
+        .expect("the located split leaves a complete regime on each side");
+    // These gates are conjunctive and independent of calibration. Keep an unsupported
+    // split for recursive segmentation, but do not calibrate a boundary they already veto.
+    // Ref: docs/implementation.md.
+    if !supported_boundary(kind, &values, split, superiority) {
+        return Some(StrongestSplit {
+            index: split,
+            supported: false,
+        });
+    }
     let calibration = stats::SelectionCalibration {
         permutation_order_budget: NonZero::new(noise_gates::MIN_CHANGE_PERMUTATION_ORDER)
             .expect("the configured permutation order is nonzero"),
@@ -469,14 +486,16 @@ fn strongest_split(
         accept_analytic_below: search_alpha,
         reject_at_or_above: search_alpha,
     };
-    // A segment too short to hold a full regime on each side yields no split at all, which
-    // is what ends the recursion.
     let change =
-        stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)?;
+        stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)
+            .expect("the same Pettitt split already leaves complete regimes on both sides");
+    debug_assert_eq!(
+        split, change.index,
+        "boundary screening and calibration use the same Pettitt split"
+    );
     Some(StrongestSplit {
-        index: change.index,
-        supported: passes_significance(change.adjusted_p, search_alpha)
-            && supported_boundary(kind, &values, change.index, change.superiority),
+        index: split,
+        supported: passes_significance(change.adjusted_p, search_alpha),
     })
 }
 /// Maps a selector-lane boundary to the first base observation known to be after it.
@@ -1296,6 +1315,7 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
+    use crate::examples;
     #[cfg(feature = "private-test-util")]
     use crate::testing::synchronous_spawner;
 
@@ -1441,30 +1461,34 @@ mod tests {
         ]);
         let context = context(BASE_COMMITS);
         let serial = find_changes(&batch, &context);
-        let spawned = block_on(find_changes_spawned(
-            Arc::clone(&batch),
-            context,
-            &synchronous_spawner(),
-        ));
+        // Exercise a single chunk and unequal chunks containing multiple series.
+        for capacity in [1, 2] {
+            let spawned = block_on(find_changes_spawned(
+                Arc::clone(&batch),
+                context,
+                &synchronous_spawner(),
+                NonZero::new(capacity).unwrap(),
+            ));
 
-        assert_eq!(spawned.findings.len(), serial.findings.len());
-        assert_eq!(spawned.census, serial.census);
-        assert_eq!(
-            spawned
-                .findings
-                .iter()
-                .map(|finding| (&finding.id, finding.direction))
-                .collect::<Vec<_>>(),
-            serial
-                .findings
-                .iter()
-                .map(|finding| (&finding.id, finding.direction))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            spawned.branch_trace.series.len(),
-            serial.branch_trace.series.len()
-        );
+            assert_eq!(spawned.findings.len(), serial.findings.len());
+            assert_eq!(spawned.census, serial.census);
+            assert_eq!(
+                spawned
+                    .findings
+                    .iter()
+                    .map(|finding| (&finding.id, finding.direction))
+                    .collect::<Vec<_>>(),
+                serial
+                    .findings
+                    .iter()
+                    .map(|finding| (&finding.id, finding.direction))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                spawned.branch_trace.series.len(),
+                serial.branch_trace.series.len()
+            );
+        }
     }
 
     #[test]
@@ -1721,6 +1745,107 @@ mod tests {
         ));
     }
 
+    fn assert_screening_matches_calibration(values: &[f64], expected: Option<(usize, bool)>) {
+        let one = series("screening", "m1", values, 150.0);
+        let selector: Vec<&BaseLevel> = one.base_window.iter().collect();
+        let search_alpha = regime_search_alpha(selector.len());
+        let calibration = stats::SelectionCalibration {
+            permutation_order_budget: NonZero::new(noise_gates::MIN_CHANGE_PERMUTATION_ORDER)
+                .unwrap(),
+            analytic_weight: noise_gates::CHANGE_ANALYTIC_WEIGHT,
+            accept_analytic_below: search_alpha,
+            reject_at_or_above: search_alpha,
+        };
+        let calibrated =
+            stats::selection_adjusted_change_point(values, noise_gates::MIN_REGIME, calibration)
+                .map(|change| {
+                    (
+                        change.index,
+                        passes_significance(change.adjusted_p, search_alpha)
+                            && supported_boundary(
+                                one.kind,
+                                values,
+                                change.index,
+                                change.superiority,
+                            ),
+                    )
+                });
+        let screened = strongest_split(one.kind, &selector, search_alpha)
+            .map(|split| (split.index, split.supported));
+        assert_eq!(calibrated, expected);
+        assert_eq!(screened, expected);
+    }
+
+    #[test]
+    fn early_boundary_screening_preserves_a_supported_split() {
+        // A minimum-sized tied step needs no expensive permutation orbit.
+        assert_screening_matches_calibration(
+            &[
+                100.0, 100.0, 100.0, 100.0, 100.0, 130.0, 130.0, 130.0, 130.0, 130.0,
+            ],
+            Some((noise_gates::MIN_REGIME, true)),
+        );
+    }
+
+    #[test]
+    fn early_boundary_screening_preserves_an_unsupported_split() {
+        // Both sides retain the same low and high levels: magnitude is sufficient, but
+        // the populations overlap. The split must remain available to segmentation.
+        assert_screening_matches_calibration(
+            &[
+                100.0, 110.0, 101.0, 102.0, 103.0, 111.0, 110.0, 112.0, 100.0, 113.0,
+            ],
+            Some((noise_gates::MIN_REGIME, false)),
+        );
+    }
+
+    #[test]
+    fn early_boundary_screening_preserves_unsearchable_segments() {
+        for values in [&[][..], &[100.0], &[100.0; 10], &[100.0, 100.0, 130.0]] {
+            assert_screening_matches_calibration(values, None);
+        }
+    }
+
+    #[test]
+    fn a_practically_supported_split_still_needs_significance() {
+        // This complete separation clears every support gate, but a minimum-sized pair
+        // of regimes cannot clear the search budget of a maximum-length branch history.
+        let values = [
+            vec![100.0; noise_gates::MIN_REGIME],
+            vec![130.0; noise_gates::MIN_REGIME],
+        ]
+        .concat();
+        let one = series("not-significant", "m1", &values, 150.0);
+        let selector: Vec<&BaseLevel> = one.base_window.iter().collect();
+        let search_alpha = regime_search_alpha(noise_gates::MAX_BRANCH_BASE_COMMITS / 2);
+        let split = strongest_split(one.kind, &selector, search_alpha).unwrap();
+        assert_eq!(split.index, noise_gates::MIN_REGIME);
+        assert!(!split.supported);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "full-window noisy regime selection and stability fit; small selectors cover Miri"
+    )]
+    fn a_long_noisy_base_remains_one_quiet_regime() {
+        let base = examples::scattered(
+            &vec![100.0; noise_gates::MAX_BRANCH_BASE_COMMITS],
+            examples::TIMING_NOISE_CV,
+            examples::seed_of("noisy_base"),
+        );
+        let one = series("long-noisy-base", "m1", &base, 100.0);
+        let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
+        assert!(detection.findings.is_empty());
+        assert_eq!(detection.census.judged(), 1);
+        let trace = &detection.branch_trace.series[0];
+        assert_eq!(trace.current_regime_start, Some(0));
+        assert_eq!(
+            trace.retained_base_commits,
+            noise_gates::MAX_BRANCH_BASE_COMMITS
+        );
+    }
+
     #[test]
     fn a_statistical_split_below_the_practical_floor_does_not_move_the_regime() {
         // A minimum-sized pair of selector regimes already establishes a statistical split.
@@ -1768,17 +1893,20 @@ mod tests {
         base.extend(std::iter::repeat_n(100.0, 30));
         base.extend(std::iter::repeat_n(100.5, 30));
         let one = series("earlier-supported-split", "m1", &base, 90.0);
-        let selection = select_regime(&one);
-
-        assert_eq!(selection.current_start, 10);
-        assert_eq!(selection.boundary_commit.as_deref(), Some("c10"));
-        assert!(!selection.unresolved);
-
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
-        let finding = detection
-            .findings
-            .first()
-            .expect("the tip sits below every observation in the current regime");
+        let trace = &detection.branch_trace.series[0];
+        assert_eq!(trace.current_regime_start, Some(10));
+        assert_eq!(trace.unresolved, None);
+        let finding = detection.findings.first().unwrap();
+        assert_eq!(
+            finding
+                .branch
+                .as_ref()
+                .unwrap()
+                .current_regime_start
+                .as_deref(),
+            Some("c10")
+        );
         assert_eq!(finding.direction, Direction::Improvement);
     }
 
@@ -1814,18 +1942,21 @@ mod tests {
         base.extend(std::iter::repeat_n(200.0, 10));
         base.extend(std::iter::repeat_n(100.0, 68));
         let one = series("reverted-base-regression", "m1", &base, 150.0);
-        let selection = select_regime(&one);
-
-        assert_eq!(selection.current_start, 60);
-        assert_eq!(selection.boundary_commit.as_deref(), Some("c60"));
-        assert_eq!(selection.previous_range, Some((200.0, 200.0)));
-        assert!(!selection.unresolved);
-
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
-        let finding = detection
-            .findings
-            .first()
-            .expect("the tip sits above every observation in the current regime");
+        let trace = &detection.branch_trace.series[0];
+        assert_eq!(trace.current_regime_start, Some(60));
+        assert_eq!(trace.previous_range, Some((200.0, 200.0)));
+        assert_eq!(trace.unresolved, None);
+        let finding = detection.findings.first().unwrap();
+        assert_eq!(
+            finding
+                .branch
+                .as_ref()
+                .unwrap()
+                .current_regime_start
+                .as_deref(),
+            Some("c60")
+        );
         assert_eq!(finding.direction, Direction::Regression);
     }
 
@@ -1843,18 +1974,21 @@ mod tests {
         base.extend(std::iter::repeat_n(100.0, 24));
         base.extend(std::iter::repeat_n(102.0, 62));
         let one = series("unsupported-suffix-split", "m1", &base, 150.0);
-        let selection = select_regime(&one);
-
-        assert_eq!(selection.current_start, 30);
-        assert_eq!(selection.boundary_commit.as_deref(), Some("c30"));
-        assert_eq!(selection.previous_range, Some((200.0, 200.0)));
-        assert!(!selection.unresolved);
-
         let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
-        let finding = detection
-            .findings
-            .first()
-            .expect("the tip sits above every observation in the current regime");
+        let trace = &detection.branch_trace.series[0];
+        assert_eq!(trace.current_regime_start, Some(30));
+        assert_eq!(trace.previous_range, Some((200.0, 200.0)));
+        assert_eq!(trace.unresolved, None);
+        let finding = detection.findings.first().unwrap();
+        assert_eq!(
+            finding
+                .branch
+                .as_ref()
+                .unwrap()
+                .current_regime_start
+                .as_deref(),
+            Some("c30")
+        );
         assert_eq!(finding.direction, Direction::Regression);
     }
 

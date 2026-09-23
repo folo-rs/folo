@@ -127,7 +127,16 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
 /// that does not exist, or any non-"not found" I/O error), or if its contents
 /// are not a valid configuration.
 pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigError> {
-    let text = match tokio::fs::read_to_string(path).await {
+    parse_config_read(path, explicit, tokio::fs::read_to_string(path).await)
+}
+
+/// Interprets a file read independently of its filesystem acquisition.
+fn parse_config_read(
+    path: &Path,
+    explicit: bool,
+    contents: io::Result<String>,
+) -> Result<Config, ConfigError> {
+    let text = match contents {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound && !explicit => {
             return Ok(Config::default());
@@ -310,46 +319,59 @@ key = \"ci-pool-a\"
         assert!(error.find_source::<toml::de::Error>().is_some());
     }
 
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn load_config_reads_and_parses() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bench_history.toml");
-        std::fs::write(
-            &path,
-            "[project]\nid = \"folo\"\n\n[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n",
+    #[test]
+    fn successful_read_is_parsed() {
+        let config = parse_config_read(
+            Path::new("config.toml"),
+            true,
+            Ok("[project]\nid = \"folo\"\n".to_owned()),
         )
         .unwrap();
 
-        let config = load_config(&path, true).await.unwrap();
-
-        assert!(matches!(config.storage, Some(CloudStorageConfig::Azure(_))));
         assert_eq!(config.project.id.as_deref(), Some("folo"));
     }
 
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn load_config_missing_explicit_file_is_read_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("absent.toml");
-
-        // An explicitly requested file that does not exist is an error.
-        let error = load_config(&path, true).await.unwrap_err();
+    #[test]
+    fn missing_explicit_file_is_read_error() {
+        let path = Path::new("absent.toml");
+        let error = parse_config_read(path, true, Err(io::ErrorKind::NotFound.into())).unwrap_err();
 
         let read = error.find_source::<ReadConfigError>().unwrap();
         assert_eq!(read.path, path);
         assert!(error.find_source::<io::Error>().is_some());
     }
 
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
-    async fn load_config_missing_default_file_yields_empty_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("absent.toml");
-
-        // The default location being absent is fine: storage can come from `--local`.
-        let config = load_config(&path, false).await.unwrap();
+    #[test]
+    fn missing_default_file_yields_empty_config() {
+        let config = parse_config_read(
+            Path::new("absent.toml"),
+            false,
+            Err(io::ErrorKind::NotFound.into()),
+        )
+        .unwrap();
 
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn unreadable_default_file_is_read_error() {
+        let path = Path::new("unreadable.toml");
+        let error = parse_config_read(path, false, Err(io::ErrorKind::PermissionDenied.into()))
+            .unwrap_err();
+
+        let read = error.find_source::<ReadConfigError>().unwrap();
+        assert_eq!(read.path, path);
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn malformed_file_is_parse_error() {
+        let error =
+            parse_config_read(Path::new("config.toml"), false, Ok("[".to_owned())).unwrap_err();
+
+        assert!(error.find_source::<ParseConfigError>().is_some());
     }
 }

@@ -9,6 +9,10 @@ child-process execution. A composition layer coordinates those responsibilities.
 passes through the package's platform abstraction so discovery logic does not depend directly on
 the host filesystem.
 
+Unit tests drive discovery and manifest parsing through in-memory filesystem mocks. Cargo command
+construction is inspected without launching a process; real workspace discovery and command
+execution belong in Cargo integration tests.
+
 The read-only query accepts an explicit Cargo workspace root and resolves missing targets
 through existing ancestors before calling the same package detector used by command execution.
 It does not invoke the command runner or the ambient-current-directory workspace discovery.

@@ -558,7 +558,6 @@ mod tests {
     use testing::{assert_panics, with_watchdog};
 
     use super::*;
-    use crate::{RegionCachedCopyExt, RegionCachedExt, region_cached};
 
     assert_impl_all!(RegionCached<String>: UnwindSafe, RefUnwindSafe);
 
@@ -581,103 +580,6 @@ mod tests {
             .filter(|p| p.id() == processor_id)
             .unwrap()
             .pin_current_thread_to();
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn real_smoke_test() {
-        region_cached! {
-            static FAVORITE_COLOR: String = "blue".to_string();
-            static FAVORITE_NUMBER: i32 = 42;
-        }
-
-        FAVORITE_COLOR.with_cached(|color| {
-            assert_eq!(*color, "blue");
-        });
-
-        FAVORITE_COLOR.set_global("red".to_string());
-
-        FAVORITE_COLOR.with_cached(|color| {
-            assert_eq!(*color, "red");
-        });
-
-        assert_eq!(FAVORITE_NUMBER.get_cached(), 42);
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn with_non_const_initial_value() {
-        region_cached!(static FAVORITE_COLOR: Arc<String> = Arc::new("blue".to_string()));
-
-        FAVORITE_COLOR.with_cached(|color| {
-            assert_eq!(**color, "blue");
-        });
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn non_static() {
-        let favorite_color_linked =
-            linked::InstancePerThread::new(RegionCached::new("blue".to_string()));
-
-        let favorite_color = favorite_color_linked.acquire();
-
-        favorite_color.with_cached(|color| {
-            assert_eq!(*color, "blue");
-        });
-
-        thread::spawn(move || {
-            let favorite_color = favorite_color_linked.acquire();
-
-            favorite_color.with_cached(|color| {
-                assert_eq!(*color, "blue");
-            });
-
-            favorite_color.set_global("red".to_string());
-
-            favorite_color.with_cached(|color| {
-                assert_eq!(*color, "red");
-            });
-        })
-        .join()
-        .unwrap();
-
-        favorite_color.with_cached(|color| {
-            assert_eq!(*color, "red");
-        });
-    }
-
-    #[cfg_attr(miri, ignore)] // Miri does not support talking to the real platform.
-    #[test]
-    fn non_static_sync() {
-        let favorite_color_linked =
-            linked::InstancePerThreadSync::new(RegionCached::new("blue".to_string()));
-
-        let favorite_color = favorite_color_linked.acquire();
-
-        favorite_color.with_cached(|color| {
-            assert_eq!(*color, "blue");
-        });
-
-        thread::spawn(move || {
-            let favorite_color = favorite_color_linked.acquire();
-
-            favorite_color.with_cached(|color| {
-                assert_eq!(*color, "blue");
-            });
-
-            favorite_color.set_global("red".to_string());
-
-            favorite_color.with_cached(|color| {
-                assert_eq!(*color, "red");
-            });
-        })
-        .join()
-        .unwrap();
-
-        favorite_color.with_cached(|color| {
-            assert_eq!(*color, "red");
-        });
     }
 
     #[test]

@@ -18,8 +18,11 @@ The single most important distinction is between overlapping *waiting* and overl
 
 Both fan-out stages route through an **injected spawner** rather than ad-hoc threads, so
 the work runs on the runtime's shared blocking pool in production and inline on the calling
-thread under Miri and in-memory tests. That single seam is what lets the whole load run
-reactor-free and unchanged under Miri while still scaling on real hardware.
+thread under Miri and in-memory tests. The command adapter also supplies a nonzero parallelism
+value, acquired from the host with a one-worker fallback when discovery is unavailable.
+In-memory tests supply capacity directly and can exercise multiple worker chunks without
+hardware discovery. These execution inputs keep the load reactor-free under Miri while
+preserving the same partitioning and dispatch logic on real hardware.
 
 ## Top-level flow
 
@@ -93,8 +96,8 @@ Design properties that make this both fast and deterministic:
 A large history materializes tens of millions of series points, so the fold keeps them
 compact and interns each commit into one shared reference across all its points, cloning a
 benchmark identity only on a true first-seen miss rather than per point. The worker count
-derives from the host's available parallelism, capped at the survivor count so a small data
-set never spawns idle workers.
+uses the parallelism supplied by the command adapter, capped at the survivor count so a
+small data set never spawns idle workers.
 
 **Memory is the accepted tradeoff, not a win.** Folding in the worker parallelizes the fold
 for a wall-time and CPU gain but does not lower peak memory: at merge time every worker's
@@ -130,8 +133,8 @@ flowchart TD
 ```
 
 The per-series preparation work splits into one balanced chunk per worker — the same split-once,
-spawn, await-and-recombine pattern as the load — and is identical to a sequential pass. A single
-available CPU (as Miri reports) yields one worker over the whole input. History runs both a
+spawn, await-and-recombine pattern as the load — and is identical to a sequential pass. A supplied
+capacity of one yields one worker over the whole input. History runs both a
 change-point and a drift detector and keeps the better fit. Branch collapses each base commit to
 one level, selects the latest supported regime on a selector lane, and tests whether the tip lies
 strictly outside that regime's observed range.

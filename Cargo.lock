@@ -624,19 +624,12 @@ dependencies = [
 name = "cargo-release-plan"
 version = "0.3.18"
 dependencies = [
- "clap",
- "criterion",
- "ignore",
+ "crp_impl",
  "mimalloc",
- "mutants",
  "ohno",
- "semver",
- "serde",
  "serde_json",
- "static_assertions",
  "tempfile",
  "testing",
- "toml_edit",
 ]
 
 [[package]]
@@ -1162,6 +1155,26 @@ name = "crossbeam-utils"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
+
+[[package]]
+name = "crp_impl"
+version = "0.3.17"
+dependencies = [
+ "cargo-release-plan",
+ "clap",
+ "criterion",
+ "ignore",
+ "mimalloc",
+ "mutants",
+ "ohno",
+ "semver",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "tempfile",
+ "testing",
+ "toml_edit",
+]
 
 [[package]]
 name = "crunchy"
