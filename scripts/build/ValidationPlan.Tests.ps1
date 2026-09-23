@@ -48,7 +48,7 @@ Describe 'Non-Cargo change domains' {
         @{ Path = '.github/workflows/pr-bench-history.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = '.github/workflows/bench-history-backfill.yml'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $false; Workflows = $true },
         @{ Path = 'justfiles/just_release.just'; Domains = @('release'); Analysis = $false; Workflows = $false },
-        @{ Path = 'justfiles/just_quality.just'; Domains = @('build', 'scheduled'); Analysis = $true; Workflows = $true },
+        @{ Path = 'justfiles/just_quality.just'; Domains = @('bench-history', 'build', 'scheduled'); Analysis = $true; Workflows = $true },
         @{ Path = '.cargo/mutants.toml'; Domains = @('build', 'scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = 'Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
         @{ Path = 'packages/cpulist/Cargo.toml'; Domains = @('scheduled'); Analysis = $false; Workflows = $false },
@@ -111,7 +111,7 @@ Describe 'Non-Cargo change domains' {
     It 'runs all tooling for <_> on main without needing a comparison' -ForEach @(
         'push', 'schedule', 'workflow_dispatch'
     ) {
-        $plan = Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main'
+        $plan = Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main' -Repository 'folo-rs/folo'
         $plan.workflows | Should -BeTrue
         $plan.script_analysis | Should -BeTrue
         $plan.bicep | Should -BeTrue
@@ -119,11 +119,75 @@ Describe 'Non-Cargo change domains' {
     }
 
     It 'rejects full-scope <_> runs outside main' -ForEach @('push', 'schedule', 'workflow_dispatch') {
-        { Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/feature' } | Should -Throw
+        { Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/feature' -Repository 'folo-rs/folo' } | Should -Throw
     }
 
     It 'rejects events that do not belong to Standard validation' -ForEach @('merge_group', 'workflow_run') {
-        { Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main' } | Should -Throw
+        { Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main' -Repository 'folo-rs/folo' } | Should -Throw
+    }
+}
+
+Describe 'Caller integration selection' {
+    It 'selects the canary for its own input <_>' -ForEach @(
+        '.github/fixtures/bench-history-caller/Cargo.lock',
+        '.github/fixtures/bench-history-caller/packages/workflow_canary/benches/synthetic.rs',
+        '.github/workflows/benchmark-action-canary.yml', '.github/workflows/standard-validation.yml',
+        '.github/workflows/deep-validation.yml', 'scripts/bench-history/CallerFixture.psm1',
+        'scripts/bench-history/Assert-BackfillCanary.ps1', '.github/actions/bench-history-setup/action.yml',
+        '.cargo/config.toml', 'delta.toml', 'constants.env', 'justfiles/just_quality.just',
+        '.github/actions/setup-environment/action.yml', 'scripts/build/Delta.psm1', '.gitignore'
+    ) {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @($_) -CanaryTrusted $true)
+        $selection = Get-ValidationCanarySelection -PlanJson $plan -AffectedPackageJson '[]'
+        $selection.check_fixture | Should -BeTrue
+        $selection.run_hosted | Should -BeTrue
+        @(Get-ValidationScriptDomain -PlanJson $plan -AffectedPackageJson '[]') | Should -Contain 'bench-history'
+    }
+
+    It 'uses transitive consumer impact for <_> rather than enumerating private partitions' -ForEach @(
+        'cargo-bench-history', 'cargo-bench-history-github', 'cargo-bench-history-faker'
+    ) {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('packages/cbh_storage/src/lib.rs') -CanaryTrusted $true)
+        $selection = Get-ValidationCanarySelection -PlanJson $plan `
+            -AffectedPackageJson (ConvertTo-Json -InputObject @('cbh_storage', $_))
+        $selection.run_hosted | Should -BeTrue
+    }
+
+    It 'does not select Azure for unrelated documentation, packages or workflows' {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @(
+                'docs/testing.md', 'packages/events_once/src/lib.rs', '.github/workflows/book.yml'
+            ) -CanaryTrusted $true)
+        $selection = Get-ValidationCanarySelection -PlanJson $plan -AffectedPackageJson '["events_once"]'
+        $selection.check_fixture | Should -BeFalse
+        $selection.run_hosted | Should -BeFalse
+    }
+
+    It 'keeps the credential-free preflight but excludes hosted work for untrusted events' {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @() -CanaryTrusted $false)
+        $selection = Get-ValidationCanarySelection -PlanJson $plan -AffectedPackageJson '["cargo-bench-history"]'
+        $selection.check_fixture | Should -BeTrue
+        $selection.run_hosted | Should -BeFalse
+    }
+
+    It 'runs full canary scope for main <_> including reusable scheduled callers' -ForEach @(
+        'push', 'schedule', 'workflow_dispatch'
+    ) {
+        $plan = Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main' -Repository 'folo-rs/folo'
+        (Get-ValidationCanarySelection -PlanJson (ConvertTo-PlanJson $plan) -AffectedPackageJson '[]').run_hosted |
+            Should -BeTrue
+        $fork = Get-ValidationWorkflowPlan -EventName $_ -EventData @{} -Ref 'refs/heads/main' -Repository 'fork/folo'
+        (Get-ValidationCanarySelection -PlanJson (ConvertTo-PlanJson $fork) -AffectedPackageJson '[]').run_hosted |
+            Should -BeFalse
+    }
+
+    It 'rejects absent or malformed canary selection fields' -ForEach @(
+        'benchmark_canary', 'benchmark_canary_trusted'
+    ) {
+        $plan = Get-ValidationPlan -ChangedPath @()
+        $plan.Remove($_)
+        { Read-ValidationPlan -Json (ConvertTo-PlanJson $plan) } | Should -Throw
+        $plan[$_] = 'false'
+        { Read-ValidationPlan -Json (ConvertTo-PlanJson $plan) } | Should -Throw
     }
 }
 
@@ -210,8 +274,10 @@ Describe 'Complete Git change sets' {
             return git rev-parse HEAD
         }
         function Get-FixturePlan([string] $Base, [string] $Head) {
-            $eventData = @{ pull_request = @{ base = @{ sha = $Base }; head = @{ sha = $Head } } }
-            Get-ValidationWorkflowPlan -EventName pull_request -EventData $eventData -Ref 'refs/pull/1/merge'
+            $eventData = @{ pull_request = @{ base = @{ sha = $Base }; head = @{
+                        sha = $Head; repo = @{ full_name = 'folo-rs/folo' }
+                    } } }
+            Get-ValidationWorkflowPlan -EventName pull_request -EventData $eventData -Ref 'refs/pull/1/merge' -Repository 'folo-rs/folo'
         }
     }
     AfterEach { Pop-Location }
@@ -252,7 +318,19 @@ Describe 'Complete Git change sets' {
     }
 
     It 'fails for missing or unavailable event revisions' {
-        { Get-ValidationWorkflowPlan -EventName pull_request -EventData @{} -Ref 'refs/pull/1/merge' } | Should -Throw
+        { Get-ValidationWorkflowPlan -EventName pull_request -EventData @{} -Ref 'refs/pull/1/merge' -Repository 'folo-rs/folo' } | Should -Throw
         { Get-FixturePlan $base ('f' * 40) } | Should -Throw
+    }
+
+    It 'distinguishes same-repository and fork PR credentials from the event' -ForEach @(
+        @{ HeadRepository = 'folo-rs/folo'; Trusted = $true }
+        @{ HeadRepository = 'fork/folo'; Trusted = $false }
+    ) {
+        $eventData = @{ pull_request = @{ base = @{ sha = $base }; head = @{
+                    sha = $base; repo = @{ full_name = $HeadRepository }
+                } } }
+        $plan = Get-ValidationWorkflowPlan -EventName pull_request -EventData $eventData `
+            -Ref 'refs/pull/1/merge' -Repository 'folo-rs/folo'
+        $plan.benchmark_canary_trusted | Should -Be $Trusted
     }
 }

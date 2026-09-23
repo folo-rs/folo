@@ -202,6 +202,27 @@ History publication is disabled; backfill has no publication.
 Its standalone fixture writes deterministic Criterion artifacts through the existing faker
 library instead of measuring elapsed time.
 
+The canary is `workflow_call`-only. Standard validation invokes it as `benchmark-canary` and
+includes that result in both `required-checks` and main-push failure reporting. Deep validation
+reuses the same graph through Standard and forwards its required token permissions. Main
+pushes and scheduled/manual main calls select full scope; PRs combine explicit fixture/tooling
+paths with Cargo delta's transitive impact on the CLI, companion and faker consumers. Private
+CBH partitions and lower-level libraries therefore need no duplicated path/package inventory.
+The path plan records credential eligibility separately from relevance. Forks never call Azure;
+they still execute the selected credential-free preflight. The merge queue retains its separate
+shallow graph and the same required-check context, without this runtime canary.
+
+Preparation runs `just verify-caller-fixture` before the hosted call. The shared PowerShell
+boundary uses Git to require a clean checkout and full `cargo metadata --locked` in the standalone
+fixture workspace. `--no-deps` does not resolve dependencies and is not a lockfile freshness
+check. The fixture lockfile is independent of the root workspace lockfile; path-package version
+changes require `cargo update --manifest-path .github/fixtures/bench-history-caller/Cargo.toml
+--offline --workspace` before committing. Validation must reject drift, never refresh it during
+measurement. Native integration tests demonstrate committed path-version drift, missing locks
+and dirty inputs against actual Cargo and Git.
+`just verify-lockfile` also invokes the shared locked-resolution check during version planning,
+without demanding cleanliness while release edits are still being prepared.
+
 The caller uses the existing test identity and storage account. A read-only configuration job
 exports their non-secret identifiers without signing in: Azure login masks the client ID,
 which prevents GitHub from exporting it as a job output. The separate storage job consumes
@@ -221,6 +242,9 @@ For backfill, configuration freezes the real event head and its first parent as 
 `to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on Linux,
 Windows and Apple Silicon macOS, using `.cargo/backfill_history.toml` to select the isolated
 `reusable-backfill-canary` project in the existing test container.
+Both real endpoints must have consistent fixture locks. A lockfile repair checkpoint followed
+by its guard/workflow integration provides valid adjacent inputs; changing the range, discarding
+dirty flags or weakening the clean-endpoint assertions would hide the defect.
 
 The separate `verify-backfill` job queries `list runs --json` across all stored machine keys and
 targets at the frozen endpoint. It checks the expected project and requires both current range
@@ -243,6 +267,15 @@ endpoint query establish actual stored results independently of the explicit-ran
 A separate no-eligible call uses an age older than all repository history; job evidence must
 show successful preparation and no executed backfill matrix. Neither scenario copies the
 planner into the caller. Frozen-clock tests own exact cutoff and calendar assertions.
+The no-work verifier matches the complete nested job-name segment, so Standard and Deep caller
+prefixes do not hide executed work or substitute an unrelated preparation job.
+The no-work probe uses its own configuration path because the reusable action keys concurrency
+by that path; it must not compete with rolling collection for the same pending-run slot.
+
+The reusable canary's always-run `result` job requires success from every configuration, storage,
+collection, backfill and verification job. Only the inner no-eligible backfill matrix may skip;
+its preparation and no-work verification must succeed. Missing, failed, cancelled or unexpectedly
+skipped contract jobs fail the reusable call and the Standard fan-in.
 
 Invalid input, failed collection, stale attempts and lifecycle mutation cases remain covered
 by the companion's mock/native suites and the action adapter tests. A successful synthetic
@@ -490,6 +523,9 @@ using its affected-package output. The execution-domain output must agree with t
 selection. Every selected tooling job must succeed; every tooling dependency must be present,
 even when not selected. Preparation remains a must-succeed dependency, so a failed planner
 cannot turn downstream skips into merge approval.
+The same reconstruction checks the explicit hosted-canary output against the path/trust plan
+and affected consumers. A selected call must succeed; skipping is accepted only for an
+explicitly irrelevant or credential-ineligible call, never for absent or malformed scope.
 
 The classifier only observes what `needs` supplies, so it also rejects an unconditional gate
 that its must-succeed list names but the payload omits. A name that drifts out of the `needs:`

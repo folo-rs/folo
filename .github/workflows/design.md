@@ -146,6 +146,15 @@ so required-check reporting does not depend on GitHub's workflow-level path filt
 The `prepare` job publishes both Cargo and non-Cargo scope. Its complete outputs are required
 before downstream checks can run or be accepted as intentionally skipped.
 
+The deterministic benchmark caller canary is a required integration check when its tools or
+execution inputs are affected. Cargo dependency impact selects its executable consumers, including
+changes in private implementation packages and their dependencies. Fixture, caller, setup and
+validation-planning inputs also select it; unrelated changes do not require Azure collection.
+The standalone fixture's locked-resolution and cleanliness preflight needs no credentials and
+runs for relevant fork PRs too. Hosted collection only runs for same-repository PRs and main
+pushes or scheduled/manual main calls. A selected canary must complete every contract check;
+missing scope or unexpected skips cannot pass the required fan-in.
+
 Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
 base. Live binstall metadata validation accompanies it because Cargo target discovery can
@@ -183,6 +192,8 @@ formatting and version readiness. Clippy compiles all targets and features on Li
 Windows and macOS. No affected-package selection precedes these checks. Minimum-dependency,
 SemVer, binstall, runtime and other standard checks remain in PR and full main validation,
 not in the queue gate.
+The benchmark caller canary follows that runtime-test policy: it runs in Standard validation,
+not on `merge_group`, and does not require expanding the Azure federated subjects.
 
 This gate trades repeated pre-merge validation for earlier merges. Passing PRs do not
 prove that their combined changes pass runtime tests. Full Standard validation on main
