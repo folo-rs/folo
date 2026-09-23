@@ -119,8 +119,10 @@ jobs:
       publish: false
 
   backfill:
+    # Exercise the same released backfill revision as production with source-built tools.
+    # Ref: implementation.md#reusable-workflow-canary.
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
       id-token: write
@@ -140,7 +142,7 @@ jobs:
 
   rolling-backfill:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
       id-token: write
@@ -163,7 +165,7 @@ jobs:
 
   no-eligible-backfill:
     needs: configuration
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
       id-token: write

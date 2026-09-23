@@ -601,8 +601,8 @@ See [canary implementation](implementation.md#reusable-workflow-canary) for the 
 A scheduled caller densifies the per-machine-key series the push workflow leaves
 sparse. At 02:00 UTC — clear of the cache warmup's midnight slot — it invokes the shared
 `backfill.yml` workflow over a window of recent `main` commits, in fixed skip-existing mode on
-the same platforms, so whichever machine key its runner draws that night receives the newest commits
-that key is missing. It is purely a producer: it performs no analysis, emits no receipts or
+the same platforms, prioritizing the newest missing commit for whichever machine key its runner
+draws that night. It is purely a producer: it performs no analysis, emits no receipts or
 reports, and has no publication sink or alert.
 Analysis stays with the push workflow, which surveys a densified series the next time one of its
 runners draws that same machine key.
@@ -620,22 +620,28 @@ is relative to preparation time, not to the selected end. Quiet history and an o
 older than that horizon produce a single-commit range. Scheduled and manual runs are
 restricted to `main` in this repository.
 
-Folo explicitly opts into best-effort execution: being killed by the clock is an expected outcome.
-One commit costs as much as a push-collect and more — the backfill worktree's build directory sits
-outside the shared
-dependency cache, so it always builds cold — so a night fills roughly one gap per platform
-against the shared workflow's fixed six-hour hosted-runner ceiling. The caller passes
-`best-effort: true`, which sets the matrix jobs' `continue-on-error`, and `ignore-errors: true`,
-which lets the core walk past per-commit build or benchmark failures. These are independent
-opt-ins, both false by default for generic callers; ignoring per-commit failures does not suppress
-infrastructure errors. Because backfill works newest-first, whatever the run managed to finish
-is the most comparison-relevant part of the range. A kill landing in the
-seconds a commit spends writing its per-engine results leaves that commit stored for only some
-engines, and later runs count it as filled; repairing it takes a `backfill --overwrite` over
-that commit. The accepted cost is that a
-genuinely broken nightly — bad credentials, a tool bug, every commit failing — is equally green
-and silent; this is an opportunistic job, and such breakage still surfaces within hours in the
-push workflow, which does alert.
+The caller sets `max-commits: '1'` to attempt at most one missing commit per platform each night.
+A complete commit with `best-of: 3` usually takes roughly four to five hours, including a cold
+backfill worktree build outside the shared dependency cache, so this matches observed nightly
+capacity. Preparation and source installation also consume the job budget. It is a work bound,
+not a duration guarantee: the shared six-hour hosted-runner ceiling remains an exceptional
+watchdog, never a normal completion mechanism.
+
+The full inclusive range remains eligible, traversed newest-first. Already-recorded commits
+are skipped before applying the attempt budget. Empty harvests, failed benchmarks and
+write-time duplicates consume an attempt; pre-check skips do not. A successful bounded pass
+finishes the selected commit's full repetitions, engine storage and cleanup, then reports
+stored, existing, empty, failed and deferred work without claiming the whole range completed.
+An empty or failed attempt can consume the pass without storing new measurements and remains
+eligible on later runs: the limit creates no persistent skip marker or cursor.
+Later passes can fill further gaps for the same machine key while they remain in the window.
+
+Build, benchmark, credential, tool and infrastructure failures remain visible as failed jobs.
+The caller does not opt into per-commit error continuation, and the shared workflow does not
+suppress unsuccessful job conclusions. Matrix fail-fast stays disabled so one platform's failure
+does not cancel the other. A watchdog termination is also a failure; if it interrupts per-engine
+storage, a partially stored commit may still require `backfill --overwrite` to repair.
+The nightly creates no alert issue; its workflow conclusion is the failure signal.
 
 It carries its own concurrency group instead of joining history collection's. A scheduled run's
 SHA *is* the current tip, so sharing that SHA-keyed, cancel-in-progress group would put the
@@ -645,8 +651,8 @@ stops a manual dispatch from duplicating a scheduled run, queueing it instead. T
 caller group is distinct from the reusable workflow's run and canonical project/platform queues,
 which retain earlier invocations without event/SHA deduplication or cancellation. The dispatch
 exists as an escape hatch: it can override the computed newest endpoint to step over a commit
-that fails slowly and would otherwise be re-selected every night. The shared preparation resolves
-the selected endpoints to full commit SHAs, and execution checks out the resolved `to` commit with
+that fails or yields no measurements and would otherwise be re-selected every night. The shared
+preparation resolves the selected endpoints to full commit SHAs, and execution checks out the resolved `to` commit with
 full history. The core tool owns first-parent validation and traversal. Historical scope comes from
 each historical workspace, not a benchmark-inventory check at the invocation head.
 
@@ -890,6 +896,5 @@ allowance; sizing a cap to the warm-cache setup time alone would make a cache mi
 fail the job. Jobs whose work is comfortably bounded carry no explicit cap and rely on
 GitHub's default ceiling, which already clears a cold setup with room to spare. Explicit caps
 exist only to stop a genuinely stuck run, never to bound the expected duration. The nightly
-history backfill is the deliberate exception: its work is unbounded by nature (it keeps filling
-gaps until it runs out of range), so it takes the ceiling as its run budget and pairs the cap
-with `continue-on-error` so being cut off is an ordinary end rather than a failure.
+history backfill uses an attempt limit for normal completion and retains the shared six-hour
+ceiling as an exceptional watchdog. Exceeding that ceiling remains a failed job.
