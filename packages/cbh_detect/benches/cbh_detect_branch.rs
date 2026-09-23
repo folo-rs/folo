@@ -1,4 +1,4 @@
-//! Benchmarks whole-report branch evaluation at representative evidence and suite sizes.
+//! Benchmarks whole-report branch evaluation with bounded evidence and suite sizes.
 
 #![allow(
     missing_docs,
@@ -16,10 +16,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 const LOW_BASE_COMMITS: usize = 20;
 /// A small report that still exercises cross-series family scoring.
 const LOW_SERIES: usize = 20;
-/// The production branch-history cap.
-const HIGH_BASE_COMMITS: usize = 128;
-/// A large report that exercises report-wide scoring at the production history cap.
-const HIGH_SERIES: usize = 1_000;
+/// Extends the chronological window search without using a production-scale history.
+const HIGH_BASE_COMMITS: usize = 40;
+/// Exercises family scoring and overlapping evidence sets within a microbenchmark budget.
+const HIGH_SERIES: usize = 40;
 /// One selector and one reference observation retained or removed together.
 const LANE_PAIR_SIZE: usize = 2;
 /// Stable base value shared by every synthetic benchmark.
@@ -31,18 +31,21 @@ fn whole_report(c: &mut Criterion) {
     let mut group = c.benchmark_group("cbh_detect_branch/whole_report");
 
     let (low, low_context) = branch_suite(LOW_BASE_COMMITS, LOW_SERIES);
-    group.bench_function("20-commits/20-series", |b| {
+    let low_name = format!("{LOW_BASE_COMMITS}-commits/{LOW_SERIES}-series");
+    group.bench_function(low_name, |b| {
         b.iter(|| black_box(find_changes(black_box(&low), black_box(&low_context))));
     });
 
     let (high, high_context) = branch_suite(HIGH_BASE_COMMITS, HIGH_SERIES);
-    group.bench_function("128-commits/1000-series", |b| {
+    let high_name = format!("{HIGH_BASE_COMMITS}-commits/{HIGH_SERIES}-series");
+    group.bench_function(high_name, |b| {
         b.iter(|| black_box(find_changes(black_box(&high), black_box(&high_context))));
     });
 
     let (mut diverse, diverse_context) = branch_suite(HIGH_BASE_COMMITS, HIGH_SERIES);
     diversify_base_evidence(&mut diverse);
-    group.bench_function("128-commits/1000-diverse-series", |b| {
+    let diverse_name = format!("{HIGH_BASE_COMMITS}-commits/{HIGH_SERIES}-diverse-series");
+    group.bench_function(diverse_name, |b| {
         b.iter(|| {
             black_box(find_changes(
                 black_box(&diverse),
@@ -55,11 +58,13 @@ fn whole_report(c: &mut Criterion) {
 }
 
 fn noisy_base(c: &mut Criterion) {
+    // Sparse and production-cap histories exercise boundary screening independently
+    // of the report-wide scoring workloads.
+    const LOW_COMMITS: usize = 20;
+    const HIGH_COMMITS: usize = 128;
+
     let mut group = c.benchmark_group("cbh_detect_branch/noisy_base");
-    for (base_commits, name) in [
-        (LOW_BASE_COMMITS, "20-commits"),
-        (HIGH_BASE_COMMITS, "128-commits"),
-    ] {
+    for base_commits in [LOW_COMMITS, HIGH_COMMITS] {
         // Stable noisy histories exercise boundary screening, unlike an exactly flat base
         // whose first Pettitt split already fails persistence.
         let mut values = examples::scattered(
@@ -75,6 +80,7 @@ fn noisy_base(c: &mut Criterion) {
         );
         let context = examples::branch_context(&series, merge_base);
         let suite = [series];
+        let name = format!("{base_commits}-commits");
         group.bench_function(name, |b| {
             b.iter(|| black_box(find_changes(black_box(&suite), black_box(&context))));
         });
@@ -110,7 +116,7 @@ fn diversify_base_evidence(suite: &mut [Series]) {
     for (series_index, series) in suite.iter_mut().enumerate() {
         let first_removed = series_index
             .checked_rem(reference_commits)
-            .expect("the production branch window has reference commits");
+            .expect("the benchmark branch window has reference commits");
         let second_removed = series_index
             .checked_div(reference_commits)
             .expect("the reference-commit count is nonzero");

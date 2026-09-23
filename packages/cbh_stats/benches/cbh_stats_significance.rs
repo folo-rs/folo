@@ -14,18 +14,13 @@ use criterion::{Criterion, criterion_group, criterion_main};
 criterion_group!(benches, exact_lopsided, selection_adjustment);
 criterion_main!(benches);
 
-/// Representative of a typical benchmark history.
+/// A short history that still exercises lopsided tails and the analytic split scan.
 const LOW_SERIES_LEN: usize = 100;
 /// The production persistence floor, which is the smallest reportable side.
 const LOW_LEFT_LEN: usize = 5;
-/// The production cap, covering the most expensive supported history.
-const HIGH_SERIES_LEN: usize = 1000;
-/// Short history that keeps a full-ceiling ambiguous benchmark practical.
-///
-/// Permutation work also scales with series length; the separate high-length case
-/// measures the analytic path at the production series cap.
-const AMBIGUOUS_SERIES_LEN: usize = 50;
-/// The largest lopsided side that remains exactly enumerable at the production cap.
+/// Extends the rank tables and analytic scan without a production-cap workload.
+const HIGH_SERIES_LEN: usize = 200;
+/// Increases the exact subset size as well as the total history length.
 const HIGH_LEFT_LEN: usize = 6;
 /// Production minimum calibration budget for a small analysis family.
 const PERMUTATION_ORDER_BUDGET: usize = 259_200;
@@ -41,23 +36,23 @@ const MAX_PERMUTATION_ORDER: usize = 500_000;
 const LARGE_FAMILY_ACCEPTANCE_LEVEL: f64 = 0.000_002_5;
 /// Pre-arbitration rejection boundary used by the history detector.
 const REJECTION_LEVEL: f64 = 0.025;
-/// Offset that makes the benchmark fixture significant but heavily overlapping.
-const AMBIGUOUS_STEP_OFFSET: f64 = 9.0;
-/// Multiplier that traverses the benchmark fixture's residue cycle.
-const AMBIGUOUS_CYCLE_MULTIPLIER: usize = 13;
-/// Modulus that gives the benchmark fixture a broad repeated-value distribution.
-const AMBIGUOUS_CYCLE_MODULUS: usize = 17;
+/// Separates noisy regimes enough to require a completed exact subgroup.
+const CLEAR_STEP_OFFSET: f64 = 50.0;
+/// Overlaps the regimes so permutation calibration can reject before exhaustion.
+const OVERLAPPING_STEP_OFFSET: f64 = 2.0;
 
 fn exact_lopsided(c: &mut Criterion) {
     let mut group = c.benchmark_group("cbh_stats_significance/exact_lopsided");
 
     let low = separated_samples(LOW_LEFT_LEN, LOW_SERIES_LEN);
-    group.bench_function("5-vs-95", |b| {
+    let low_name = format!("{LOW_LEFT_LEN}-vs-{}", LOW_SERIES_LEN - LOW_LEFT_LEN);
+    group.bench_function(low_name, |b| {
         b.iter(|| black_box(MannWhitneyU::new(black_box(&low.0), black_box(&low.1))));
     });
 
     let high = separated_samples(HIGH_LEFT_LEN, HIGH_SERIES_LEN);
-    group.bench_function("6-vs-994", |b| {
+    let high_name = format!("{HIGH_LEFT_LEN}-vs-{}", HIGH_SERIES_LEN - HIGH_LEFT_LEN);
+    group.bench_function(high_name, |b| {
         b.iter(|| black_box(MannWhitneyU::new(black_box(&high.0), black_box(&high.1))));
     });
 
@@ -75,7 +70,7 @@ fn selection_adjustment(c: &mut Criterion) {
     };
 
     let low = clean_step(LOW_SERIES_LEN);
-    group.bench_function("100-points", |b| {
+    group.bench_function(format!("{LOW_SERIES_LEN}-points"), |b| {
         b.iter(|| {
             black_box(selection_adjusted_change_point(
                 black_box(&low),
@@ -85,7 +80,7 @@ fn selection_adjustment(c: &mut Criterion) {
         });
     });
 
-    let short = distinct_short_step();
+    let short = noisy_short_step(CLEAR_STEP_OFFSET);
     let short_calibration = SelectionCalibration {
         accept_analytic_below: CROWDED_ACCEPTANCE_LEVEL,
         ..calibration
@@ -101,7 +96,7 @@ fn selection_adjustment(c: &mut Criterion) {
     });
 
     let high = clean_step(HIGH_SERIES_LEN);
-    group.bench_function("1000-points", |b| {
+    group.bench_function(format!("{HIGH_SERIES_LEN}-points"), |b| {
         b.iter(|| {
             black_box(selection_adjusted_change_point(
                 black_box(&high),
@@ -111,7 +106,7 @@ fn selection_adjustment(c: &mut Criterion) {
         });
     });
 
-    let ambiguous = ambiguous_step();
+    let overlapping = noisy_short_step(OVERLAPPING_STEP_OFFSET);
     let capped = SelectionCalibration {
         permutation_order_budget: NonZero::new(MAX_PERMUTATION_ORDER)
             .expect("the production maximum is nonzero"),
@@ -119,10 +114,34 @@ fn selection_adjustment(c: &mut Criterion) {
         accept_analytic_below: LARGE_FAMILY_ACCEPTANCE_LEVEL,
         reject_at_or_above: REJECTION_LEVEL,
     };
-    group.bench_function("50-points/capped-20000-family", |b| {
+    // Preserve production calibration settings, but measure a bounded rejection.
+    // Full large-family orbit exhaustion is not a routine microbenchmark workload.
+    // Check that the fixture reaches calibration instead of the unadjusted-score gate,
+    // and distinguishes decision-based rejection from the completed calibration.
+    let rejected = selection_adjusted_change_point(&overlapping, LOW_LEFT_LEN, capped)
+        .expect("the overlapping fixture has a reportable split");
+    let completed = selection_adjusted_change_point(
+        &overlapping,
+        LOW_LEFT_LEN,
+        SelectionCalibration {
+            // Disable decision-based rejection to distinguish its sentinel from the
+            // completed calibration result, while retaining the same orbit and budget.
+            reject_at_or_above: 1.0,
+            ..capped
+        },
+    )
+    .expect("the overlapping fixture has a reportable split");
+    assert!(rejected.tainted_p < REJECTION_LEVEL, "{rejected:?}");
+    assert!(completed.adjusted_p >= REJECTION_LEVEL, "{completed:?}");
+    assert!(
+        rejected.adjusted_p > completed.adjusted_p,
+        "{rejected:?} must reject before the completed result {completed:?}"
+    );
+
+    group.bench_function("12-points/large-family-early-rejection", |b| {
         b.iter(|| {
             black_box(selection_adjusted_change_point(
-                black_box(&ambiguous),
+                black_box(&overlapping),
                 LOW_LEFT_LEN,
                 capped,
             ))
@@ -147,35 +166,19 @@ fn clean_step(series_len: usize) -> Vec<f64> {
     .concat()
 }
 
-fn distinct_short_step() -> Vec<f64> {
-    vec![
-        98.0, 100.0, 102.0, 99.0, 101.0, 100.0, 148.0, 150.0, 152.0, 149.0, 151.0, 150.0,
-    ]
-}
-
-fn ambiguous_step() -> Vec<f64> {
-    let split = AMBIGUOUS_SERIES_LEN
-        .checked_div(2)
-        .expect("the divisor is nonzero");
-    let before: Vec<f64> = (0..split)
-        .map(|index| {
-            count_f64(
-                index
-                    .saturating_mul(AMBIGUOUS_CYCLE_MULTIPLIER)
-                    .rem_euclid(AMBIGUOUS_CYCLE_MODULUS),
-            )
-        })
-        .collect();
-    let after: Vec<f64> = before
-        .iter()
-        .map(|value| value + AMBIGUOUS_STEP_OFFSET)
-        .collect();
-    before.into_iter().chain(after).collect()
+fn noisy_short_step(offset: f64) -> Vec<f64> {
+    // Repeated but nonconstant ranks force subgroup calibration rather than the
+    // small complete orbit of a two-level tied step.
+    let before = [98.0, 100.0, 102.0, 99.0, 101.0, 100.0];
+    before
+        .into_iter()
+        .chain(before.map(|value| value + offset))
+        .collect()
 }
 
 #[expect(
     clippy::cast_precision_loss,
-    reason = "benchmark series lengths are at most the 1,000-point production cap"
+    reason = "bounded benchmark series lengths are exactly representable as f64"
 )]
 fn count_f64(count: usize) -> f64 {
     count as f64

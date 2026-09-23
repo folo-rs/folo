@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.3.18"
+version = "0.3.19"
 dependencies = [
  "crp_impl",
  "mimalloc",
@@ -2326,7 +2326,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "cpulist",
  "criterion",
