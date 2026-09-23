@@ -1,32 +1,22 @@
-//! Callgrind benchmarks for `fast_time::Clock` operations.
+//! Callgrind benchmarks for timestamp capture in `fast_time`.
 //!
-//! Paired with `fast_time_timestamp_performance.rs` which covers the same operations
-//! under wall-clock measurement.
+//! Paired with `fast_time_timestamp_performance.rs`: `timestamp_capture_clock_now`
+//! corresponds to `timestamp_capture/fast_time_clock/now`, and `timestamp_capture_std_now`
+//! corresponds to `timestamp_capture/std_instant/now`.
 //!
 //! # Scope and caveats
 //!
-//! `Clock::now()` ultimately reaches a kernel time source (Windows
-//! `GetSystemTimePreciseAsFileTime` / `QueryUnbiasedInterruptTime`, Linux
-//! `clock_gettime(CLOCK_MONOTONIC_COARSE)`). Callgrind models syscall cost
-//! as essentially-free, so the **instruction counts measured here capture
-//! only the user-space wrapper around the syscall**, not the real cost of
-//! retrieving the time. This is still useful: an unintended regression in
-//! the wrapper (extra branches, redundant work, layout changes) will show
-//! up here even when wall-clock measurements bury it in syscall noise.
+//! These counts cover user-space time-source wrappers, not the actual cost of
+//! retrieving time from the operating system. Criterion remains the source of
+//! truth for timestamp-capture latency; a wrapper instruction delta is not a
+//! comparison of time-source performance.
 //!
-//! The wall-clock benchmarks in `fast_time_timestamp_performance.rs` remain the
-//! source of truth for the actual end-to-end cost of `Clock::now()`. See
-//! `docs/callgrind-benchmarks.md` for the broader pairing rule.
-//!
-//! # Flaky benchmark: `timestamp_capture_instant_elapsed`
-//!
-//! `timestamp_capture_instant_elapsed` is **timing-dependent and its instruction
-//! count is not stable** (observed 137/154/169). It calls the real
-//! `CLOCK_MONOTONIC_COARSE` time source, so both the cache hit/miss decision
-//! inside `now()` and the carry/borrow branches inside `std::time::Instant`
-//! arithmetic depend on whether the coarse clock happened to tick while the
-//! Valgrind-slowed process ran. Treat run-to-run differences in this specific
-//! benchmark as noise rather than regressions.
+//! The fast-time case isolates the first capture from a fresh clock, whereas its
+//! Criterion counterpart measures repeated captures from a warmed clock. Repeated
+//! real-clock captures and `Instant::elapsed` depend on coarse-clock ticks and
+//! the resulting cache branches, so they do not provide a stable instruction
+//! baseline. `Instant` duration arithmetic forwards to the standard library
+//! rather than providing a separate fast-time algorithm to track.
 
 #![allow(
     missing_docs,
@@ -69,29 +59,13 @@ mod linux {
     use std::hint::black_box;
     use std::time::Instant as StdInstant;
 
-    use fast_time::{Clock, Instant};
+    use fast_time::Clock;
     use gungraun::prelude::*;
 
     fn make_clock() -> Clock {
         Clock::new()
     }
 
-    fn make_clock_with_anchor() -> (Clock, Instant) {
-        let mut clock = Clock::new();
-        let anchor = clock.now();
-        (clock, anchor)
-    }
-
-    fn make_two_instants() -> (Instant, Instant) {
-        let mut clock = Clock::new();
-        let first = clock.now();
-        let second = clock.now();
-        (first, second)
-    }
-
-    // Headline measurement: the user-space wrapper around the kernel time
-    // source. Compare against `timestamp_capture_std_now` below to see how much
-    // wrapper the standard library adds.
     #[library_benchmark]
     #[bench::fresh(make_clock())]
     fn timestamp_capture_clock_now(mut clock: Clock) -> Clock {
@@ -99,33 +73,6 @@ mod linux {
         clock
     }
 
-    // `Instant::elapsed` calls `now()` internally and then does arithmetic.
-    // NOTE: flaky — the instruction count varies run-to-run because it depends
-    // on whether the coarse clock ticked during the measured window (cache
-    // hit/miss plus Instant carry/borrow branches). See the module docs.
-    #[library_benchmark]
-    #[bench::after_one_tick(make_clock_with_anchor())]
-    fn timestamp_capture_instant_elapsed(input: (Clock, Instant)) -> (Clock, Instant) {
-        let (mut clock, anchor) = input;
-        _ = black_box(black_box(&anchor).elapsed(black_box(&mut clock)));
-        (clock, anchor)
-    }
-
-    // Pure arithmetic, no syscall. Useful as a baseline for the arithmetic
-    // overhead that `elapsed` adds on top of `now`.
-    #[library_benchmark]
-    #[bench::two_instants(make_two_instants())]
-    fn timestamp_capture_instant_saturating_duration_since(
-        input: (Instant, Instant),
-    ) -> (Instant, Instant) {
-        let (first, second) = input;
-        _ = black_box(black_box(&second).saturating_duration_since(black_box(first)));
-        (first, second)
-    }
-
-    // Sibling comparison: how many wrapper instructions does `std::time::Instant::now()`
-    // add on top of its own syscall? The delta against `timestamp_capture_clock_now`
-    // is the value proposition of `fast_time` (no allocator, no monotonic-correction logic).
     #[library_benchmark]
     fn timestamp_capture_std_now() {
         _ = black_box(StdInstant::now());
@@ -133,11 +80,6 @@ mod linux {
 
     library_benchmark_group!(
         name = timestamp_capture,
-        benchmarks = [
-            timestamp_capture_clock_now,
-            timestamp_capture_instant_elapsed,
-            timestamp_capture_instant_saturating_duration_since,
-            timestamp_capture_std_now,
-        ]
+        benchmarks = [timestamp_capture_clock_now, timestamp_capture_std_now,]
     );
 }
