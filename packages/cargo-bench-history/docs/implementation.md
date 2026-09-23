@@ -105,6 +105,8 @@ so a limit never interrupts repetitions or engine storage. Recorded skips and un
 eligible commits remain distinct in the report, including when failure stops replay early.
 Bounded completion uses the ordinary worktree teardown and storage-invalidation flush paths.
 
+#### Backfill project-directory handling
+
 Backfill asks Git for the selected project's repository-relative prefix instead of comparing
 absolute paths with filesystem case assumptions. It accepts only a relative descendant path
 (or the empty prefix for a root project), then roots both the partition pre-check and per-commit
