@@ -614,11 +614,9 @@ verifies both endpoints resolve and that the start is a first-parent ancestor of
 then derives the range purely from the end's history — so backfilling does not depend on the
 current checkout or branch.
 
-Within that range commits are processed **newest-first**. A long backfill is routinely cut
-short — by an operator losing patience or by a CI job ceiling — and the recent end of the
-history is what a comparison against the current tip actually reads, so an interrupted run
-has already spent its time on the points that matter most. The visible consequence is that
-stopping at the first failure stops at the *newest* failing commit.
+Within that range commits are processed **newest-first**, prioritizing the recent history
+that comparisons against the current tip read. Stopping at the first failure therefore
+stops at the *newest* failing commit.
 
 All work happens inside a dedicated **git worktree** under the temp directory rather than
 in the primary checkout, so a dirty primary tree neither blocks backfill nor affects what
@@ -663,6 +661,21 @@ all), so a commit with a clean result for only some engines is still skipped, an
 is the way to revisit it. Engine results are stored one at a time, so a run killed inside
 that window leaves a partially stored commit that later runs consider complete —
 overwriting that one commit is the repair.
+
+Optional `--max-commits N` bounds replay attempts to a positive integer, after the partition
+pre-check. Without it, replay is unlimited. Already-recorded commits skipped before replay
+do not consume the budget; every attempt does, including empty harvests, benchmark failures,
+and write-time duplicates. The range remains inclusive and is never shortened before the
+pre-check. Each attempted commit completes all repetitions and engine storage before the
+limit stops further checkout or benchmarking; normal worktree cleanup and storage flushing
+still run. This is a work bound, not a duration deadline.
+
+The initial announcement states the pending work and any attempt bound. The final summary
+counts stored, existing, empty, failed and deferred commits and distinguishes a reached limit,
+range exhaustion and a stopping benchmark failure. Deferred counts only eligible commits
+not attempted, never already-recorded commits. An all-recorded range succeeds without replay.
+With `--overwrite`, every invocation applies the limit to the newest commits again; it is not
+a resumable cursor.
 
 A build or bench failure stops by default (or, with a flag, is recorded and skipped
 with an end-of-run summary), while infrastructure failures always abort since continuing

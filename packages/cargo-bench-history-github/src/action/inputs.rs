@@ -127,6 +127,15 @@ impl Inputs {
                 })?;
             }
         }
+        if let Some(value) = self.get("max-commits") {
+            value.parse::<NonZero<usize>>().map_err(|error| {
+                InvalidInput::caused_by(
+                    "max-commits",
+                    "expected a positive integer within this platform's usize range",
+                    error,
+                )
+            })?;
+        }
         self.conflict("packages", "exclude")?;
         self.conflict("local-path", "cache")?;
         match self.command {
@@ -236,7 +245,8 @@ impl ActionCommand {
             Self::Collect | Self::Backfill => {
                 BUILD_INPUTS.contains(&key)
                     || key == "local-path"
-                    || (self == Self::Backfill && matches!(key, "from" | "to" | "ignore-errors"))
+                    || (self == Self::Backfill
+                        && matches!(key, "from" | "to" | "ignore-errors" | "max-commits"))
             }
             Self::AnalyzeHistory | Self::AnalyzePr => {
                 matches!(
@@ -375,6 +385,7 @@ const ALL_INPUTS: &[&str] = &[
     "from",
     "to",
     "ignore-errors",
+    "max-commits",
     "body-file",
     "report-file",
     "analyzed-sha",

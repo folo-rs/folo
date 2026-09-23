@@ -125,6 +125,82 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     );
 }
 
+/// A bounded pass stores complete engine results and leaves the next gap for a later pass.
+#[tokio::test]
+#[cfg_attr(
+    miri,
+    ignore = "uses real git worktrees, processes, and filesystem storage"
+)]
+async fn bounded_backfill_completes_each_commit_and_resumes_in_the_same_partition() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::clean_repo(&storage_only_config())
+        .with_bench(&["--callgrind", &bench, "--criterion", "grp|capture|now=12.5"])
+        .with_real_auto_discriminants();
+    let older = workspace.commit("older");
+    let newer = workspace.commit("newer");
+    let worktrees = workspace.git(&["worktree", "list", "--porcelain"]).stdout;
+    let branch = workspace.current_branch();
+    let args = [
+        "backfill",
+        &older,
+        &newer,
+        "--max-commits",
+        "1",
+        "--best-of",
+        "2",
+    ];
+
+    let RunOutcome::Completed { message } = workspace.drive(&args).await.unwrap() else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("1 stored, 0 skipped (existing)"));
+    assert!(message.contains("1 deferred. Commit limit reached."));
+    let first = workspace.stored_objects();
+    assert_eq!(first.len(), 2);
+    for (_, run) in &first {
+        assert_eq!(run.context.git.commit.as_ref(), Some(&newer));
+        assert!(!run.context.git.dirty);
+        assert_eq!(run.context.best_of.unwrap().get(), 2);
+        assert!(!run.results.is_empty());
+    }
+    assert_eq!(
+        workspace.git(&["worktree", "list", "--porcelain"]).stdout,
+        worktrees
+    );
+
+    let RunOutcome::Completed { message } = workspace.drive(&args).await.unwrap() else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("1 stored, 1 skipped (existing)"));
+    assert!(message.contains("0 deferred. Range exhausted."));
+    let objects = workspace.stored_objects();
+    assert_eq!(objects.len(), 4);
+    for object in &first {
+        assert!(objects.contains(object));
+    }
+    let first_run = &first[0].1;
+    for (_, run) in objects
+        .iter()
+        .filter(|(_, run)| run.context.git.commit.as_ref() == Some(&older))
+    {
+        assert_eq!(
+            run.context.toolchain.target_triple,
+            first_run.context.toolchain.target_triple
+        );
+        assert_eq!(
+            run.context.machine.as_ref().unwrap().fingerprint,
+            first_run.context.machine.as_ref().unwrap().fingerprint,
+        );
+        assert_eq!(run.context.best_of.unwrap().get(), 2);
+    }
+    assert_eq!(workspace.head(), newer);
+    assert_eq!(workspace.current_branch(), branch);
+    assert_eq!(
+        workspace.git(&["worktree", "list", "--porcelain"]).stdout,
+        worktrees
+    );
+}
+
 /// A nested workspace keeps its project directory in every historical checkout,
 /// including its output tree, and resuming never launches already-recorded benches.
 #[tokio::test]
