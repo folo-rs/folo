@@ -200,9 +200,9 @@ an action release, which may change only that manifest. Tool and action version 
 remain independent. Every monorepo PR moving a pinned tool version has a paired action PR
 to adopt it, following the [release policy](../../../docs/benchmark-action-releases.md).
 
-A pinned action release or commit selects an exact tested combination. The floating `v1`
-tag advances only among action releases with their own tested manifests. `path` deliberately
-builds unreleased code from the supplied Folo checkout.
+A pinned action release or commit selects an exact tested combination. Each floating major
+tag advances only among that major's action releases with their own tested manifests.
+`path` deliberately builds unreleased code from the supplied Folo checkout.
 
 **`binstall` — the fast default.** `cargo-binstall` resolves the package's GitHub Release
 and unpacks the binary, with source installation as its fallback. Installation remains
@@ -1501,8 +1501,8 @@ test their tool/action selection; the action does not add a `report-schema` or t
 
 ## 8. Versioning & Marketplace
 
-* **Semver tags** `vX.Y.Z` on the action repo, plus a **floating major** `v1` ref
-  that is force-moved to each new `v1.*` release (the standard `actions/*` major-tag dance,
+* **Semver tags** `vX.Y.Z` on the action repo, plus a **floating major** `vX` ref
+  that is force-moved to each new release of that major (the standard `actions/*` major-tag convention,
   re-pointed by the action repo's `release.yml`).
 * **An action release selects an exact tested binary combination.** Tool and action version
   numbers are independent, but consumers do not override the manifest's binary versions.
@@ -1779,8 +1779,9 @@ The monorepo's Azure-backend test jobs cover the backend's authentication branch
 
 ## 10. Dogfooding — Folo's own workflows
 
-Folo's deployed history, PR and backfill workflows consume a selected v1 revision of the
-shared action. This section describes that deployment, not the v2 input contract above.
+Folo's deployed history and PR workflows consume a selected v1 revision of the shared action;
+the nightly backfill caller pins a released v2 revision to its immutable commit. This section
+describes those deployments; the general input contract above is v2.
 **`install-method: path`** and **`source-path: .`** build the required tools from the invocation
 checkout, so unreleased monorepo changes are exercised without waiting for tool publication.
 The selected action revision supplies orchestration independently of those tool sources.
@@ -1798,15 +1799,21 @@ The nightly densification caller keeps Folo's 02:00 UTC schedule, same-repositor
 and repository-wide non-cancelling concurrency group. It passes `lookback: 14 days`,
 `minimum-age: 24 hours` and an optional `to_commit` override as parameters. Shared preparation
 owns the full-history queries, date arithmetic, frozen endpoints and successful no-work result.
+`max-commits: '1'` bounds replay to one attempt per platform after skipping recorded commits,
+without shortening the inclusive range or changing newest-first priority. This matches usual
+nightly capacity, not a hard duration guarantee. Normal completion preserves full repetitions,
+storage and cleanup and reports deferred work honestly; the six-hour ceiling remains an
+exceptional watchdog.
 
 Every production caller passes non-secret repository identity variables, exclusions, all
 features, `best-of: 3` and matching compiler stability flags directly in `with`, with
 `install-method: path` and `source-path: .`. The invocation-owned setup hook supplies genuine
 build prerequisites only. There are no caller configuration jobs, shell calculations or
-calculated outputs. The deployed v1 backfill caller explicitly selects `ignore-errors: true`
-and `best-effort: true` at the shared hosted-job ceiling. That selected v1 revision accepts
-both opt-ins; the v2 workflow has no `best-effort` input. The shared workflow owns the matrix
-and skip-existing execution, and leaves first-parent traversal to the core.
+calculated outputs. The backfill caller leaves `ignore-errors` at its strict false default,
+and the v2 workflow has no whole-job failure-suppression input. Build, benchmark and
+infrastructure failures, including watchdog termination, remain visible as unsuccessful jobs.
+The shared workflow owns the matrix with fail-fast disabled and skip-existing execution,
+and leaves first-parent traversal to the core.
 
 **The tested combination includes the action revision.** Building all binaries from one
 checkout does not establish compatibility with an arbitrary action revision. Folo tests its
