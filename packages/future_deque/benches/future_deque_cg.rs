@@ -13,8 +13,11 @@
 //!   front future is immediately ready; minimum poll cost.
 //! * `poll_front_pending_100` — `poll_front` on a deque of 100
 //!   pending futures; measures the cost of scanning the deque.
+//! * `few_items_wake_burst` / `many_items_wake_burst` — a single `poll`
+//!   completing resident futures after all have been made ready and woken.
+//!   Initial pending polls, signalling and output draining are outside measurement.
 //!
-//! The same four scenarios are repeated for [`FutureDeque`] so the
+//! The same scenarios are repeated for [`FutureDeque`] so the
 //! atomic-coordination overhead of the sync variant can be compared
 //! side by side with [`LocalFutureDeque`].
 //!
@@ -61,6 +64,9 @@ mod linux {
     use std::future::Future;
     use std::hint::black_box;
     use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Sender};
     use std::task::{Context, Poll, Waker};
 
     use future_deque::{FutureDeque, LocalFutureDeque};
@@ -69,6 +75,10 @@ mod linux {
     const POPULATED_COUNT: usize = 100;
 
     const PENDING_REMAINING: usize = 100;
+
+    // Match the Criterion low/high populations to expose the cost of completing a wake burst.
+    const FEW_ITEMS: usize = 8;
+    const MANY_ITEMS: usize = 500;
 
     // A future that returns `Pending` for `remaining` polls, then `Ready(value)`.
     // Matches the helper used in the Criterion bench so wall-clock and Callgrind
@@ -96,6 +106,35 @@ mod linux {
             } else {
                 this.remaining = this.remaining.wrapping_sub(1);
                 cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
+
+    /// Captures a waker during setup and completes when setup enables the whole burst.
+    ///
+    /// Setup retains the readiness flag through teardown, keeping heap deallocation
+    /// out of the measured poll. This matches the Criterion helper's future layout.
+    struct WakeBurstFuture {
+        ready: Arc<AtomicBool>,
+        // Sending is needed only on the initial pending poll, before measurement.
+        wakers: Option<Sender<Waker>>,
+        value: u64,
+    }
+
+    impl Future for WakeBurstFuture {
+        type Output = u64;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<u64> {
+            // Setup, readiness changes and polling all run on the same thread.
+            if self.ready.load(Ordering::Relaxed) {
+                Poll::Ready(self.value)
+            } else {
+                if let Some(wakers) = self.wakers.take() {
+                    wakers
+                        .send(cx.waker().clone())
+                        .expect("setup owns the receiver");
+                }
                 Poll::Pending
             }
         }
@@ -157,6 +196,64 @@ mod linux {
         (populated_sync_pending(), Waker::noop())
     }
 
+    fn local_after_wake_burst(count: usize) -> (LocalFutureDeque<u64>, Arc<AtomicBool>) {
+        let mut deque = LocalFutureDeque::new();
+        let ready = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = mpsc::channel();
+        for i in 0..count {
+            deque.push_back(WakeBurstFuture {
+                ready: Arc::clone(&ready),
+                wakers: Some(sender.clone()),
+                value: i as u64,
+            });
+        }
+        assert!(deque.poll(&Context::from_waker(Waker::noop())).is_pending());
+        assert_eq!(deque.len(), count);
+        let wakers: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(wakers.len(), count);
+        ready.store(true, Ordering::Relaxed);
+        for waker in wakers {
+            waker.wake();
+        }
+        (deque, ready)
+    }
+
+    fn sync_after_wake_burst(count: usize) -> (FutureDeque<u64>, Arc<AtomicBool>) {
+        let mut deque = FutureDeque::new();
+        let ready = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = mpsc::channel();
+        for i in 0..count {
+            deque.push_back(WakeBurstFuture {
+                ready: Arc::clone(&ready),
+                wakers: Some(sender.clone()),
+                value: i as u64,
+            });
+        }
+        assert!(deque.poll(&Context::from_waker(Waker::noop())).is_pending());
+        assert_eq!(deque.len(), count);
+        let wakers: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(wakers.len(), count);
+        ready.store(true, Ordering::Relaxed);
+        for waker in wakers {
+            waker.wake();
+        }
+        (deque, ready)
+    }
+
+    fn finish_local_wake_burst((mut deque, _ready): (LocalFutureDeque<u64>, Arc<AtomicBool>)) {
+        for i in 0..deque.len() {
+            assert_eq!(deque.pop_front(), Some(i as u64));
+        }
+        assert!(deque.is_empty());
+    }
+
+    fn finish_sync_wake_burst((mut deque, _ready): (FutureDeque<u64>, Arc<AtomicBool>)) {
+        for i in 0..deque.len() {
+            assert_eq!(deque.pop_front(), Some(i as u64));
+        }
+        assert!(deque.is_empty());
+    }
+
     // ---------- LocalFutureDeque benches ----------
 
     #[library_benchmark]
@@ -195,6 +292,24 @@ mod linux {
         deque
     }
 
+    #[library_benchmark(teardown = finish_local_wake_burst)]
+    #[bench::burst(local_after_wake_burst(FEW_ITEMS))]
+    fn local_few_items_wake_burst(
+        (mut deque, ready): (LocalFutureDeque<u64>, Arc<AtomicBool>),
+    ) -> (LocalFutureDeque<u64>, Arc<AtomicBool>) {
+        _ = black_box(deque.poll(&Context::from_waker(Waker::noop())));
+        (deque, ready)
+    }
+
+    #[library_benchmark(teardown = finish_local_wake_burst)]
+    #[bench::burst(local_after_wake_burst(MANY_ITEMS))]
+    fn local_many_items_wake_burst(
+        (mut deque, ready): (LocalFutureDeque<u64>, Arc<AtomicBool>),
+    ) -> (LocalFutureDeque<u64>, Arc<AtomicBool>) {
+        _ = black_box(deque.poll(&Context::from_waker(Waker::noop())));
+        (deque, ready)
+    }
+
     // ---------- FutureDeque (sync) benches ----------
 
     #[library_benchmark]
@@ -229,13 +344,33 @@ mod linux {
         deque
     }
 
+    #[library_benchmark(teardown = finish_sync_wake_burst)]
+    #[bench::burst(sync_after_wake_burst(FEW_ITEMS))]
+    fn sync_few_items_wake_burst(
+        (mut deque, ready): (FutureDeque<u64>, Arc<AtomicBool>),
+    ) -> (FutureDeque<u64>, Arc<AtomicBool>) {
+        _ = black_box(deque.poll(&Context::from_waker(Waker::noop())));
+        (deque, ready)
+    }
+
+    #[library_benchmark(teardown = finish_sync_wake_burst)]
+    #[bench::burst(sync_after_wake_burst(MANY_ITEMS))]
+    fn sync_many_items_wake_burst(
+        (mut deque, ready): (FutureDeque<u64>, Arc<AtomicBool>),
+    ) -> (FutureDeque<u64>, Arc<AtomicBool>) {
+        _ = black_box(deque.poll(&Context::from_waker(Waker::noop())));
+        (deque, ready)
+    }
+
     library_benchmark_group!(
         name = local,
         benchmarks = [
             local_push_back_empty,
             local_push_back_into_100,
             local_poll_front_one_ready,
-            local_poll_front_pending_100
+            local_poll_front_pending_100,
+            local_few_items_wake_burst,
+            local_many_items_wake_burst,
         ]
     );
 
@@ -245,7 +380,9 @@ mod linux {
             sync_push_back_empty,
             sync_push_back_into_100,
             sync_poll_front_one_ready,
-            sync_poll_front_pending_100
+            sync_poll_front_pending_100,
+            sync_few_items_wake_burst,
+            sync_many_items_wake_burst,
         ]
     );
 }

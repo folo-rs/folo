@@ -167,11 +167,19 @@ The matrix checks out the resolved `to` commit with full history, while configur
 setup hook and source installation remain invocation-owned. The core tool validates and traverses
 the inclusive first-parent range, preserving the selected project directory in its worktrees.
 
-Folo passes `install-method: path`, `source-path: .`, shared exclusions, all features and the
-shared repetition count and compiler stability flags. Fixed skip-existing behavior
-makes each platform resumable. `ignore-errors: true` continues past per-commit build/benchmark
-failures; `best-effort: true` separately opts into whole-matrix-job `continue-on-error`, including
-the shared hosted-runner timeout. Generic callers default both policies to false.
+Folo pins the released v2 reusable workflow to an immutable commit and passes
+`install-method: path`, `source-path: .`, shared exclusions, all features and the shared
+repetition count and compiler stability flags. Fixed skip-existing behavior makes each platform
+resumable. `max-commits: '1'` reaches the core as an attempt budget after existing-result
+prefiltering; it does not change range preparation or first-parent traversal. The chosen budget
+matches [observed nightly capacity](design.md#nightly-history-backfill), not a hard time bound.
+Each attempted commit retains its full repetitions, storage and flush/cleanup; the final log
+summary distinguishes stored, existing, empty, failed and deferred work.
+
+The caller omits `ignore-errors`, retaining its strict false default. The v2 workflow has no
+whole-job failure-suppression input or job-level `continue-on-error`. Its matrix keeps
+`fail-fast: false` and the six-hour exceptional watchdog; genuine failures and timeout remain
+unsuccessful job conclusions rather than successful bounded completion.
 
 Backfill creates no receipts, analysis job, report artifacts, publication sink or public outputs.
 Shared run/work concurrency prefixes differ from Folo's caller group; non-cancelling
@@ -188,7 +196,7 @@ tools work together without requiring published tool versions or a full performa
 
 `benchmark-action-canary.yml` calls the action repository's `history.yml` and `backfill.yml`
 at the revisions specified in their `uses:` references, with tools built from the Folo checkout
-under test.
+under test. Its backfill calls use the same released revision as the production backfill caller.
 On a pull request, it runs only when the source branch belongs to `folo-rs/folo`, not a fork.
 History publication is disabled; backfill has no publication.
 Its standalone fixture writes deterministic Criterion artifacts through the existing faker

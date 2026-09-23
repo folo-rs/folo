@@ -6,7 +6,6 @@
 )]
 
 use std::hint::black_box;
-use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use many_cpus::SystemHardware;
@@ -19,9 +18,6 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("many_cpus_hardware_tracker/current");
 
     let hw = SystemHardware::current();
-
-    // Results from this are really unstable for whatever reason. Give it more time to stabilize.
-    group.measurement_time(Duration::from_secs(30));
 
     group.bench_function("current_processor_unpinned", |b| {
         b.iter(|| {
