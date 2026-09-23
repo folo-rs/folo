@@ -1,3 +1,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! This package contains nothing, it exists just as a container for benchmarks.
+//! Manual exploratory benchmarks and their workload helpers.
+
+mod memory_workload;
+
+pub use memory_workload::*;
