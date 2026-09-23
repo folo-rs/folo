@@ -822,6 +822,14 @@ the mostly-cached setup time it would save. Toolchain versions are defined once 
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
 
+The Linux ARM64 PowerShell bootstrap uses an upstream release archive because the
+Microsoft APT repository does not provide a native package. Its pinned runtime must
+satisfy the Azure deployment bundle's PowerShell prerequisite and the native integration
+fixture's requirement. Regression tests in the `bench-history` script domain compare the
+pin with those executable requirements, so both bootstrap and bundle changes select them.
+The bundle integration tests exercise parameter validation, cleanup and mocked deployment
+without Azure access.
+
 The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
 installed only where a job actually executes Callgrind measurements — the benchmark
 collection jobs, the test jobs that smoke-run every bench target, and the cache warmup that
