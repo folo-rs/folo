@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "alloc_tracker",
  "cpu-time",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_tracker"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "all_the_time",
  "criterion",
@@ -210,7 +210,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awaiter_set"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "criterion",
  "futures",
@@ -477,7 +477,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-faker"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "folo_utils",
  "mimalloc",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-figures"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_analyze",
  "cbh_detect",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-github"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "cargo-detect-package",
  "cbh_config",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-stress"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "all_the_time",
  "cargo-bench-history",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "clap",
  "mimalloc",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-freeze-deps"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "clap",
  "mimalloc",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "clap",
  "criterion",
@@ -647,7 +647,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "mutants",
  "testing",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_engines"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_model",
  "futures",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "criterion",
  "jiff",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "criterion",
  "mutants",
@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_storage"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -991,7 +991,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "cpulist"
-version = "1.1.9"
+version = "1.1.10"
 dependencies = [
  "itertools 0.15.0",
  "new_zealand",
@@ -1283,7 +1283,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dure"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "clap",
  "dure-test-helper",
@@ -1345,7 +1345,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1370,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.7.18"
+version = "0.7.19"
 dependencies = [
  "alloc_tracker",
  "awaiter_set",
@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "events_once"
-version = "0.5.39"
+version = "0.5.40"
 dependencies = [
  "criterion",
  "futures",
@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "fast_time"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1457,7 +1457,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "folo_ffi"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "folo_utils"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "mutants",
  "serde",
@@ -1525,7 +1525,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "future_deque"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "infinity_pool"
-version = "0.8.29"
+version = "0.8.30"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "linked"
-version = "1.0.24"
+version = "1.0.25"
 dependencies = [
  "criterion",
  "gungraun",
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros"
-version = "1.0.24"
+version = "1.0.25"
 dependencies = [
  "linked_macros_impl",
  "proc-macro2",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "linked_macros_impl"
-version = "1.0.24"
+version = "1.0.25"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2303,7 +2303,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.21"
+version = "2.4.22"
 dependencies = [
  "many_cpus_impl",
  "new_zealand",
@@ -2313,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_impl"
-version = "2.4.21"
+version = "2.4.22"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2445,14 +2445,14 @@ checksum = "add0ac067452ff1aca8c5002111bd6b1c895baee6e45fcbc44e0193aea17be56"
 
 [[package]]
 name = "new_zealand"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "testing",
 ]
 
 [[package]]
 name = "nm"
-version = "0.1.50"
+version = "0.1.51"
 dependencies = [
  "nm_impl",
  "static_assertions",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "nm_impl"
-version = "0.1.50"
+version = "0.1.51"
 dependencies = [
  "criterion",
  "fast_time",
@@ -2478,7 +2478,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -2492,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -2679,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.62"
+version = "0.2.63"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -2965,7 +2965,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3139,7 +3139,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.36"
+version = "1.0.37"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3161,7 +3161,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.36"
+version = "1.0.37"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3283,7 +3283,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3340,7 +3340,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3701,7 +3701,7 @@ dependencies = [
  "fastrand",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4266,7 +4266,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vicinal"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -4441,7 +4441,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
