@@ -91,7 +91,11 @@ dependence assumptions of Benjamini–Hochberg. The ceiling is a hard bound, not
 candidate is cheap: an ambiguous maximum-length series may consume the full orbit.
 
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
-analysis logic for production execution and synchronous component tests.
+analysis logic for production execution and synchronous component tests. Worker partitioning uses
+an explicit nonzero parallelism value supplied alongside the spawner. The command adapters own
+host-capacity discovery; neither detector preparation nor partition arithmetic queries the
+operating system. Tests can exercise single-worker and multi-worker partitions using the same
+inline executor.
 
 Test data comes from two sources with different jobs. A deterministic generator supplies realistic
 *spread* for curated shapes, and verbatim recordings of this project's own stored series supply

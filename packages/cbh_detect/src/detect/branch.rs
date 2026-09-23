@@ -107,9 +107,10 @@ pub(crate) async fn find_changes_spawned(
     series: Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Detection {
     let len = series.len();
-    let workers = worker_count(len);
+    let workers = worker_count(len, available_parallelism);
     let mut handles = Vec::with_capacity(workers);
     let mut start = 0_usize;
     for size in balanced_chunk_sizes(len, workers) {
@@ -1441,30 +1442,34 @@ mod tests {
         ]);
         let context = context(BASE_COMMITS);
         let serial = find_changes(&batch, &context);
-        let spawned = block_on(find_changes_spawned(
-            Arc::clone(&batch),
-            context,
-            &synchronous_spawner(),
-        ));
+        // Exercise a single chunk and unequal chunks containing multiple series.
+        for capacity in [1, 2] {
+            let spawned = block_on(find_changes_spawned(
+                Arc::clone(&batch),
+                context,
+                &synchronous_spawner(),
+                NonZero::new(capacity).unwrap(),
+            ));
 
-        assert_eq!(spawned.findings.len(), serial.findings.len());
-        assert_eq!(spawned.census, serial.census);
-        assert_eq!(
-            spawned
-                .findings
-                .iter()
-                .map(|finding| (&finding.id, finding.direction))
-                .collect::<Vec<_>>(),
-            serial
-                .findings
-                .iter()
-                .map(|finding| (&finding.id, finding.direction))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            spawned.branch_trace.series.len(),
-            serial.branch_trace.series.len()
-        );
+            assert_eq!(spawned.findings.len(), serial.findings.len());
+            assert_eq!(spawned.census, serial.census);
+            assert_eq!(
+                spawned
+                    .findings
+                    .iter()
+                    .map(|finding| (&finding.id, finding.direction))
+                    .collect::<Vec<_>>(),
+                serial
+                    .findings
+                    .iter()
+                    .map(|finding| (&finding.id, finding.direction))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                spawned.branch_trace.series.len(),
+                serial.branch_trace.series.len()
+            );
+        }
     }
 
     #[test]

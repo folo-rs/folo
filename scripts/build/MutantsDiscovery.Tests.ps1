@@ -70,8 +70,10 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         $packages = @('cargo-bench-history-stress', 'cargo-release-plan', 'release-target-check')
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
+            # The release-plan binary and its implementation library have separate owners.
+            $libraryPackage = if ($packageName -ceq 'cargo-release-plan') { 'crp_impl' } else { $packageName }
             @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
-            @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
+            @($after | Where-Object { $_.package -eq $libraryPackage }).Count | Should -BeGreaterThan 0
         }
     }
 

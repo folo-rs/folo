@@ -23,6 +23,13 @@ delegating. Their inner `*_with` orchestrators receive generic ports and explici
 which keeps policy deterministic and same-crate tests in memory. The component crates own the
 adapter implementations; `cbh_analyze` selects and coordinates them.
 
+The query entry points acquire available host parallelism alongside the production spawner,
+falling back to one worker when discovery is unavailable. That nonzero capacity is passed through
+dataset loading and detection, each capping its worker count at its input length. Inner
+orchestrators and their in-memory tests supply execution capacity explicitly rather than
+discovering hardware during partitioning. Seeded-history integration tests exercise the real
+command wiring and Tokio execution without running a benchmark engine.
+
 Every command selects the ordinary storage facade. Read-only queries synchronize its optional
 cloud cache before the shared selection pipeline and report cache activity afterward.
 Git-topology selection separates the target branch's measurements from the base-ref history

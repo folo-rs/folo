@@ -1114,10 +1114,7 @@ fn decode_git_reference(encoded: &str) -> Option<String> {
 /// locally declared one, so historical membership only matches Cargo once these
 /// edges are followed as well.
 #[must_use]
-fn inherited_path_dependencies(
-    doc: &DocumentMut,
-    workspace: &WorkspaceInherit<'_>,
-) -> Vec<String> {
+fn inherited_path_dependencies(doc: &DocumentMut, workspace: &WorkspaceInherit<'_>) -> Vec<String> {
     let mut names = Vec::new();
     for_each_dependency_table(
         doc.as_table(),
@@ -1282,10 +1279,7 @@ pub(crate) fn is_workspace_excluded(dir: &str, members: &WorkspaceMembers) -> bo
     members.exclude.iter().any(|pattern| pattern.matches(dir))
 }
 
-fn compile_patterns(
-    patterns: &[String],
-    case: PathCase,
-) -> Result<Vec<MemberPattern>, AppError> {
+fn compile_patterns(patterns: &[String], case: PathCase) -> Result<Vec<MemberPattern>, AppError> {
     patterns
         .iter()
         .map(|pattern| MemberPattern::new(pattern, case))
