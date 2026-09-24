@@ -621,3 +621,5 @@ thread_local! {
 
     static PUSH_SCENARIO: PushScenario = PushScenario::new();
 }
+
+::testing::set_allocator!();

@@ -105,3 +105,6 @@ pub use local_manual::{
     EmbeddedLocalManualResetEvent, EmbeddedLocalManualResetEventRef, LocalManualResetEvent,
 };
 pub use manual::{EmbeddedManualResetEvent, EmbeddedManualResetEventRef, ManualResetEvent};
+
+#[cfg(test)]
+::testing::set_allocator!();

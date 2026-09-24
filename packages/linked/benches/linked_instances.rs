@@ -121,3 +121,5 @@ impl Drop for LinkedVariableClearGuard {
         ::linked::__private_clear_linked_variables_local();
     }
 }
+
+::testing::set_allocator!();

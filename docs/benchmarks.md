@@ -33,6 +33,13 @@ benchmark function and in the same benchmark group.
 
 Do not forget to register benchmarks in `Cargo.toml`.
 
+Benchmark executables follow the [executable allocator policy](testing.md#executable-allocators):
+mimalloc natively, with allocation instrumentation wrapping that same backend.
+When comparing a tracking wrapper against an untracked allocator, use
+`testing::DefaultAllocator` for both sides so the difference measures tracking,
+not a change of allocator. Allocator changes affect benchmark baselines and must
+not be interpreted as changes to the measured library algorithms.
+
 ## Bound routine workloads
 
 Routine benchmarks are microbenchmarks, not production-sized data sets or stress

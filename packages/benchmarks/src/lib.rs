@@ -5,3 +5,6 @@
 mod memory_workload;
 
 pub use memory_workload::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

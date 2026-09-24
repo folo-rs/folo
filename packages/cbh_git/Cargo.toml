@@ -4,7 +4,7 @@
 name = "cbh_git"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.17"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -44,6 +44,7 @@ tokio = { workspace = true, features = ["process"] }
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

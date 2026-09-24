@@ -14,6 +14,7 @@ development = ["new_zealand"]
 
 [dev-dependencies]
 new_zealand = { path = "../new_zealand" }
+testing = { path = "../testing" }
 trybuild = { workspace = true }
 
 [lints]

@@ -104,3 +104,5 @@ fn help_request_is_a_success_early_exit() {
     assert!(early.status.is_ok(), "help should be a success exit");
     assert!(early.output.contains("Usage"));
 }
+
+::testing::set_allocator!();

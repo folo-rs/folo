@@ -155,3 +155,5 @@ mod linux {
         benchmarks = [decompress_small, decompress_large]
     );
 }
+
+::testing::set_allocator!();

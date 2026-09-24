@@ -48,6 +48,17 @@ a CI-only entry point (driven by the release workflow); never run it manually.
 Do **not** use VS Code tasks, relying instead on `just` and, if necessary, `cargo`
 commands.
 
+The benchmark caller under `.github/fixtures/bench-history-caller` is a standalone Cargo
+workspace. Root-workspace lockfile checks do not cover it. After moving its path dependencies,
+refresh its lock with `cargo update --manifest-path .github/fixtures/bench-history-caller/Cargo.toml
+--offline --workspace`. `just verify-lockfile` checks both workspaces during local version planning.
+After committing, run `just verify-caller-fixture` from the clean checkout.
+This uses full locked metadata and rejects dirty inputs rather than repairing them during
+collection. The synthetic benchmark emits fixed data, not timed measurements; use
+`cargo bench --manifest-path .github/fixtures/bench-history-caller/Cargo.toml --locked --bench synthetic -- --test`
+for a local smoke run. The hosted canary checks the actual head and its first parent, so both
+must carry consistent fixture locks.
+
 ## Validating changes
 
 Validate changes via `just validate-local`. This runs a number of different checks

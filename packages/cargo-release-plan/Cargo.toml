@@ -3,7 +3,7 @@
 name = "cargo-release-plan"
 description = "A Cargo subcommand that classifies publishable packages against their version anchors and applies increment plans"
 publish = true
-version = "0.3.18"
+version = "0.3.19"
 
 authors.workspace = true
 edition.workspace = true
@@ -69,6 +69,7 @@ toml_edit = { workspace = true, features = ["parse", "display"] }
 criterion = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "cargo_release_plan_algorithms"

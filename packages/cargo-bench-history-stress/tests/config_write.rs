@@ -46,3 +46,5 @@ async fn reports_file_write_failure() {
     _ = write_config(dir.path(), "configuration").await.unwrap_err();
     assert!(path.is_dir());
 }
+
+::testing::set_allocator!();

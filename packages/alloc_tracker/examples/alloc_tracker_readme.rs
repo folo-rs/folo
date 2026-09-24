@@ -20,9 +20,10 @@ use alloc_tracker::{Allocator, Session};
 #[cfg(feature = "panic_on_next_alloc")]
 use alloc_tracker::{Allocator, Session, panic_on_next_alloc};
 use criterion::Criterion;
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 #[expect(clippy::useless_vec, reason = "example needs to show allocation")]
 fn main() {

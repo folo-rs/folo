@@ -43,3 +43,5 @@ fn atomic_increments(pool: &mut ThreadPool, group: &mut BenchmarkGroup<'_, WallT
         .iter(|_| counter.fetch_add(1, Ordering::Relaxed))
         .execute_criterion_on(pool, group, name);
 }
+
+::testing::set_allocator!();

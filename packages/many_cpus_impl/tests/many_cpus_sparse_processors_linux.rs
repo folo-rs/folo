@@ -152,3 +152,5 @@ fn narrow_process_affinity_to(processor_ids: &[ProcessorId]) -> bool {
 
     true
 }
+
+::testing::set_allocator!();

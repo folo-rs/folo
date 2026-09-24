@@ -999,3 +999,5 @@ async fn prune_without_cache_round_trips_through_real_azure() {
     })
     .await;
 }
+
+::testing::set_allocator!();

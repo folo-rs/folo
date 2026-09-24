@@ -205,3 +205,5 @@ async fn collect_against_real_criterion_bench_stores_wall_time() {
         metric.value
     );
 }
+
+::testing::set_allocator!();

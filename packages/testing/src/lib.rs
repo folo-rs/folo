@@ -4,6 +4,7 @@
 
 //! Private helpers for testing and examples in Folo packages.
 
+mod allocator;
 mod assert_panics;
 mod clone_waker;
 mod cwd_guard;
@@ -13,6 +14,7 @@ mod reentrant_waker;
 mod wake_action_waker;
 mod watchdog;
 
+pub use allocator::*;
 pub use assert_panics::{assert_panics, assert_panics_with};
 pub use clone_waker::{clone_action_waker, clone_action_waker_panicking_on_clone_release};
 pub use cwd_guard::CwdGuard;
@@ -27,3 +29,6 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::*;
+
+#[cfg(test)]
+crate::set_allocator!();

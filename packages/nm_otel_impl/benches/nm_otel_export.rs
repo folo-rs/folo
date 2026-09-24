@@ -19,10 +19,11 @@ use nm::{EventMetrics, Histogram, Magnitude, Report};
 use nm_otel::Publisher;
 use nm_otel_impl::{EventState, create_test_provider};
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
+use testing::DefaultAllocator;
 use tick::Clock;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 // This workload represents routing several events rather than scaling one histogram.
 const MULTI_EVENT_COUNT: usize = 8;

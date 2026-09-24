@@ -127,3 +127,5 @@ fn worker_thread(thread_name: &str) -> Report {
     // Convert session to thread-safe report
     session.to_report()
 }
+
+::testing::set_allocator!();

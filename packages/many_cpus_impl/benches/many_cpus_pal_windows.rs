@@ -91,3 +91,5 @@ mod windows {
         group.finish();
     }
 }
+
+::testing::set_allocator!();

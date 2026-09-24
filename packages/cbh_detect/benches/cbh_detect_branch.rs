@@ -106,3 +106,5 @@ fn diversify_base_evidence(suite: &mut [Series]) {
 
 criterion_group!(benches, whole_report);
 criterion_main!(benches);
+
+::testing::set_allocator!();

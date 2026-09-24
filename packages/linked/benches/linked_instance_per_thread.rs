@@ -187,3 +187,5 @@ thread_local! {
 
 static TEST_SUBJECT_GLOBAL: LazyLock<ComparisonTestSubject> =
     LazyLock::new(ComparisonTestSubject::new);
+
+::testing::set_allocator!();

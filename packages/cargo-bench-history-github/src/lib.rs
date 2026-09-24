@@ -33,3 +33,6 @@ pub mod __private {
     pub use crate::action::prepare_backfill_at;
     pub use crate::private_test_util::*;
 }
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -24,3 +24,6 @@ mod report;
 
 pub use coverage::*;
 pub use report::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

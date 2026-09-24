@@ -2,7 +2,7 @@
 name = "linked"
 description = "Create families of linked objects that can collaborate across threads while being internally single-threaded"
 publish = true
-version = "1.0.24"
+version = "1.0.25"
 
 authors.workspace = true
 edition.workspace = true
@@ -41,6 +41,7 @@ new_zealand = { path = "../new_zealand" }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 seq-macro = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }

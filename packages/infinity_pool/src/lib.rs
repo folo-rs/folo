@@ -166,3 +166,6 @@ pub use pastey::paste as __private_paste;
 pub use pinned::*;
 #[cfg(test)]
 pub(crate) use thread_safety_types::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

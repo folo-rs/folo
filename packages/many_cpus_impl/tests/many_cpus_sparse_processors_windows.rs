@@ -143,3 +143,5 @@ fn processor_mask(processor_ids: &[ProcessorId]) -> NonZero<usize> {
 
     NonZero::new(mask).unwrap()
 }
+
+::testing::set_allocator!();

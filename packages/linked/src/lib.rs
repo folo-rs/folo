@@ -715,3 +715,6 @@ pub use linked_macros::__macro_linked_object as object;
 // ::linked::* which will work also in the current crate.
 #[doc(hidden)]
 extern crate self as linked;
+
+#[cfg(test)]
+::testing::set_allocator!();

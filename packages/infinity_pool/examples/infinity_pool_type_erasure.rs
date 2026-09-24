@@ -101,3 +101,5 @@ fn main() {
     demonstrate_lifetime_extension();
     demonstrate_mixed_handles();
 }
+
+::testing::set_allocator!();

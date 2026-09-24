@@ -389,3 +389,5 @@ fn cast_raw_pinned_pooled_shared_generic_removal_unique() {
     }
     assert_eq!(pool.len(), 0);
 }
+
+::testing::set_allocator!();

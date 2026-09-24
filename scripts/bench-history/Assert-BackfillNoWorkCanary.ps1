@@ -19,13 +19,15 @@ $VerbosePreference = 'Continue'
 $json = gh api --paginate --slurp "repos/$Repository/actions/runs/$RunId/attempts/$RunAttempt/jobs?per_page=100"
 $json | Set-Content -LiteralPath $OutputPath -Encoding utf8
 $pages = $json | ConvertFrom-Json
-$jobs = @($pages.jobs | Where-Object { $_.name.StartsWith('no-eligible-backfill / ', [StringComparison]::Ordinal) })
-$preparation = @($jobs | Where-Object { $_.name -ceq 'no-eligible-backfill / prepare' })
+# Reusable callers prepend their job names, including Standard nested under Deep validation.
+# Match a complete job-name segment, not one fixed nesting depth or a substring lookalike.
+$jobs = @($pages.jobs | Where-Object { $_.name -cmatch '(^| / )no-eligible-backfill / ' })
+$preparation = @($jobs | Where-Object { $_.name -cmatch '(^| / )no-eligible-backfill / prepare$' })
 if ($preparation.Count -ne 1 -or $preparation[0].conclusion -cne 'success') {
     throw 'The no-eligible canary must have successful preparation in this run attempt.'
 }
 foreach ($job in $jobs) {
-    if ($job.name -ceq 'no-eligible-backfill / prepare') { continue }
+    if ($job.name -cmatch '(^| / )no-eligible-backfill / prepare$') { continue }
     if ($job.conclusion -cne 'skipped') {
         throw "The no-eligible canary executed unexpected work: $($job.name)."
     }

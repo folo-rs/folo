@@ -569,3 +569,5 @@ impl Payload for HttpHeadersParse {
         }
     }
 }
+
+::testing::set_allocator!();

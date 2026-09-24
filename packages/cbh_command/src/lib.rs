@@ -33,3 +33,6 @@ pub use command::{
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 pub use setup_azure::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

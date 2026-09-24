@@ -622,3 +622,5 @@ fn run_warns_when_an_ancestor_job_would_end_the_session() {
         );
     });
 }
+
+::testing::set_allocator!();

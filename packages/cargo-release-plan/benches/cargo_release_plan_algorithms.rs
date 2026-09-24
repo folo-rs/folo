@@ -11,6 +11,12 @@ use std::hint::black_box;
 use cargo_release_plan::__private::{benchmark_lockfile_closures, benchmark_patch_rendering};
 use criterion::{Criterion, criterion_group, criterion_main};
 
+// This benchmark ships in the crate archive, so it uses the normal mimalloc
+// dependency rather than the unpublished testing helper.
+#[cfg(not(miri))]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Keeps the low case above trivial fixed-cost behavior.
 const LOW_LINE_COUNT: usize = 16;
 /// Exposes distributed-edit scaling while keeping full sampling millisecond-scale.

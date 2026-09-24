@@ -77,3 +77,5 @@ fn main() {
     println!("  - multiplier: {multiplier}");
     println!("  - global_counter: shared between all threads");
 }
+
+::testing::set_allocator!();

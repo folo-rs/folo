@@ -12,6 +12,7 @@ BeforeAll {
     $script:standard = Get-Content -LiteralPath (Join-Path $root '.github/workflows/standard-validation.yml') -Raw
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
+    $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
@@ -199,6 +200,56 @@ Describe 'Standard validation dependency relationships' {
                 if ((Get-WorkflowJob $workflow $job) -notmatch '(?m)^    if:') {
                     $mustSucceed | Should -Contain $job
                 }
+            }
+        }
+    }
+
+    Describe 'Required reusable canary relationships' {
+        It 'keeps backfill calls in distinct configuration-keyed concurrency groups' {
+            $configs = @(foreach ($name in @('backfill', 'rolling-backfill', 'no-eligible-backfill')) {
+                    $job = Get-WorkflowJob $canary $name
+                    $config = [regex]::Match($job, '(?m)^      config: ([^\r\n]+)').Groups[1].Value
+                    $config | Should -Not -BeNullOrEmpty
+                    Test-Path -LiteralPath (Join-Path $root ".github/fixtures/bench-history-caller/$config") |
+                        Should -BeTrue
+                    $config
+                })
+            @($configs | Sort-Object -Unique).Count | Should -Be $configs.Count
+        }
+
+        It 'has one reusable entry point selected by Standard validation rather than duplicate event runs' {
+            @(Get-WorkflowEvent $canary) | Should -Be @('workflow_call')
+            $caller = Get-WorkflowJob $standard 'benchmark-canary'
+            $calledPath = [regex]::Match($caller, '(?m)^    uses: ([^\r\n]+)').Groups[1].Value
+            (Get-Content -LiteralPath (Join-Path $root $calledPath) -Raw) | Should -Be $canary
+            @(Get-WorkflowJobDependency $caller) | Should -Contain 'prepare'
+            $output = [regex]::Match($caller, 'needs\.prepare\.outputs\.([a-z_]+)').Groups[1].Value
+            $output | Should -Not -BeNullOrEmpty
+            (Get-WorkflowJob $standard 'prepare') | Should -Match ('(?m)^      ' + [regex]::Escape($output) + ': ')
+            @(Get-WorkflowJobName $queue) | Should -Not -Contain 'benchmark-canary'
+        }
+
+        It 'propagates every contract job failure, cancellation, unexpected skip or absence' {
+            $fanIn = Get-WorkflowJob $canary 'result'
+            $dependencies = @(Get-WorkflowJobDependency $fanIn)
+            $mustSucceed = @(Get-MustSucceedJob $fanIn)
+            $checks = @(Get-WorkflowJobName $canary | Where-Object { $_ -ne 'result' })
+            @($dependencies | Sort-Object) | Should -Be @($checks | Sort-Object)
+            @($mustSucceed | Sort-Object) | Should -Be @($checks | Sort-Object)
+            $results = @{}
+            foreach ($name in $checks) { $results[$name] = @{ result = 'success' } }
+            { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $mustSucceed } |
+                Should -Not -Throw
+            foreach ($name in $checks) {
+                foreach ($result in @('failure', 'cancelled', 'skipped', 'unknown')) {
+                    $results[$name].result = $result
+                    { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $mustSucceed } |
+                        Should -Throw
+                }
+                $results.Remove($name)
+                { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $mustSucceed } |
+                    Should -Throw
+                $results[$name] = @{ result = 'success' }
             }
         }
     }

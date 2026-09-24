@@ -12,6 +12,12 @@ use cargo_bench_history_figures::assets::{GENERATED_ROOT, wrap_io};
 use cargo_bench_history_figures::{assets, preview};
 use clap::{Parser, Subcommand};
 
+// Executables own allocator selection; library dependencies must not impose it.
+// Ref: docs/testing.md, "Executable allocators".
+#[cfg(not(miri))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Where the preview page is written.
 ///
 /// Under the build directory because it is a development aid, not a checked-in artifact.

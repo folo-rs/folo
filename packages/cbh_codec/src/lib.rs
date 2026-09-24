@@ -14,3 +14,6 @@
 mod codec;
 
 pub use codec::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

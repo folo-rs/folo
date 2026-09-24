@@ -519,3 +519,5 @@ mod rolling {
         );
     }
 }
+
+::testing::set_allocator!();

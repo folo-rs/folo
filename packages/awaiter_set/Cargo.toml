@@ -2,7 +2,7 @@
 name = "awaiter_set"
 description = "Zero-allocation awaiter tracking for async synchronization primitives"
 publish = true
-version = "0.1.16"
+version = "0.1.17"
 
 authors.workspace = true
 edition.workspace = true
@@ -26,6 +26,7 @@ criterion = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }

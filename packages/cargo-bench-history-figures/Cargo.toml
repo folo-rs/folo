@@ -3,7 +3,7 @@
 name = "cargo-bench-history-figures"
 description = "Generates the figures, tables and report excerpts embedded in the cargo-bench-history book's data pipeline appendix"
 publish = false
-version = "0.2.17"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -27,6 +27,7 @@ cbh_model = { workspace = true }
 cbh_render = { workspace = true }
 cbh_stats = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+mimalloc = { workspace = true }
 plotters = { workspace = true, features = [
     "area_series",
     "line_series",
@@ -37,6 +38,7 @@ plotters = { workspace = true, features = [
 [dev-dependencies]
 cbh_probe = { path = "../cbh_probe", default-features = false }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

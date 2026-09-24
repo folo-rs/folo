@@ -4,7 +4,7 @@
 name = "cargo-bench-history-faker"
 description = "Unsupported synthetic benchmark-output generator for validating cargo-bench-history end to end; no stable API or CLI"
 publish = true
-version = "0.2.9"
+version = "0.2.10"
 
 authors.workspace = true
 edition.workspace = true
@@ -44,6 +44,9 @@ private-test-util = []
 folo_utils = { workspace = true }
 mimalloc = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

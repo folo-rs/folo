@@ -29,3 +29,5 @@ mod preview;
 mod preview_safety;
 mod report;
 mod status;
+
+::testing::set_allocator!();

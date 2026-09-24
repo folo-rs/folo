@@ -83,3 +83,5 @@ mod linux {
         benchmarks = [timestamp_capture_clock_now, timestamp_capture_std_now,]
     );
 }
+
+::testing::set_allocator!();

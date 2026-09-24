@@ -83,3 +83,5 @@ fn output_probe() {
         run();
     }
 }
+
+::testing::set_allocator!();

@@ -31,9 +31,10 @@ use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use future_deque::{FutureDeque, LocalFutureDeque};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// A future that returns `Pending` for `remaining` polls, then `Ready(value)`.
 struct CountdownFuture {

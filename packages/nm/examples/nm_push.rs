@@ -40,3 +40,5 @@ thread_local! {
         .pusher_local(&METRICS_PUSHER)
         .build();
 }
+
+::testing::set_allocator!();

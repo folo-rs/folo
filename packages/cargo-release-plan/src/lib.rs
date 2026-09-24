@@ -46,3 +46,6 @@ mod run;
 mod semver_targets;
 mod text;
 mod verbose;
+
+#[cfg(test)]
+::testing::set_allocator!();

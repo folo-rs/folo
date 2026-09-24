@@ -454,3 +454,5 @@ fn reports_progress_and_explains_only_under_verbose() {
         "expected explanatory detail under --verbose: {verbose_err}"
     );
 }
+
+::testing::set_allocator!();

@@ -261,3 +261,5 @@ fn colliding_names_fail_before_creating_output_directory() {
     assert_panics(|| session.to_report().write_to_directory(&target));
     assert!(!target.exists());
 }
+
+::testing::set_allocator!();

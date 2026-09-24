@@ -40,3 +40,6 @@ pub use input::{
     CACHE_ENV_VAR, STORAGE_ENV_VAR, cache_env, default_config_path, rebase, resolve_cache_path,
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
 };
+
+#[cfg(test)]
+::testing::set_allocator!();

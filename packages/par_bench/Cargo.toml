@@ -2,7 +2,7 @@
 name = "par_bench"
 description = "Mechanisms for multithreaded benchmarking, designed for integration with Criterion or a similar benchmark framework"
 publish = true
-version = "0.2.62"
+version = "0.2.63"
 
 authors.workspace = true
 edition.workspace = true
@@ -50,6 +50,7 @@ alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "par_bench_overhead"

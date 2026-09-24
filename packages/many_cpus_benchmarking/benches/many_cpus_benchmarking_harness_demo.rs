@@ -66,3 +66,5 @@ impl Payload for CopyBytes {
         _ = black_box(&to);
     }
 }
+
+::testing::set_allocator!();

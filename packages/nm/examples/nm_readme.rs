@@ -24,3 +24,5 @@ fn main() {
     let report = Report::collect();
     print!("{report}");
 }
+
+::testing::set_allocator!();
