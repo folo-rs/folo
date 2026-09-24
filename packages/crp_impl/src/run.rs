@@ -18,7 +18,7 @@ use crate::verbose::Verbose;
 #[derive(Debug)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "Internal orchestration value; the application facade hides it from user-facing documentation"
+    reason = "The supported facade permits exhaustive matching on the application's command inputs"
 )]
 pub enum RunInput {
     /// Inspect validated expanded-plan facts for external tooling.
@@ -153,7 +153,7 @@ pub enum RunInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "Internal orchestration value; the application facade hides it from user-facing documentation"
+    reason = "The supported facade permits exhaustive matching on the application's command outcomes"
 )]
 pub enum RunOutcome {
     /// A JSON-producing query completed.

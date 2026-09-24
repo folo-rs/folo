@@ -2,7 +2,7 @@
 name = "crp_impl"
 description = "Implementation crate for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.3.17"
+version = "0.4.0"
 
 authors.workspace = true
 edition.workspace = true

@@ -477,7 +477,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-figures"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_analyze",
  "cbh_detect",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-github"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "cargo-detect-package",
  "cbh_config",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-bench-history-stress"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "all_the_time",
  "cargo-bench-history",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "clap",
  "mimalloc",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.3.19"
+version = "0.4.0"
 dependencies = [
  "crp_impl",
  "mimalloc",
@@ -640,7 +640,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -677,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "mutants",
  "testing",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_engines"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_model",
  "futures",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "criterion",
  "jiff",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "criterion",
  "mutants",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_storage"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -1158,7 +1158,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crp_impl"
-version = "0.3.17"
+version = "0.4.0"
 dependencies = [
  "cargo-release-plan",
  "clap",
@@ -1296,7 +1296,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dure"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "clap",
  "dure-test-helper",
@@ -2491,7 +2491,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel"
-version = "0.4.25"
+version = "0.4.26"
 dependencies = [
  "nm",
  "nm_otel_impl",
@@ -2505,7 +2505,7 @@ dependencies = [
 
 [[package]]
 name = "nm_otel_impl"
-version = "0.4.25"
+version = "0.4.26"
 dependencies = [
  "alloc_tracker",
  "criterion",
@@ -3152,7 +3152,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3174,7 +3174,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "arc-swap",
  "axum",

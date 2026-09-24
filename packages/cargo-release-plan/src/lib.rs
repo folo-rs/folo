@@ -3,9 +3,7 @@
 
 //! Classifies publishable packages against version anchors and applies plans.
 
-#[doc(hidden)]
-pub use crp_impl::{CheckFormat, RunInput, RunOutcome, run};
-pub use crp_impl::{Cli, EarlyExit};
+pub use crp_impl::{CheckFormat, Cli, EarlyExit, RunInput, RunOutcome, run};
 
 #[cfg(test)]
 ::testing::set_allocator!();
