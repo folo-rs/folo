@@ -1,8 +1,8 @@
 #requires -Version 7
 
-# In-repo replacement for a marketplace toolchain action, run by .github/actions/setup-environment.
-# It installs the pinned stable toolchain from rust-toolchain.toml and sets only the Cargo
-# environment variables our pipeline actually relies on.
+# Prepares the pinned toolchain set for .github/actions/setup-environment and just install-tools.
+# CI completes this before Rust cache lookup, so restored and newly installed environments
+# present the same compiler inventory. Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
 #
 # It is a standalone module (imported via `shell: pwsh`), NOT a `just` recipe: the composite installs
 # the toolchain BEFORE `just` is available, so `just` cannot be used here.
@@ -14,7 +14,10 @@
 # whole job.
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
+Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Constants.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
 
 function Get-PinnedRustChannel {
@@ -113,9 +116,34 @@ function Install-RustupToolchain {
     }
 }
 
+function Install-RustToolchainSet {
+    # CI cannot use Just before cache restoration. Keep its toolchain set and the local recipe's
+    # identical by reading the same pins here, without exporting dotenv inputs into the cache's
+    # environment. Rustup reconciles requested components even after a partial cache restore.
+    [CmdletBinding()]
+    param(
+        [string] $ConstantsPath = (Join-Path $PSScriptRoot '..' '..' 'constants.env')
+    )
+
+    $constants = Read-DotEnvFile -Path $ConstantsPath
+    $msrv = Get-RequiredConstant -Values $constants -Name 'RUST_MSRV'
+    $nightly = Get-RequiredConstant -Values $constants -Name 'RUST_NIGHTLY'
+    $externalTypes = Get-RequiredConstant -Values $constants -Name 'RUST_NIGHTLY_EXTERNAL_TYPES'
+
+    # Let rustup resolve the stable channel and its components from rust-toolchain.toml.
+    Install-RustupToolchain
+    Install-RustupToolchain -Channel $msrv
+    Install-RustupToolchain -Channel $nightly `
+        -Component @('miri', 'rustfmt', 'rust-src', 'llvm-tools-preview')
+
+    # This schema-paired nightly only drives rustdoc. Ref: constants.env,
+    # RUST_NIGHTLY_EXTERNAL_TYPES; the general nightly owns the additional analysis components.
+    Install-RustupToolchain -Channel $externalTypes -InstallProfile minimal
+}
+
 function Install-RustToolchain {
-    # Installs the pinned stable toolchain via rustup and sets the Cargo environment the composite
-    # relies on. Parameters exist purely for testability; in CI both take their real defaults.
+    # Selects CI's stable default and prepares every toolchain before the shared cache lookup.
+    # Local installation uses Install-RustToolchainSet without changing rustup's default.
     [CmdletBinding()]
     param(
         [string] $ManifestPath = 'rust-toolchain.toml',
@@ -138,6 +166,8 @@ function Install-RustToolchain {
         Write-Warning "rustup default $channel exited with code $LASTEXITCODE (continuing)"
     }
 
+    Install-RustToolchainSet
+
     Set-CargoEnvDefault -Name 'CARGO_INCREMENTAL' -Value '0' -GitHubEnvPath $GitHubEnvPath
     Set-CargoEnvDefault -Name 'CARGO_TERM_COLOR' -Value 'always' -GitHubEnvPath $GitHubEnvPath
 
@@ -152,4 +182,5 @@ Export-ModuleMember -Function `
     Get-PinnedRustChannel, `
     Set-CargoEnvDefault, `
     Install-RustupToolchain, `
+    Install-RustToolchainSet, `
     Install-RustToolchain

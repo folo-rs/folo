@@ -70,6 +70,41 @@ The install steps supply the job's ephemeral GitHub token for public release dis
 Local installation does not require authentication or modify credential configuration.
 No step bootstraps binstall through compilation or disables signature verification.
 
+### Shared environment cache identity
+
+The scheduled `cache-warmup.yml` job invokes `setup-environment` on the default branch, where
+GitHub permits pull-request and branch consumers to restore its caches. Other jobs, including
+the benchmark setup hook, invoke the same composite. There is no warmup-specific cache key.
+Manual warmup runs use the selected ref; use the default branch to populate broadly reusable
+caches. Successful consumers can also save missing environment entries within GitHub's normal
+ref scoping.
+
+The composite restores rustup's cache and then completes the pinned toolchain set **before**
+`Swatinem/rust-cache` computes its key. `RustToolchain.psm1` owns the common installer used by
+both CI preparation and `just install-tools`: stable with the manifest's components, MSRV, the
+general analysis nightly and the schema-paired external-types nightly. It reads `constants.env`
+without exporting those dotenv values into the workflow environment. Missing pins or installation
+failures stop setup rather than allowing a partial toolchain set to reach cache lookup.
+The rustup key includes the pin files and installer inputs so component-policy changes invalidate
+the saved toolchain set as well.
+
+`rust-cache` hashes installed compiler identities and Cargo/Rust environment variables in
+addition to workspace inputs. Its action step fixes `RUST_BACKTRACE` to the same value for
+every caller because that runtime diagnostic setting does not alter compilation. The override
+is local to the cache action; validation and other commands retain their own backtrace behavior.
+The existing Cargo defaults are shared, while genuine compiler inputs, runner image, platform,
+architecture and manifest/lockfile hashes retain their normal cache separation and compatible
+dependency fallback.
+
+Installed Cargo tools remain in the independent pin-keyed cache described above. Warmup runs
+the complete installer before saving environment caches, while consumers reconcile any missing
+or stale inputs after restoration. Setup-only callers set `save-build-cache: false`: warmup,
+validation scope preparation, book rendering and cloud-agent preparation restore the Rust build
+cache without saving it. GitHub cache entries are immutable, and `rust-cache` does not resave
+an exact hit; letting a setup-only job save first would prevent later compilation from filling
+that entry. Compiling jobs retain the default save policy. This switch does not affect saving
+rustup, installed-tool or other environment caches.
+
 ## Benchmark workflow artifacts
 
 Folo delegates its ordinary benchmark job graphs to

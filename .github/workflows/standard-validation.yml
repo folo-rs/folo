@@ -74,13 +74,13 @@ jobs:
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
       - name: Setup environment
-        # Preparation runs before - and gates - every package-scoped job, so it uses the same
-        # setup-environment composite as they do rather than a hand-picked minimal toolchain. That
-        # keeps a single install path (cargo-delta comes from `just install-tools` like every other
-        # tool) and, on a cold cache, primes the shared `prerequisites` cache this job's dependents
-        # then restore instead of each recompiling from scratch. On a warm cache the setup is a
-        # ~30-second restore.
+        # Preparation gates package-scoped jobs and consumes the same warmed environment as
+        # every other setup consumer. A cold setup may also seed environment caches for dependents;
+        # this metadata-only job leaves saving workspace build artifacts to compiling jobs.
+        # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
         uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "false"
 
       - name: Select Cargo validation scope
         id: compute

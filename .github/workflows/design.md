@@ -826,9 +826,23 @@ Partial successes survive a retry; reconciliation creates only what remains miss
 
 ## Cache warmup
 
-A scheduled workflow recompiles the shared dependency cache on every runner image daily so
-it is never evicted for inactivity. Without it, a cold cache would force every parallel
-validation job to compile all dependencies from scratch.
+The scheduled warmup prepares and caches the complete shared development environment on the
+default branch for each supported runner platform. Validation, release, benchmark and other
+setup consumers reuse that environment rather than maintaining workflow-specific toolsets.
+Manual warmup runs intended for cross-branch reuse also run on the default branch.
+
+Warmup and consumers use the same preparation and cache identity for equivalent platform,
+runner-image and build inputs. Cache lookup must not depend on whether toolchains were restored
+or installed during this job, nor on diagnostic settings such as backtrace reporting.
+Compiler-affecting settings and platform compatibility boundaries remain part of build-cache
+identity. See [shared environment cache identity](implementation.md#shared-environment-cache-identity).
+
+Caches are an optimization, not a prerequisite: eviction, changed pins and runner-image rolls
+can require a cold setup. Consumers reconcile the declared environment and may populate missing
+environment caches. Only jobs that compile workspace crates save their build artifacts;
+setup-only jobs must not claim a shared immutable build-cache entry with an empty target directory.
+Periodic warmup reduces inactivity misses but does not guarantee retention or prebuild every
+consumer's workspace compilation.
 
 ## Shared infrastructure
 
@@ -836,8 +850,9 @@ All non-trivial jobs use the `setup-environment` composite action to install a s
 consistent toolchain (`just`, PowerShell, the Rust toolchain, and release tooling);
 deviating from it to hand-pick a minimal per-job toolchain costs more in maintenance than
 the mostly-cached setup time it would save. Toolchain versions are defined once in
-`constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
-commands they call, so no version is ever duplicated into a workflow file.
+`constants.env` and `rust-toolchain.toml`. Shared setup helpers read these pins before Just is
+available, and developer recipes use those same helpers, so no version or toolchain set is
+duplicated into a workflow file.
 
 The Linux ARM64 PowerShell bootstrap uses an upstream release archive because the
 Microsoft APT repository does not provide a native package. Its pinned runtime must
