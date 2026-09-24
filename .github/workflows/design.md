@@ -859,6 +859,15 @@ serving debug symbols that no longer match — and because that scoping makes ev
 resolve packages afresh, the APT index is refreshed on every Linux job rather than trusted as
 the image left it.
 
+## Copilot agent environments
+
+The coding agent uses `copilot-setup-steps.yml` to provision the shared development tooling.
+Code review uses the independent `copilot-code-review.yml` configuration, which
+[takes precedence for reviews](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review#customizing-copilot-code-reviews-environment).
+Reviews start on a fresh standard GitHub-hosted Ubuntu runner with only a repository checkout:
+no repository-specific tools or dependencies are installed. This keeps review startup fast
+and independent of development-toolchain provisioning without changing the coding environment.
+
 ## Transient-fault handling
 
 CI touches unreliable infrastructure — package mirrors, the GitHub API, runner disks — where a
