@@ -26,7 +26,6 @@
 use std::collections::HashMap;
 use std::num::NonZero;
 use std::path::Path;
-use std::thread;
 
 use anyspawn::Spawner;
 use cbh_command::ExamineOptions;
@@ -40,6 +39,7 @@ use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
+use many_cpus::SystemHardware;
 use serde::Serialize;
 use tick::Clock;
 
@@ -105,7 +105,8 @@ pub async fn execute(
     // The object-load work shares the ambient Tokio worker threads (mirrors
     // `analyze::execute`).
     let spawner = Spawner::new_tokio();
-    let available_parallelism = thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN);
+    let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
+        .expect("a processor set is never empty");
     let outcome = examine_with(
         &git,
         &storage,

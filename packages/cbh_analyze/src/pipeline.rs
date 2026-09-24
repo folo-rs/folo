@@ -8,7 +8,6 @@ use std::io::IsTerminal;
 use std::num::NonZero;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 use std::time::Instant;
 
 use anyspawn::Spawner;
@@ -33,6 +32,7 @@ use cbh_render::{
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
+use many_cpus::SystemHardware;
 use tick::Clock;
 
 use super::comparison_base::classify_comparison_base_lags;
@@ -102,7 +102,8 @@ pub async fn execute(
     // the analysis shares the ambient Tokio worker threads rather than spawning its
     // own short-lived ones.
     let spawner = Spawner::new_tokio();
-    let available_parallelism = thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN);
+    let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
+        .expect("a processor set is never empty");
     let outcome = analyze_with(
         &git,
         &storage,

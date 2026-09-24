@@ -19,7 +19,9 @@ The single most important distinction is between overlapping *waiting* and overl
 Both fan-out stages route through an **injected spawner** rather than ad-hoc threads, so
 the work runs on the runtime's shared blocking pool in production and inline on the calling
 thread under Miri and in-memory tests. The command adapter also supplies a nonzero parallelism
-value, acquired from the host with a one-worker fallback when discovery is unavailable.
+value from `many_cpus`'s nonempty, quota-respecting processor set, counting across Windows
+processor groups. This is a partitioning input, not a change to the embedding runtime's
+thread count or affinity.
 In-memory tests supply capacity directly and can exercise multiple worker chunks without
 hardware discovery. These execution inputs keep the load reactor-free under Miri while
 preserving the same partitioning and dispatch logic on real hardware.

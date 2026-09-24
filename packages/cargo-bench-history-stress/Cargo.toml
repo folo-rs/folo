@@ -18,6 +18,7 @@ cbh_codec = { workspace = true }
 cbh_model = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 jiff = { workspace = true, features = ["serde"] }
+many_cpus = { workspace = true }
 mimalloc = { workspace = true }
 nonempty = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
