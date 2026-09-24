@@ -1,18 +1,10 @@
 name: Benchmark action caller canary
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/benchmark-action-canary.yml
-      - .github/fixtures/bench-history-caller/**
-      - scripts/bench-history/Assert-BackfillCanary.ps1
-      - scripts/bench-history/Assert-BackfillNoWorkCanary.ps1
-      - packages/cargo-bench-history/**
-      - packages/cargo-bench-history-github/**
-      - packages/cargo-detect-package/**
-      - packages/cargo-bench-history-faker/**
-  workflow_dispatch: {}
+  # Standard validation owns scope, credentials and the single required-checks context.
+  # Deep validation reaches this same graph through Standard, without duplicate event runs.
+  # Ref: implementation.md#reusable-workflow-canary.
+  workflow_call:
 
 permissions: {}
 
@@ -22,7 +14,8 @@ jobs:
     # Ref: implementation.md#reusable-workflow-canary.
     if: >-
       github.repository == 'folo-rs/folo'
-      && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      && ((contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name)
+              && github.ref == 'refs/heads/main')
           || (github.event_name == 'pull_request'
               && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
@@ -119,8 +112,10 @@ jobs:
       publish: false
 
   backfill:
+    # Exercise the same released backfill revision as production with source-built tools.
+    # Ref: implementation.md#reusable-workflow-canary.
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
       id-token: write
@@ -140,7 +135,7 @@ jobs:
 
   rolling-backfill:
     needs: [configuration, storage]
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
       id-token: write
@@ -163,7 +158,7 @@ jobs:
 
   no-eligible-backfill:
     needs: configuration
-    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
     permissions:
       contents: read
       id-token: write
@@ -178,7 +173,7 @@ jobs:
       install-method: path
       source-path: .
       working-directory: .github/fixtures/bench-history-caller
-      config: .cargo/backfill_rolling.toml
+      config: .cargo/backfill_no_work.toml
 
   verify-rolling-backfill:
     needs: [configuration, rolling-backfill]
@@ -344,3 +339,39 @@ jobs:
               ($actualTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
             throw 'The report did not contain the synthetic measurements from every supported target.'
           }
+
+  result:
+    # A selected reusable call cannot succeed through skipped prerequisites or verifiers.
+    # Every contract job is mandatory, including the no-work call whose inner matrix skips.
+    # Ref: implementation.md#merge-blocking-result.
+    if: always()
+    needs:
+      - configuration
+      - storage
+      - exercise
+      - backfill
+      - rolling-backfill
+      - no-eligible-backfill
+      - verify-rolling-backfill
+      - verify-no-work
+      - verify-backfill
+      - verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require every caller contract result
+        shell: pwsh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          MUST_SUCCEED_JOBS: configuration storage exercise backfill rolling-backfill no-eligible-backfill verify-rolling-backfill verify-no-work verify-backfill verify
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/build/RequiredChecks.psm1 -Force
+          $jobs = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $jobs

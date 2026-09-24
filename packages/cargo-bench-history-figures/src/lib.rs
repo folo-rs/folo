@@ -57,3 +57,6 @@ pub mod theme;
 pub mod verdict;
 
 mod coord;
+
+#[cfg(test)]
+::testing::set_allocator!();

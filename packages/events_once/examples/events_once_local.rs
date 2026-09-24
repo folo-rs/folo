@@ -11,3 +11,5 @@ async fn main() {
     let message = receiver.await.unwrap();
     println!("{message}");
 }
+
+::testing::set_allocator!();

@@ -68,3 +68,5 @@ fn basic_usage_example() {
 
     println!("Counter verification passed: {actual_total} increments");
 }
+
+::testing::set_allocator!();

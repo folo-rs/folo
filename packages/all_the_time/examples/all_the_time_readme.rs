@@ -32,3 +32,5 @@ fn main() {
     // writes machine-readable JSON files (one per operation) into the Cargo
     // target directory: target/all_the_time/<operation>.json
 }
+
+::testing::set_allocator!();

@@ -43,3 +43,5 @@ mod windows {
         assert_eq!(processor_count, 2);
     }
 }
+
+::testing::set_allocator!();

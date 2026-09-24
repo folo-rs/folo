@@ -24,3 +24,6 @@ mod verify;
 
 #[cfg(test)]
 mod verification_tests;
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -48,3 +48,5 @@ async fn manual_reset_gate() {
 
     println!("ManualResetEvent: gate opened, all waiters released.");
 }
+
+::testing::set_allocator!();

@@ -246,3 +246,5 @@ thread_local! {
     static PULL_HISTOGRAMS: Vec<Event<Pull>> =
         make_pull_bulk("bench_bulk_pull_histogram", HISTOGRAM_BUCKETS);
 }
+
+::testing::set_allocator!();

@@ -10,3 +10,6 @@
 
 pub mod linked_object;
 mod syn_helpers;
+
+#[cfg(test)]
+::testing::set_allocator!();

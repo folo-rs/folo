@@ -362,3 +362,6 @@ pub use model::{
     Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
 pub use outcome::RunOutcome;
+
+#[cfg(test)]
+::testing::set_allocator!();

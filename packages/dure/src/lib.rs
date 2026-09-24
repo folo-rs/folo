@@ -96,3 +96,6 @@ mod tests {
     // Ref: docs/unwind-safety.md.
     assert_not_impl_any!(test_support::ConsoleProcess: UnwindSafe, RefUnwindSafe);
 }
+
+#[cfg(test)]
+::testing::set_allocator!();

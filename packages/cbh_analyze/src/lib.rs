@@ -83,3 +83,6 @@ pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
 pub use window::auto_mode;
 pub(crate) use window::{before_since_cutoff, parse_since};
+
+#[cfg(test)]
+::testing::set_allocator!();

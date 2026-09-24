@@ -636,3 +636,5 @@ mod linux {
     /// that the pusher's skipping of unobserved pairs exists for.
     const SPARSE_DIRTY_EVENTS: usize = 4;
 }
+
+::testing::set_allocator!();

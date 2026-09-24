@@ -12,10 +12,13 @@
 //! * `register_notify_take_notify_one_singleton` — pop the only awaiter, set becomes empty.
 //! * `register_notify_take_take_notification_when_notified` — `take_notification` CAS success.
 //! * `register_notify_take_take_notification_when_waiting` — `take_notification` CAS failure.
+//! * `notify_one_empty` — notification miss with no registered awaiters.
 //! * `is_empty_when_empty` — null-head fast path on an empty set.
 //! * `is_empty_when_populated` — null-head check on a populated set.
 //! * `notify_one_prior_generation_eligible` — pop an awaiter that
 //!   belongs to a prior generation.
+//! * `notify_one_prior_generation_current_generation_miss` — leave an ineligible
+//!   current-generation awaiter registered.
 //!
 //! Multi-threaded contention is intentionally out of scope; callers
 //! synchronize external to the set, and Callgrind cannot model cache
@@ -56,6 +59,7 @@ main!(
     library_benchmark_groups = [
         register_unregister,
         register_notify_take,
+        notify_one,
         is_empty,
         notify_one_prior_generation
     ]
@@ -205,6 +209,13 @@ mod linux {
     }
 
     #[library_benchmark]
+    #[bench::empty(AwaiterSet::new())]
+    fn notify_one_empty(mut set: AwaiterSet) -> AwaiterSet {
+        drop(black_box(set.notify_one()));
+        set
+    }
+
+    #[library_benchmark]
     #[bench::empty(make_empty_solo())]
     fn is_empty_when_empty(state: SoloState) -> SoloState {
         _ = black_box(black_box(&state.set).is_empty());
@@ -233,6 +244,38 @@ mod linux {
         state
     }
 
+    fn make_registered_solo_current_generation() -> SoloState {
+        let mut state = make_empty_solo();
+        // Model a waiter arriving during a drain, after its generation boundary.
+        state.set.advance_generation();
+        // SAFETY: The heap-pinned awaiter remains alive in SoloState until teardown removes it.
+        unsafe {
+            state
+                .set
+                .register(state.awaiter.as_mut(), Waker::noop().clone());
+        }
+        assert!(!state.set.is_empty());
+        assert!(state.set.notify_one_prior_generation().is_none());
+        state
+    }
+
+    fn finish_current_generation_miss(mut state: SoloState) {
+        assert!(!state.awaiter.as_ref().take_notification());
+        // SAFETY: The miss path leaves this awaiter registered with the same set.
+        unsafe {
+            state.set.unregister(state.awaiter.as_mut());
+        }
+    }
+
+    #[library_benchmark(teardown = finish_current_generation_miss)]
+    #[bench::current_generation(make_registered_solo_current_generation())]
+    fn notify_one_prior_generation_current_generation_miss(mut state: SoloState) -> SoloState {
+        drop(black_box(state.set.notify_one_prior_generation()));
+        state
+    }
+
+    library_benchmark_group!(name = notify_one, benchmarks = [notify_one_empty]);
+
     library_benchmark_group!(
         name = register_unregister,
         benchmarks = [
@@ -258,6 +301,11 @@ mod linux {
 
     library_benchmark_group!(
         name = notify_one_prior_generation,
-        benchmarks = [notify_one_prior_generation_eligible]
+        benchmarks = [
+            notify_one_prior_generation_eligible,
+            notify_one_prior_generation_current_generation_miss,
+        ]
     );
 }
+
+::testing::set_allocator!();

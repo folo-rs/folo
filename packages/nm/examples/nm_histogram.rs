@@ -37,3 +37,5 @@ thread_local! {
         .histogram(BAGEL_WEIGHT_GRAMS_BUCKETS)
         .build();
 }
+
+::testing::set_allocator!();

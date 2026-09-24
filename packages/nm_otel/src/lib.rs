@@ -88,3 +88,6 @@
 // This explicit list advertises only the public subset and excludes implementation-only items.
 // Ref: docs/impl-crate-split.md, "The split"; packages/nm_otel/docs/implementation.md.
 pub use nm_otel_impl::{Publisher, PublisherBuilder};
+
+#[cfg(test)]
+::testing::set_allocator!();

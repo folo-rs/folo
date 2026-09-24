@@ -669,3 +669,5 @@ fn collection_rejects_linked_input_and_output_ancestors() {
             .is_none()
     );
 }
+
+::testing::set_allocator!();

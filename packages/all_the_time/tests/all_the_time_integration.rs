@@ -180,3 +180,5 @@ fn real_platform_session_not_empty_after_work() {
         "Expected measurable time for intensive work, got {measured_time:?}"
     );
 }
+
+::testing::set_allocator!();

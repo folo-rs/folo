@@ -14,9 +14,10 @@ use std::hint::black_box;
 use std::thread;
 
 use alloc_tracker::{Allocator, Report, Session};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 fn main() {
     println!("=== Threaded Allocation Tracking Example ===");

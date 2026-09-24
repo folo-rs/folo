@@ -28,8 +28,11 @@ fn strict_json_rejects_wrong_types_unknown_and_duplicate_keys() {
 
 #[test]
 fn empty_known_inputs_are_unspecified_even_when_not_applicable() {
-    let inputs = Inputs::parse(br#"{"command":"collect","since":"","all-features":""}"#).unwrap();
+    let inputs =
+        Inputs::parse(br#"{"command":"collect","since":"","all-features":"","max-commits":""}"#)
+            .unwrap();
     assert!(inputs.get("since").is_none());
+    assert!(inputs.get("max-commits").is_none());
     assert!(inputs.boolean("all-features", true).unwrap());
 }
 
@@ -135,8 +138,10 @@ fn command_names_and_misplaced_inputs_fail_instead_of_being_ignored() {
         ("collect", "cache"),
         ("collect", "base"),
         ("collect", "from"),
+        ("collect", "max-commits"),
         ("backfill", "context"),
         ("analyze-history", "base"),
+        ("analyze-history", "max-commits"),
         ("analyze-pr", "since"),
         ("analyze-pr", "packages"),
         ("alert", "run-attempt"),
@@ -153,6 +158,30 @@ fn command_names_and_misplaced_inputs_fail_instead_of_being_ignored() {
         input[key] = json!("unexpected");
         let error = Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap_err();
         assert_eq!(error.find_source::<InvalidInput>().unwrap().input, key);
+    }
+}
+
+#[test]
+fn backfill_max_commits_validates_the_core_platform_range() {
+    for value in ["1".to_owned(), usize::MAX.to_string()] {
+        let input = json!({"command":"backfill", "from":"a", "to":"b", "max-commits":value});
+        let inputs = Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap();
+        assert_eq!(inputs.get("max-commits"), Some(value.as_str()));
+    }
+    let overflow = format!("{}0", usize::MAX);
+    // Native runs cover lexical variants; Miri keeps the nonzero and target-width boundaries.
+    let values: &[&str] = if cfg!(miri) {
+        &["0", &overflow]
+    } else {
+        &["0", "-1", "1.5", "many", " ", &overflow]
+    };
+    for value in values {
+        let input = json!({"command":"backfill", "from":"a", "to":"b", "max-commits":value});
+        let error = Inputs::parse(&serde_json::to_vec(&input).unwrap()).unwrap_err();
+        assert_eq!(
+            error.find_source::<InvalidInput>().unwrap().input,
+            "max-commits"
+        );
     }
 }
 

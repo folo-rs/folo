@@ -184,3 +184,5 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 }
+
+::testing::set_allocator!();

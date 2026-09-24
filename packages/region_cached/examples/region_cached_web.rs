@@ -49,3 +49,5 @@ async fn update() -> String {
     LAST_UPDATE.set_global(now);
     format!("Last update time set to: {now}")
 }
+
+::testing::set_allocator!();

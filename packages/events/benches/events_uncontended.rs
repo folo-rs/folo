@@ -43,9 +43,10 @@ use events::{
 use rsevents::{
     AutoResetEvent as RsAutoReset, Awaitable as _, EventState, ManualResetEvent as RsManualReset,
 };
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);

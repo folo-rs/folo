@@ -272,3 +272,5 @@ mod linux {
         inputs
     }
 }
+
+::testing::set_allocator!();

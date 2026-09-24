@@ -106,8 +106,9 @@ runs:
       shell: bash
       run: |
         set -x
-        # Pinned to a current LTS release. Bump as newer 7.4.x patches ship.
-        PWSH_VERSION="7.4.6"
+        # Must satisfy the Azure deployment bundle and its native integration fixture.
+        # Ref: .github/workflows/design.md#shared-infrastructure.
+        PWSH_VERSION="7.6.5"
         curl --fail --silent --show-error --location \
           --retry 5 --retry-delay 2 --retry-all-errors \
           --output /tmp/powershell.tar.gz \

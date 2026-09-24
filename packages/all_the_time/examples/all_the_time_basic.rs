@@ -96,3 +96,5 @@ fn main() {
     println!("The session's results were printed above and written to");
     println!("target/all_the_time/ as machine-readable JSON.");
 }
+
+::testing::set_allocator!();

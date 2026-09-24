@@ -18,3 +18,5 @@ fn main() {
 
     println!("All threads have finished.");
 }
+
+::testing::set_allocator!();

@@ -63,3 +63,5 @@ fn issue_title_adoption_is_rejected() {
 fn custom_comment_identity_is_rejected() {
     assert_removed_global_option("--comment-marker", "<!-- custom -->");
 }
+
+::testing::set_allocator!();

@@ -48,3 +48,5 @@ fn obeys_processor_selection_limits() {
 
     drop(job);
 }
+
+::testing::set_allocator!();

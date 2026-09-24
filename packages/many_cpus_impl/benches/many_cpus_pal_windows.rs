@@ -28,7 +28,6 @@ fn entrypoint(c: &mut Criterion) {
 #[cfg(windows)]
 mod windows {
     use std::hint::black_box;
-    use std::time::Duration;
 
     use criterion::Criterion;
     use many_cpus::SystemHardware;
@@ -39,9 +38,6 @@ mod windows {
 
     pub(crate) fn entrypoint(c: &mut Criterion) {
         let mut group = c.benchmark_group("many_cpus_pal_windows/pal");
-
-        // The results are quite jittery. Give it some time to stabilize.
-        group.measurement_time(Duration::from_secs(30));
 
         group.bench_function("current_thread_processors", |b| {
             b.iter(|| black_box(BUILD_TARGET_PLATFORM.current_thread_processors_for_bench()));
@@ -95,3 +91,5 @@ mod windows {
         group.finish();
     }
 }
+
+::testing::set_allocator!();

@@ -50,3 +50,6 @@ mod waker_meta;
 
 pub use future_deque::*;
 pub use local_future_deque::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

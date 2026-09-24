@@ -7,15 +7,19 @@
 //! `rsevents` is excluded because its blocking `.wait()` API is not
 //! comparable in a multi-threaded contention benchmark (threads
 //! block on OS waits rather than contending on a lock).
+//! `event-listener` is excluded because notifications without registered
+//! listeners do not synchronize event state, and its listener protocol has
+//! no equivalent to these stored-signal `try_wait` cycles.
+//!
+//! These are shared-state contention measurements, not producer/consumer
+//! handoffs: another thread can consume or reset a signal before `try_wait`.
 
 #![allow(missing_docs, reason = "benchmark code")]
 
 use std::hint::black_box;
 use std::num::NonZero;
-use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use event_listener::Event as ElEvent;
 use many_cpus::SystemHardware;
 use par_bench::{Run, ThreadPool};
 
@@ -63,24 +67,6 @@ fn contended_auto_reset(c: &mut Criterion) {
                 })
                 .execute_criterion_on(&mut pool, &mut group, &format!("events/{name}"));
         }
-
-        // event-listener (notify + try_listen pattern)
-        {
-            let event = Arc::new(ElEvent::new());
-            Run::new()
-                .prepare_thread({
-                    let event = Arc::clone(&event);
-                    move |_| Arc::clone(&event)
-                })
-                .iter(|args| {
-                    let event = args.thread_state();
-                    event.notify(1);
-                    // event-listener has no try_wait; just notify
-                    // as the closest equivalent operation.
-                    black_box(event.total_listeners());
-                })
-                .execute_criterion_on(&mut pool, &mut group, &format!("event-listener/{name}"));
-        }
     }
 
     group.finish();
@@ -123,23 +109,9 @@ fn contended_manual_reset(c: &mut Criterion) {
                 })
                 .execute_criterion_on(&mut pool, &mut group, &format!("events/{name}"));
         }
-
-        // event-listener (notify_additional + total_listeners)
-        {
-            let event = Arc::new(ElEvent::new());
-            Run::new()
-                .prepare_thread({
-                    let event = Arc::clone(&event);
-                    move |_| Arc::clone(&event)
-                })
-                .iter(|args| {
-                    let event = args.thread_state();
-                    event.notify(usize::MAX);
-                    black_box(event.total_listeners());
-                })
-                .execute_criterion_on(&mut pool, &mut group, &format!("event-listener/{name}"));
-        }
     }
 
     group.finish();
 }
+
+::testing::set_allocator!();

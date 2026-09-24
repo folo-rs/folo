@@ -67,3 +67,6 @@ pub(crate) use pending::PendingInvalidation;
 pub use port::Storage;
 #[cfg(any(test, feature = "private-test-util"))]
 pub use test_container::unique_test_container;
+
+#[cfg(test)]
+::testing::set_allocator!();

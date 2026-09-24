@@ -525,6 +525,11 @@ pub struct BackfillOptions {
     pub from: String,
     /// Newest commit of the range to backfill (inclusive).
     pub to: String,
+    /// Maximum replay attempts after skipping recorded commits; `None` is unlimited.
+    ///
+    /// Every attempted commit counts, including failed, empty, and duplicate results.
+    /// Each attempt completes its repetitions and storage before the limit is checked.
+    pub max_commits: Option<NonZeroUsize>,
     /// Restrict the runs to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
@@ -563,6 +568,7 @@ impl Default for BackfillOptions {
             local: None,
             from: String::new(),
             to: String::new(),
+            max_commits: None,
             packages: Vec::new(),
             excludes: Vec::new(),
             benches: Vec::new(),

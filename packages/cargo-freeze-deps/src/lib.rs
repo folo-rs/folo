@@ -15,3 +15,6 @@ pub use cli::{Cli, EarlyExit};
 pub(crate) use errors::*;
 pub use run::run;
 pub use types::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

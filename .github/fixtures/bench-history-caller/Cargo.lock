@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "cargo-bench-history-faker"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "folo_utils",
  "mimalloc",
@@ -29,7 +29,7 @@ checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
 name = "folo_utils"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "serde",
  "serde_json",

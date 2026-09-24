@@ -34,3 +34,5 @@ fn timestamp_comparison(c: &mut Criterion) {
 
 criterion_group!(benches, timestamp_comparison);
 criterion_main!(benches);
+
+::testing::set_allocator!();

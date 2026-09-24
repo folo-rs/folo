@@ -60,3 +60,6 @@ pub use emit::*;
 pub use error::*;
 pub(crate) use item::Item;
 pub use parse::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

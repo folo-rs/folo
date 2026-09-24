@@ -6,11 +6,13 @@ use all_the_time::Session as TimeSession;
 use alloc_tracker::{Allocator, Session as AllocSession};
 use many_cpus::SystemHardware;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
+#[cfg(feature = "alloc_tracker")]
+use testing::DefaultAllocator;
 
-// Set up global allocator for allocation tracking (if feature is enabled)
+// This target requires allocation tracking and wraps the workspace allocator.
 #[cfg(feature = "alloc_tracker")]
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 fn main() {
     // Create tracking sessions based on available features

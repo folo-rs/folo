@@ -157,3 +157,5 @@ mod linux {
         benchmarks = [write_set_global_first_touch, write_set_global_warm]
     );
 }
+
+::testing::set_allocator!();

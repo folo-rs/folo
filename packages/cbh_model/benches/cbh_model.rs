@@ -69,3 +69,5 @@ fn storage_key(c: &mut Criterion) {
 
     group.finish();
 }
+
+::testing::set_allocator!();

@@ -406,3 +406,5 @@ fn nested_spawn_with_fake_hardware() {
         assert_eq!(block_on(inner_handle), 99);
     });
 }
+
+::testing::set_allocator!();

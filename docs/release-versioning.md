@@ -65,6 +65,12 @@ effects are resolved before application, which installs the captured state witho
 dependency refresh. Human review of the complete PR is the approval step. Merge publishes only
 publishable packages.
 
+After applying workspace version changes, refresh any standalone fixture lockfiles that consume
+the changed path packages. The benchmark caller has an independent lockfile; root-workspace
+resolution cannot validate it. `just verify-lockfile` checks both workspaces before committing.
+Follow the clean-checkout preflight in
+[`build-and-tooling.md`](build-and-tooling.md) before collecting synthetic history.
+
 Every PR description carries a current **Version/release plan** section covering every package
 and group the plan reaches, including retained pending increments and necessary dependent/group
 movements. It states previous and proposed versions, substantive change levels, and reasons, or

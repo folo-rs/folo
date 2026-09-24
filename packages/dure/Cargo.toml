@@ -2,7 +2,7 @@
 name = "dure"
 description = "Detachable Windows console sessions that outlive the terminal"
 publish = true
-version = "0.2.10"
+version = "0.2.11"
 
 authors.workspace = true
 edition.workspace = true
@@ -61,12 +61,13 @@ allowed_external_types = [
 # integration tests use to drive the real PAL. Not part of the product.
 private-test-util = []
 
-# Every dependency is Windows-only because the crate itself is: a non-Windows build compiles to a
-# stub that only reports the unsupported platform (docs/implementation.md, "Platform gate"), so
-# declaring them unconditionally would make them genuinely unused there.
+[dependencies]
+mimalloc = { workspace = true }
+
+# Console dependencies are Windows-only; the unsupported-platform binary still
+# selects the workspace allocator. Ref: docs/implementation.md, "Platform gate".
 [target.'cfg(windows)'.dependencies]
 clap = { workspace = true, features = ["derive"] }
-mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
 rand = { workspace = true, features = ["thread_rng"] }
 serde = { workspace = true, features = ["derive"] }
@@ -86,17 +87,16 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell",
 ] }
 
-# The non-Windows stub carries a mutation skip of its own, so unlike every other
-# dependency this one is named on both platforms.
+# The stub's mutation annotation and executable allocator are used on both platforms.
 [dev-dependencies]
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(windows)'.dev-dependencies]
 dure-test-helper = { path = "../dure-test-helper" }
 mockall = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
-testing = { path = "../testing" }
 
 # The end-to-end Windows suite needs the test support above, which is not part of the product and
 # is therefore behind a feature. The CLI suite drives `--store-root`, which is behind the same

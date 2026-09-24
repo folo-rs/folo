@@ -100,3 +100,5 @@ mod linux {
         ]
     );
 }
+
+::testing::set_allocator!();

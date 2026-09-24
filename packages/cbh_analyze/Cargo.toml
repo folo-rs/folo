@@ -4,7 +4,7 @@
 name = "cbh_analyze"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.16"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -70,6 +70,7 @@ cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 tick = { workspace = true, features = ["test-util"] }
 
 [lints]

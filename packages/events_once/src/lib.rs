@@ -318,3 +318,6 @@ pub use lake::*;
 pub use pool::*;
 #[cfg(test)]
 pub(crate) use reentrancy::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

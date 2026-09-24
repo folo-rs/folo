@@ -2,7 +2,7 @@
 name = "folo_utils"
 description = "Utilities for internal use in Folo packages; no stable API surface"
 publish = true
-version = "0.1.13"
+version = "0.1.14"
 
 authors.workspace = true
 edition.workspace = true
@@ -31,6 +31,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true
