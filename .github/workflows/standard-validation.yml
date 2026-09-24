@@ -53,6 +53,7 @@ jobs:
       packages_json: ${{ steps.compute.outputs.packages_json }}
       skip_all: ${{ steps.compute.outputs.skip_all }}
       script_domains: ${{ steps.scripts.outputs.domains }}
+      benchmark_canary: ${{ steps.scripts.outputs.benchmark_canary }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,7 +68,8 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/build/ValidationPlan.psm1 -Force
           $eventData = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -AsHashtable
-          $plan = Get-ValidationWorkflowPlan -EventName $env:GITHUB_EVENT_NAME -EventData $eventData -Ref $env:GITHUB_REF -Verbose
+          $plan = Get-ValidationWorkflowPlan -EventName $env:GITHUB_EVENT_NAME -EventData $eventData `
+            -Ref $env:GITHUB_REF -Repository $env:GITHUB_REPOSITORY -Verbose
           "plan=$(ConvertTo-Json -InputObject $plan -Compress)" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
 
@@ -115,13 +117,42 @@ jobs:
           $domains = @(Get-ValidationScriptDomain -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose)
           "domains=$(ConvertTo-Json -InputObject $domains -Compress)" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          $canary = Get-ValidationCanarySelection -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose
+          "check_fixture=$(ConvertTo-Json -InputObject $canary.check_fixture -Compress)" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "benchmark_canary=$(ConvertTo-Json -InputObject $canary.run_hosted -Compress)" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Verify standalone caller inputs
+        # No credentials are needed: fork PRs also reject stale nested lockfiles before
+        # measurement can dirty the checkout. Ref: implementation.md#reusable-workflow-canary.
+        if: steps.scripts.outputs.check_fixture == 'true'
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just verify-caller-fixture
+
+  # Reuse the full caller contract, not an advisory cross-workflow status. Its result joins
+  # required-checks only through this workflow's needs graph; scope/trust are reconstructed
+  # by the fan-in. Ref: implementation.md#reusable-workflow-canary.
+  benchmark-canary:
+    needs: prepare
+    if: needs.prepare.outputs.benchmark_canary == 'true'
+    uses: ./.github/workflows/benchmark-action-canary.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      issues: write
 
   # Script tests and static analysis share setup, retaining their independent input selections.
   # An empty Cargo delta cannot discard script inputs.
   # Ref: .github/workflows/implementation.md#non-cargo-change-planning.
   test-scripts:
     needs: prepare
-    if: needs.prepare.outputs.script_domains != '[]' || fromJSON(needs.prepare.outputs.plan).script_analysis
+    if: needs.prepare.outputs.script_domains != '[]' || fromJSON(needs.prepare.outputs.plan).script_analysis || fromJSON(needs.prepare.outputs.plan).bicep
     runs-on: ubuntu-latest
 
     steps:
@@ -140,6 +171,17 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           just validate-scripts
+
+      # Bicep owns syntax/type/API-version checks; the shared recipe rejects warning diagnostics.
+      # No Azure login or deployment occurs. Ref: .github/workflows/implementation.md#bicep-validation.
+      - name: Validate Bicep templates and parameters
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && fromJSON(needs.prepare.outputs.plan).bicep }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just validate-bicep
 
       - name: Run script test suites
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.script_domains != '[]' }}
@@ -162,6 +204,14 @@ jobs:
         with:
           name: script-analysis-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/script-analysis
+          if-no-files-found: ignore
+
+      - name: Retain Bicep diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: bicep-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/bicep-validation
           if-no-files-found: ignore
 
   # Reuse the pinned standalone installers without restoring the Rust development environment.
@@ -640,6 +690,7 @@ jobs:
       - prepare
       - test-scripts
       - validate-workflows
+      - benchmark-canary
       - validate-versions
       - clippy-dev-docs
       - test-x64
@@ -686,6 +737,7 @@ jobs:
       - prepare
       - test-scripts
       - validate-workflows
+      - benchmark-canary
       - validate-versions
       - clippy-dev-docs
       - test-x64

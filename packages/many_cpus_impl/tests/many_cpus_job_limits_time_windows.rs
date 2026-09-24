@@ -69,3 +69,5 @@ fn obeys_processor_time_limits() {
 
     drop(job);
 }
+
+::testing::set_allocator!();

@@ -1,6 +1,6 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Checks relationships between validation fan-ins, dependencies and job definitions
+# Checks relationships between workflow outputs, validation fan-ins, dependencies and job definitions
 # without invoking GitHub jobs or freezing workflow settings as test literals.
 # Ref: .github/workflows/implementation.md#merge-blocking-result.
 Set-StrictMode -Version Latest
@@ -12,6 +12,12 @@ BeforeAll {
     $script:standard = Get-Content -LiteralPath (Join-Path $root '.github/workflows/standard-validation.yml') -Raw
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
+    $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
+    $script:benchmarkWorkflows = @(
+        foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
+            Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
+        }
+    )
     Import-Module (Join-Path $PSScriptRoot 'RequiredChecks.psm1') -Force
 
     function Get-WorkflowJob([string] $Workflow, [string] $Name) {
@@ -55,6 +61,26 @@ BeforeAll {
     function Get-MustSucceedJob([string] $FanIn) {
         return [regex]::Match($FanIn, '(?m)^\s+MUST_SUCCEED_JOBS: ([^\r\n]+)').Groups[1].Value -split '\s+'
     }
+
+    function Assert-WorkflowIdentityHandoff([string] $Workflow) {
+        foreach ($name in @(Get-WorkflowJobName $Workflow)) {
+            $job = Get-WorkflowJob $Workflow $name
+            if ($job -notmatch '(?m)^    uses: .*cargo-bench-history-action/') { continue }
+
+            # Only job-output bindings can be lost through Azure login masking.
+            # Repository variables need no producer; storage ordering is a separate concern.
+            $inputs = [regex]::Matches($job,
+                '(?m)^      azure-(?:client|tenant)-id: \$\{\{ needs\.(?<job>[a-z][a-z0-9-]*)\.outputs\.(?<output>[a-z][a-z0-9-]*) \}\}')
+            foreach ($inputReference in $inputs) {
+                $producerName = $inputReference.Groups['job'].Value
+                $outputName = $inputReference.Groups['output'].Value
+                @(Get-WorkflowJobDependency $job) | Should -Contain $producerName
+                $producer = Get-WorkflowJob $Workflow $producerName
+                $producer | Should -Match ('(?m)^      ' + [regex]::Escape($outputName) + ': ')
+                $producer | Should -Not -Match '(?m)^\s+(?:- )?uses: azure/login@'
+            }
+        }
+    }
 }
 
 Describe 'Workflow dependency extraction' {
@@ -73,7 +99,7 @@ Describe 'Workflow dependency extraction' {
 
 Describe 'Validation job references' {
     It 'resolves every declared prerequisite within its workflow' {
-        foreach ($workflow in @($standard, $deep, $queue)) {
+        foreach ($workflow in (@($standard, $deep, $queue) + $benchmarkWorkflows)) {
             $jobNames = @(Get-WorkflowJobName $workflow)
             foreach ($name in $jobNames) {
                 $job = Get-WorkflowJob $workflow $name
@@ -82,6 +108,62 @@ Describe 'Validation job references' {
                     $dependency | Should -Not -Be $name
                 }
             }
+        }
+    }
+}
+
+Describe 'Benchmark caller identity handoff' {
+    BeforeAll {
+        # Synthetic workflows exercise the relationship check independently of repository settings.
+        $script:identityOutputWorkflow = @'
+jobs:
+  identities:
+    runs-on: ubuntu-latest
+    outputs:
+      client-id: ${{ steps.ids.outputs.client }}
+    steps:
+      - uses: example/read-identifiers@v1
+  storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v3
+  collect:
+    needs: identities
+    uses: example/cargo-bench-history-action/.github/workflows/history.yml@v1
+    with:
+      azure-client-id: ${{ needs.identities.outputs.client-id }}
+      azure-tenant-id: ${{ vars.TENANT_ID }}
+'@
+    }
+
+    It 'accepts repository variables without prerequisite jobs' {
+        $workflow = @'
+jobs:
+  collect:
+    uses: example/cargo-bench-history-action/.github/workflows/history.yml@v1
+    with:
+      azure-client-id: ${{ vars.CLIENT_ID }}
+      azure-tenant-id: ${{ vars.TENANT_ID }}
+'@
+        { Assert-WorkflowIdentityHandoff $workflow } | Should -Not -Throw
+    }
+
+    It 'accepts an unmasked producer without depending on unrelated login jobs' {
+        { Assert-WorkflowIdentityHandoff $identityOutputWorkflow } | Should -Not -Throw
+    }
+
+    It 'rejects <Case> for a job-output identity binding' -ForEach @(
+        @{ Case = 'an undeclared dependency'; Before = '    needs: identities'; After = '' }
+        @{ Case = 'an undeclared output'; Before = '      client-id:'; After = '      other-id:' }
+        @{ Case = 'a masking producer'; Before = 'example/read-identifiers@v1'; After = 'azure/login@v3' }
+    ) {
+        $workflow = $identityOutputWorkflow.Replace($Before, $After)
+        { Assert-WorkflowIdentityHandoff $workflow } | Should -Throw
+    }
+
+    It 'validates actual cross-job identity bindings without imposing an execution graph' {
+        foreach ($workflow in $benchmarkWorkflows) {
+            Assert-WorkflowIdentityHandoff $workflow
         }
     }
 }
@@ -118,6 +200,56 @@ Describe 'Standard validation dependency relationships' {
                 if ((Get-WorkflowJob $workflow $job) -notmatch '(?m)^    if:') {
                     $mustSucceed | Should -Contain $job
                 }
+            }
+        }
+    }
+
+    Describe 'Required reusable canary relationships' {
+        It 'keeps backfill calls in distinct configuration-keyed concurrency groups' {
+            $configs = @(foreach ($name in @('backfill', 'rolling-backfill', 'no-eligible-backfill')) {
+                    $job = Get-WorkflowJob $canary $name
+                    $config = [regex]::Match($job, '(?m)^      config: ([^\r\n]+)').Groups[1].Value
+                    $config | Should -Not -BeNullOrEmpty
+                    Test-Path -LiteralPath (Join-Path $root ".github/fixtures/bench-history-caller/$config") |
+                        Should -BeTrue
+                    $config
+                })
+            @($configs | Sort-Object -Unique).Count | Should -Be $configs.Count
+        }
+
+        It 'has one reusable entry point selected by Standard validation rather than duplicate event runs' {
+            @(Get-WorkflowEvent $canary) | Should -Be @('workflow_call')
+            $caller = Get-WorkflowJob $standard 'benchmark-canary'
+            $calledPath = [regex]::Match($caller, '(?m)^    uses: ([^\r\n]+)').Groups[1].Value
+            (Get-Content -LiteralPath (Join-Path $root $calledPath) -Raw) | Should -Be $canary
+            @(Get-WorkflowJobDependency $caller) | Should -Contain 'prepare'
+            $output = [regex]::Match($caller, 'needs\.prepare\.outputs\.([a-z_]+)').Groups[1].Value
+            $output | Should -Not -BeNullOrEmpty
+            (Get-WorkflowJob $standard 'prepare') | Should -Match ('(?m)^      ' + [regex]::Escape($output) + ': ')
+            @(Get-WorkflowJobName $queue) | Should -Not -Contain 'benchmark-canary'
+        }
+
+        It 'propagates every contract job failure, cancellation, unexpected skip or absence' {
+            $fanIn = Get-WorkflowJob $canary 'result'
+            $dependencies = @(Get-WorkflowJobDependency $fanIn)
+            $mustSucceed = @(Get-MustSucceedJob $fanIn)
+            $checks = @(Get-WorkflowJobName $canary | Where-Object { $_ -ne 'result' })
+            @($dependencies | Sort-Object) | Should -Be @($checks | Sort-Object)
+            @($mustSucceed | Sort-Object) | Should -Be @($checks | Sort-Object)
+            $results = @{}
+            foreach ($name in $checks) { $results[$name] = @{ result = 'success' } }
+            { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $mustSucceed } |
+                Should -Not -Throw
+            foreach ($name in $checks) {
+                foreach ($result in @('failure', 'cancelled', 'skipped', 'unknown')) {
+                    $results[$name].result = $result
+                    { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $mustSucceed } |
+                        Should -Throw
+                }
+                $results.Remove($name)
+                { Assert-RequiredCheck -NeedsJson (ConvertTo-Json $results) -MustSucceedJob $mustSucceed } |
+                    Should -Throw
+                $results[$name] = @{ result = 'success' }
             }
         }
     }

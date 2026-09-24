@@ -2,7 +2,7 @@
 name = "linked_macros_impl"
 description = "Internal dependency of the 'linked_macros' package - do not reference directly"
 publish = true
-version = "1.0.24"
+version = "1.0.25"
 
 authors.workspace = true
 edition.workspace = true
@@ -34,6 +34,7 @@ quote = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing", "printing"] }
 
 [dev-dependencies]
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

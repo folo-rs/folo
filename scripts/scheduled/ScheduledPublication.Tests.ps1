@@ -137,6 +137,7 @@ Describe 'Large report publication recovery' {
                         $script:issueAttempts++
                         $script:issues = @(@{
                             number = 50; body = $Body.body; comments = 0; state = 'open'
+                            title = $Body.title
                             html_url = 'https://github.com/example/repo/issues/50'
                         })
                         return $script:issues[0]
@@ -173,9 +174,11 @@ Describe 'Large report publication recovery' {
                     '/artifacts\?per_page=100&page=1$' { return @{ artifacts = @(1..30 | ForEach-Object { @{
                         id = $_; name = "scheduled-result-10-1-check-$_"; expired = $script:expired
                     } }) } }
-                    '/issues\?state=all&labels=scheduled-run-failure&per_page=100&page=1$' { return ,$script:issues }
+                    '^search/issues\?.*&page=1$' {
+                        return @{ items = $script:issues; total_count = $script:issues.Count; incomplete_results = $false }
+                    }
+                    '^repos/example/repo/issues/50$' { return $script:issues[0] }
                     '/issues/50/comments\?per_page=100&page=1$' { return ,$script:comments.ToArray() }
-                    '/labels\?per_page=100&page=1$' { return ,@(@{ name = 'scheduled-run-failure' }) }
                     default { throw "Unexpected read: $Endpoint" }
                 }
             }

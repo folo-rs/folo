@@ -17,3 +17,5 @@ async fn main() {
 
     assert_eq!(task3.await.await, 55);
 }
+
+::testing::set_allocator!();

@@ -48,6 +48,17 @@ a CI-only entry point (driven by the release workflow); never run it manually.
 Do **not** use VS Code tasks, relying instead on `just` and, if necessary, `cargo`
 commands.
 
+The benchmark caller under `.github/fixtures/bench-history-caller` is a standalone Cargo
+workspace. Root-workspace lockfile checks do not cover it. After moving its path dependencies,
+refresh its lock with `cargo update --manifest-path .github/fixtures/bench-history-caller/Cargo.toml
+--offline --workspace`. `just verify-lockfile` checks both workspaces during local version planning.
+After committing, run `just verify-caller-fixture` from the clean checkout.
+This uses full locked metadata and rejects dirty inputs rather than repairing them during
+collection. The synthetic benchmark emits fixed data, not timed measurements; use
+`cargo bench --manifest-path .github/fixtures/bench-history-caller/Cargo.toml --locked --bench synthetic -- --test`
+for a local smoke run. The hosted canary checks the actual head and its first parent, so both
+must carry consistent fixture locks.
+
 ## Validating changes
 
 Validate changes via `just validate-local`. This runs a number of different checks
@@ -138,6 +149,9 @@ whether the checks pass.
 The policy lives in `codecov.yml`. Statuses and comments are posted only after all
 coverage-producing jobs finish, so they reflect the complete set of reports.
 
+For Codecov verification-key import failures, follow the
+[Triage guide](triage.md#codecov-verification-key-import-failures).
+
 ### Coverage target selection
 
 `coverage-measure` uses Cargo's `--tests --examples` selection. `--tests` includes
@@ -172,6 +186,28 @@ samples or performing statistical analysis. The watchdog is a last-chance
 safeguard, not the expected execution budget. If it fires, the runner retains and
 prints partial child output to identify the last completed phase.
 
+## Bicep validation
+
+`just validate-bicep` compiles maintained `.bicep` and `.bicepparam` inputs under `infra/`
+and the embedded `cargo-bench-history` Azure bundle. It uses the compiler pinned by
+`BICEP_VERSION`, installed through `just install-bicep` (also part of `just install-tools`).
+The check neither signs in to Azure nor deploys or queries resources.
+
+Compilation validates syntax and resource types against that compiler's API catalog.
+The root `bicepconfig.json` also enables `use-recent-api-versions`. Compiler and linter
+warnings fail the check alongside errors; SARIF diagnostics and generated ARM JSON stay
+under `target/bicep-validation`, not beside source files.
+
+The API catalog is an offline check, not proof that an API is available in a particular
+subscription/region or that deployment permissions and policy allow it. Real deployment
+still performs Azure's own validation. Update the compiler pin deliberately when its
+catalog needs newer resource definitions.
+
+Standard validation selects this check for changed Bicep inputs, compiler configuration
+or invocation code and runs it inside the existing script-validation job. Main and deep
+validation retain full scope. See
+[workflow implementation](../.github/workflows/implementation.md#bicep-validation).
+
 ## Multiplatform codebase
 
 This is a multiplatform codebase. In some packages you will find folders named
@@ -205,6 +241,9 @@ best-effort coverage; this policy does not change their commands or reporting, t
 observed failures into passes, or bypass required CI checks.
 
 ## Automation language and boundaries
+
+For issue classification, discovery scope and repeatable notifications, follow
+the [automation guidelines](automation.md).
 
 Prefer **nonpublished Rust utilities** for automation logic, especially structured
 configuration parsing, data transformations and policy decisions. Reuse workspace
@@ -276,7 +315,11 @@ strict mode once at the top rather than per function.)
 ### PowerShell linting
 
 `just validate-scripts` runs [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
-over everything under `scripts/`, gating on Error/Warning findings. The rule set lives in
+over everything under `scripts/`, `infra/azure-bench-history-prod/`, and the embedded deployment bundle under
+`packages/cargo-bench-history/src/azure_bundle/`, together with that package's native
+PowerShell fixtures, gating on Error/Warning findings. The bundle is shipped application
+code even though its driver executes in PowerShell.
+The rule set lives in
 `PSScriptAnalyzerSettings.psd1`, supplemented by repo-local custom rules in
 `scripts/analyzer/FoloAnalyzerRules.psm1` - which catch classes the built-in rules (and strict
 mode) miss, such as a `foreach` whose loop variable case-insensitively collides with the

@@ -22,5 +22,9 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 mod cli;
+mod setup_azure;
 
 pub use cli::{Cli, EarlyExit};
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -26,7 +26,8 @@ use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
 use cbh_render::{
-    Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render, render_markdown_summary,
+    AnalysisOutcome, Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render,
+    render_markdown_summary,
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
@@ -214,6 +215,7 @@ where
         options.markdown.as_deref(),
         options.json.as_deref(),
         options.markdown_summary.as_deref(),
+        options.outcome.as_deref(),
     )?;
     let selection = Selection::from_analyze(options);
     let filter = SeriesFilter {
@@ -394,7 +396,6 @@ where
         tip_commit: &dataset.tip_commit,
         tip_dirty: dataset.tip_dirty,
         mode: dataset.mode,
-        notable,
         runs: dataset.run_index.total(),
         series: series.len(),
         commit_span: dataset.run_index.commit_span(),
@@ -406,8 +407,10 @@ where
         ghosts_excluded,
         census,
     };
+    let outcome = AnalysisOutcome::from_analysis(notable, &Coverage::from_census(&input.census));
     let render_started = Instant::now();
     let rendered = request.render_analyze(
+        outcome,
         |format| render(&input, format, color),
         || render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
     );
@@ -1036,6 +1039,14 @@ mod tests {
         let report = rendered
             .json
             .expect("the JSON report was rendered for the requested path");
+        let outcome = rendered.outcome.expect("analysis returns a typed outcome");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["outcome"], outcome.as_str(), "{report}");
+        assert_eq!(
+            parsed["notable"],
+            outcome == AnalysisOutcome::Findings,
+            "{report}"
+        );
         (report, regressions)
     }
 
@@ -1243,21 +1254,69 @@ mod tests {
     #[test]
     #[cfg_attr(
         miri,
-        ignore = "the positive notable control loads a full history through detection and rendering"
+        ignore = "the findings outcome loads a full history through detection and rendering"
     )]
-    fn json_notable_flag_reflects_whether_findings_survived() {
-        // The `notable` signal appears only in the JSON report (the text report
-        // keys off the finding list directly), so assert it there.
+    fn analysis_outcome_reports_surviving_findings() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let (report, regressions) =
             analyze_quiet_json(&history_git(), &storage, "folo", &options());
         assert_eq!(regressions, 1);
-        assert!(report.contains("\"notable\": true"), "{report}");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_history_was_judged(&parsed);
+        assert_eq!(parsed["outcome"], "findings", "{report}");
+        assert_eq!(parsed["findings"].as_array().unwrap().len(), 1, "{report}");
+    }
 
-        let empty = MemoryStorage::new();
-        let (report, _) = analyze_quiet_json(&linear_git(), &empty, "folo", &options());
-        assert!(report.contains("\"notable\": false"), "{report}");
+    #[test]
+    fn analysis_outcome_reports_nothing_in_scope_for_empty_history() {
+        let storage = MemoryStorage::new();
+        let (report, regressions) = analyze_quiet_json(&linear_git(), &storage, "folo", &options());
+        assert_eq!(regressions, 0);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["outcome"], "nothing_in_scope", "{report}");
+        assert_eq!(parsed["census"]["total"], 0, "{report}");
+        assert!(
+            parsed["findings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn analysis_outcome_reports_insufficient_baseline_for_unjudged_history() {
+        let storage = MemoryStorage::new();
+        // A measurement at the tip stays in scope but cannot establish a baseline.
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
+        let (report, regressions) = analyze_quiet_json(&linear_git(), &storage, "folo", &options());
+        assert_eq!(regressions, 0);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["outcome"], "insufficient_baseline", "{report}");
+        assert_eq!(parsed["census"]["total"], 1, "{report}");
+        assert_eq!(parsed["census"]["judged"], 0, "{report}");
+        assert!(
+            parsed["findings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "a clean outcome requires decoding the detector's full minimum-length history"
+    )]
+    fn analysis_outcome_reports_clean_only_after_judging_history() {
+        let storage = MemoryStorage::new();
+        seed_master(&storage, &[100.0; HISTORY_COMMITS]);
+        let (report, regressions) =
+            analyze_quiet_json(&history_git(), &storage, "folo", &options());
+        assert_eq!(regressions, 0);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_history_was_judged(&parsed);
+        assert_eq!(parsed["outcome"], "clean", "{report}");
+        assert!(
+            parsed["findings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
     }
 
     #[test]
@@ -1831,6 +1890,11 @@ mod tests {
             analyze_json(&history_git(), &storage, "folo", &options());
         assert_eq!(regressions, 0);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["outcome"], "partial", "{report}");
+        assert!(
+            parsed["findings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
         let census = &parsed["census"];
         assert_eq!(census["total"], 3, "{report}");
         assert_eq!(census["judged"], 1, "{report}");
@@ -1888,6 +1952,7 @@ mod tests {
             &options(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["outcome"], "nothing_in_scope", "{report}");
         assert_eq!(parsed["ghosts_excluded"], 1, "one benchmark: {report}");
         assert_eq!(parsed["series"], 0, "none survived the filter: {report}");
         assert_eq!(parsed["census"]["total"], 2, "two series: {report}");
@@ -1954,6 +2019,8 @@ mod tests {
             analyze_json(&branch_git(), &storage, "folo", &options());
         assert_eq!(regressions, 1, "the measured metric still moved: {report}");
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["outcome"], "findings", "{report}");
+        assert_eq!(parsed["findings"].as_array().unwrap().len(), 1, "{report}");
         assert_eq!(parsed["census"]["total"], 2, "{report}");
         assert_eq!(parsed["census"]["judged"], 1, "{report}");
         assert_eq!(

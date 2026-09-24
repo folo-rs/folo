@@ -10,3 +10,6 @@ mod target_dir;
 pub use file_name::*;
 pub use span_accumulator::*;
 pub use target_dir::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

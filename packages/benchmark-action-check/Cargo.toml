@@ -1,0 +1,29 @@
+[package]
+name = "benchmark-action-check"
+description = "Checks whether a verified monorepo release needs benchmark-action coordination"
+publish = false
+version = "0.0.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+mimalloc = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+mutants = { workspace = true }
+tempfile = { workspace = true }
+testing = { path = "../testing" }
+
+[lints]
+workspace = true

@@ -65,3 +65,5 @@ fn main() {
 
     println!("All threads have finished processing log lines.");
 }
+
+::testing::set_allocator!();

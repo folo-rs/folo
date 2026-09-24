@@ -1,0 +1,433 @@
+# Implementation
+
+Pure marker and message composition is synchronous. Lifecycle orchestration is generic over the
+`GitHub` port; unit tests use an in-memory fake and `futures::executor::block_on`, with no runtime,
+network or real-time delay. The production `RestGitHub` adapter is the only HTTP boundary.
+Repository identities are validated as literal owner/name path segments before REST URL
+construction, rejecting dot components as well as separators and escape syntax.
+
+The port exposes semantic GitHub operations—title search, issue reads, comment listing, create,
+update, compare and read the pull-request head—rather than a raw HTTP passthrough. Idempotent
+operations retry transient failures in the adapter. Creates never retry blindly: orchestration
+reconciles the intended identity and content after an error.
+
+The binary is a thin Clap and Tokio entry point. `lib.rs` and `main.rs` contain only crate-level
+documentation, attributes, re-exports and entry-point wiring.
+
+The file-backed online command dispatcher accepts the GitHub port and clock independently of
+process setup. Native integration scenarios use the same dispatcher with ordinary report files,
+an in-memory GitHub port and a frozen clock. They observe publication snapshots after each command,
+so argument wiring and terminal transitions are covered without credentials or network writes.
+
+Collection receipt loading accepts the artifact downloader's direct single-artifact layout
+as well as its per-artifact directories. Each selected layout remains receipt-only; platform,
+run, attempt and commit identity come from validated receipt contents and job reconciliation,
+not directory names.
+
+## Workflow job history
+
+GitHub's all-attempts job listing includes copies of successful jobs reused by later
+workflow attempts. Such copies have new job IDs and `run_attempt` values while retaining
+the original execution's start and completion times.
+
+The REST adapter validates complete pagination before processing snapshots in attempt order.
+For a successful job reported in a later attempt, it reads that attempt's `run_started_at`.
+A job completed before that boundary is reused work only when an earlier snapshot contains
+the same job name and execution interval. The copy is omitted, retaining the original
+execution attempt for receipt matching. Missing original evidence or ambiguous timing is
+an error rather than permission to use an older receipt.
+
+Genuine successful retries retain their own attempt and require their own receipt.
+Unfinished and unsuccessful snapshots remain authoritative, so a failed retry still
+invalidates older success. Skipped jobs can have synthetic timing fields; those fields do
+not establish successful collection. The receipt format and the semantic job/receipt
+reconciliation rules are unchanged.
+
+## Root action boundary
+
+The `action` entry point separates strict string-object parsing and command planning from
+filesystem, process, environment and GitHub adapters. An in-memory host records process
+arguments and supplies files and dedicated command responses; publication has a separate
+port so offline commands cannot construct the credentialed adapter. Native integration tests
+exercise real Git, configuration loading, persistent temporary reports and an executable
+fixture without running benchmark engines or network operations.
+
+Namespace resolution calls `cbh_config`'s configuration-path, configuration-loading and project-ID
+helpers, then `cbh_model`'s storage-segment normalization. Compatible version-plus-path
+dependencies reuse that behavior without declaring a lockstep release group with the core.
+No core types enter this package's public API.
+
+The action planner translates publication input names into the existing typed CLI argument
+groups and uses the same lifecycle dispatcher. Analysis output projection uses the existing
+validated report and platform evidence, not Markdown interpretation. The report's regression
+tally is passed through as data; findings and unjudged-reason vocabulary remain core-owned.
+The temporary outcome file is an internal consistency check against JSON. Callers receive
+the validated verdict as the scalar `outcome` output; it is not an additional report-path API.
+
+Native process invocation uses argument vectors, an explicit working directory and inherited
+streams for the main work. Child processes inherit the caller's environment, including
+variables used by private dependency helpers or benchmarks. Explicit process-local overrides
+are applied without changing the companion's global environment. Only dedicated Git and machine-key
+commands capture stdout; stderr remains visible. Report directory creation is unique and atomic,
+outside the canonical Git checkout, and ownership persists beyond the command for artifact upload.
+
+Workflow output paths are a separate representation from native canonical paths. The output
+projection uses `dunce` to simplify Windows drive paths only when their ordinary spelling
+preserves their meaning. It rejects remaining verbatim paths rather than giving the artifact
+uploader a root containing glob syntax. The same projection reserves wildcard and character-class
+syntax on every platform, and backslash escapes on non-Windows platforms. It does not emit escaped
+glob patterns because report readers also consume these outputs as literal file paths.
+The uploader's `@actions/glob` configuration disables brace expansion and extended matching
+operators; literal braces, closing brackets and parentheses do not require rejection.
+See [artifact file discovery](https://github.com/actions/upload-artifact/blob/v7/src/shared/search.ts)
+and the [pinned glob matcher](https://cdn.jsdelivr.net/npm/@actions/glob@0.6.1/lib/internal-pattern.js).
+Native I/O, existing-ancestor resolution and checkout containment continue using the original
+canonical paths; no filesystem case-folding is added.
+
+See [action execution](action.md) for the bootstrap invocation and input/output contract.
+
+### Compiler-flag composition
+
+Collection and backfill compose additional flags once before execution. An omitted or empty
+input neither reads nor overrides ambient flags. Otherwise, ambient encoded flags are retained
+verbatim when present; ordinary ambient flags and additional input use Cargo's whitespace
+splitting. The arguments are joined with Cargo's reserved encoded separator and supplied only
+through the child process environment. No shell interpretation or compiler-option normalization
+is involved. In particular, repeated LLVM alignment options use rustc's last-occurrence behavior.
+
+The collection process and its subsequent machine-key query reuse the same override so measurement
+and receipt capture share their execution context. Backfill descendants inherit it, including
+historical builds whose toolchain selection is independently managed by the core runner.
+Git queries, analysis and publication do not request compiler-flag overrides.
+
+## Execution scale
+
+The companion operates on workflow control data, not the stored benchmark series. Root-action
+planning runs once per invocation; collection reconciliation runs once for an analysis
+preparation; lifecycle decisions run once for the selected publication command.
+
+The main size-dependent work is indexing job/receipt attempts, selecting expected platforms,
+and scanning or composing a single report/comment body. Reconciliation uses ordered indices
+rather than rescanning every job for every platform. Marker interpretation makes fixed-purpose
+passes over the selected body; it does not traverse measurement history. Title search has a
+server-result cap and direct body reads follow exact candidate selection. Job and comment
+pagination still validate the entire returned set; there is no implicit local limit that turns
+incomplete discovery into success.
+
+## Evidence and state transitions
+
+JSON decoding produces a validated analysis report before any publication operation. The
+publication boundary validates the report's mode, frozen commit, outcome and census consistency,
+rejects blank summaries and separately carries collection-platform coverage. Message selection
+uses that typed evidence; it does not scrape Markdown or map the tool's individual
+unjudged-reason vocabulary.
+
+All-clear validation happens before issue lookup or mutation. This makes a contradictory report
+or a missing platform an error even when the rolling issue happens not to exist. The CLI
+supplies the same evidence to findings, clean and inconclusive publication, avoiding independent
+definitions of clean. Output projection selects the publication state once for workflow dispatch.
+The named publication command asserts consistency with its evidence and passes that checked state
+to lifecycle and rendering operations; those operations do not select the state again.
+An explicit empty-scope variant carries no report;
+it cannot be confused with a missing or malformed artifact.
+
+Pending ownership combines workflow run ID, attempt and frozen head. Failed-state publication
+acts only on its own in-progress placeholder or issue annotation. Freshness and distance queries
+are distinct: inability to compute a distance produces an explicit qualification, while a known
+newer result is preserved.
+Attempt supersession compares attempt numbers only when run IDs match; the ownership record
+has no total ordering. Distinct runs use the existing freshness guards, and serialized
+publication order decides which same-commit report remains. No run-number or timestamp lookup
+is needed, and exact failed-state ownership remains independent of that ordering policy.
+For a comment report known to be stale, an existing different owned head is replaced only after
+a positive forward comparison proves the incoming commit advances it. This also protects
+reports and notes that no longer match the live head. Identical heads retain serialized arrival
+ordering, and incoming live-head reports retain their authority. Failure to query the live head
+keeps the explicit freshness-unverified publication path.
+History issue replacement also checks commit ordering: the same commit or a verified forward
+comparison may replace existing findings, while an absent, backward or unknown ordering leaves
+them intact. Both publication and all-clear share this guard.
+Serialized writers can still arrive with out-of-order frozen heads. Preflight preserves reports
+proven newer by a reverse commit comparison; without a proved relationship it retains the
+unknown-distance warning.
+
+Issue inconclusive and failed states share the bounded annotation mechanism rather than replacing
+the previous report. They retain its analyzed-commit identity and freshness qualification.
+Preflight records ownership so delayed terminal work cannot retire a newer pending annotation.
+Inconclusive publication at the pending head can retire that annotation despite an unknown
+distance to the retained report, including when a successful preflight is reused by a later
+run attempt. When inconclusive publication is the first successful publication for a newer
+head, it qualifies the retained report as stale rather than depending on preflight to have
+done so. An existing annotation at
+that head preserves the retained report and its staleness unchanged.
+Absence of an issue is diagnosed after input validation; only findings can create one.
+
+The opaque comment/annotation codec uses `no-data` for the inconclusive disposition.
+Public command names and outputs use `inconclusive`. The stored codec has one accepted spelling,
+not alternate metadata formats; unknown or inconsistent metadata is rejected.
+
+An ambiguous create is reconciled against both the artifact identity and the desired body.
+Finding the same identity with different content is not proof that this publication committed;
+the other content is preserved and the original failure remains visible.
+
+## Report identity and composition
+
+Issue discovery sends a repository-scoped, quoted `in:title` query to GitHub's search endpoint.
+It filters candidate metadata by the exact project-qualified title form, without using the
+rolling date suffix as identity. The selected number is read through the ordinary issue
+endpoint so stale indexed content does not drive a mutation. Comment discovery matches
+instance/kind markers only within the target PR. No operation scans all repository issue bodies
+or relies on author identity, and there is no title-renaming fallback or migration path.
+Comment identity alone does not permit a lifecycle transition without interpretable
+run-attempt ownership.
+
+The search adapter validates `total_count`, `incomplete_results` and pagination before treating
+the result set as complete. It URL-encodes the query and treats project text as a literal search
+value, not additional qualifiers. Multiple exact matches, the search result cap and failed or
+incomplete discovery surface explicitly. An empty index result does not prove the outcome of
+an ambiguous create; bounded reconciliation may still end with the original error. Serializing
+issue writers prevents ordinary concurrent creation, not search-index lag.
+Search rate limits use the adapter's bounded retry policy; authorization and query-validation
+errors are not treated as empty results or transient indexing delays.
+
+The lifecycle context carries repository, internal instance namespace and verbosity only.
+Message composition derives all markers from that namespace and owns the standard titles,
+advisory wording and documentation link. An injected clock supplies the UTC date captured for
+an issue body update, and retries reuse that date. Title and body are sent together in the
+same issue update. No-op paths do not refresh titles; measured-commit freshness remains in
+the body, independently of the title date. Publication passes the optional artifact URL directly
+as report data alongside validated evidence and the tool-rendered summary.
+
+The clock is `tick::Clock`; calendar conversion uses Jiff with the UTC time zone, never the
+host's local zone. Tests inject frozen instants. Report metadata and the bounded annotation
+are parsed separately, so a pending run's ownership never replaces the retained report's
+ownership or analyzed commit. Malformed and duplicated identity metadata are errors.
+
+Clean issue publication only updates the all-clear body. There is no issue-closing operation
+in the companion. Empty-scope comment publication shares ordinary update/create reconciliation
+and always writes the explanatory note.
+
+One-off alert discovery searches its exact project/run-qualified title and includes closed issues.
+Existing alerts are not updated or reopened. An ambiguous create still requires the exact
+intended body as well as identity to establish success; a different body discovered after
+the failed request is not evidence that the request committed. Distinct run IDs do not
+aggregate into a shared issue, and run attempts do not create additional alert identities.
+
+## HTTP adapter
+
+The semantic port is implemented by a REST adapter over an injected request executor and
+delay provider. Request construction, JSON decoding, pagination, status classification and
+retry decisions run identically with the real executor and a scripted in-memory executor.
+Tests record serialized requests and requested delays without using sockets or a clock.
+
+Idempotent reads and updates retry only transient failures within a bounded attempt and delay
+budget. An acceptable `Retry-After` delay is honored; unsupported or excessive delays are
+reported rather than retried prematurely. Pagination must make progress, and a later page's
+failure remains an error rather than a successful partial list. Comparison distances are
+numeric only for a verified linear forward relationship or identical commits.
+
+Secondary throttling is recognized from GitHub's error message as well as its status and headers.
+Without a supplied delay, retries use GitHub's documented minimum wait; continued throttling
+requires an increasing wait within the same budget. Exhausted primary quota requires an absolute
+reset-time calculation. The adapter has no clock-backed reset policy, so it surfaces that
+response instead of guessing a retry time.
+
+The reqwest boundary disables automatic redirects and retries so they cannot bypass the
+adapter's operation-specific policy. Creates have no blind retry; lifecycle reconciliation
+uses the same REST decoding as ordinary lookup. Credentials are redacted from diagnostic
+representations. Only the actual network and timer primitives are outside in-process tests;
+the request and response policy is not excluded with them.
+
+## Workflow preparation
+
+`prepare-workflow --flow history|pr|backfill --inputs-file PATH --github-output PATH` prepares
+configuration-derived identity, frozen Git revisions, collection platforms and benchmark scope
+before a reusable workflow starts collection. Its JSON contains only string-valued
+`working-directory`, `config`, `platforms` and `exclude` inputs. Backfill additionally accepts
+an exact `from`/`to` range or rolling `lookback`/`minimum-age` with an optional `to` override;
+unknown keys and whitespace-only values are rejected before empty adapter defaults are removed.
+Mode selection then uses the remaining values, rejecting incompatible nonempty inputs before
+any host operations. Preparation is offline:
+it uses the action host's Git/Cargo/filesystem operations, without constructing a GitHub client
+or reading storage credentials.
+
+History selects workspace collection. PR preparation freezes the event's real head/base,
+checks the checkout head and computes the merge-base diff. Cargo metadata supplies the member
+directory boundaries. The detector's read-only query resolves the nearest declared member,
+not an independent fixture manifest below it. Deleted files retain their surviving member;
+paths outside all declared members and removed members select workspace scope.
+The companion expands reverse path dependents across dependency kinds
+and conditions, then filters explicit benchmark targets and exclusions. Visited membership
+bounds cyclic dependency traversal. The native adapters and in-memory action host execute the
+same orchestration.
+
+History and PR emit canonical instance, matrix, expected platforms and collection-job prefix,
+plus head/base, concrete package CSV, `skip-all` and `skipped`. An empty PR scope does not reach
+collection as an empty package input, which would otherwise select workspace. A fork policy skip
+is separate from empty scope and does not authorize publication. History invoked from a
+same-repository PR also uses the real PR head, not a synthetic merge commit.
+
+Backfill uses the shared namespace/platform normalization but does not derive work from the
+invocation head's Cargo metadata: a historical workspace can contain benchmarks absent there.
+After checking full history and the frozen event checkout, option-safe Git resolution freezes
+exact endpoints and rolling overrides. Rolling selection takes one snapshot from an injected
+`tick::Clock`; native preparation constructs a Tokio clock and tests supply a frozen clock.
+Pure Jiff span parsing takes absolute magnitudes, and UTC zoned calendar subtraction produces
+the minimum-age and now-relative lookback cutoffs. Git owns first-parent traversal and date
+filtering rather than an independently implemented timestamp filter, including its handling of
+nonmonotonic commit dates. Numeric revision-walk age bounds avoid Git's approximate human date
+parser. The inclusive lower bound rounds up and the inclusive upper bound rounds down to Git's
+whole-second commit precision; a subsecond window must not admit an earlier same-second commit.
+A cutoff before Git's Unix epoch admits every commit as a lookback start but no automatic
+endpoint as old enough. An empty endpoint query produces no work; an empty lookback query
+produces the single selected endpoint.
+
+Backfill emits the canonical namespace, matrix, expected platforms, `has-work` and policy-skip
+fields. Only a selected range includes `from` and `to`; an automatic range without an eligible
+endpoint carries `no-work-reason=no-eligible-commit`. A fork skip also sets `has-work=false`.
+The core backfill command validates first-parent membership and owns historical scope and
+traversal. Execution receives explicit frozen endpoints, using the range end for its checkout
+and retaining invocation-owned configuration and tool sources. Native Git selection tests use
+fixed commit dates and an injected clock through the same range planner, independently of
+ambient GitHub event variables and process working-directory changes.
+
+## Workflow evidence adapters
+
+Offline matrix setup and job reconciliation share platform validation and the instance-qualified
+collection-job namespace. Setup emits both the strategy matrix and expected-platform CSV from
+the same validated, sorted set, keeping workflow orchestration free of duplicate parsing rules.
+Report coverage uses the same identifier rule, including rejection of dot-only path components.
+
+Receipt decoding and job reconciliation operate on in-memory values. Filesystem adapters read
+receipt-only artifacts, then materialize machine-key files for only the selected indices after all
+identities and latest-attempt decisions have been validated. Collection and analysis use the
+configured measurement store directly; the companion does not traverse or copy measurement
+objects. Filesystem operations do not retry writes or clean existing destinations.
+
+Destination planning resolves missing paths through their existing canonical ancestors without
+creating directories. Input/output separation and destination suitability are checked before
+materialization. Canonical paths are rechecked after creation to retain filesystem-alias
+protection rather than assuming that distinct spellings imply distinct locations.
+
+One ordered platform/attempt index owns both receipt association and latest-job lookup.
+Duplicate attempts are rejected before selection, so there is no equal-attempt tie-breaker.
+Verbose diagnostics are projected in memory before the stderr adapter emits them, allowing
+complete and partial collection qualifications to be exercised without capturing process output.
+
+Job listing uses `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` with `filter=all`,
+`per_page` and `page` on every request. Its `{total_count, jobs}` envelope differs from issue and
+comment lists. Stable counts, unique job IDs and complete pagination are required. Job identity
+includes positive `run_id` and `run_attempt`; API `head_sha` is deliberately not an analysis-head
+check because GitHub can use a PR merge ref. Receipts bind the explicitly frozen analysis commit.
+The scripted HTTP executor tests real request construction and response decoding without sockets,
+credentials or real delay.
+
+The `private-test-util` feature exposes a deliberately unsupported preparation entry point for
+native integration tests. It injects already-discovered job records and bypasses only HTTP; real
+receipt loading, selection, fresh machine-key destinations and workflow outputs
+execute unchanged. Offline commands also run through the binary without credential environment
+variables. This keeps real filesystem and process coverage outside the unit/Miri harness.
+
+### Command and artifact contract
+
+Common options precede the subcommand: `--repository owner/name`, `--instance ID`, `--verbose`.
+The internal instance input carries the resolved project namespace supplied by workflow setup,
+not a raw arbitrary project ID or consumer-selected action override. Omitting it retains the
+companion's `default` namespace.
+Receipt creation and analysis preparation default the repository from `GITHUB_REPOSITORY`.
+Matrix setup and report inspection need neither a repository nor a GitHub credential.
+
+```text
+cargo-bench-history-github --instance folo workflow-matrix
+  --platforms CSV --github-output PATH
+
+cargo-bench-history-github --repository owner/name --instance folo collection-receipt
+  --run-id N --run-attempt N --head SHA --platform ID
+  --machine-key-file PATH --file ARTIFACT_ROOT\receipt.json
+
+cargo-bench-history-github --repository owner/name --instance folo prepare-analysis
+  --run-id N --head SHA --expected-platforms CSV
+  --receipts-dir DOWNLOAD_ROOT --machine-key-dir KEY_ROOT --github-output PATH
+
+cargo-bench-history-github inspect-report
+  --report-file PATH --analyzed-sha SHA --expected-platforms CSV
+  --completed-platforms CSV --github-output PATH
+```
+
+These examples wrap arguments for readability, not shell execution. SHA is a full
+hexadecimal commit ID. Run IDs and attempts are positive. Machine-key files contain the actual
+16-hex-digit fingerprint, with surrounding command-output whitespace accepted and hexadecimal
+letters normalized to lowercase. Matrix, receipt and preparation platform identifiers use ASCII
+letters, digits, `.`, `_` and `-`, excluding `.` and `..` as entire identifiers.
+
+Lifecycle commands use the same common options and repository fallback. Rolling commands carry
+`--run-id N --run-attempt N`; report-bearing commands use this shared evidence group:
+
+```text
+--body-file PATH --analyzed-sha SHA
+  --report-file PATH --expected-platforms CSV --completed-platforms CSV [--artifact-url URL]
+```
+
+| Command | Additional inputs |
+| --- | --- |
+| `publish-comment-findings` | Report evidence, `--pull-request N --packages CSV` |
+| `publish-comment-clean` | Report evidence, `--pull-request N --packages CSV` |
+| `publish-comment-preflight` | `--pull-request N --packages CSV --head SHA` |
+| `publish-comment-inconclusive` | `--pull-request N`, plus either report evidence and `--packages CSV`, or `--empty-scope --head SHA` |
+| `publish-comment-failed` | `--pull-request N --head SHA --run-url URL --conclusion failure\|cancelled` |
+| `publish-issue-findings` | Report evidence |
+| `publish-issue-clean` | Report evidence |
+| `publish-issue-preflight` | `--head SHA` |
+| `publish-issue-inconclusive` | Either report evidence, or `--empty-scope --head SHA` |
+| `publish-issue-failed` | `--head SHA --run-url URL --conclusion failure\|cancelled` |
+
+`alert --run-id N --run-url URL` uses no report or attempt ownership. Its validated run
+identity determines the one-off title; the URL names that same repository and run.
+
+Matrix setup appends these outputs, with one sorted platform set shared by JSON and CSV:
+
+```text
+matrix={"platform":["linux","windows"]}
+expected-platforms=linux,windows
+instance=folo
+collection-job-prefix=cbh-collect:folo
+```
+
+The collection strategy consumes `matrix`; job names append `:<platform>` to
+`collection-job-prefix`. Later evidence commands consume `expected-platforms` and `instance`
+unchanged. The prefix has no trailing separator.
+
+Download artifacts into separate immediate child directories of `DOWNLOAD_ROOT`, without merging
+artifact contents:
+
+```text
+DOWNLOAD_ROOT\
+  artifact-for-linux\
+    receipt.json
+  artifact-for-windows\
+    receipt.json
+```
+
+Artifact roots contain only `receipt.json`. Distinct historical attempts can be present;
+duplicate receipts for the same platform and attempt are rejected.
+The receipt JSON has `version`, `repository`, `instance`,
+`run_id`, `run_attempt`, `head`, `platform` and `machine_key` fields; unknown fields or versions
+are errors.
+
+Preparation writes `KEY_ROOT\<platform>\machine-key.txt`, compatible with the existing recursive
+key-directory recipe. It appends single-line outputs in this order:
+
+```text
+completed-platforms=linux,windows
+machine-keys=0123456789abcdef
+complete=true
+```
+
+Platform and deduplicated key lists are sorted. `complete` measures platform coverage only.
+The machine-key destination must be absent or empty. `GITHUB_OUTPUT` must be a separate regular
+file with an existing parent directory; output appending preserves earlier workflow values.
+Inspection appends `outcome=<wire value>`, `notable=<bool>`, `can-clear=<bool>` and
+`publication-state=findings|clean|inconclusive`, using lowercase booleans and the tool's existing
+outcome spelling. `can-clear` retains its history-only meaning; `publication-state` also
+serves comment publication. The latter is a projection of existing report/platform evidence,
+not another tool verdict or a caller override.

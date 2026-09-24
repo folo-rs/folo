@@ -2,7 +2,7 @@
 name = "fast_time"
 description = "An efficient low-precision timestamp source suitable for high-frequency querying"
 publish = true
-version = "0.1.32"
+version = "0.1.33"
 
 authors.workspace = true
 edition.workspace = true
@@ -30,6 +30,7 @@ criterion = { workspace = true }
 mockall = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }

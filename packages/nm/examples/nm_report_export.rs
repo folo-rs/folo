@@ -52,3 +52,5 @@ thread_local! {
         .name("bagels_cooked_large")
         .build();
 }
+
+::testing::set_allocator!();

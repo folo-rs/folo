@@ -37,3 +37,5 @@ fn all_the_time_report_api() {
 
     println!("✓ all_the_time Report API works correctly");
 }
+
+::testing::set_allocator!();

@@ -21,3 +21,5 @@ fn main() {
     assert_eq!(deque.poll_front(cx), Poll::Ready(Some(2)));
     assert_eq!(deque.poll_front(cx), Poll::Ready(None));
 }
+
+::testing::set_allocator!();

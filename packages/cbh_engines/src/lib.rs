@@ -40,3 +40,6 @@ pub use bench_output::{
 #[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
 pub mod testing;
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -5,11 +5,13 @@
 - [Installation](installation.md)
 - [Getting started](getting-started.md)
 - [Storage backends](storage.md)
+- [GitHub automation](github-automation.md)
 
 # Commands
 
 - [Overview](commands/index.md)
 - [install](commands/install.md)
+- [setup-azure](commands/setup-azure.md)
 - [collect](commands/collect.md)
 - [backfill](commands/backfill.md)
 - [analyze](commands/analyze.md)

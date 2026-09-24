@@ -32,3 +32,6 @@ pub use resource_quota::*;
 pub use system_hardware::*;
 
 pub mod pal;
+
+#[cfg(test)]
+::testing::set_allocator!();

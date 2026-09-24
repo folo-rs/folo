@@ -33,3 +33,5 @@ fn main() {
 fn print_item(label: &str, item: &impl AsRef<dyn Display>) {
     println!("{}: {}", label, item.as_ref());
 }
+
+::testing::set_allocator!();

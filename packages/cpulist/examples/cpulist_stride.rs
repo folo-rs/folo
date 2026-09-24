@@ -11,3 +11,5 @@ fn main() {
 
     println!("All as cpulist: {all}");
 }
+
+::testing::set_allocator!();

@@ -35,3 +35,6 @@ mod target;
 
 pub use config::*;
 pub use run::run;
+
+#[cfg(test)]
+::testing::set_allocator!();

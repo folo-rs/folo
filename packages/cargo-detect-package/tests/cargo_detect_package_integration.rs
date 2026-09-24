@@ -761,3 +761,5 @@ fn nonexistent_executable_error() {
 
     result.unwrap_err();
 }
+
+::testing::set_allocator!();

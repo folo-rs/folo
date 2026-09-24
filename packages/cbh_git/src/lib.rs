@@ -36,3 +36,6 @@ pub use git_history::{FirstParentCommit, GitHistory, SystemGitHistory};
 pub use process::{
     BenchRunner, CommandOutput, EngineStatus, TokioBenchRunner, capture, capture_in_worktree,
 };
+
+#[cfg(test)]
+::testing::set_allocator!();

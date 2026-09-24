@@ -53,6 +53,7 @@ mod testing;
 
 pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
+pub use cbh_render::AnalysisOutcome;
 pub(crate) use cbh_render::{ReportFormat, chart_series, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
 pub use discriminants::AutoDiscriminants;
@@ -82,3 +83,6 @@ pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
 pub use window::auto_mode;
 pub(crate) use window::{before_since_cutoff, parse_since};
+
+#[cfg(test)]
+::testing::set_allocator!();

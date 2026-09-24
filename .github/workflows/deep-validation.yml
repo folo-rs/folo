@@ -2,7 +2,8 @@ name: Deep validation
 
 on:
   schedule:
-    - cron: 41 2 * * *
+    # Avoid contention with morning work; see design.md#scheduled-validation.
+    - cron: 0 18 * * *
   workflow_dispatch:
 
 permissions:
@@ -40,6 +41,7 @@ jobs:
     uses: ./.github/workflows/standard-validation.yml
     permissions:
       contents: read
+      actions: read
       id-token: write
       issues: write
     secrets:
@@ -54,9 +56,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.platform }}
-    # Mutation work needs its execution allowance plus cold-cache environment setup.
+    # Allow for mutation work per shard plus cold-cache environment setup.
     # Ref: .github/workflows/implementation.md#deep-execution.
-    timeout-minutes: 270
+    timeout-minutes: 360
     # Live captures and native artifacts must stay outside mutation source copies.
     # Capture and always-upload share this path. Ref: implementation.md#deep-execution.
     env:

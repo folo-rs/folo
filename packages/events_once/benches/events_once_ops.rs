@@ -1386,3 +1386,5 @@ fn entrypoint(c: &mut Criterion) {
 
 criterion_group!(benches, entrypoint);
 criterion_main!(benches);
+
+::testing::set_allocator!();

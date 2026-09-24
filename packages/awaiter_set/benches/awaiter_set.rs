@@ -7,10 +7,13 @@
 //! * `register_unregister/with_10_anchors` — same, but the set has 10
 //!   anchor awaiters that remain registered for the duration.
 //! * `register_notify_take/empty` — full lifecycle: register, notify, take.
+//! * `notify_one/empty` — notification miss with no registered awaiters.
 //! * `is_empty/empty` — null-head fast path on an empty set.
 //! * `is_empty/populated` — null-head check on a populated set.
 //! * `notify_one_prior_generation/eligible` — register, advance generation,
 //!   notify prior generation, take notification.
+//! * `notify_one_prior_generation/current_generation_miss` — a nonempty set
+//!   whose awaiter was registered after the generation advanced.
 
 #![allow(missing_docs, reason = "benchmark code")]
 #![allow(
@@ -41,6 +44,7 @@ criterion_main!(benches);
 fn entrypoint(c: &mut Criterion) {
     register_unregister(c);
     register_notify_take(c);
+    notify_one(c);
     is_empty(c);
     notify_one_prior_generation(c);
 }
@@ -131,6 +135,20 @@ fn register_notify_take(c: &mut Criterion) {
     group.finish();
 }
 
+/// Isolates the miss path; successful notification is covered by `register_notify_take`.
+fn notify_one(c: &mut Criterion) {
+    let mut group = c.benchmark_group("awaiter_set/notify_one");
+
+    group.bench_function("empty", |b| {
+        let mut set = AwaiterSet::new();
+        assert!(set.notify_one().is_none());
+        b.iter(|| drop(black_box(black_box(&mut set).notify_one())));
+        assert!(set.is_empty());
+    });
+
+    group.finish();
+}
+
 /// Measures `is_empty` on an empty and a populated set. State is
 /// invariant across iterations, so the set and awaiter are constructed
 /// once per sample.
@@ -175,7 +193,8 @@ fn is_empty(c: &mut Criterion) {
 /// `advance_generation` + `notify_one_prior_generation`: register the
 /// awaiter in the current generation, advance into a new generation
 /// (the awaiter is now in a prior generation), notify it, then take
-/// the notification to reset state for the next iteration.
+/// the notification to reset state for the next iteration. The miss case
+/// keeps a current-generation awaiter registered and measures only notification.
 fn notify_one_prior_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("awaiter_set/notify_one_prior_generation");
 
@@ -199,5 +218,30 @@ fn notify_one_prior_generation(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("current_generation_miss", |b| {
+        let mut awaiter = Box::pin(Awaiter::new());
+        let mut set = AwaiterSet::new();
+        // Model a waiter arriving during a drain, after its generation boundary.
+        set.advance_generation();
+        // SAFETY: The heap-pinned awaiter remains alive until explicitly unregistered below.
+        unsafe {
+            set.register(awaiter.as_mut(), Waker::noop().clone());
+        }
+        assert!(!set.is_empty());
+        assert!(set.notify_one_prior_generation().is_none());
+
+        b.iter(|| {
+            drop(black_box(black_box(&mut set).notify_one_prior_generation()));
+        });
+
+        assert!(!awaiter.as_ref().take_notification());
+        // SAFETY: The miss path leaves this awaiter registered with the same set.
+        unsafe {
+            set.unregister(awaiter.as_mut());
+        }
+    });
+
     group.finish();
 }
+
+::testing::set_allocator!();

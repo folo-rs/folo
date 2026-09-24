@@ -285,3 +285,6 @@ pub use report::*;
 pub use session::*;
 pub(crate) use span_measurement::*;
 pub use thread_span::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

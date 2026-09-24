@@ -1,0 +1,7 @@
+[project]
+id = "reusable-workflow-canary"
+
+[storage.azure]
+# Dedicated synthetic data in the existing test account, not production benchmark history.
+account = "folovalidate"
+container = "bench-history-caller-canary"

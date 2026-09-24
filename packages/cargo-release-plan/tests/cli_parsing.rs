@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use cargo_release_plan::{CheckFormat, Cli, EarlyExit, RunInput};
 
+::testing::set_allocator!();
+
 fn parse(args: &[&str]) -> Result<Cli, EarlyExit> {
     Cli::from_args_os(iter::once("cargo-release-plan").chain(args.iter().copied()))
 }

@@ -30,6 +30,8 @@ pub(crate) enum BenchFailure<'a> {
     InvalidCommand(&'a InvalidCommandError),
     /// A harvested benchmark output could not be parsed.
     ParseOutput(&'a ParseOutputError),
+    /// The selected project directory is unavailable in a historical checkout.
+    MissingProjectDirectory(&'a MissingProjectDirectoryError),
 }
 
 impl<'a> BenchFailure<'a> {
@@ -52,6 +54,11 @@ impl<'a> BenchFailure<'a> {
                 error
                     .find_source::<ParseOutputError>()
                     .map(Self::ParseOutput)
+            })
+            .or_else(|| {
+                error
+                    .find_source::<MissingProjectDirectoryError>()
+                    .map(Self::MissingProjectDirectory)
             })
     }
 
@@ -78,9 +85,23 @@ impl<'a> BenchFailure<'a> {
                     failure.path.display()
                 )
             }
+            Self::MissingProjectDirectory(failure) => format!(
+                "historical project directory is unavailable: {}",
+                failure.path.display()
+            ),
         }
     }
 }
+
+/// A historical commit cannot build the selected project because its directory is absent.
+#[ohno::error]
+#[display("historical project directory is unavailable: {}", path.display())]
+pub(crate) struct MissingProjectDirectoryError {
+    path: PathBuf,
+}
+
+impl UnwindSafe for MissingProjectDirectoryError {}
+impl RefUnwindSafe for MissingProjectDirectoryError {}
 
 /// The benchmark command exited with a non-zero status.
 #[derive(ohno::Error)]
@@ -469,7 +490,28 @@ impl HarvestFailedError {
     }
 }
 
-/// Writing a requested report file failed.
+/// Requested report files cannot coexist at their destinations.
+///
+/// Report preflight uses this condition to identify formats whose paths alias or form a
+/// file/directory prefix. The original requested paths remain available for diagnostics
+/// when the condition is carried through the shell's application error boundary.
+#[ohno::error]
+#[display(
+    "the {first_label} report ({}) and {second_label} report ({}) have conflicting output destinations",
+    first_path.display(),
+    second_path.display()
+)]
+pub(crate) struct ConflictingReportDestinationsError {
+    pub(crate) first_label: String,
+    pub(crate) first_path: PathBuf,
+    pub(crate) second_label: String,
+    pub(crate) second_path: PathBuf,
+}
+
+impl UnwindSafe for ConflictingReportDestinationsError {}
+impl RefUnwindSafe for ConflictingReportDestinationsError {}
+
+/// Checking or writing a requested report file failed.
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("failed to write the {label} report to {}", path.display())]
@@ -701,6 +743,14 @@ mod tests {
     assert_impl_all!(InvalidCommandError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ParseOutputError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(
+        MissingProjectDirectoryError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
         InconsistentRunsError: Send,
         Sync,
         Debug,
@@ -746,6 +796,14 @@ mod tests {
     assert_impl_all!(HarvestFailedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(
         WriteReportFailedError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        ConflictingReportDestinationsError: Send,
         Sync,
         Debug,
         Error,
@@ -869,12 +927,13 @@ mod tests {
     }
 
     #[test]
-    fn bench_failures_are_the_four_per_commit_failures() {
-        let bench: [AppError; 4] = [
+    fn bench_failures_are_recoverable_per_commit_failures() {
+        let bench: [AppError; 5] = [
             EngineFailedError::new("cargo bench", 101).into(),
             EngineTerminatedError::new("cargo bench").into(),
             InvalidCommandError::new("cargo bench", "command is empty").into(),
             ParseOutputError::caused_by("a/summary.json", io::Error::other("bad")).into(),
+            MissingProjectDirectoryError::new("historical-project").into(),
         ];
 
         for error in &bench {
@@ -908,15 +967,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_project_summary_retains_the_selected_path() {
+        let error = AppError::from(MissingProjectDirectoryError::new("historical-project"));
+        assert!(
+            BenchFailure::find(&error)
+                .unwrap()
+                .render()
+                .contains("historical-project")
+        );
+    }
+
+    #[test]
     fn infrastructure_failures_are_not_bench_failures() {
         // A backfill must abort on these rather than record them and continue, so
         // misclassifying one would let a run finish with incorrect data.
-        let infrastructure: [AppError; 4] = [
+        let infrastructure: [AppError; 5] = [
             DuplicateResultError::new("v1/p/objects/e/t/m/abc/clean.json").into(),
             InconsistentRunsError::caused_by("cargo bench", io::Error::other("a/b is missing"))
                 .into(),
             AddWorktreeFailedError::caused_by("a/tree", "c0ffee", io::Error::other("no space"))
                 .into(),
+            BenchCommandFailedError::caused_by(
+                "unavailable-executable",
+                io::Error::from(io::ErrorKind::NotFound),
+            )
+            .into(),
             io::Error::other("access denied").into(),
         ];
 

@@ -2,6 +2,9 @@
 
 This chapter covers conventions for working with git and GitHub pull requests.
 
+For repository-specific benchmark-action coordination, see
+[paired PR presentation](benchmark-action-releases.md#paired-pr-presentation).
+
 ## Creating GitHub pull requests
 
 When creating PRs with `gh pr create`, do not pass the `--body` flag with an
@@ -35,6 +38,11 @@ and actionable findings even from optional checks, and handle relevant later
 results during normal authorized follow-up. Low expected signal is not a reason
 to dismiss an observed problem, cancel workflows or weaken validation.
 
+For Codecov verification-key import failures, follow the
+[bounded recovery policy in the Triage guide](triage.md#codecov-verification-key-import-failures)
+before proposing source changes or asking the user to retry. This exception does
+not authorize retrying arbitrary failed checks or treating a failed upload as passed.
+
 ## Addressing pull request review comments
 
 When addressing PR review comments, reply to each comment thread with the
@@ -59,8 +67,7 @@ See [release-versioning.md](release-versioning.md).
 ### Version/release plan section
 
 Every pull request description must contain a clearly identified
-**Version/release plan** section. Keep `[Copilot speaking]` first in an
-agent-authored body, before any section.
+**Version/release plan** section.
 
 Base the section on the final expanded plan and current release evidence, not
 just the packages directly edited. Use one row per version group and per

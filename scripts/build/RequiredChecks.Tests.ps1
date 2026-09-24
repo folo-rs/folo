@@ -143,11 +143,17 @@ Describe 'Get-RequiredCheckFailure' {
 
 Describe 'Planned tooling results' {
     BeforeEach {
-        $script:plan = @{ workflows = $false; script_analysis = $false; script_domains = @() }
+        $script:plan = @{
+            workflows = $false; script_analysis = $false; bicep = $false; script_domains = @()
+            benchmark_canary = $false; benchmark_canary_trusted = $true
+        }
         $script:needs = @{
-            prepare = @{ result = 'success'; outputs = @{ packages_json = '[]'; script_domains = '[]' } }
+            prepare = @{ result = 'success'; outputs = @{
+                    packages_json = '[]'; script_domains = '[]'; benchmark_canary = 'false'
+                } }
             'test-scripts' = @{ result = 'skipped' }
             'validate-workflows' = @{ result = 'skipped' }
+            'benchmark-canary' = @{ result = 'skipped' }
         }
         function Assert-PlannedResult {
             $needs.prepare.outputs.plan = ConvertTo-Json -InputObject $plan -Compress
@@ -168,6 +174,13 @@ Describe 'Planned tooling results' {
         $plan.script_domains = @('book')
         { Assert-PlannedResult } | Should -Throw
         $needs.prepare.outputs.script_domains = '["book"]'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'requires successful offline Bicep validation when selected without script tests' {
+        $plan.bicep = $true
         { Assert-PlannedResult } | Should -Throw
         $needs['test-scripts'].result = 'success'
         { Assert-PlannedResult } | Should -Not -Throw
@@ -205,7 +218,7 @@ Describe 'Planned tooling results' {
     }
 
     It 'rejects omitted conditional jobs even for a no-work plan' -ForEach @(
-        'test-scripts', 'validate-workflows'
+        'test-scripts', 'validate-workflows', 'benchmark-canary'
     ) {
         $needs.Remove($_)
         { Assert-PlannedResult } | Should -Throw
@@ -219,7 +232,7 @@ Describe 'Planned tooling results' {
     }
 
     It 'rejects absent preparation output <_>' -ForEach @(
-        'plan', 'packages_json', 'script_domains'
+        'plan', 'packages_json', 'script_domains', 'benchmark_canary'
     ) {
         $needs.prepare.outputs.plan = ConvertTo-Json -InputObject $plan -Compress
         $needs.prepare.outputs.Remove($_)
@@ -235,5 +248,46 @@ Describe 'Planned tooling results' {
             Assert-RequiredCheck -NeedsJson (ConvertTo-Json -InputObject $needs -Depth 10) `
                 -MustSucceedJob @('prepare')
         } | Should -Throw
+    }
+
+    It 'requires selected canary success and rejects <_>' -ForEach @(
+        'failure', 'cancelled', 'skipped', 'unknown', ''
+    ) {
+        $plan.benchmark_canary = $true
+        $needs.prepare.outputs.script_domains = '["bench-history"]'
+        $needs.prepare.outputs.benchmark_canary = 'true'
+        $needs['test-scripts'].result = 'success'
+        $needs['benchmark-canary'].result = $_
+        { Assert-PlannedResult } | Should -Throw
+        $needs['benchmark-canary'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'rejects forged, missing or malformed canary output despite successful jobs' -ForEach @(
+        '', 'False', 'null', 'true'
+    ) {
+        $needs.prepare.outputs.benchmark_canary = $_
+        $needs['benchmark-canary'].result = 'success'
+        { Assert-PlannedResult } | Should -Throw
+    }
+
+    It 'requires the canary for affected consumer dependencies' {
+        $needs.prepare.outputs.packages_json = '["cbh_storage","cargo-bench-history"]'
+        $needs.prepare.outputs.script_domains = '["bench-history"]'
+        $needs.prepare.outputs.benchmark_canary = 'true'
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Throw
+        $needs['benchmark-canary'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+    }
+
+    It 'allows hosted skip for a relevant fork but still requires credential-free fixture preparation' {
+        $plan.benchmark_canary = $true
+        $plan.benchmark_canary_trusted = $false
+        $needs.prepare.outputs.script_domains = '["bench-history"]'
+        $needs['test-scripts'].result = 'success'
+        { Assert-PlannedResult } | Should -Not -Throw
+        $needs.prepare.result = 'failure'
+        { Assert-PlannedResult } | Should -Throw
     }
 }

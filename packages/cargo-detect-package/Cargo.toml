@@ -3,7 +3,7 @@
 name = "cargo-detect-package"
 description = "A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand"
 publish = true
-version = "1.0.34"
+version = "1.1.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -47,6 +47,7 @@ mutants = { workspace = true }
 serial_test = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

@@ -11,6 +11,8 @@ publish half is [`release-automation.md`](release-automation.md).
   `increment-versions` skill.
 * **Cross-links**: [`release-automation.md`](release-automation.md) (the publish half),
   [`git-workflow.md`](git-workflow.md) (contributor pull-request conventions),
+  [`benchmark-action-releases.md`](benchmark-action-releases.md) (repository-specific
+  action release coordination),
   [`impl-crate-split.md`](impl-crate-split.md) (why version groups exist),
   [`build-and-tooling.md`](build-and-tooling.md) (`just` recipes and script conventions),
   [`RELEASING.md`](../RELEASING.md) (first publish of a new crate, emergency manual publish,
@@ -62,6 +64,12 @@ lower one. Group expansion, requirement rewrites, alignment-only targets, and bi
 effects are resolved before application, which installs the captured state without another
 dependency refresh. Human review of the complete PR is the approval step. Merge publishes only
 publishable packages.
+
+After applying workspace version changes, refresh any standalone fixture lockfiles that consume
+the changed path packages. The benchmark caller has an independent lockfile; root-workspace
+resolution cannot validate it. `just verify-lockfile` checks both workspaces before committing.
+Follow the clean-checkout preflight in
+[`build-and-tooling.md`](build-and-tooling.md) before collecting synthetic history.
 
 Every PR description carries a current **Version/release plan** section covering every package
 and group the plan reaches, including retained pending increments and necessary dependent/group

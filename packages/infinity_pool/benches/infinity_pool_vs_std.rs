@@ -25,9 +25,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use infinity_pool::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Number of objects to pre-fill before starting the timed benchmark span.
 /// This ensures we start from a "hot state" with existing items.

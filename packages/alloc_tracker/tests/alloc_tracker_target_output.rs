@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 
 use alloc_tracker::{Allocator, Session};
 use serde_json::Value;
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 const BYTES_PER_ITERATION: usize = 64;
 const ITERATIONS: u64 = 8;

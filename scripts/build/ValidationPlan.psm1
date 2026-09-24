@@ -13,6 +13,7 @@ $script:ScriptDomains = @('analyzer', 'bench-history', 'book', 'build', 'release
 $script:RecipeDomains = @{
     'just_basics.just' = @('build', 'scheduled')
     'just_bench_history.just' = @('bench-history')
+    'just_benchmark_action.just' = @('release')
     'just_book.just' = @('book')
     'just_delta.just' = @('build')
     'just_quality.just' = @('build', 'scheduled')
@@ -25,27 +26,43 @@ function Get-ValidationPlan {
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $ChangedPath,
-        [switch] $Full
+        [switch] $Full,
+        [bool] $CanaryTrusted = $false
     )
 
     $domains = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $workflows = $Full.IsPresent
     $analysis = $Full.IsPresent
+    $bicep = $Full.IsPresent
+    $canary = $Full.IsPresent
     if ($Full) { $domains.UnionWith([string[]] $script:ScriptDomains) }
 
     foreach ($path in $ChangedPath) {
         # These inputs define selection or the shared invocation environment. Changes to the
         # planner and fan-in must exercise every selectable check, including their own tests.
-        $shared = $path -cin @('justfile', 'constants.env', 'rust-toolchain.toml', '.gitattributes', '.gitconfig') -or
-            $path -cmatch '^scripts/(build/(ValidationPlan|RequiredChecks)(\.Tests\.ps1|\.psm1)|setup/.+|utility/.+)$' -or
+        $shared = $path -cin @('justfile', 'constants.env', 'rust-toolchain.toml', '.gitattributes', '.gitconfig', '.gitignore') -or
+            $path -cmatch '^scripts/(build/(ValidationPlan|RequiredChecks|Delta)(\.Tests\.ps1|\.psm1)|setup/.+|utility/.+)$' -or
             $path -cmatch '^justfiles/just_(setup|testing)\.just$' -or
             $path -cmatch '^\.github/actions/setup-environment/'
         if ($shared) {
             $workflows = $true
             $analysis = $true
+            $bicep = $true
+            $canary = $true
             $domains.UnionWith([string[]] $script:ScriptDomains)
             Write-Verbose "'$path' changes shared validation machinery; selecting all tooling checks."
             continue
+        }
+
+        if ($path -cmatch '^\.github/fixtures/bench-history-caller/' -or
+            $path -cmatch '^scripts/bench-history/' -or
+            $path -cmatch '^\.github/actions/bench-history-setup/' -or
+            $path -cin @('.github/workflows/standard-validation.yml', '.github/workflows/deep-validation.yml',
+                '.github/workflows/benchmark-action-canary.yml', 'justfiles/just_quality.just',
+                'delta.toml', '.cargo/config', '.cargo/config.toml')) {
+            $canary = $true
+            $null = $domains.Add('bench-history')
+            Write-Verbose "'$path' affects the synthetic caller or its execution/selection machinery; selecting caller integration."
         }
 
         if ($path -cmatch '^\.github/workflows/[^/]+\.ya?ml$' -or
@@ -60,6 +77,22 @@ function Get-ValidationPlan {
             $path -cin @('.github/prompts/setup-scheduled-remediation.prompt.md', 'docs/scheduled-validation.md')) {
             $null = $domains.Add('scheduled')
             Write-Verbose "'$path' is an input to documentation-link tests; selecting the scheduled test domain."
+        }
+        if ($path -cmatch '^infra/azure-bench-history-(prod|test)/' -or
+            $path -cmatch '^packages/cargo-bench-history/src/azure_bundle/' -or
+            $path -cmatch '^packages/cargo-bench-history/tests/fixtures/.+\.ps(m1|d1|1)$' -or
+            $path -cmatch '^\.github/actions/bench-history-setup/' -or
+            $path -cin @('.github/workflows/bench-history.yml', '.github/workflows/pr-bench-history.yml', '.github/workflows/bench-history-backfill.yml')) {
+            $null = $domains.Add('bench-history')
+            if ($path -cmatch '\.ps(m1|d1|1)$') { $analysis = $true }
+            Write-Verbose "'$path' owns benchmark deployment or invocation wiring; selecting benchmark helper tests."
+        }
+        if ($path -ceq 'bicepconfig.json' -or
+            $path -cmatch '^(infra/|packages/cargo-bench-history/src/azure_bundle/).+\.bicep(param)?$' -or
+            $path -cmatch '^scripts/build/Bicep(\.[^.]+)*\.(psm1|ps1)$') {
+            $bicep = $true
+            $domains.UnionWith([string[]] @('build', 'scheduled'))
+            Write-Verbose "'$path' affects Bicep inputs or their compiler invocation; selecting offline Bicep validation."
         }
 
         if ($path -ceq 'PSScriptAnalyzerSettings.psd1') {
@@ -87,7 +120,7 @@ function Get-ValidationPlan {
                 Write-Verbose "'$path' has no registered recipe owner; conservatively selecting every script suite."
             }
             # The quality recipe owns both lint commands, including their arguments/settings.
-            if ($recipe -ceq 'just_quality.just') { $workflows = $true; $analysis = $true }
+            if ($recipe -ceq 'just_quality.just') { $workflows = $true; $analysis = $true; $bicep = $true }
         }
         if ($path -cin @('delta.toml', '.cargo/mutants.toml', '.config/nextest.toml')) {
             $null = $domains.Add('build')
@@ -120,10 +153,13 @@ function Get-ValidationPlan {
         $null = $domains.Add('scheduled')
         Write-Verbose 'Scheduled tests consume build helpers; including that dependent domain.'
     }
-    Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
+    Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, Bicep=$bicep, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
     return @{
         workflows = $workflows
         script_analysis = $analysis
+        bicep = $bicep
+        benchmark_canary = $canary
+        benchmark_canary_trusted = $CanaryTrusted
         script_domains = @($domains | Sort-Object)
     }
 }
@@ -135,8 +171,9 @@ function Read-ValidationPlan {
 
     $plan = ConvertFrom-Json -InputObject $Json -AsHashtable
     if ($plan -isnot [hashtable] -or $plan.workflows -isnot [bool] -or
-        $plan.script_analysis -isnot [bool]) {
-        throw 'Validation plan must contain explicit workflow and script-analysis decisions.'
+        $plan.script_analysis -isnot [bool] -or $plan.bicep -isnot [bool] -or
+        $plan.benchmark_canary -isnot [bool] -or $plan.benchmark_canary_trusted -isnot [bool]) {
+        throw 'Validation plan must contain explicit tooling and canary scope/trust decisions.'
     }
     $null = Read-ScriptDomain -Value $plan.script_domains
     return $plan
@@ -167,17 +204,57 @@ function Get-ValidationScriptDomain {
     )
 
     $plan = Read-ValidationPlan -Json $PlanJson
-    $packages = ConvertFrom-Json -InputObject $AffectedPackageJson -NoEnumerate
-    if ($packages -isnot [array]) { throw 'Affected packages must be an explicit array.' }
+    $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -isnot [string]) { throw 'Affected package names must be strings.' }
         if ($package -cin @('cargo-release-plan', 'release-target-check')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
     }
+    if ((Get-ValidationCanarySelection -PlanJson $PlanJson -AffectedPackageJson $AffectedPackageJson).check_fixture) {
+        $domains += 'bench-history'
+    }
     return @($domains | Sort-Object -Unique)
+}
+
+function Read-ValidationAffectedPackage {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Json)
+
+    $packages = ConvertFrom-Json -InputObject $Json -NoEnumerate
+    if ($packages -isnot [array]) { throw 'Affected packages must be an explicit array.' }
+    foreach ($package in $packages) {
+        if ($package -isnot [string] -or [string]::IsNullOrWhiteSpace($package)) {
+            throw 'Affected package names must be nonempty strings.'
+        }
+    }
+    return $packages
+}
+
+function Get-ValidationCanarySelection {
+    # These are the executable consumers the canary exercises. Cargo delta supplies their
+    # transitive dependency impact, including private CBH partitions; do not list those again.
+    # Ref: .github/workflows/implementation.md#reusable-workflow-canary.
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $PlanJson,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $AffectedPackageJson
+    )
+
+    $plan = Read-ValidationPlan -Json $PlanJson
+    $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
+    $affected = @($packages | Where-Object {
+            $_ -cin @('cargo-bench-history', 'cargo-bench-history-github', 'cargo-bench-history-faker')
+        })
+    $scope = $plan.benchmark_canary -or $affected.Count -gt 0
+    Write-Verbose "Caller integration: path/full selection=$($plan.benchmark_canary), affected consumers=$($affected -join ', '), trusted event=$($plan.benchmark_canary_trusted). Fixture checks need no credentials; hosted collection requires both scope and trust."
+    return @{
+        check_fixture = $scope
+        run_hosted = $scope -and $plan.benchmark_canary_trusted
+    }
 }
 
 function Get-ScriptTestPath {
@@ -258,17 +335,23 @@ function Get-ValidationWorkflowPlan {
     param(
         [Parameter(Mandatory)][ValidateSet('push', 'pull_request', 'schedule', 'workflow_dispatch')][string] $EventName,
         [Parameter(Mandatory)][hashtable] $EventData,
-        [Parameter(Mandatory)][string] $Ref
+        [Parameter(Mandatory)][string] $Ref,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Repository
     )
 
     if ($EventName -cne 'pull_request') {
         if ($Ref -cne 'refs/heads/main') { throw 'Full validation is reserved for main.' }
         Write-Verbose "$EventName on main selects every tooling check without a changed-path comparison."
-        return Get-ValidationPlan -ChangedPath @() -Full
+        return Get-ValidationPlan -ChangedPath @() -Full -CanaryTrusted ($Repository -ceq 'folo-rs/folo')
     }
+    $headRepository = $EventData.pull_request.head.repo.full_name
+    if ($headRepository -isnot [string] -or [string]::IsNullOrWhiteSpace($headRepository)) {
+        throw 'Canary credential selection requires the pull-request head repository.'
+    }
+    $trusted = $Repository -ceq 'folo-rs/folo' -and $headRepository -ceq $Repository
     $paths = @(Get-ValidationChangedPath -EventData $EventData)
-    return Get-ValidationPlan -ChangedPath $paths
+    return Get-ValidationPlan -ChangedPath $paths -CanaryTrusted $trusted
 }
 
 Export-ModuleMember -Function Get-ValidationPlan, Read-ValidationPlan, Read-ScriptDomain,
-    Get-ValidationScriptDomain, Get-ScriptTestPath, Get-ValidationWorkflowPlan
+    Get-ValidationScriptDomain, Get-ValidationCanarySelection, Get-ScriptTestPath, Get-ValidationWorkflowPlan

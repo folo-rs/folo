@@ -30,3 +30,6 @@ mod probe;
 pub use host::RustcInfo;
 pub use machine::{HardwareProfile, describe_fingerprint_components, resolve_machine_key};
 pub use probe::{EnvironmentProbe, SystemProbe};
+
+#[cfg(test)]
+::testing::set_allocator!();

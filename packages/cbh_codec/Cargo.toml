@@ -4,7 +4,7 @@
 name = "cbh_codec"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.13"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -23,13 +23,16 @@ private-api = true
 doc = false
 
 [dependencies]
-flate2 = { workspace = true, features = ["rust_backend"] }
+# Own checksum CPU dispatch independently of workspace feature unification.
+# Ref: docs/implementation.md.
+flate2 = { workspace = true, features = ["runtime_detection", "rust_backend"] }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
 cbh_model = { path = "../cbh_model" }
 criterion = { workspace = true }
 nonempty = { workspace = true }
+testing = { path = "../testing" }
 
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]

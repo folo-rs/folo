@@ -362,3 +362,5 @@ mod windows {
         }
     }
 }
+
+::testing::set_allocator!();

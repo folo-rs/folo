@@ -104,3 +104,5 @@ fn main() {
 
     println!("All threads completed work; final global count: {final_count}");
 }
+
+::testing::set_allocator!();

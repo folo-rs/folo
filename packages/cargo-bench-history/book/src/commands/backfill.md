@@ -14,11 +14,8 @@ the span and `<to-commit>` the newest. The tool first verifies both endpoints re
 the start is a first-parent ancestor of the end, then derives the range purely from the end's
 history — so backfilling does not depend on the current checkout or branch.
 
-Commits are **processed newest-first**. A long backfill is routinely cut short — you stop it,
-or a CI job hits its time limit — and the recent end of the history is the part an analysis of
-the current tip actually reads, so an interrupted run has already spent its time where it
-counts. The one visible consequence: without `--ignore-errors`, the run stops at the *newest*
-failing commit.
+Commits are **processed newest-first**, prioritizing the recent history that an analysis of
+the current tip reads. Without `--ignore-errors`, the run stops at the *newest* failing commit.
 
 ## Isolation and resumability
 
@@ -31,7 +28,8 @@ By default, commits that already have a stored result are listed once up front a
 before their benches run, making backfill resumable and cheap to re-issue;
 `--overwrite` regenerates them. A build or bench failure stops by default;
 `--ignore-errors` instead continues and includes every failed commit in the end-of-run
-summary. Infrastructure failures always abort.
+summary. During replay, a commit without the selected project directory also counts as a
+per-commit failure. Infrastructure failures always abort.
 
 That skip check looks only at the **storage partition this run writes to** — the target triple
 and auto-detected machine key this run stores under — so a commit measured on other hardware,
@@ -41,6 +39,32 @@ and is skipped, because nothing requires a run to produce every engine (off Linu
 produces nothing at all). Use `--overwrite` to re-measure such a commit — for example after
 adding a new bench, or after a run was killed partway through storing one commit's per-engine
 results.
+
+## Bounded passes
+
+Use `--max-commits N` to attempt at most a positive number of commits in one invocation:
+
+```console
+cargo bench-history backfill --local=./bench-history <from-commit> <to-commit> --max-commits 1
+```
+
+The limit applies after the partition skip check, not to the range endpoints. Commits
+skipped before benchmarking consume no budget. Each replay attempt counts, including a
+failed build or benchmark, an empty harvest, or a duplicate discovered only while writing.
+Every attempted commit finishes its repetitions and engine storage before another commit
+can start. Reaching the limit returns normally after worktree cleanup and storage flushing;
+it does not suppress errors or cancel a running benchmark.
+
+The initial announcement states the pending work and attempt bound. The final summary
+counts stored, existing, empty, failed and deferred commits, with the reason replay stopped:
+limit reached, range exhausted or benchmark failure. Deferred commits are eligible work
+not attempted, not already-recorded results.
+
+Without `--max-commits`, replay is unlimited. Repeating a bounded pass over the same range
+fills the next missing commits in the same partition; an all-recorded pass succeeds without
+benchmarking. With `--overwrite`, each invocation instead starts at the newest commit
+again, so the limit is not a resumable cursor. This bounds work, not elapsed time: allow
+enough time for every selected attempt to complete.
 
 ## Toolchain and measurement configuration
 

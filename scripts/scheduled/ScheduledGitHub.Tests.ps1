@@ -52,9 +52,13 @@ Describe 'Same-workflow failure reporting' {
                     '^repos/example/repo/actions/runs/10$' { return $script:run }
                     '/jobs\?filter=all&per_page=100&page=1$' { return @{ jobs = $script:jobs } }
                     '/artifacts\?per_page=100&page=1$' { return @{ artifacts = $script:artifacts } }
-                    '/issues\?state=all&labels=scheduled-run-failure&per_page=100&page=1$' { return ,$script:issues }
+                    '^search/issues\?.*&page=1$' {
+                        return @{ items = $script:issues; total_count = $script:issues.Count; incomplete_results = $false }
+                    }
+                    '^repos/example/repo/issues/(\d+)$' {
+                        return $script:issues | Where-Object number -EQ ([long]$Matches[1])
+                    }
                     '/issues/\d+/comments\?per_page=100&page=1$' { return ,$script:comments }
-                    '/labels\?per_page=100&page=1$' { return ,@(@{ name = 'scheduled-run-failure' }) }
                     default { throw "Unexpected test API request: $Endpoint" }
                 }
             }
@@ -73,7 +77,7 @@ Describe 'Same-workflow failure reporting' {
             $script:writes.Count | Should -Be 1
             $issue = $script:writes[0].body
             $issue.title | Should -BeExactly 'Scheduled validation failed on 2026-09-11'
-            $issue.labels | Should -Contain 'scheduled-run-failure'
+            $issue.ContainsKey('labels') | Should -BeFalse
             $issue.body | Should -Match '^\[Copilot speaking\]'
             $issue.body | Should -Match '/runs/10/attempts/1'
             $issue.body | Should -Match 'Rust toolchain download failed'
@@ -84,6 +88,12 @@ Describe 'Same-workflow failure reporting' {
             $issue.body | Should -Not -Match 'independent-success|/job/22'
             Test-Path -LiteralPath (Join-Path $script:directory 'job-20.log') | Should -BeFalse
             Should -Invoke Read-ScheduledArtifactText -Times 0
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly -ParameterFilter {
+                $Endpoint.StartsWith('search/issues?', [StringComparison]::Ordinal)
+            }
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
+                $Endpoint -match '/labels|^repos/.*/issues\?'
+            }
         }
         It 'reports nested standard checks alongside deep failures in the same issue' {
             $script:jobs[0].name = 'standard / test-x64 (ubuntu-latest)'
@@ -304,7 +314,8 @@ Describe 'Same-workflow failure reporting' {
         }
         It 'reuses a human report without overwriting it or requiring an author/schema' {
             $script:issues = @(@{
-                number = 42; state = 'closed'; html_url = 'https://github.com/example/repo/issues/42'
+                number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on the nightly run'; labels = @()
                 body = 'Investigate this attempt: https://github.com/example/repo/actions/runs/10/attempts/1'
             })
             $script:comments = @(@{ body = 'Compare https://github.com/example/repo/actions/runs/10/attempts/2' })
@@ -312,13 +323,14 @@ Describe 'Same-workflow failure reporting' {
             $script:writes.Count | Should -Be 1
             $script:writes[0].endpoint | Should -BeExactly 'repos/example/repo/issues/42/comments'
         }
-        It 'does not reuse a closed <BodyAttempt> report because a comment links a newer failure' -ForEach @(
+        It 'does not reuse a <BodyAttempt> report because a comment links a newer failure' -ForEach @(
             @{ BodyAttempt = 'https://github.com/example/repo/actions/runs/10/attempts/1' }
             @{ BodyAttempt = 'https://github.com/example/repo/actions/runs/9/attempts/2' }
         ) {
             $script:run.run_attempt = 2
             $script:issues = @(@{
-                number = 42; state = 'closed'; html_url = 'https://github.com/example/repo/issues/42'
+                number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = "Failed attempt: $BodyAttempt"; comments = 1
             })
             $script:comments = @(@{ body = 'Compare https://github.com/example/repo/actions/runs/10/attempts/2' })
@@ -332,7 +344,8 @@ Describe 'Same-workflow failure reporting' {
         }
         It 'reuses a human report whose exact attempt link appears on a later discussion page' {
             $script:issues = @(@{
-                number = 42; state = 'closed'; html_url = 'https://github.com/example/repo/issues/42'
+                number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'Planning failed before any checker ran. See the discussion for the run.'; comments = 101
             })
             Mock Invoke-ScheduledGitHubJson {
@@ -352,6 +365,7 @@ Describe 'Same-workflow failure reporting' {
         It 'does not fetch nonexistent discussions on unrelated reports' {
             $script:issues = @(@{
                 number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'An unrelated failed run'; comments = 0
             })
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
@@ -363,6 +377,7 @@ Describe 'Same-workflow failure reporting' {
         It 'does not confuse a different attempt linked in discussion with the current attempt' {
             $script:issues = @(@{
                 number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'Run details are in the discussion.'; comments = 1
             })
             $script:comments = @(@{ body = 'https://github.com/example/repo/actions/runs/10/attempts/12' })
@@ -372,6 +387,7 @@ Describe 'Same-workflow failure reporting' {
         It 'does not create another report when an existing report discussion cannot be searched' {
             $script:issues = @(@{
                 number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'Run details are in the discussion.'; comments = 1
             })
             Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter {
@@ -384,7 +400,7 @@ Describe 'Same-workflow failure reporting' {
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
             $script:issues = @(@{
                 number = 50; state = 'open'; html_url = 'https://github.com/example/repo/issues/50'
-                body = $script:writes[0].body.body
+                title = $script:writes[0].body.title; body = $script:writes[0].body.body
             })
             $script:writes.Clear()
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
@@ -395,6 +411,7 @@ Describe 'Same-workflow failure reporting' {
                 param($Body)
                 $script:issues = @(@{
                     number = 50; state = 'open'; comments = 0
+                    title = $Body.title
                     html_url = 'https://github.com/example/repo/issues/50'; body = $Body.body
                 })
                 throw [IO.IOException]::new()
@@ -406,9 +423,51 @@ Describe 'Same-workflow failure reporting' {
             }
             $script:writes.Count | Should -Be 0
         }
+        It 'does not replay an ambiguous creation while its report is not yet indexed' {
+            $script:createdIssue = $null
+            Mock Invoke-ScheduledGitHubJson {
+                param($Body)
+                $script:createdIssue = @{
+                    number = 50; state = 'open'; comments = 0; title = $Body.title
+                    html_url = 'https://github.com/example/repo/issues/50'; body = $Body.body
+                }
+                throw [IO.IOException]::new()
+            } -ParameterFilter { $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/issues' }
+
+            { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly -ParameterFilter {
+                $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/issues'
+            }
+            $script:writes.Count | Should -Be 0
+
+            $script:issues = @($script:createdIssue)
+            Invoke-ScheduledReporting example/repo 10 1 $script:directory | Should -Match '/issues/50'
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly -ParameterFilter {
+                $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/issues'
+            }
+            $script:writes.Count | Should -Be 0
+        }
+        It 'leaves a <Case> issue untouched when publishing the same attempt' -ForEach @(
+            @{ Case = 'closed report'; State = 'closed'; Title = 'Scheduled validation failed on 2026-09-11' }
+            @{ Case = 'retitled report'; State = 'open'; Title = 'Nightly validation failure' }
+            @{ Case = 'problem'; State = 'open'; Title = 'Repair the toolchain download failure' }
+        ) {
+            $script:issues = @(@{
+                number = 42; state = $State; title = $Title; labels = @('scheduled-run-failure')
+                html_url = 'https://github.com/example/repo/issues/42'
+                body = 'https://github.com/example/repo/actions/runs/10/attempts/1'; comments = 1
+            })
+            $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+            $script:writes.Count | Should -Be 1
+            $script:writes[0].endpoint | Should -BeExactly 'repos/example/repo/issues'
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
+                $Endpoint -match '/issues/42'
+            }
+        }
         It 'creates a separate report for a failed source rerun' {
             $script:issues = @(@{
-                number = 42; state = 'closed'; html_url = 'https://github.com/example/repo/issues/42'
+                number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'https://github.com/example/repo/actions/runs/10/attempts/1'
             })
             $script:run.run_attempt = 2
@@ -418,7 +477,8 @@ Describe 'Same-workflow failure reporting' {
         }
         It 'does not match the current attempt as a prefix of a different attempt' {
             $script:issues = @(@{
-                number = 42; state = 'closed'; html_url = 'https://github.com/example/repo/issues/42'
+                number = 42; state = 'open'; html_url = 'https://github.com/example/repo/issues/42'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'https://github.com/example/repo/actions/runs/10/attempts/12'
             })
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
@@ -478,13 +538,20 @@ Describe 'Same-workflow failure reporting' {
             $text | Should -Match 'byte limit'
             $text | Should -Match 'Result artifact: https://github.com/example/repo/actions/runs/10/artifacts/31'
         }
-        It 'does not reinterpret failed job-list or issue-list API calls as empty work' {
+        It 'does not reinterpret failed job-list API calls as empty work' {
             Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter { $Endpoint -match '/jobs\?' }
             { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
             $script:writes.Count | Should -Be 0
         }
         It 'propagates an issue search failure before publishing' {
-            Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter { $Endpoint -match '/issues\?' }
+            Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter { $Endpoint -match '^search/issues\?' }
+            { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+            $script:writes.Count | Should -Be 0
+        }
+        It 'does not publish after incomplete report discovery' {
+            Mock Invoke-ScheduledGitHubJson {
+                return @{ items = @(); total_count = 0; incomplete_results = $true }
+            } -ParameterFilter { $Endpoint -match '^search/issues\?' }
             { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
             $script:writes.Count | Should -Be 0
         }
@@ -492,49 +559,10 @@ Describe 'Same-workflow failure reporting' {
             Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter { $Method -ceq 'POST' }
             { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
         }
-        It 'accepts a concurrently created <LabelName> label without changing its metadata' -ForEach @(
-            @{ LabelName = 'scheduled-run-failure' }, @{ LabelName = 'Scheduled-Run-Failure' }
-        ) {
-            $script:labelName = $LabelName
-            $script:labelCreated = $false
-            Mock Invoke-ScheduledGitHubJson {
-                if ($script:labelCreated) {
-                    return ,@(@{ name = $script:labelName; color = '123456'; description = 'Existing description' })
-                }
-                return ,@()
-            } -ParameterFilter {
-                $Endpoint -ceq 'repos/example/repo/labels?per_page=100&page=1'
-            }
-            Mock Invoke-ScheduledGitHubJson {
-                $script:labelCreated = $true
-                throw [IO.IOException]::new()
-            } -ParameterFilter {
-                $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/labels'
-            }
-            $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
-            $script:writes[0].endpoint | Should -BeExactly 'repos/example/repo/issues'
-            Should -Invoke Invoke-ScheduledGitHubJson -Times 2 -Exactly -ParameterFilter {
-                $Endpoint -ceq 'repos/example/repo/labels?per_page=100&page=1'
-            }
-            Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
-                $Method -ceq 'PATCH' -and $Endpoint -match '/labels'
-            }
-        }
-        It 'preserves the original label creation failure when the exact label is still unavailable' {
-            $script:creationFailure = [IO.IOException]::new()
-            Mock Invoke-ScheduledGitHubJson { return ,@() } -ParameterFilter {
-                $Endpoint -ceq 'repos/example/repo/labels?per_page=100&page=1'
-            }
-            Mock Invoke-ScheduledGitHubJson { throw $script:creationFailure } -ParameterFilter {
-                $Method -ceq 'POST' -and $Endpoint -ceq 'repos/example/repo/labels'
-            }
-            $failure = { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw -PassThru
-            $failure.Exception | Should -Be $script:creationFailure
-            $script:writes.Count | Should -Be 0
-        }
         It 'propagates continuation publication failures' {
             $script:issues = @(@{
                 number = 50; state = 'open'; html_url = 'https://github.com/example/repo/issues/50'
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'Failed https://github.com/example/repo/actions/runs/10/attempts/1'
             })
             Mock Read-ScheduledArtifactText {
@@ -564,7 +592,7 @@ Describe 'Same-workflow failure reporting' {
             $script:writes[0].body.body | Should -Match 'Check summary unavailable'
             $script:writes[0].body.body | Should -Match 'Rust toolchain download failed'
         }
-        It 'reads all pages for jobs, artifacts and ordinary closed issues' {
+        It 'reads all pages for jobs, artifacts and report comments' {
             Mock Invoke-ScheduledGitHubJson {
                 param($Endpoint)
                 $items = if ($Endpoint -match 'page=1$') { @(1..100 | ForEach-Object { @{ number = $_ } }) }
@@ -578,7 +606,7 @@ Describe 'Same-workflow failure reporting' {
                 $items.Count | Should -Be 101
                 $items[-1].number | Should -Be 101
             }
-            $items = @(Get-ScheduledGitHubCollection 'repos/example/repo/issues?state=all')
+            $items = @(Get-ScheduledGitHubCollection 'repos/example/repo/issues/50/comments')
             $items.Count | Should -Be 101
             $items[-1].number | Should -Be 101
         }
@@ -617,16 +645,31 @@ Describe 'Same-workflow failure reporting' {
         It 'reconciles exact-attempt duplicates with a normal linked comment and closure' {
             $script:issues = @(51, 50 | ForEach-Object { @{
                 number = $_; state = 'open'; html_url = "https://github.com/example/repo/issues/$_"
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'https://github.com/example/repo/actions/runs/10/attempts/1'
             } })
+            $script:issues += @(
+                @{
+                    number = 49; state = 'open'; title = 'Toolchain download failure'; labels = @('scheduled-run-failure')
+                    body = 'https://github.com/example/repo/actions/runs/10/attempts/1'
+                }
+                @{
+                    number = 48; state = 'closed'; title = 'Scheduled validation failed on 2026-09-11'
+                    body = 'https://github.com/example/repo/actions/runs/10/attempts/1'
+                }
+            )
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
             @($script:writes | Where-Object method -EQ PATCH).Count | Should -Be 1
             ($script:writes | Where-Object method -EQ PATCH).endpoint | Should -BeExactly 'repos/example/repo/issues/51'
             ($script:writes | Where-Object endpoint -EQ 'repos/example/repo/issues/51/comments').body.body | Should -Match '/issues/50'
+            Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
+                $Endpoint -match '/issues/(48|49)'
+            }
         }
         It 'does not repeat a persisted duplicate explanation after its closure fails' {
             $script:issues = @(50, 51 | ForEach-Object { @{
                 number = $_; state = 'open'; html_url = "https://github.com/example/repo/issues/$_"
+                title = 'Scheduled validation failed on 2026-09-11'
                 body = 'https://github.com/example/repo/actions/runs/10/attempts/1'
             } })
             $script:duplicateComments = @()
@@ -670,6 +713,7 @@ Describe 'Same-workflow failure reporting' {
             $allMessages.Count | Should -BeGreaterThan 2
             $script:issues = @(@{
                 number = 50; state = 'open'; html_url = 'https://github.com/example/repo/issues/50'; body = $allMessages[0]
+                title = 'Scheduled validation failed on 2026-09-11'
             })
             $script:comments = @(@{ body = $allMessages[1] })
             $script:writes.Clear()

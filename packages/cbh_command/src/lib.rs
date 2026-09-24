@@ -25,9 +25,14 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 mod command;
+mod setup_azure;
 
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
+pub use setup_azure::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

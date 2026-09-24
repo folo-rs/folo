@@ -1,0 +1,9 @@
+# A separate configuration path gives the no-work probe its own reusable-action concurrency
+# group, independent of rolling collection. This project must never receive measurements.
+# Ref: .github/workflows/implementation.md#reusable-workflow-canary.
+[project]
+id = "reusable-no-work-canary"
+
+[storage.azure]
+account = "folovalidate"
+container = "bench-history-caller-canary"

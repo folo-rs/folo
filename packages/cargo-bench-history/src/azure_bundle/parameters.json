@@ -1,0 +1,13 @@
+{
+  "SubscriptionId": null,
+  "ResourceGroup": null,
+  "Location": null,
+  "StorageAccountName": null,
+  "GithubOrg": null,
+  "GithubRepo": null,
+  "HistoryBranch": null,
+  "HistoryContainerName": "bench-history",
+  "ManagedIdentityName": null,
+  "CustomPrincipalId": null,
+  "CustomPrincipalType": null
+}

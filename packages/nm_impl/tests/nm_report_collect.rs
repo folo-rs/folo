@@ -136,3 +136,5 @@ fn report_collect_aggregates_data_from_multiple_threads() {
     assert!(display_output.contains(&expected_histogram_sum.to_string()));
     assert!(display_output.contains(&expected_histogram_mean.to_string()));
 }
+
+::testing::set_allocator!();

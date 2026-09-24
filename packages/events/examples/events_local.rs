@@ -65,3 +65,5 @@ async fn local_manual_reset() {
 
     println!("LocalManualResetEvent: gate opened, verified, and reset.");
 }
+
+::testing::set_allocator!();

@@ -106,6 +106,7 @@ pub async fn run_with_overrides(
             .await
         }
         Command::Install(options) => commands::install(options, workspace_dir).await,
+        Command::SetupAzure(options) => commands::setup_azure(options, workspace_dir).await,
         Command::Import(options) => {
             commands::import(options, workspace_dir, storage_override).await
         }

@@ -18,3 +18,6 @@ mod terminal_input;
 pub use locate::binary_path;
 pub use non_ascii::SAMPLE_NON_ASCII_TEXT;
 pub use terminal_input::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

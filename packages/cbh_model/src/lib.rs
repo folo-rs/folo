@@ -47,3 +47,6 @@ pub use context::{
 pub use identifiers::{MachineKey, TargetTriple};
 pub use metric::{Metric, MetricKind};
 pub use run::{BenchmarkResult, MetricList, Run, SCHEMA_VERSION};
+
+#[cfg(test)]
+::testing::set_allocator!();

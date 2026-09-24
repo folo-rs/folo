@@ -18,12 +18,14 @@ function Get-ScheduledCheck {
             shard = ''
         }
     }
+    # Favor runner availability over elapsed time for scheduled mutation testing.
+    # Ref: .github/workflows/design.md#shallow-and-deep-validation.
+    $mutationShardCount = 2
     foreach ($platform in @('ubuntu-latest', 'windows-latest')) {
-        # Mutation shards bound each runner's workload; tests remain serial within each leg.
-        foreach ($index in 1..8) {
+        foreach ($index in 1..$mutationShardCount) {
             $checks += @{
                 id = "mutants-$platform-$index"; recipe = 'mutants'; platform = $platform
-                packages = @(); shard = "$index/8"
+                packages = @(); shard = "$index/$mutationShardCount"
             }
         }
         $checks += @{

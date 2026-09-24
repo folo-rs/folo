@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use cbh_model::BenchmarkIdPrefix;
 
+use crate::SetupAzureOptions;
+
 /// How a command selects local filesystem storage, from the `--local` flag.
 ///
 /// Local storage paths are machine-dependent, so they are never carried in the
@@ -55,6 +57,8 @@ pub enum Command {
     Import(ImportOptions),
     /// Generate a starter configuration file.
     Install(InstallOptions),
+    /// Provision Azure history resources or export their deployment bundle.
+    SetupAzure(SetupAzureOptions),
     /// Analyze stored history for notable patterns.
     Analyze(AnalyzeOptions),
     /// List the data set a matching `analyze` pass would include.
@@ -287,6 +291,9 @@ pub struct AnalyzeOptions {
     /// against the working directory. Analyze-only, so a large analysis still fits
     /// within a GitHub issue body.
     pub markdown_summary: Option<PathBuf>,
+    /// Write the stable analysis outcome wire name to this path, if set
+    /// (`--outcome <path>`). A relative path resolves against the working directory.
+    pub outcome: Option<PathBuf>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
     /// Emit per-stage wall-clock timings to standard error, independent of
@@ -518,6 +525,11 @@ pub struct BackfillOptions {
     pub from: String,
     /// Newest commit of the range to backfill (inclusive).
     pub to: String,
+    /// Maximum replay attempts after skipping recorded commits; `None` is unlimited.
+    ///
+    /// Every attempted commit counts, including failed, empty, and duplicate results.
+    /// Each attempt completes its repetitions and storage before the limit is checked.
+    pub max_commits: Option<NonZeroUsize>,
     /// Restrict the runs to these packages (`--package`/`-p`); empty means the
     /// whole workspace.
     pub packages: Vec<String>,
@@ -556,6 +568,7 @@ impl Default for BackfillOptions {
             local: None,
             from: String::new(),
             to: String::new(),
+            max_commits: None,
             packages: Vec::new(),
             excludes: Vec::new(),
             benches: Vec::new(),

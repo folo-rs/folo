@@ -4,7 +4,7 @@
 name = "cbh_render"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.13"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -47,6 +47,8 @@ serde_json = { workspace = true }
 [dev-dependencies]
 mutants = { workspace = true }
 nonempty = { workspace = true }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

@@ -1,104 +1,178 @@
-# Azure infrastructure for the benchmark-history data store
+# Azure infrastructure for production benchmark history
 
-This directory provisions the Azure storage account that holds the **real,
-long-lived benchmark history** collected by the `bench-history` GitHub workflow and its
-nightly backfill companion
-(and by local `cargo run -p cargo-bench-history -- collect` invocations). It is the production data store,
-as opposed to the throwaway test account in
-[`infra/azure-bench-history-test/`](../azure-bench-history-test/).
+This stack owns the long-lived benchmark history used by collection, backfill and
+comparison workflows. It is independent of the throwaway
+[test infrastructure](../azure-bench-history-test/), sharing only tenant and
+subscription. Production provisioning is a **manual maintainer operation**; none
+of the commands below are automatic rollout steps.
 
-Everything is described in Bicep and driven by idempotent PowerShell scripts, so
-the environment can be deleted and re-created with one command.
+## Access model
 
-## What gets created
+- One **production identity**, `id-folo-bench-history-prod` by default, has
+  `Storage Blob Data Contributor` on the storage account. Collection, backfill and
+  analysis share it; there is no separate reader role or client ID.
+- An optional additional user or group receives account-scoped
+  `Storage Blob Data Contributor`, independently of the production identity.
 
-`main.bicep` (deployed at resource-group scope) creates:
+The production identity uses the issuer `https://token.actions.githubusercontent.com`
+and audience `api://AzureADTokenExchange`, with these GitHub subjects:
 
-- A **Storage account** — `StorageV2`, HTTPS-only, TLS 1.2, **shared-key access
-  disabled** (Entra ID only, so there is no account key to leak). Container and blob
-  soft-delete are disabled, matching the test account.
-- A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with
-  **GitHub OIDC federated credentials** for `main` and for same-repo **pull requests**. The
-  bench-history workflow and its nightly backfill companion (both running on `main`) and the
-  PR benchmark-history workflow federate into
-  it with no stored secret: `cargo-bench-history` mints a fresh GitHub OIDC token on
-  demand and exchanges it with Entra for each access token (so a multi-hour run stays
-  authenticated). The pull-request credential (subject `…:pull_request`) is what lets the PR
-  workflow collect PR-head points and analyze them against `main`'s baseline in the same
-  store; only **same-repo** PRs can federate (forks carry no secrets), and the credential can
-  be removed by setting the `trustPullRequests` parameter in `main.bicep` to `false` and
-  redeploying, reverting prod to main-only.
-- **`Storage Blob Data Contributor`** role assignments on the account for that managed
-  identity and (optionally) a local developer principal. That single role covers
-  container create/delete and blob read/write/delete via the data plane, which is all
-  the tool's `run` (and any later `prune`) need.
+```text
+repo:folo-rs/folo:ref:refs/heads/main
+repo:folo-rs/folo:pull_request
+```
 
-This stack is **fully self-contained**: it owns its own identity and shares nothing
-with [`infra/azure-bench-history-test/`](../azure-bench-history-test/) except the
-tenant and subscription. Either can be deployed, torn down, and re-created
-independently — keeping the prod data store from depending on test infrastructure.
+`-GithubOrg`, `-GithubRepo` and `-HistoryBranch` select the repository and branch.
+The Folo wrapper defaults to `main`. The `pull_request` subject does **not**
+distinguish same-repository and fork heads. Under GitHub's default permissions,
+fork PR jobs cannot obtain effective `id-token: write`, even by editing the
+workflow YAML; maintainer approval does not elevate it. That platform restriction
+prevents OIDC issuance. Keep the same-repository job gate to skip unsupported fork
+work explicitly. Fork-owned workflows name the fork repository and do not match
+the upstream subjects.
+
+`-HistoryBranch` authorizes a workflow execution context; it does not limit the
+branches whose benchmark results can be stored or analyzed.
+
+Analysis and GitHub publication may run in one job. Azure access uses this identity;
+issue/comment access uses the job's built-in GitHub token. PR and trunk measurements use
+the configured store; collection artifacts carry receipts rather than a second copy of data.
 
 ## Prerequisites
 
-- Azure CLI (`az`) and PowerShell 7+.
-- `az login` as an account allowed to create these resources and assign roles
-  (Owner or User Access Administrator on the target scope).
+- The repository's Rust development environment, PowerShell 7.6, Azure CLI, and an
+  **already installed Bicep CLI** accessible to
+  Azure CLI. `az bicep version` must succeed. The deployment wrapper checks this
+  before any Azure changes and does not install tooling.
+- `az login` as a maintainer with resource provisioning and role-assignment rights
+  in the selected subscription/resource group, including managed identity
+  federated-credential management. Owner, or Contributor combined with User Access
+  Administrator at the appropriate scope, are examples. User Access Administrator
+  alone does not grant resource provisioning rights.
+- Confirm the target subscription, resource group, account and container.
+  [`.cargo/bench_history.toml`](../../.cargo/bench_history.toml) configures
+  account `folohistory`, container **`bench-history`**. The wrapper defaults match.
+- Serialize deployments targeting the same storage account or managed identity
+  in the selected subscription and resource group: the state-preserving decisions
+  use a pre-deployment snapshot.
 
-## Deploy
+## Deploy the production stack
+
+Run from the repository root, replacing the quoted subscription placeholder:
 
 ```powershell
-# Your own object id for local data-plane access (optional but recommended, so you
-# can inspect/manage the history with the tool or `az`):
-$me = az ad signed-in-user show --query id -o tsv
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
-./deploy.ps1 `
-    -SubscriptionId <subscription-guid> `
-    -LocalPrincipalId $me
+az login
+.\infra\azure-bench-history-prod\deploy.ps1 `
+    -SubscriptionId '<subscription-guid>' `
+    -ResourceGroup folohistory `
+    -StorageAccountName folohistory `
+    -HistoryContainerName bench-history
 ```
 
-Key parameters (see `deploy.ps1 -?` for all): `-ResourceGroup` (default
-`folohistory`), `-Location` (default `swedencentral`), `-StorageAccountName`
-(default `folohistory`; 3-24 lowercase alphanumerics, globally unique),
-`-ManagedIdentityName` (default `id-folo-bench-history-prod`),
-`-LocalPrincipalId` / `-LocalPrincipalType`.
+This provisions storage and one identity without changing existing storage settings or data.
+Allow Azure RBAC propagation, then verify authentication and storage access before activating
+the workflows. A correctly configured existing production identity can be reused.
 
-On success the script prints the identifiers to record in `constants.env`.
+Other parameters (see `deploy.ps1 -?`):
 
-## Configure the repository
-
-The storage account name is committed in `.cargo/bench_history.toml` (where
-cargo-bench-history config belongs). The prod identity's client id is committed
-(non-secret) in `constants.env`; tenant and subscription are shared with the test
-identity. If you re-created the resources, update these to match the values the deploy
-script printed:
-
-| Setting | Source |
+| Flag | Default / purpose |
 | --- | --- |
-| `.cargo/bench_history.toml` → `[storage.azure].account` | storage account name (this deployment) |
-| `AZURE_PROD_CLIENT_ID` (constants.env) | this deployment's managed identity client id |
-| `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` (constants.env) | shared tenant/subscription (already present) |
+| `-Location` | `swedencentral`; use the existing resources' region on updates |
+| `-ManagedIdentityName` | `id-folo-bench-history-prod`; shared production identity |
+| `-HistoryContainerName` | `bench-history`; must match repository storage configuration |
+| `-GithubOrg` / `-GithubRepo` | `folo-rs` / `folo` |
+| `-HistoryBranch` | `main`; branch allowed to federate alongside PRs |
+| `-CustomPrincipalId` / `-CustomPrincipalType` | Optional existing Entra object ID and `User` or `Group` |
+| `-CurrentUser` | Resolve the Azure CLI signed-in user in the selected subscription's tenant |
 
-## Collect history locally
+For workstation data-plane access, optionally include `-CurrentUser`. It requires
+a user login, Microsoft Graph access and the target subscription active in Azure CLI,
+and conflicts with the explicit custom
+principal flags. Those flags let you grant an existing user or group access by its
+object ID in the target tenant instead.
+
+### Non-secret output handoff
+
+The script prints these mappings. Record the identifiers in repository
+configuration; **do not create secrets** for client, tenant or subscription IDs.
+Provisioning alone does not activate any workflow.
+
+| Configuration | Bicep output |
+| --- | --- |
+| `.cargo/bench_history.toml` → `[storage.azure].account` | `storageAccountName` |
+| `.cargo/bench_history.toml` → `[storage.azure].container` | `historyContainerName` |
+| `AZURE_PROD_CLIENT_ID` in `constants.env` | `managedIdentityClientId` |
+| `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | `tenantId` / `subscriptionId` |
+
+`managedIdentityPrincipalId` identifies the principal in Azure role-assignment
+diagnostics; it is not a workflow client ID. `blobEndpoint` is for connectivity
+diagnostics, not an additional benchmark configuration field.
+Generic exported deployments describe GitHub repository variables; Folo instead uses
+the `constants.env` mappings above and supplies them to its workflow callers.
+The callers need `id-token: write` for OIDC; direct benchmark OIDC requires only
+client and tenant IDs, not the subscription ID.
+
+## Deployment behavior
+
+`deploy.ps1` supplies Folo defaults to `cargo run -p cargo-bench-history --bin cargo-bench-history
+--locked -- setup-azure`. Routine production provisioning therefore exercises the source-built
+CLI, including its prerequisite checks and embedded
+[canonical deployment bundle](../../packages/cargo-bench-history/src/azure_bundle/).
+The exported bundle remains usable without a Rust toolchain; its driver calls the
+Pester-tested `AzureDeployment.psm1` module. Bicep remains the resource
+definition authority.
+
+- **Existing storage:** successful management-plane listings select
+  `createStorageAccount=false` and, if present, `createHistoryContainer=false`.
+  The account, blob service and existing container are Bicep `existing`
+  references: their properties, retention settings and data are not overwritten.
+- **Fresh storage:** bootstrap modules create an Entra-only `StorageV2`
+  `Standard_LRS` account (HTTPS, TLS 1.2, no public blobs or shared-key access),
+  initially disable container/blob soft delete, and create the private history container.
+- **Identity:** fresh and repeated deployments ensure the same production identity,
+  `Storage Blob Data Contributor` role and configured branch/PR federated subjects.
+- **Incremental grants:** unmentioned resources and previous custom-principal
+  grants remain. Granting another principal access does not remove earlier grants.
+  Omission is not revocation and existing storage/history is not destroyed.
+- **Federation configuration:** changing the repository or branch updates the
+  selected identity's `bench-history-default` and `bench-history-pull-request`
+  credentials. The branch value changes the subject, not the resource name.
+  The test identity may use the same child names because it is a separate parent.
+
+The [test stack](../azure-bench-history-test/) also invokes the source-built
+`setup-azure` command with its own account, resource group and identity. Both use
+the same embedded templates and preserve existing storage settings. Test execution
+creates and deletes isolated containers on the test account; it does not acquire
+production history access.
+
+Always use the wrapper for routine deployments. Direct Bicep/ARM callers bypass
+its state discovery. They must explicitly select `createStorageAccount` and
+`createHistoryContainer`, setting each to true only when its corresponding resource is absent.
+The bundle's `parameters.json` is standalone driver input, with explicit required
+placement and repository values rather than Folo defaults.
+
+## Local collection and destructive teardown
+
+Local collection uses your own Entra principal:
 
 ```powershell
-az login                                          # sign in as your Entra user
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+az login
 cargo run -p cargo-bench-history --bin cargo-bench-history -- collect --workspace --exclude benchmarks
 ```
 
-This benches every workspace package except `benchmarks` (the slow, special-purpose
-one) and stores into the account from `.cargo/bench_history.toml`. It requires your
-user to hold the `Storage Blob Data Contributor` role on the account (deploy with
-`-LocalPrincipalId` as above). For a throwaway run that never touches Azure, add
-`--local <path>`. The CI automation uses the dedicated `just gh-collect-bench-history`
-recipe instead.
+This writes to the configured production storage account and requires local
+`Storage Blob Data Contributor` access. Use `--local=<path>` for a throwaway run
+that never accesses Azure.
 
-## Tear down / re-create
-
-```powershell
-./teardown.ps1 -SubscriptionId <subscription-guid>     # deletes the resource group
-./deploy.ps1 ...                                        # re-create from scratch
-```
-
-Tearing down permanently deletes the collected history. It is reconstructible with
-`cargo bench-history backfill` over past commits, but the collection job otherwise only
-repopulates history going forward.
+`teardown.ps1` deletes the entire production resource group and **permanently
+deletes collected history**, the identity and its access configuration.
+It is not part of ordinary provisioning. Reconstructing
+history requires backfill; ordinary collection only adds history going forward.

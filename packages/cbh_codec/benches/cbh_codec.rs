@@ -30,9 +30,10 @@ use cbh_model::{
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use nonempty::nonempty;
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Result count of the `small` payload (a serialized `Run` of roughly 9 KB),
 /// representing a modest benchmark suite.

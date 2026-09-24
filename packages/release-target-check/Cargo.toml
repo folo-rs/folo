@@ -18,6 +18,7 @@ all-features = true
 
 [dependencies]
 cargo-release-plan = { workspace = true }
+mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

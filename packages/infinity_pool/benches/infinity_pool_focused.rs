@@ -282,3 +282,5 @@ fn make_sparse_pinned_pool() -> (PinnedPool<u64>, Vec<PooledMut<u64>>) {
     }
     (pool, survivors)
 }
+
+::testing::set_allocator!();

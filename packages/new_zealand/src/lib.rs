@@ -20,3 +20,6 @@
 //! ```
 
 mod nz;
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -82,6 +82,19 @@ validate-workflows:
 
     actionlint -color
 
+# The synthetic caller is a standalone Cargo workspace, so root-workspace checks do not
+# validate its lockfile. Run from a clean checkout before collection, including on fork PRs.
+# Ref: .github/workflows/implementation.md#reusable-workflow-canary.
+[group('quality')]
+[script]
+verify-caller-fixture:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/CallerFixture.psm1 -Force
+    Assert-CallerFixture -Workspace "{{justfile_directory()}}"
+
 # Validates that every publishable binary crate declares the `[package.metadata.binstall]` block
 # the release workflow relies on, so a binary crate can never ship without installable prebuilt
 # binaries (see scripts/release/BinstallValidation.psm1 and docs/release-automation.md). Fast and
@@ -96,7 +109,7 @@ validate-binstall:
 
     Invoke-BinstallValidation
 
-# Statically analyzes every PowerShell script and module under scripts/ with PSScriptAnalyzer
+# Statically analyzes repository scripts and the packaged Azure deployment bundle with PSScriptAnalyzer
 # (installed and version-pinned by `just install-tools`). It runs the built-in rule set filtered by
 # the curated PSScriptAnalyzerSettings.psd1 PLUS the repo-local custom rules in
 # scripts/analyzer/FoloAnalyzerRules.psm1 - which catch classes the built-in rules miss, notably the
@@ -119,6 +132,19 @@ validate-scripts:
 [group('quality')]
 hack:
     cargo hack check {{ target_package }} --feature-powerset --locked
+
+# Offline compiler/type-catalog checks own Bicep semantics; no Azure authentication or deployment.
+# Ref: docs/build-and-tooling.md#bicep-validation.
+[group('quality')]
+[script]
+validate-bicep:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/build/Bicep.psm1 -Force
+    Invoke-BicepValidation -RepositoryRoot "{{justfile_directory()}}" -Version $env:BICEP_VERSION `
+        -DiagnosticsDirectory (Join-Path "{{justfile_directory()}}" 'target/bicep-validation')
 
 [group('quality')]
 machete:
@@ -246,6 +272,7 @@ validate-local:
     just package="{{ package }}" validate-workflows
     just package="{{ package }}" validate-binstall
     just package="{{ package }}" validate-scripts
+    just package="{{ package }}" validate-bicep
     just package="{{ package }}" check dev
     just package="{{ package }}" clippy dev
     just package="{{ package }}" test

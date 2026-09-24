@@ -78,3 +78,5 @@ fn linked_objects_smoke_test() {
     assert_eq!(clone.get_local_value(), 42);
     assert_eq!(clone.get_global_value(), "paradise");
 }
+
+::testing::set_allocator!();

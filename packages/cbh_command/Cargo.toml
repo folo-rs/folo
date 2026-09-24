@@ -4,7 +4,7 @@
 name = "cbh_command"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.13"
+version = "0.2.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -27,6 +27,7 @@ cbh_model = { workspace = true }
 
 [dev-dependencies]
 mutants = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

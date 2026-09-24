@@ -1,0 +1,377 @@
+name: Benchmark action caller canary
+
+on:
+  # Standard validation owns scope, credentials and the single required-checks context.
+  # Deep validation reaches this same graph through Standard, without duplicate event runs.
+  # Ref: implementation.md#reusable-workflow-canary.
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  configuration:
+    # Export identifiers without Azure login: its masking prevents cross-job client-ID outputs.
+    # Ref: implementation.md#reusable-workflow-canary.
+    if: >-
+      github.repository == 'folo-rs/folo'
+      && ((contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name)
+              && github.ref == 'refs/heads/main')
+          || (github.event_name == 'pull_request'
+              && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      client-id: ${{ steps.values.outputs.AZURE_TEST_CLIENT_ID }}
+      tenant-id: ${{ steps.values.outputs.AZURE_TENANT_ID }}
+      subscription-id: ${{ steps.values.outputs.AZURE_SUBSCRIPTION_ID }}
+      account: ${{ steps.values.outputs.BENCH_HISTORY_TEST_AZURE_ACCOUNT }}
+      from: ${{ steps.range.outputs.from }}
+      to: ${{ steps.range.outputs.to }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load test identity and account
+        id: values
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          $values = Read-DotEnvFile -Path constants.env
+          foreach ($name in @('AZURE_TEST_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'BENCH_HISTORY_TEST_AZURE_ACCOUNT')) {
+            $value = Get-RequiredConstant -Values $values -Name $name
+            "$name=$value" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          }
+      - name: Freeze the synthetic backfill range
+        id: range
+        shell: pwsh
+        env:
+          CANARY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # Adjacent commits exercise real historical checkout without expanding the CI workload.
+          $to = git rev-parse --verify --end-of-options "$($env:CANARY_HEAD)^{commit}"
+          $from = git rev-parse --verify --end-of-options "$($to)^"
+          @("from=$from", "to=$to") | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+  storage:
+    # This is a real data-plane canary using the separate test identity, never production
+    # history or Azure management provisioning. Ref: implementation.md#reusable-workflow-canary.
+    needs: configuration
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Sign in with the test identity
+        uses: azure/login@v3
+        with:
+          client-id: ${{ needs.configuration.outputs.client-id }}
+          tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+          subscription-id: ${{ needs.configuration.outputs.subscription-id }}
+      - name: Ensure the dedicated synthetic-data container exists
+        shell: pwsh
+        env:
+          BENCH_HISTORY_TEST_AZURE_ACCOUNT: ${{ needs.configuration.outputs.account }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # The fixture configuration owns this isolated test-data destination. Fail on
+          # configuration drift rather than creating a container in the wrong account.
+          if ($env:BENCH_HISTORY_TEST_AZURE_ACCOUNT -cne 'folovalidate') {
+            throw 'Update the caller fixture storage configuration to match the test account.'
+          }
+          az storage container create --auth-mode login --account-name $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT --name bench-history-caller-canary --only-show-errors --output none
+
+  exercise:
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/history.yml@36da42dd15209824627745c3efd78495cec035f2 # v1.1.0
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      issues: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # Cover the action's supported native runners independently of Folo's benchmark policy.
+      # Ref: implementation.md#reusable-workflow-canary.
+      platforms: ubuntu-latest,windows-latest,macos-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      bench: synthetic
+      best-of: 1
+      rustflags: -Cllvm-args=-align-all-functions=6
+      publish: false
+
+  backfill:
+    # Exercise the same released backfill revision as production with source-built tools.
+    # Ref: implementation.md#reusable-workflow-canary.
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      from: ${{ needs.configuration.outputs.from }}
+      to: ${{ needs.configuration.outputs.to }}
+      platforms: ubuntu-latest,windows-latest,macos-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_history.toml
+      bench: synthetic
+      best-of: 1
+      rustflags: -Cllvm-args=-align-all-functions=6
+
+  rolling-backfill:
+    needs: [configuration, storage]
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # A sub-second horizon exercises the single-commit fallback; zero age selects the head.
+      # Exact cutoff behavior uses frozen-clock Rust tests, not hosted-runner timing.
+      # Ref: implementation.md#reusable-workflow-canary.
+      lookback: 1 nanosecond
+      minimum-age: 0 seconds
+      platforms: ubuntu-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_rolling.toml
+      bench: synthetic
+      best-of: 1
+      rustflags: -Cllvm-args=-align-all-functions=6
+
+  no-eligible-backfill:
+    needs: configuration
+    uses: folo-rs/cargo-bench-history-action/.github/workflows/backfill.yml@57aae6fb6d079115c338dc9119a9c78f9254292e # v2.0.0
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      azure-client-id: ${{ needs.configuration.outputs.client-id }}
+      azure-tenant-id: ${{ needs.configuration.outputs.tenant-id }}
+      # The repository has no history this old, so only preparation may execute.
+      # Ref: implementation.md#reusable-workflow-canary.
+      lookback: 14 days
+      minimum-age: 100 years
+      platforms: ubuntu-latest
+      install-method: path
+      source-path: .
+      working-directory: .github/fixtures/bench-history-caller
+      config: .cargo/backfill_no_work.toml
+
+  verify-rolling-backfill:
+    needs: [configuration, rolling-backfill]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ needs.configuration.outputs.client-id }}
+      AZURE_TENANT_ID: ${{ needs.configuration.outputs.tenant-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.configuration.outputs.to }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      - name: Verify the rolling window stored its selected commit
+        shell: pwsh
+        env:
+          CANARY_HEAD: ${{ needs.configuration.outputs.to }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & ./scripts/bench-history/Assert-BackfillCanary.ps1 -Workspace $env:GITHUB_WORKSPACE `
+            -From $env:CANARY_HEAD -To $env:CANARY_HEAD -Config '.cargo/backfill_rolling.toml' `
+            -Project reusable-rolling-canary -TargetTriple x86_64-unknown-linux-gnu `
+            -OutputPath (Join-Path $env:RUNNER_TEMP 'rolling-canary-runs.json')
+      - name: Retain the rolling verification listing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rolling-caller-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rolling-canary-runs.json
+          if-no-files-found: error
+
+  verify-no-work:
+    needs: no-eligible-backfill
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify no benchmark job executed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & ./scripts/bench-history/Assert-BackfillNoWorkCanary.ps1 `
+            -Repository $env:GITHUB_REPOSITORY -RunId $env:GITHUB_RUN_ID -RunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -OutputPath (Join-Path $env:RUNNER_TEMP 'no-work-canary-jobs.json')
+      - name: Retain the no-work job evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: no-work-caller-jobs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/no-work-canary-jobs.json
+          if-no-files-found: error
+
+  verify-backfill:
+    needs: [configuration, backfill]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ needs.configuration.outputs.client-id }}
+      AZURE_TENANT_ID: ${{ needs.configuration.outputs.tenant-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.configuration.outputs.to }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-environment
+      # Backfill itself has no analysis or report. Query exact stored endpoints rather
+      # than letting older data in the persistent test project satisfy an aggregate count.
+      - name: Verify stored historical measurements
+        shell: pwsh
+        env:
+          CANARY_FROM: ${{ needs.configuration.outputs.from }}
+          CANARY_TO: ${{ needs.configuration.outputs.to }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $reportPath = Join-Path $env:RUNNER_TEMP 'backfill-canary-runs.json'
+          & ./scripts/bench-history/Assert-BackfillCanary.ps1 -Workspace $env:GITHUB_WORKSPACE `
+            -From $env:CANARY_FROM -To $env:CANARY_TO -OutputPath $reportPath
+      - name: Retain the backfill verification listing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backfill-caller-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backfill-canary-runs.json
+          if-no-files-found: error
+
+  verify:
+    needs: exercise
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Verify the completed caller contract
+        shell: pwsh
+        env:
+          OUTCOME: ${{ needs.exercise.outputs.outcome }}
+          STATE: ${{ needs.exercise.outputs.publication-state }}
+          NOTABLE: ${{ needs.exercise.outputs.notable }}
+          REGRESSIONS: ${{ needs.exercise.outputs.regressions }}
+          PARTIAL: ${{ needs.exercise.outputs.partial-platform-coverage }}
+          ARTIFACT_ID: ${{ needs.exercise.outputs.report-artifact-id }}
+          ARTIFACT_URL: ${{ needs.exercise.outputs.report-artifact-url }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:OUTCOME -cnotin @('clean', 'insufficient_baseline', 'partial')) {
+            throw "Unexpected synthetic analysis outcome '$env:OUTCOME'."
+          }
+          if ($env:STATE -cnotin @('clean', 'inconclusive') -or
+              $env:NOTABLE -cne 'false' -or $env:REGRESSIONS -cne '0' -or $env:PARTIAL -cne 'false') {
+            throw 'The deterministic matrix did not produce a complete, non-regressing report.'
+          }
+          if ($env:ARTIFACT_ID -notmatch '^[1-9][0-9]*$' -or
+              [string]::IsNullOrWhiteSpace($env:ARTIFACT_URL)) {
+            throw 'The reusable workflow did not expose its uploaded report artifact.'
+          }
+      - name: Download the emitted report bundle
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.exercise.outputs.report-artifact-id }}
+          path: ${{ runner.temp }}/caller-report
+          github-token: ${{ github.token }}
+      - name: Verify actual report files
+        shell: pwsh
+        env:
+          REPORT_DIRECTORY: ${{ runner.temp }}/caller-report
+          EXPECTED_OUTCOME: ${{ needs.exercise.outputs.outcome }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($name in @('report.md', 'report.json', 'summary.md')) {
+            $content = Get-Content -LiteralPath (Join-Path $env:REPORT_DIRECTORY $name) -Raw
+            if ([string]::IsNullOrWhiteSpace($content)) { throw "Empty report file '$name'." }
+          }
+          $report = Get-Content -LiteralPath (Join-Path $env:REPORT_DIRECTORY 'report.json') -Raw | ConvertFrom-Json
+          if ($report.mode -cne 'history' -or $report.outcome -cne $env:EXPECTED_OUTCOME) {
+            throw 'The downloaded report does not match the reusable workflow outputs.'
+          }
+          # Each supported native target contributes the fixture's sole Criterion series.
+          $expectedTargets = @('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin')
+          $actualTargets = @($report.sets.target_triple | Sort-Object -Unique)
+          if ($report.census.in_scope -ne $expectedTargets.Count -or
+              ($actualTargets -join ',') -cne (($expectedTargets | Sort-Object) -join ',')) {
+            throw 'The report did not contain the synthetic measurements from every supported target.'
+          }
+
+  result:
+    # A selected reusable call cannot succeed through skipped prerequisites or verifiers.
+    # Every contract job is mandatory, including the no-work call whose inner matrix skips.
+    # Ref: implementation.md#merge-blocking-result.
+    if: always()
+    needs:
+      - configuration
+      - storage
+      - exercise
+      - backfill
+      - rolling-backfill
+      - no-eligible-backfill
+      - verify-rolling-backfill
+      - verify-no-work
+      - verify-backfill
+      - verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require every caller contract result
+        shell: pwsh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          MUST_SUCCEED_JOBS: configuration storage exercise backfill rolling-backfill no-eligible-backfill verify-rolling-backfill verify-no-work verify-backfill verify
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/build/RequiredChecks.psm1 -Force
+          $jobs = @($env:MUST_SUCCEED_JOBS -split '\s+' | Where-Object { $_ })
+          Assert-RequiredCheck -NeedsJson $env:NEEDS_JSON -MustSucceedJob $jobs

@@ -1421,7 +1421,7 @@ const SEED_PROJECT: &str = "testproj";
 /// Builds a clean-object storage key through the model's key builder — the exact
 /// code path `run` writes under — so a seed helper cannot drift from the
 /// production storage layout by hand-formatting a key string.
-fn seed_clean_key(engine: Engine, triple: &str, machine: &str, commit: &str) -> String {
+pub(crate) fn seed_clean_key(engine: Engine, triple: &str, machine: &str, commit: &str) -> String {
     DiscriminantSet::new(
         engine,
         &TargetTriple::from(triple),

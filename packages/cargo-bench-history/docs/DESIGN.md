@@ -12,7 +12,7 @@ analyzes that history for trends that snapshot / "previous run" tools cannot see
 It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only where results are
 not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `examine`,
-`backfill`, `list`, `prune`, `bless`, and `unbless`.
+`backfill`, `list`, `prune`, `bless`, `unbless`, and `setup-azure`.
 
 ## 1. Benchmark engines and what they emit
 
@@ -102,6 +102,10 @@ flowchart LR
   projects never meet; it is not a member of the discriminant set.
 * **Machine key** — a stable hardware fingerprint that partitions every engine's data by
   the host it ran on.
+* **Analysis outcome** — the successful-analysis result used by automation. It combines
+  whether findings exist with how much of the in-scope series was judged. It is distinct
+  from execution success and from the completeness of an external collection matrix
+  ([Accounting for what was judged](#89-accounting-for-what-was-judged)).
 
 ## 3. Comparability and storage partitioning
 
@@ -355,6 +359,11 @@ cloud backend. `collect --no-store` is the one exception — it skips selection 
 The environment read is isolated behind a thin edge feeding a pure resolver, so the
 decision logic is unit-testable without touching the process environment.
 
+A store can hold both trunk and PR measurements. Collection uses the same immutable object
+keys and write-collision policy for either, and queries select their history through Git
+topology. Unrelated branch commits do not join a trunk series merely because their
+measurements share its store.
+
 ### 6.2 Read-through cache for the cloud backend
 
 The read commands (`analyze` / `list` / `prune`) load the whole in-selection history before
@@ -555,17 +564,25 @@ are selected), the ghost filter is analyze-only and outside the shared selection
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file output flags that compose so a single pass can also write Markdown and JSON to
-their requested paths; requesting no output at all is an error. Beyond those three canonical
-renderings, `analyze` offers one **derived** output — a condensed Markdown *summary* — for a
-downstream consumer
-whose body has a hard size limit (the workflow posts it as a rolling GitHub issue, capped at
-65,536 characters). The summary keeps only the most significant findings and drops the
-per-discriminant grouping, so it is intentionally lossy; it is analyze-only because truncating a
-ranked list is meaningless for the enumerating commands, and it never displaces the full
-reports, which the workflow attaches alongside it. **Findings never affect the exit code**:
-the process exits non-zero only when the analysis fails to *run*. A finding is advisory, and
-the machine-readable signal lives in the JSON report. Downstream automation (a scheduled
-regression watch, a PR comment bot) reads that rather than the exit status.
+their requested paths; requesting no output at all is an error. Beyond those canonical
+renderings, `analyze` offers **derived** outputs. A condensed Markdown *summary* serves a
+downstream consumer whose body has a hard size limit (the workflow posts it as a rolling
+GitHub issue, capped at 65,536 characters). The summary keeps only the most significant
+findings and drops the per-discriminant grouping, so it is intentionally lossy;
+`--outcome <path>` writes the stable analysis outcome (`findings`, `clean`,
+`insufficient_baseline`, `nothing_in_scope` or `partial`) so automation can select a message
+without parsing JSON merely to recover one field. Its conditions are defined under
+[Accounting for what was judged](#89-accounting-for-what-was-judged).
+These outputs are analyze-only, and neither
+displaces the full reports, which the workflow attaches alongside the summary.
+
+**Findings never affect the exit code**: the process exits non-zero only when the analysis
+fails to *run*. A finding is advisory. The JSON report carries both `outcome` and the
+backward-compatible `notable` flag (`true` exactly for `findings`), while `--outcome` exposes
+the former directly to lightweight automation. A failed analysis produces no outcome.
+Platform coverage — whether every expected collection platform completed — is separate
+workflow evidence: missing platforms or failures elsewhere in the workflow can coexist with
+any successful analysis outcome.
 
 Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine`) prints a
 one-line **effective-selection** summary to stderr — the engine, target-triple, and
@@ -581,6 +598,11 @@ auto-detected) partition holds no runs at all the hint names that partition and 
 widening it. A zero-run outcome is thus never mistaken for "no data", and an auto-detected
 partition that quietly missed is never mistaken for an empty project.
 
+Packaging this `collect → analyze → report` flow as a reusable, Marketplace-published
+GitHub Action for other repositories — its shape, binary distribution, configuration
+surface, and hosting — is designed in [`reusable-action.md`](reusable-action.md) (issue
+#284).
+
 ### 7.4 `backfill`
 
 `backfill` reconstructs history by checking out each commit in a range and running
@@ -592,17 +614,20 @@ verifies both endpoints resolve and that the start is a first-parent ancestor of
 then derives the range purely from the end's history — so backfilling does not depend on the
 current checkout or branch.
 
-Within that range commits are processed **newest-first**. A long backfill is routinely cut
-short — by an operator losing patience or by a CI job ceiling — and the recent end of the
-history is what a comparison against the current tip actually reads, so an interrupted run
-has already spent its time on the points that matter most. The visible consequence is that
-stopping at the first failure stops at the *newest* failing commit.
+Within that range commits are processed **newest-first**, prioritizing the recent history
+that comparisons against the current tip read. Stopping at the first failure therefore
+stops at the *newest* failing commit.
 
 All work happens inside a dedicated **git worktree** under the temp directory rather than
 in the primary checkout, so a dirty primary tree neither blocks backfill nor affects what
 is measured (each point benchmarks a specific commit, never the working tree), and an
 interruption leaves the user exactly where they were. Between commits the worktree is reset
 clean while preserving the ignored build directory for incremental speed.
+
+The selected project directory keeps its location relative to the Git repository root in
+every historical checkout. A Cargo workspace nested inside a repository is benchmarked
+from that nested directory, with its own target output and toolchain selection, rather than
+from the repository root. Configuration and project identity still come from the invocation.
 
 Because that worktree is a **historical checkout, its own toolchain selection governs its
 build**: the toolchain selection the launcher exported into the tool's environment is
@@ -637,9 +662,26 @@ is the way to revisit it. Engine results are stored one at a time, so a run kill
 that window leaves a partially stored commit that later runs consider complete —
 overwriting that one commit is the repair.
 
+Optional `--max-commits N` bounds replay attempts to a positive integer, after the partition
+pre-check. Without it, replay is unlimited. Already-recorded commits skipped before replay
+do not consume the budget; every attempt does, including empty harvests, benchmark failures,
+and write-time duplicates. The range remains inclusive and is never shortened before the
+pre-check. Each attempted commit completes all repetitions and engine storage before the
+limit stops further checkout or benchmarking; normal worktree cleanup and storage flushing
+still run. This is a work bound, not a duration deadline.
+
+The initial announcement states the pending work and any attempt bound. The final summary
+counts stored, existing, empty, failed and deferred commits and distinguishes a reached limit,
+range exhaustion and a stopping benchmark failure. Deferred counts only eligible commits
+not attempted, never already-recorded commits. An all-recorded range succeeds without replay.
+With `--overwrite`, every invocation applies the limit to the newest commits again; it is not
+a resumable cursor.
+
 A build or bench failure stops by default (or, with a flag, is recorded and skipped
 with an end-of-run summary), while infrastructure failures always abort since continuing
-cannot produce correct data. `--best-of N` carries through to each commit's `collect`, so a
+cannot produce correct data. During replay, a historical commit without the selected project
+directory is a per-commit build failure, not a failure of the benchmark executable.
+`--best-of N` carries through to each commit's `collect`, so a
 backfill can apply the same min-of-N noise reduction (§7.1) uniformly across the range.
 
 ### 7.5 `list`
@@ -801,6 +843,98 @@ lets a test attribute a whole synthetic series across history from a single HEAD
 `--dirty` records the run as a dirty snapshot rather than a clean point. The commit must
 still exist: `import` never invents git topology, so real integration testing still requires
 a real history.
+
+### 7.10 `setup-azure`
+
+`cargo-bench-history setup-azure` provisions the Azure storage and federated identity used
+by the [GitHub automation](reusable-action.md). It removes the need to obtain deployment
+files from a Folo checkout. Provisioning is an explicit maintainer operation, never a side
+effect of collection, analysis, or an action invocation.
+
+The command has separate execution and export modes:
+
+* **Execution:** validate inputs and prerequisites, materialize the deployment bundle in a
+  uniquely owned temporary directory, and run its deployment script with the supplied
+  parameters. Clean up that directory after execution, preserving diagnostics in the command
+  output. Deployment errors identify the failed operation and remain errors; Azure changes
+  already made are not claimed to have been rolled back.
+* **Export:** `setup-azure --out-dir <directory>` writes the self-contained Bicep, parameter
+  and PowerShell files for review, modification and direct execution. It runs no deployment
+  or prerequisite probes and needs no Azure login, Azure CLI, Bicep, PowerShell, or repository
+  checkout. Deployment parameters are optional in this mode: supplied values populate the
+  parameter file, while omitted values remain for the user to supply before deployment.
+  The output directory must be absent or empty; relative paths resolve against the invocation
+  working directory. Export never overwrites an existing deployment bundle.
+
+Execution requires an explicit subscription ID, resource group, location, storage account,
+GitHub `owner/repository`, and history branch. It does not infer a target subscription from
+the active Azure CLI default or inherit Folo's deployment names. The container defaults to
+`bench-history`; the managed identity name derives from the selected storage account, with an
+optional explicit name for existing deployments. Optional additional access takes a custom
+principal's object ID and its `User` or `Group` type together. `--current-user` instead resolves
+the Azure CLI signed-in user in the explicitly selected subscription's tenant before any
+Azure changes. It requires a user login, successful Microsoft Graph lookup and an active
+Azure CLI subscription matching the explicit target; it never changes the CLI default. It conflicts
+with explicit custom principal values and offline export. These inputs describe resource placement and access;
+resource tuning beyond the standard setup belongs in an exported bundle, not additional knobs.
+
+The explicit command inputs are `--subscription-id`, `--resource-group`, `--location`,
+`--storage-account`, `--github-owner`, `--github-repository` and `--history-branch`.
+`--container` and `--managed-identity` override the resource-name defaults.
+`--custom-principal-id` pairs with `--custom-principal-type user|group`.
+`--verbose` enables explanatory deployment diagnostics.
+
+Before any cloud mutation, execution verifies Azure CLI, PowerShell 7.6 or later, an already
+installed Bicep CLI accessible through Azure CLI, and an authenticated context for the selected
+subscription. It installs no tooling and does not initiate login. The operator must have
+resource-provisioning, role-assignment and federated-credential-management privileges.
+Azure authorization remains authoritative for each operation; a successful prerequisite check
+does not promise that every requested mutation will be authorized.
+
+Newly created history storage is private and Entra-only. The deployment supplies one managed
+identity with an account-scoped Storage Blob Data Contributor role assignment and federated
+identity credentials for the selected history branch and the repository's PR subject,
+supporting collection, backfill and analysis.
+A managed identity is a general Azure principal; this deployment dedicates one to the
+history account. Its federated credentials are trust rules on that principal, not separate
+identities. Their names identify the default-branch and PR roles. The branch credential
+still uses the explicitly configured history branch rather than discovering GitHub's default.
+Additional user or group access to the same role is independent. The role permits blob
+read/write/delete and container creation/deletion across the account, not only the configured
+history container. With default GitHub permissions, fork PR jobs cannot obtain effective
+`id-token: write`, including through changes to workflow YAML; maintainer approval does not
+elevate that permission. This platform restriction prevents OIDC issuance for fork PRs.
+The upstream PR subject, if issued, does not distinguish same-repository and fork heads.
+Fork-owned workflows name the fork repository and do not match the upstream subjects.
+The documented caller workflows additionally skip unsupported fork work explicitly.
+Callers grant `id-token: write` to obtain OIDC tokens for eligible jobs. The trusted subjects name the
+repository and event/branch, not a particular workflow file or action. Provisioning
+OIDC trust requires no GitHub API access or stored credential.
+Any job in a trusted context with effective OIDC permission can use the identity; neither
+the credential names nor the subjects establish a bench-history-only software boundary.
+
+Repeated deployments preserve existing storage properties, history and previous additional grants.
+Changing the custom principal adds its grant without removing earlier grants; omission does
+not revoke access. Deployment is incremental, not a cleanup of unrelated resources. Federation
+is configuration rather than an append-only grant list: changing the repository or history
+branch reconfigures the existing branch/PR credentials on the selected identity.
+Serialize invocations targeting the same storage account
+or managed identity in the selected subscription and resource group.
+
+The credential resource names identify benchmark authentication contexts, not a particular
+branch name. Separate managed identities and accounts distinguish test and production
+deployments without another naming suffix. The selected history branch is a workflow
+authorization scope, not a constraint on the Git commits whose measurements are stored.
+
+Successful execution reports the storage account, container, endpoint, tenant and subscription
+IDs, and the managed identity's client and principal IDs. It explains which non-secret values
+configure storage and the workflows. It does not edit the caller's repository, GitHub settings
+or credentials. Export includes parameter guidance and a deployment example; neither mode exports
+or invokes destructive teardown.
+
+PowerShell remains a prerequisite for executing the bundle. The same script drives the command
+and standalone exported deployments, avoiding two implementations of state-preserving provisioning.
+The [implementation guide](implementation.md#azure-provisioning-bundle) defines that ownership.
 
 ## 8. Analysis
 
@@ -1314,18 +1448,20 @@ finding is **self-describing** (it inlines its discriminant set and benchmark se
 findings are never duplicated under the per-set breakdown, which carries only identity and
 tallies. JSON keeps full precision and omits the per-commit series (a charting concern the
 human reports draw from internally, not data a consumer reconstructs); the text and
-Markdown values round to four significant figures. A consumer keys off a top-level
-"notable" flag (post or stay silent) and reads each finding's direction, magnitude, and
-associated commit. A change-point finding's commit is an estimate of where the new level
+Markdown values round to four significant figures. Automation selects its successful-analysis
+message from the top-level `outcome` and reads each finding's direction, magnitude, and
+associated commit. The `notable` flag remains a convenience for consumers that only need to
+know whether findings exist; it does not distinguish the silent outcomes.
+A change-point finding's commit is an estimate of where the new level
 begins, not a claim that that commit introduced it.
 
 Every format also states what the analysis **judged** (§8.9): a coverage tally in the header of
-all three, prose qualifying a silent verdict where there are no findings, and, in JSON, a
-structured census with the per-reason breakdown so automation can gate on coverage rather than
-on the absence of findings.
+each format, prose qualifying a silent result where there are no findings, and, in JSON, a
+structured census with the per-reason breakdown. This evidence supports detailed coverage
+policy without replacing the successful-analysis outcome.
 
-Separate from those three canonical formats, `analyze` can also render a condensed Markdown
-**summary** — a single derived view for a size-limited consumer. It reuses the Markdown
+Separate from those canonical formats, `analyze` can also render a condensed Markdown
+**summary** — a derived view for a size-limited consumer. It reuses the Markdown
 finding blocks but keeps only the top findings by magnitude and drops the per-discriminant grouping,
 so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
 total it shows and leaves the full reports to be consulted separately. Because it drops the
@@ -1417,14 +1553,31 @@ skip, which costs precisely the disclosure this accounting exists to buy. The ex
 only that ratio: the total and the per-reason breakdown keep the whole account, so a consumer
 that needs the ghosts has them, and each surface discloses as much of them as its readers need.
 
-The reach of a verdict is published as a single **coverage state**, the field automation gates
-on:
+The census publishes a **series coverage state** describing how much of the in-scope suite
+was judged:
 
 * `no_series` — nothing was accounted for at all.
 * `nothing_in_scope` — everything accounted for was a ghost.
 * `nothing_judged` — an in-scope suite existed and none of it could be judged.
 * `partial` — some, but not all, of the in-scope suite was judged.
 * `full` — the whole in-scope suite was judged.
+
+The **analysis outcome** combines findings with that state. Findings take precedence over
+coverage limitations:
+
+| Analysis outcome | Condition |
+| --- | --- |
+| `findings` | At least one finding survived detection, regardless of series coverage. |
+| `clean` | No findings, and series coverage is `full`. |
+| `insufficient_baseline` | No findings, and series coverage is `nothing_judged`. |
+| `nothing_in_scope` | No findings, and series coverage is `no_series` or `nothing_in_scope`. |
+| `partial` | No findings, and series coverage is `partial`. |
+
+JSON and the outcome file expose the same analysis outcome; `notable` is true exactly for
+`findings`. The census remains the detailed evidence behind this projection.
+Neither series coverage nor the analysis outcome inventories external collection jobs.
+Matrix automation supplies **platform coverage** separately, from its expected and completed
+platforms, before presenting a complete all-clear.
 
 Only `full` removes the coverage qualification from a silent report: the whole in-scope suite
 was judged. The verdict remains "no notable changes detected" for those judged series: no
@@ -1450,9 +1603,9 @@ How it surfaces (§8.7) follows what a reader needs where:
   in that prose and the verdict above it answer to the same denominator, so a reader who trusts
   the headline and a reader who trusts the ratio cannot reach opposite conclusions.
 * JSON carries the full census — the accounted-for and in-scope totals, the judged count, the
-  coverage state and a per-reason breakdown — as structured data, so automation can gate on
-  coverage instead of on the absence of findings without re-deriving the ghost arithmetic and
-  disagreeing with the report it accompanies.
+  series coverage state and a per-reason breakdown — as supporting evidence for detailed
+  coverage policy. Consumers need not re-derive the ghost arithmetic or the analysis outcome
+  when selecting a message.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
 * An analysis with **nothing in scope** states no coverage ratio — there is nothing to take a
@@ -1468,6 +1621,13 @@ reports are written to the paths supplied by their output flags. Progress, effec
 and effective-partition summaries, verbose reasoning, timings, and failures go to stderr.
 Benchmark child processes inherit the parent process's standard streams and may write directly
 to either one.
+
+File outputs requested together must identify distinct, mutually compatible destinations,
+including the analysis summary and outcome: no report file can also be another report's parent
+directory. The shell checks the complete set before writing any report, accounting for equivalent
+relative paths and filesystem aliases. A rejected collision leaves existing reports untouched.
+Compatible outputs retain the normal overwrite behavior for refreshing reports.
+This is a destination preflight, not a transaction or protection against concurrent filesystem changes.
 
 Failures identify the attempted operation, retain relevant underlying causes, render their causal
 diagnostics once without redundant category prefixes on stderr, and return a failure status.

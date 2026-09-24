@@ -2,7 +2,7 @@
 name = "many_cpus"
 description = "Efficiently schedule work and inspect the hardware environment on many-processor systems"
 publish = true
-version = "2.4.21"
+version = "2.4.22"
 
 authors.workspace = true
 edition.workspace = true
@@ -20,12 +20,6 @@ all-features = true
 # Ref: docs/external-types.md; docs/impl-crate-split.md.
 [package.metadata.cargo_check_external_types]
 allowed_external_types = ["many_cpus_impl::*"]
-
-# `testing` is used by the Windows-only `*_obey_job_*` examples (inside
-# `#[cfg(windows)]` modules) but not by anything on Linux, so cargo-udeps
-# reports it as unused there.
-[package.metadata.cargo-udeps.ignore]
-development = ["testing"]
 
 [features]
 default = []

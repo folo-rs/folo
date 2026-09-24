@@ -1,0 +1,8 @@
+[workspace]
+members = ["packages/workflow_canary"]
+resolver = "3"
+
+[profile.bench]
+# The fixture writes deterministic engine output; it does not measure execution time.
+opt-level = 0
+debug = false
