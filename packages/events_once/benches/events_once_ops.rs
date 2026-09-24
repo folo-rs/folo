@@ -9,11 +9,16 @@
 //! identically prepared Criterion row exists here.
 //!
 //! Everything that is not the operation under test is prepared outside the measured
-//! region: pools and lakes are created and warmed before the group runs, endpoints and
+//! region: pools and lakes are created and warmed outside the timed callbacks, endpoints and
 //! caller-owned embedded storage come from the `iter_batched` preparation callback,
 //! and the noop-waker polling context is built before `iter`. The Callgrind twin
 //! prepares the same values with functions of the same names, which Gungraun evaluates
 //! outside its own measured region.
+//!
+//! Batched scenarios use `LargeInput` to reduce the memory retained between setup and
+//! cleanup, including whole pools and lakes owned by individual cancellation inputs.
+//! The same policy applies to local and thread-safe rows to keep them comparable.
+//! Batch sizes still scale with Criterion's iteration count; this is not a fixed memory cap.
 //!
 //! Equivalent `LocalEvent` and `Event` scenarios are registered as leaves of the same
 //! group so that Criterion reports them side by side: the package requires the
@@ -386,7 +391,7 @@ fn rent(c: &mut Criterion) {
                 let endpoints = black_box(pool.rent());
                 black_box((pool, endpoints))
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -397,7 +402,7 @@ fn rent(c: &mut Criterion) {
                 let endpoints = black_box(pool.rent());
                 black_box((pool, endpoints))
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -408,7 +413,7 @@ fn rent(c: &mut Criterion) {
                 let endpoints = black_box(lake.rent::<i32>());
                 black_box((lake, endpoints))
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -419,7 +424,7 @@ fn rent(c: &mut Criterion) {
                 let endpoints = black_box(lake.rent::<i32>());
                 black_box((lake, endpoints))
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -483,7 +488,7 @@ macro_rules! bench_cancel_owned {
                     drop(receiver);
                     owner
                 },
-                BatchSize::SmallInput,
+                BatchSize::LargeInput,
             );
         });
     };
@@ -496,7 +501,7 @@ macro_rules! bench_cancel_owned {
                     drop(sender);
                     owner
                 },
-                BatchSize::SmallInput,
+                BatchSize::LargeInput,
             );
         });
     };
@@ -513,7 +518,7 @@ macro_rules! bench_cancel_boxed {
                     drop(sender);
                     drop(receiver);
                 },
-                BatchSize::SmallInput,
+                BatchSize::LargeInput,
             );
         });
     };
@@ -525,7 +530,7 @@ macro_rules! bench_cancel_boxed {
                     drop(receiver);
                     drop(sender);
                 },
-                BatchSize::SmallInput,
+                BatchSize::LargeInput,
             );
         });
     };
@@ -577,7 +582,7 @@ fn lifecycle(c: &mut Criterion) {
 
                 place
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -602,7 +607,7 @@ fn lifecycle(c: &mut Criterion) {
 
                 place
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -683,7 +688,7 @@ fn lifecycle_await_first(c: &mut Criterion) {
 
                 place
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -710,7 +715,7 @@ fn lifecycle_await_first(c: &mut Criterion) {
 
                 place
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -765,7 +770,7 @@ fn send(c: &mut Criterion) {
                 sender.send(black_box(PAYLOAD));
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -776,7 +781,7 @@ fn send(c: &mut Criterion) {
                 sender.send(black_box(PAYLOAD));
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -787,7 +792,7 @@ fn send(c: &mut Criterion) {
                 sender.send(black_box(PAYLOAD));
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -798,7 +803,7 @@ fn send(c: &mut Criterion) {
                 sender.send(black_box(PAYLOAD));
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -808,7 +813,7 @@ fn send(c: &mut Criterion) {
         b.iter_batched(
             local_boxed_sender_only,
             |sender| sender.send(black_box(PAYLOAD)),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -816,7 +821,7 @@ fn send(c: &mut Criterion) {
         b.iter_batched(
             sync_boxed_sender_only,
             |sender| sender.send(black_box(PAYLOAD)),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -837,7 +842,7 @@ fn poll(c: &mut Criterion) {
                 _ = black_box(Pin::new(&mut receiver).poll(&mut cx));
                 (sender, receiver)
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -850,7 +855,7 @@ fn poll(c: &mut Criterion) {
                 _ = black_box(Pin::new(&mut receiver).poll(&mut cx));
                 (sender, receiver)
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -865,7 +870,7 @@ fn poll(c: &mut Criterion) {
                 _ = black_box(Pin::new(&mut receiver).poll(&mut cx));
                 (sender, receiver)
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -878,7 +883,7 @@ fn poll(c: &mut Criterion) {
                 _ = black_box(Pin::new(&mut receiver).poll(&mut cx));
                 (sender, receiver)
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -893,7 +898,7 @@ fn poll(c: &mut Criterion) {
                 _ = black_box(Pin::new(&mut receiver).poll(&mut cx));
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -906,7 +911,7 @@ fn poll(c: &mut Criterion) {
                 _ = black_box(Pin::new(&mut receiver).poll(&mut cx));
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -927,7 +932,7 @@ fn into_value(c: &mut Criterion) {
         b.iter_batched(
             local_boxed_bound,
             |(sender, receiver)| (sender, black_box(receiver.into_value())),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -935,7 +940,7 @@ fn into_value(c: &mut Criterion) {
         b.iter_batched(
             sync_boxed_bound,
             |(sender, receiver)| (sender, black_box(receiver.into_value())),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -943,7 +948,7 @@ fn into_value(c: &mut Criterion) {
         b.iter_batched(
             local_boxed_set,
             |receiver| black_box(receiver.into_value()),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -951,7 +956,7 @@ fn into_value(c: &mut Criterion) {
         b.iter_batched(
             sync_boxed_set,
             |receiver| black_box(receiver.into_value()),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -959,7 +964,7 @@ fn into_value(c: &mut Criterion) {
         b.iter_batched(
             local_boxed_disconnected,
             |receiver| black_box(receiver.into_value()),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -967,7 +972,7 @@ fn into_value(c: &mut Criterion) {
         b.iter_batched(
             sync_boxed_disconnected,
             |receiver| black_box(receiver.into_value()),
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -988,7 +993,7 @@ fn is_ready(c: &mut Criterion) {
                 _ = black_box(receiver.is_ready());
                 (sender, receiver)
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -999,7 +1004,7 @@ fn is_ready(c: &mut Criterion) {
                 _ = black_box(receiver.is_ready());
                 (sender, receiver)
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -1010,7 +1015,7 @@ fn is_ready(c: &mut Criterion) {
                 _ = black_box(receiver.is_ready());
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -1021,7 +1026,7 @@ fn is_ready(c: &mut Criterion) {
                 _ = black_box(receiver.is_ready());
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -1032,7 +1037,7 @@ fn is_ready(c: &mut Criterion) {
                 _ = black_box(receiver.is_ready());
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
@@ -1043,7 +1048,7 @@ fn is_ready(c: &mut Criterion) {
                 _ = black_box(receiver.is_ready());
                 receiver
             },
-            BatchSize::SmallInput,
+            BatchSize::LargeInput,
         );
     });
 
