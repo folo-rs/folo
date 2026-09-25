@@ -15,3 +15,7 @@ observations or fallback toolchain observations rather than failing the probe. T
 `EnvironmentProbe` trait retains `io::Result` so alternate implementations can report unexpected
 failures for callers to contextualize under the workspace
 [error-handling guide](../../../docs/error-handling.md).
+
+Hardware acquisition is exercised through `SystemProbe` in Cargo integration tests, including
+the relationship between usable processor counts and the padded processor ID space. Unit tests
+keep fingerprint normalization and reduction in process by supplying hardware facts directly.

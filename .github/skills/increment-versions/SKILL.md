@@ -357,15 +357,21 @@ section instead of omitting it. An empty plan alone does not establish this: acc
 pending increments and first-publication packages as well.
 
 Report separately, and outside that table, every entry in `report.json.packages` that has no
-`anchor`. Such a publishable package has never been released, so it has no version to increment.
-Hand it off for a first publication as described in
-[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) rather than publishing it
-from this run: bootstrap publication happens from a clean `main` checkout after these changes
-merge, in dependency order, and configures Trusted Publishing. Name every such package in the
-handoff.
+`anchor`. Such a package has no Git release anchor on the release branch; that does not establish
+whether its manual bootstrap version already exists on crates.io. Use the registry publication
+checks to identify an outstanding first-publication handoff.
 
-Include any first-publication handoff in the PR section separately from increments, identifying
-the initial declared version and the absence of a released predecessor.
+Follow [`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) rather than publishing
+from this run: a maintainer publishes the bootstrap version from the feature branch containing
+the new crate, in dependency order, **before its first merge**, then configures Trusted Publishing.
+The version intended for that first merge must be strictly higher than the manually published
+bootstrap version, including when version-group expansion supplies the increase. The first
+merge performs the **second publication**, the first automated one. Do not hand off bootstrap
+publication as post-merge work or request publication from a `main` checkout without the new crate.
+
+Include this handoff in the PR section separately from increments, naming every new package,
+its bootstrap version and publication status, its higher intended automated-release version,
+and the absence of a Git release anchor. Preserve the existing publication gate.
 
 Proceed without asking the caller to approve the levels. If further evidence or review feedback
 changes a decision, return to Stage 4 to reassess it and its dependents, respecting every SemVer

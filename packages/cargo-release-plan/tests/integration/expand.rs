@@ -6,8 +6,58 @@ use std::os::unix::fs::symlink;
 
 use cargo_release_plan::{RunInput, RunOutcome, run};
 use serde_json::Value;
+use tempfile::tempdir;
 
 use crate::fixture::{Fixture, write_package};
+
+#[test]
+#[cfg_attr(miri, ignore = "reads proposal files without acquiring a workspace")]
+fn accepted_destinations_reach_plan_validation_in_both_modes() {
+    let directory = tempdir().unwrap();
+    let input = directory.path().join("plan.json");
+    fs::write(&input, "invalid plan, retained").unwrap();
+    for (preserve_input, output) in [
+        (true, directory.path().join("expanded.json")),
+        (false, directory.path().join("expanded.json")),
+        (false, input.clone()),
+    ] {
+        let error = run(&RunInput::Expand {
+            plan: input.clone(),
+            out: output,
+            manifest_path: directory.path().join("unused.toml"),
+            preserve_input,
+            verbose: false,
+        })
+        .unwrap_err();
+        assert!(error.find_source::<serde_json::Error>().is_some());
+        assert_eq!(
+            fs::read_to_string(&input).unwrap(),
+            "invalid plan, retained"
+        );
+    }
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "protects input aliases before reading artifacts")]
+fn protected_expansion_rejects_input_aliases_before_reading() {
+    let directory = tempdir().unwrap();
+    let input = directory.path().join("plan.json");
+    fs::write(&input, "retained").unwrap();
+    for output in [input.clone(), directory.path().join("missing/../plan.json")] {
+        let error = run(&RunInput::Expand {
+            plan: input.clone(),
+            out: output,
+            manifest_path: directory.path().join("unused.toml"),
+            preserve_input: true,
+            verbose: false,
+        })
+        .unwrap_err();
+        // Invalid JSON is not reached when the output aliases the input.
+        assert!(error.find_source::<serde_json::Error>().is_none());
+        assert_eq!(fs::read_to_string(&input).unwrap(), "retained");
+    }
+}
 
 #[test]
 #[cfg_attr(miri, ignore = "expands plans in a real workspace")]

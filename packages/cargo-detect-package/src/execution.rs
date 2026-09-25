@@ -14,6 +14,15 @@ pub(crate) fn execute_with_cargo_args(
     detected_package: &DetectedPackage,
     subcommand: &[String],
 ) -> Result<ExitStatus, io::Error> {
+    cargo_command(working_dir, detected_package, subcommand)?.status()
+}
+
+/// Builds the Cargo invocation independently of spawning it.
+fn cargo_command(
+    working_dir: &Path,
+    detected_package: &DetectedPackage,
+    subcommand: &[String],
+) -> io::Result<Command> {
     if subcommand.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -65,7 +74,7 @@ pub(crate) fn execute_with_cargo_args(
         }
     }
 
-    cmd.status()
+    Ok(cmd)
 }
 
 /// Executes the subcommand with an environment variable set to the package name.
@@ -104,107 +113,66 @@ pub(crate) fn execute_with_env_var(
     cmd.status()
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-    use std::path::Path;
+    use std::ffi::OsStr;
 
     use super::*;
 
-    /// Creates a minimal temporary Cargo workspace for tests that need to run cargo commands.
-    fn create_minimal_workspace() -> tempfile::TempDir {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path();
-
-        fs::write(
-            workspace_root.join("Cargo.toml"),
-            r#"[workspace]
-members = ["test_pkg"]
-resolver = "2"
-"#,
-        )
-        .unwrap();
-
-        let test_pkg = workspace_root.join("test_pkg");
-        fs::create_dir_all(test_pkg.join("src")).unwrap();
-        fs::write(
-            test_pkg.join("Cargo.toml"),
-            r#"[package]
-name = "test_pkg"
-version = "0.1.0"
-edition = "2021"
-"#,
-        )
-        .unwrap();
-        fs::write(test_pkg.join("src/lib.rs"), "// minimal lib\n").unwrap();
-
-        temp_dir
+    fn assert_cargo_args(selection: &DetectedPackage, input: &[&str], expected: &[&str]) {
+        let working_dir = Path::new("workspace");
+        let input = input.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let command = cargo_command(working_dir, selection, &input).unwrap();
+        assert_eq!(command.get_program(), OsStr::new("cargo"));
+        assert_eq!(command.get_current_dir(), Some(working_dir));
+        assert!(command.get_args().eq(expected.iter().map(OsStr::new)));
     }
 
     #[test]
-    fn execute_with_cargo_args_handles_separator() {
-        // Test that we properly handle the "--" separator in clippy commands.
-
-        // Test without "--" separator (should place package flags after subcommand).
-        let subcommand = ["check".to_string(), "--all".to_string()];
-        let separator_pos = subcommand.iter().position(|arg| arg == "--");
-        assert_eq!(separator_pos, None);
-
-        // Test with "--" separator (should place package flags before "--").
-        let subcommand_with_separator = [
-            "clippy".to_string(),
-            "--all-features".to_string(),
-            "--".to_string(),
-            "-D".to_string(),
-            "warnings".to_string(),
-        ];
-        let separator_pos = subcommand_with_separator.iter().position(|arg| arg == "--");
-        assert_eq!(separator_pos, Some(2));
-
-        // Test edge case with "--" as first argument.
-        let subcommand_edge_case = ["clippy".to_string(), "--".to_string(), "--help".to_string()];
-        let separator_pos = subcommand_edge_case.iter().position(|arg| arg == "--");
-        assert_eq!(separator_pos, Some(1));
-    }
-
-    #[test]
-    fn execute_with_cargo_args_workspace_branch() {
-        // Test that the Workspace branch correctly adds --workspace flag.
-        // We use "tree" with --depth 0 as it is fast and accepts --workspace.
-        let workspace = create_minimal_workspace();
-
-        let result = execute_with_cargo_args(
-            workspace.path(),
-            &DetectedPackage::Workspace,
-            &["tree".to_string(), "--depth".to_string(), "0".to_string()],
+    fn cargo_args_select_package_with_and_without_separator() {
+        let package = DetectedPackage::Package("test-package".to_owned());
+        assert_cargo_args(
+            &package,
+            &["check", "--all-targets"],
+            &["check", "--all-targets", "-p", "test-package"],
         );
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().success());
-    }
-
-    #[test]
-    fn execute_with_cargo_args_workspace_with_separator() {
-        // Test that the Workspace branch correctly adds --workspace flag when there is a "--"
-        // separator. This tests the `Some(pos)` branch with `DetectedPackage::Workspace`.
-        // We use "clippy" with "--" separator as it is a common use case.
-        let workspace = create_minimal_workspace();
-
-        let result = execute_with_cargo_args(
-            workspace.path(),
-            &DetectedPackage::Workspace,
+        assert_cargo_args(
+            &package,
+            &["clippy", "--all-features", "--", "-D", "warnings"],
             &[
-                "clippy".to_string(),
-                "--".to_string(),
-                "-A".to_string(),
-                "warnings".to_string(),
+                "clippy",
+                "--all-features",
+                "-p",
+                "test-package",
+                "--",
+                "-D",
+                "warnings",
             ],
         );
+        assert_cargo_args(
+            &package,
+            &["clippy", "--", "--help"],
+            &["clippy", "-p", "test-package", "--", "--help"],
+        );
+    }
 
-        result.unwrap();
-        // The command should have run (exit status depends on clippy findings, but it should not
-        // error out from our argument handling).
+    #[test]
+    fn cargo_args_select_workspace_without_separator() {
+        assert_cargo_args(
+            &DetectedPackage::Workspace,
+            &["tree", "--depth", "0"],
+            &["tree", "--depth", "0", "--workspace"],
+        );
+    }
+
+    #[test]
+    fn cargo_args_select_workspace_before_separator() {
+        assert_cargo_args(
+            &DetectedPackage::Workspace,
+            &["clippy", "--", "-A", "warnings"],
+            &["clippy", "--workspace", "--", "-A", "warnings"],
+        );
     }
 
     #[test]

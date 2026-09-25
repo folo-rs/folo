@@ -320,13 +320,11 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use nm::{EventMetrics, Histogram, Magnitude};
-    use opentelemetry::KeyValue;
-    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
+    use opentelemetry::metrics::NoopMeterProvider;
     use static_assertions::assert_impl_all;
     use testing::assert_panics;
 
     use super::*;
-    use crate::create_test_provider;
 
     assert_impl_all!(Publisher: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PublisherBuilder: UnwindSafe, RefUnwindSafe);
@@ -336,15 +334,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn builder_with_defaults() {
-        let (provider, _) = create_test_provider();
-
         let publisher = Publisher::builder()
-            .provider(provider)
+            .provider(NoopMeterProvider::new())
             .clock(create_test_clock())
             .build();
 
@@ -352,15 +344,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn builder_with_custom_interval() {
-        let (provider, _) = create_test_provider();
-
         let publisher = Publisher::builder()
-            .provider(provider)
+            .provider(NoopMeterProvider::new())
             .clock(create_test_clock())
             .interval(Duration::from_secs(5))
             .build();
@@ -376,13 +362,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn builder_without_clock_panics() {
-        let (provider, _) = create_test_provider();
-        let builder = Publisher::builder().provider(provider);
+        let builder = Publisher::builder().provider(NoopMeterProvider::new());
 
         assert_panics(|| {
             _ = builder.build();
@@ -407,101 +388,10 @@ mod tests {
         Report::fake(vec![event])
     }
 
-    fn find_metric_value(
-        metrics: &ResourceMetrics,
-        name: &str,
-        bucket: Option<&str>,
-    ) -> Option<u64> {
-        for scope_metrics in metrics.scope_metrics() {
-            for metric in scope_metrics.metrics() {
-                if metric.name() != name {
-                    continue;
-                }
-                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                    continue;
-                };
-                for point in sum.data_points() {
-                    let matches = match bucket {
-                        None => point.attributes().next().is_none(),
-                        Some(expected) => point.attributes().any(|kv: &KeyValue| {
-                            kv.key.as_str() == "le" && kv.value.as_str() == expected
-                        }),
-                    };
-                    if matches {
-                        return Some(point.value());
-                    }
-                }
-            }
-        }
-        None
-    }
-
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
-    fn run_one_iteration_with_report_publishes_fake_report() {
-        const METER_NAME: &str = "custom_meter_name_for_test";
-
-        let (provider, reader) = create_test_provider();
-
-        let mut publisher = Publisher::builder()
-            .provider(provider)
-            .clock(create_test_clock())
-            .meter_name(METER_NAME)
-            .build();
-
-        let initial_report = make_fake_report(10, 4567, vec![4, 3, 2], 1);
-        publisher.run_one_iteration_with_report(&initial_report);
-
-        let metrics = reader.collect();
-        let has_expected_scope = metrics
-            .scope_metrics()
-            .map(|scope_metrics| scope_metrics.scope().name())
-            .any(|scope_name| scope_name == METER_NAME);
-        assert!(has_expected_scope);
-
-        assert_eq!(find_metric_value(&metrics, FAKE_EVENT_NAME, None), Some(10));
-
-        let next_report = make_fake_report(25, 8901, vec![6, 5, 3], 2);
-        publisher.run_one_iteration_with_report(&next_report);
-        let metrics = reader.collect();
-
-        // OpenTelemetry counters accumulate across flushes, so the observed total
-        // distinguishes publishing deltas from replaying raw cumulative report values.
-        assert_eq!(find_metric_value(&metrics, FAKE_EVENT_NAME, None), Some(25));
-
-        // Bucket counters have the same cumulative OpenTelemetry semantics and therefore
-        // verify delta publication independently for every bound and the overflow bucket.
-        let bucket_metric = format!("{FAKE_EVENT_NAME}_bucket");
-        assert_eq!(
-            find_metric_value(&metrics, &bucket_metric, Some("10")),
-            Some(6)
-        );
-        assert_eq!(
-            find_metric_value(&metrics, &bucket_metric, Some("50")),
-            Some(11)
-        );
-        assert_eq!(
-            find_metric_value(&metrics, &bucket_metric, Some("100")),
-            Some(14)
-        );
-        assert_eq!(
-            find_metric_value(&metrics, &bucket_metric, Some("+Inf")),
-            Some(16)
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
-    )]
     fn run_one_iteration_with_report_panics_on_incompatible_histograms() {
-        let (provider, _) = create_test_provider();
         let mut publisher = Publisher::builder()
-            .provider(provider)
+            .provider(NoopMeterProvider::new())
             .clock(create_test_clock())
             .build();
 

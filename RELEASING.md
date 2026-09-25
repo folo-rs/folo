@@ -23,26 +23,36 @@ See [Required GitHub configuration](#required-github-configuration) below.
 ## First publish of a new crate
 
 crates.io does not allow Trusted Publishing for a crate that has never been published,
-so a brand-new crate's first version must be published manually:
+so a brand-new crate's first version must be published manually **before its first
+merge**. The maintainer publishes from the feature branch containing the new crate,
+not from `main`, in dependency order:
 
-1. `cargo publish -p <crate>` (with a crates.io token login).
+1. Publish the initial bootstrap version with `cargo publish -p <crate>`.
 1. Configure Trusted Publishing for the crate on crates.io (owner `folo-rs`, repo
    `folo`, workflow `release.yml`).
-1. Re-run `release.yml`. The workflow creates missing package tags at verified
-   release-equivalent main snapshots. For a binary crate it also creates the GitHub
-   release and uploads prebuilt binaries. The requested package version must still
-   be present at the selected snapshot; existing tags are never moved.
-   Subsequent releases then go through `release.yml` automatically.
+1. Prepare a version strictly higher than the bootstrap version for the first merge,
+   including any version-group alignment and dependency requirement updates. Refresh
+   the pull request's version/release plan against that intended automated release.
+1. Merge the pull request. `release.yml` performs the crate's **second publication**,
+   its first automated release. For a binary crate, the workflow also creates its
+   GitHub release and uploads prebuilt binaries.
+
+Do not merge the bootstrap version unchanged or rerun a `main` release workflow to
+publish source that exists only on the feature branch. If the automated release needs
+a retry after merge, rerun `release.yml` for the merged version. Package tags and
+binary assets are reconciled against verified release-equivalent main snapshots;
+existing tags are never moved.
 
 The `increment-versions` skill runs `just check-never-published` as an early,
 workspace-wide advisory. Before applying a resolved plan,
 `just check-increment-published` fails unless every **publishable** package the
 plan reaches has already reached crates.io. Version-alignment targets with
 publication disabled do not require a first-publication handoff. The gate cannot
-verify Trusted Publisher configuration or the release-workflow follow-up, so
-complete those remaining steps explicitly before retrying the increment.
-The skill only reports this maintainer handoff; it does not perform a manual
-first publication or an emergency publish.
+verify Trusted Publisher configuration, so complete that setup explicitly before
+retrying the increment. The automated release follows the first merge.
+The skill only reports this pre-merge maintainer handoff; it does not perform a manual
+first publication or an emergency publish. A package can lack a Git release anchor
+while its bootstrap version already exists on crates.io.
 
 The skill prepares offline dependency resolution and previews prospective version
 and requirement rewrites before application. The resolved plan includes the complete

@@ -277,18 +277,26 @@ mod tests {
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::processes::MockProcesses;
     use crate::pal::pseudoconsole::WindowSize;
-    use crate::pal::session_store::{FsSessionStore, MockSessionStore};
+    use crate::pal::session_store::MockSessionStore;
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::StartupStep;
     use crate::session_record::ProcessIdentity;
     use crate::{AttachFailedError, SessionId};
 
+    fn launch_store() -> MockSessionStore {
+        let mut store = MockSessionStore::new();
+        store
+            .expect_current_dir()
+            .returning(|| Ok(PathBuf::from("cwd")));
+        store
+            .expect_canonicalize()
+            .returning(|path| Ok(path.to_path_buf()));
+        store
+    }
+
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn no_console_fails() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MockSessionStore::new();
         let processes = MockProcesses::new();
         let transport = MemoryTransport::new();
         let mut console = MockLocalConsole::new();
@@ -345,11 +353,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn breakaway_denied_is_breakaway_error() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = launch_store();
         let mut processes = MockProcesses::new();
         processes
             .expect_random_nonce()
@@ -378,11 +383,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn spawn_failure_is_startup_error() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = launch_store();
         let mut processes = MockProcesses::new();
         processes
             .expect_random_nonce()
@@ -415,11 +417,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_does_not_connect_is_a_startup_error() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = launch_store();
         let transport = MemoryTransport::new();
         transport.expire_next_accept(&transport.pipe_name("startup-nonce"));
         let mut processes = MockProcesses::new();
@@ -459,11 +458,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_connects_without_reporting_is_a_startup_error() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = launch_store();
         let transport = MemoryTransport::new();
         transport.expire_next_recv(&transport.pipe_name("startup-nonce"));
         let mut processes = MockProcesses::new();
@@ -510,11 +506,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_reports_failure_is_a_startup_error() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = launch_store();
         let transport = MemoryTransport::new();
         let mut processes = MockProcesses::new();
         processes
@@ -563,11 +556,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_disconnects_after_startup_ok_is_a_startup_error() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = launch_store();
         let transport = MemoryTransport::new();
         let mut processes = MockProcesses::new();
         processes

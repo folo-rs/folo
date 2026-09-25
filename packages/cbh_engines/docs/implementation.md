@@ -23,3 +23,8 @@ Orchestration tests share minimal synthetic engine documents through the test-su
 module. These exercise the real adapters without repeatedly processing unrelated producer
 metadata. The committed external-output fixtures and live producer round trips retain
 schema-compatibility coverage at the adapter boundary.
+
+Filesystem harvesting and live producer round trips run as Cargo integration tests because they
+acquire real files or processor-clock readings. Harvesting fixtures assign their modification times
+explicitly rather than depending on the wall clock. In-memory parsing, freshness arithmetic and
+diagnostic formatting remain in the unit harness.
