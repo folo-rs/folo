@@ -58,7 +58,7 @@ install-tools:
 
     # These pins lack publisher archives or a verified discovery layout (cargo-careful's raw
     # executables). cargo-sort's v2.1.4 archives report 2.1.3, so use the crates.io source to
-    # preserve the pin: https://github.com/DevinR528/cargo-sort/blob/v2.1.4/Cargo.toml.
+    # preserve the pin: https://github.com/DevinR528/cargo-sort/issues/138.
     cargo install `
         cargo-careful@$env:CARGO_CAREFUL_VERSION `
         cargo-ensure-no-default-features@$env:CARGO_ENSURE_NO_DEFAULT_FEATURES_VERSION `

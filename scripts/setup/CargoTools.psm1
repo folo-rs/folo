@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Shared binary-first Cargo tool installation for local setup, Just recipes and CI.
 # PowerShell owns this boundary because it must bootstrap Just before Rust helpers can run.
@@ -13,6 +13,10 @@ Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
 
 # SHA-256 digests of the official cargo-binstall release assets. Update these together with
 # CARGO_BINSTALL_VERSION in constants.env, using the release API's asset digests.
+# Refresh the pinned upstream references here when updating that version.
+# Archive names/layout follow the upstream manual installation instructions:
+# https://github.com/cargo-bins/cargo-binstall/blob/v1.23.0/README.md#manually.
+# Digest source: https://api.github.com/repos/cargo-bins/cargo-binstall/releases/tags/v1.23.0.
 # Linux uses the static musl build to avoid depending on the host's glibc version.
 $script:BinstallBuilds = @{
     'windows-X64'   = @{ Target = 'x86_64-pc-windows-msvc'; Format = 'zip'; Sha256 = 'f4641479477aca40387e88297e3813fab8e44a8d21f25faa44e0ff33e2bc1726' }
@@ -24,6 +28,12 @@ $script:BinstallBuilds = @{
 }
 
 function Get-CargoInstallRoot {
+    # Select one root for bootstrap, binary installs and source installs, including metadata.
+    # Binstall documents the environment precedence in its --root option:
+    # https://github.com/cargo-bins/cargo-binstall/blob/v1.23.0/HELP.md#cargo-binstall.
+    # Cargo also reads install.root, but passing our resolved --root deliberately overrides it
+    # so every installation path agrees, without implementing Cargo's configuration discovery.
+    # https://doc.rust-lang.org/cargo/commands/cargo-install.html#description.
     [CmdletBinding()]
     [OutputType([string])]
     param()
@@ -35,6 +45,8 @@ function Get-CargoInstallRoot {
 }
 
 function Get-BootstrapToolVersion {
+    # Read pins before Just exists to load its dotenv file. Bootstrap and command-runner setup
+    # require exact release identities, not requirements that resolve differently across runs.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -50,6 +62,8 @@ function Get-BootstrapToolVersion {
 }
 
 function Get-BinstallBuild {
+    # Match the executing PowerShell process, including x64 processes on ARM64 hosts.
+    # Only explicitly supported targets have reviewed archive digests; never guess a fallback.
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
@@ -65,10 +79,14 @@ function Get-BinstallBuild {
 }
 
 function Get-BinstallVersion {
+    # Probe the selected bootstrap executable instead of trusting its filename or install metadata.
+    # The pinned binstall's -V emits a bare release triplet. An unreadable/malformed executable
+    # is an error, not a cache miss to hide by replacing it.
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][string] $Path)
 
+    # Preserve both the path and captured output in our diagnostic for a native-command failure.
     $PSNativeCommandUseErrorActionPreference = $false
     $output = & $Path -V
     if ($LASTEXITCODE -ne 0 -or "$output" -notmatch '^\d+\.\d+\.\d+$') {
@@ -78,6 +96,10 @@ function Get-BinstallVersion {
 }
 
 function Install-CargoBinstall {
+    # Establish the verified installer that both the pre-Just entry point and recipes use.
+    # Reuse a matching executable; otherwise download and verify in private staging before
+    # replacing the selected root's copy. Return the installed executable's path without changing PATH.
+    # Ref: docs/build-and-tooling.md#development-tool-installation.
     [CmdletBinding()]
     [OutputType([string])]
     param([string] $Root = (Get-CargoInstallRoot))
@@ -101,7 +123,8 @@ function Install-CargoBinstall {
     )
     try {
         $archive = Join-Path $work.FullName $asset
-        # Retry only the download/verification, not execution of an unverified bootstrap.
+        # A short, capped exponential retry budget tolerates transient release-host failures.
+        # Retry only the download/verification, not extraction or execution of a bootstrap.
         Invoke-WithRetry -Attempt 4 -DelaySeconds 3 -BackoffMultiplier 2 -MaxDelaySeconds 30 -Action {
             Invoke-WebRequest -Uri $url -OutFile $archive
             $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -136,6 +159,8 @@ function Install-CargoBinstall {
 }
 
 function Invoke-CargoBinstall {
+    # Keep native exit-code handling shared and send installer progress to the host, not the
+    # success pipeline used by helpers to return paths and versions.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Executable,
@@ -150,6 +175,13 @@ function Invoke-CargoBinstall {
 }
 
 function Install-CargoTool {
+    # Reconcile the recipe's exact pins through one local/CI installation policy. Leave matching
+    # installations tracked and reusable rather than forcing replacement on every setup.
+    # PackageUrl accommodates a publisher's nonstandard release layout for one package only.
+    # CLI/root/tracking/fallback semantics:
+    # https://github.com/cargo-bins/cargo-binstall/blob/v1.23.0/HELP.md#cargo-binstall.
+    # URL templates and strategy-override precedence:
+    # https://github.com/cargo-bins/cargo-binstall/blob/v1.23.0/SUPPORT.md.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string[]] $Package,

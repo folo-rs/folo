@@ -76,7 +76,7 @@ apply equally to binary and source installs.
 The cargo-audit invocation supplies its publisher's nested release-tag URL explicitly,
 because automatic discovery does not find those archives.
 Cargo-sort uses crates.io source because the publisher's archive at the pinned release
-reports a different version.
+reports a different version; see [the upstream report](https://github.com/DevinR528/cargo-sort/issues/138).
 
 The binstall bootstrap downloads an official archive for the host platform and
 verifies a checked-in SHA-256 before executing it. Update the archive digests in
@@ -329,9 +329,10 @@ to collect diagnostics and file an issue. See
 
 ## Scripting
 
-You can assume PowerShell 7 (`pwsh`) is available on every operating system and
-environment. Where a script is justified, prefer PowerShell 7 commands to Bash
-commands.
+PowerShell 7.6 or later (`pwsh`) is required on every operating system and environment.
+Declare `#requires -Version 7.6` in new or modified standalone scripts and modules,
+including executable test fixtures; require a newer version when an API needs it.
+Where a script is justified, prefer PowerShell commands to Bash commands.
 
 ### Script purpose and decision comments
 

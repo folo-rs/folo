@@ -17,7 +17,7 @@ Prerequisites:
     * rust-analyzer
     * vscode-just
     * WSL
-* PowerShell 7
+* PowerShell 7.6 or later
 * Node.js with npm (used to install and run the Azurite Azure Blob emulator for `just test-azurite`)
 * `rustup toolchain install` to install Rust development tools based on `rust-toolchain.toml`
 * (Only if publishing releases) GitHub CLI + `gh auth login`
@@ -43,7 +43,7 @@ Prerequisites:
 * Ubuntu 24 installed in WSL
 * `sudo apt install -y git git-lfs build-essential cmake gcc make curl libssl-dev pkg-config valgrind`
 * Git LFS setup: `git lfs install`
-* [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/install-ubuntu?view=powershell-7.5):
+* [PowerShell 7.6 or later](https://learn.microsoft.com/en-us/powershell/scripting/install/install-ubuntu?view=powershell-7.6):
   ```bash
   # Download and install Microsoft package repository
   wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"

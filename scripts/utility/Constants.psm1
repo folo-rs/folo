@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Reads repository constants before Just's dotenv loading is available. Used by tool
 # bootstrapping and the hosted benchmark caller canary, both before Rust helper preparation.

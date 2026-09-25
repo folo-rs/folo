@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Exercises the shared local/CI installer without network access or global installation.

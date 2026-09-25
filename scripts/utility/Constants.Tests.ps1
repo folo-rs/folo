@@ -1,3 +1,4 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Integration tests for bootstrap/canary constants loading, using fixture files without

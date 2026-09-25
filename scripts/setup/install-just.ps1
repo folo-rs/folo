@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Bootstraps the pinned Just command runner for DEVELOPMENT.md and setup-environment.
 # This entry point cannot itself be a Just recipe. Both callers share CargoTools' verified
