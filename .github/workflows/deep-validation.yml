@@ -68,6 +68,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        # Mutation builds use private source copies rather than this checkout's target directory.
+        # Ref: implementation.md#shared-environment-cache-identity.
+        with:
+          save-build-cache: ${{ matrix.recipe != 'mutants' }}
       - name: Run just ${{ matrix.recipe }}
         shell: pwsh
         env:
@@ -108,6 +112,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
         id: setup
+        with:
+          save-build-cache: "true"
       # Keep independent findings visible without running checks after failed setup or cancellation.
       # Ref: .github/workflows/design.md#job-granularity-and-gating.
       - name: Run clippy release on ${{ matrix.platform }}
@@ -144,6 +150,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "true"
       - name: Run examples on ${{ matrix.platform }}
         shell: pwsh
         run: |
@@ -161,6 +169,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "true"
       - name: Run default-features-check
         shell: pwsh
         run: |
@@ -183,6 +193,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "true"
       - name: Run hack on ${{ matrix.platform }}
         shell: pwsh
         run: |
@@ -204,6 +216,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        # The recipe also runs cargo-udeps, which compiles the workspace.
+        with:
+          save-build-cache: "true"
       - name: Run machete on ${{ matrix.platform }}
         shell: pwsh
         run: |
@@ -234,6 +249,7 @@ jobs:
         id: setup
         # Linux benchmark smoke tests execute Gungraun harnesses under Valgrind.
         with:
+          save-build-cache: "true"
           install-valgrind: "true"
       - name: Run tests on ${{ matrix.platform }}
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}

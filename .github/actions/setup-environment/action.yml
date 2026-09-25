@@ -4,11 +4,11 @@ description: Setup development environment for Folo project
 inputs:
   save-build-cache:
     description: >-
-      Whether this job saves Cargo dependency and workspace build artifacts. Setup-only jobs
-      restore these caches but leave saving to jobs that compile the workspace, so an empty
-      target directory cannot claim an immutable cache key. Environment caches are still saved.
+      Whether this compiling job saves Cargo dependency and workspace build artifacts. Saving
+      is opt-in so setup-only jobs cannot claim an immutable cache key with an empty target
+      directory. All jobs can restore these caches; environment caches are still saved.
     required: false
-    default: "true"
+    default: "false"
   install-azurite:
     description: >-
       Whether `just install-tools` should also install the Azurite blob-storage emulator.

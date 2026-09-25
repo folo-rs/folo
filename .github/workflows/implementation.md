@@ -78,6 +78,8 @@ the benchmark setup hook, invoke the same composite. There is no warmup-specific
 Manual warmup runs use the selected ref; use the default branch to populate broadly reusable
 caches. Successful consumers can also save missing environment entries within GitHub's normal
 ref scoping.
+The Linux warmup matrix includes both values of `install-valgrind` because the APT cache key
+includes the requested package set. Non-Linux platforms need only one warmup variant.
 
 The composite restores rustup's cache and then completes the pinned toolchain set **before**
 `Swatinem/rust-cache` computes its key. `RustToolchain.psm1` owns the common installer used by
@@ -98,11 +100,14 @@ dependency fallback.
 
 Installed Cargo tools remain in the independent cache described above. Warmup runs
 the complete installer before saving environment caches, while consumers reconcile any missing
-or stale inputs after restoration. Setup-only callers set `save-build-cache: false`: warmup,
-validation scope preparation, book rendering and cloud-agent preparation restore the Rust build
-cache without saving it. GitHub cache entries are immutable, and `rust-cache` does not resave
+or stale inputs after restoration. `save-build-cache` defaults to `false`; jobs opt in only when
+they compile in the cached checkout. This includes repository-native CLI verification, not only
+library tests and builds. Script-domain selection and no-op publication need not compile anything,
+so they leave saving disabled. Mutation jobs build private copies, and the benchmark hook prepares
+the invocation checkout rather than the separate measurement checkout; neither owns this cache.
+GitHub cache entries are immutable, and `rust-cache` does not resave
 an exact hit; letting a setup-only job save first would prevent later compilation from filling
-that entry. Compiling jobs retain the default save policy. This switch does not affect saving
+that entry. All jobs can still restore it. This switch does not affect saving
 rustup, installed-tool or other environment caches.
 
 ## Benchmark workflow artifacts

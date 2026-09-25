@@ -15,6 +15,15 @@ jobs:
       fail-fast: false
       matrix:
         platform: [ubuntu-latest, windows-latest, macos-latest, ubuntu-24.04-arm, windows-11-arm]
+        # APT keys include the requested package set. Warm both Linux variants without
+        # duplicating non-Linux jobs, where the Valgrind input does not affect setup.
+        # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
+        install-valgrind: ["false"]
+        include:
+          - platform: ubuntu-latest
+            install-valgrind: "true"
+          - platform: ubuntu-24.04-arm
+            install-valgrind: "true"
 
     runs-on: ${{ matrix.platform }}
     # This job's whole purpose is the cold-cache setup-environment, which can take up to
@@ -27,9 +36,9 @@ jobs:
 
       - name: Setup environment
         # Use the consumers' complete toolchain set and normalized cache inputs, not a
-        # warmup-specific environment. Include Valgrind for benchmark consumers' APT cache.
+        # warmup-specific environment. Prime each declared APT package-set variant.
         # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
         uses: ./.github/actions/setup-environment
         with:
           save-build-cache: "false"
-          install-valgrind: "true"
+          install-valgrind: ${{ matrix.install-valgrind }}

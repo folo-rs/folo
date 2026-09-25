@@ -5,7 +5,9 @@ runs:
   using: composite
   steps:
     # Keep repository build prerequisites here; measurement settings are workflow inputs.
+    # Measurements compile in a separate checkout, not this invocation checkout's build cache.
     # Ref: ../../workflows/design.md#benchmark-setup-hook.
     - uses: ./.github/actions/setup-environment
       with:
+        save-build-cache: "false"
         install-valgrind: "true"

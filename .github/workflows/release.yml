@@ -56,6 +56,8 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
+        # A no-release run may do no compilation; build-cache writes belong to compiling jobs.
+        # Ref: implementation.md#shared-environment-cache-identity.
         uses: ./.github/actions/setup-environment
 
       - name: Verify checked-in lockfile is consistent
@@ -113,6 +115,9 @@ jobs:
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
+        # Reconciliation builds the repository-native release verifier.
+        with:
+          save-build-cache: "true"
 
       - name: Reconcile package tags and binary GitHub releases
         shell: pwsh
@@ -171,6 +176,8 @@ jobs:
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "true"
 
       - name: Build, package, checksum and upload
         uses: taiki-e/upload-rust-binary-action@v1

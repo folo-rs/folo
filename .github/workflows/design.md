@@ -830,6 +830,7 @@ The scheduled warmup prepares and caches the complete shared development environ
 default branch for each supported runner platform. Validation, release, benchmark and other
 setup consumers reuse that environment rather than maintaining workflow-specific toolsets.
 Manual warmup runs intended for cross-branch reuse also run on the default branch.
+Linux warmup covers both ordinary setup and the Valgrind-enabled package set used by benchmarks.
 
 Warmup and consumers use the same preparation and cache identity for equivalent platform,
 runner-image and build inputs. Cache lookup must not depend on whether toolchains were restored
@@ -839,8 +840,9 @@ identity. See [shared environment cache identity](implementation.md#shared-envir
 
 Caches are an optimization, not a prerequisite: eviction, changed pins and runner-image rolls
 can require a cold setup. Consumers reconcile the declared environment and may populate missing
-environment caches. Only jobs that compile workspace crates save their build artifacts;
-setup-only jobs must not claim a shared immutable build-cache entry with an empty target directory.
+environment caches. Saving workspace build artifacts is opt-in for jobs that compile in the
+cached checkout; setup-only jobs and builds in isolated checkouts must not claim its shared
+immutable build-cache entry with an empty target directory.
 Periodic warmup reduces inactivity misses but does not guarantee retention or prebuild every
 consumer's workspace compilation.
 

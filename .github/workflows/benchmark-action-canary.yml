@@ -191,6 +191,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        # The verifier builds cargo-bench-history from this checkout before querying storage.
+        with:
+          save-build-cache: "true"
       - name: Verify the rolling window stored its selected commit
         shell: pwsh
         env:
@@ -256,6 +259,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        # The verifier builds cargo-bench-history from this checkout before querying storage.
+        with:
+          save-build-cache: "true"
       # Backfill itself has no analysis or report. Query exact stored endpoints rather
       # than letting older data in the persistent test project satisfy an aggregate count.
       - name: Verify stored historical measurements
