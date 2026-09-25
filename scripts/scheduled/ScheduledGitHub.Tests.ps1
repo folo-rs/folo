@@ -234,6 +234,11 @@ Describe 'Same-workflow failure reporting' {
                 $text | Should -Match '\| cancelled \|'
                 $text | Should -Match ([regex]::Escape($script:annotations[0].message))
             }
+            It 'accepts case variants of the same GitHub repository URL' {
+                $script:jobs[0].check_run_url = 'https://api.github.com/repos/Example/Repo/check-runs/120'
+                $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+                $script:writes[0].body.body | Should -Match '\| cancelled \|'
+            }
             It 'rejects a <Case> check-run URL rather than silently omitting a cancelled job' -ForEach @(
                 @{ Case = 'missing'; Url = $null }
                 @{ Case = 'different repository'; Url = 'https://api.github.com/repos/other/repo/check-runs/120' }
