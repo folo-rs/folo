@@ -204,6 +204,13 @@ omits, so in a passing workspace the list is a superset of what is genuinely
 exposed. Reading a declaration the repository already verifies keeps this
 offline and avoids a second, weaker inference of the public API.
 
+This verification is an adoption prerequisite, not something ordinary `check`
+proves. The consuming repository runs `cargo-check-external-types` as a required
+API-validation check for its supported feature and platform surfaces. An omitted
+allow-list declares no external exposure; it is not permission to leave exposure
+unknown. The public integration guide includes this check alongside the
+repository's build and test gates, without relying on a Folo Just recipe.
+
 The allow-list names the crate that *defines* a type, which is not always the
 dependency that supplies it: a package usually reaches an implementation crate's
 types re-exported through the public crate in front of it. The re-exporting
@@ -376,6 +383,14 @@ prospective workspace. It uses the report-selected consumer contracts and runs
 the supported external API checker. The operation records comparison inputs,
 checker identity, findings and diagnostics; it does not replace the author's
 semantic decisions.
+
+Report-based execution explicitly selects a workspace and requires evidence bound
+to that workspace's assessed source, baseline and resolution. A matching HEAD
+alone is insufficient for a dirty work tree. The tool verifies those inputs before
+and after the comparison, as it does for a retained preview. Artifact-only target
+selection does not by itself establish that the selected checkout matches a report.
+The published comparison versions are recorded with the result; an unavailable
+comparison is not silently replaced with a different baseline.
 
 A self-comparison canary checks that the installed checker can perform a comparison
 before its evidence is relied upon. Findings, a valid empty target set and an
@@ -885,6 +900,14 @@ publication does not repair it. Ignored build output is not a source change.
 Preparation repeats the merge gate's publication-input checks, including target
 selection and the tag/archive URLs in `cargo-binstall` metadata, before any upload.
 
+Adoption into an already-published repository includes an initial release-history
+audit. Maintainers establish that each current published version corresponds to
+the claimed source and that package/version identities belong to this repository.
+Matching version strings or a newly imported Git history are not proof of matching
+released content. Differences are reconciled through reviewed forward releases,
+not by rewriting published versions or established tags. Once adopted, the release
+process preserves that correspondence.
+
 Every publishable workspace package at that snapshot contributes its exact
 name/version request, including packages assessed as unchanged. Nonpublishable
 version-alignment targets contribute no upload request. Preparation can read
@@ -1061,6 +1084,16 @@ version. Automatic missing-tag recovery requires that the requested version rema
 available at an eligible snapshot. Existing tags remain usable for binary repair
 without selecting a replacement target or imposing new version policy on them.
 
+This can occur during ordinary concurrent development, not only after a failed
+run: another merge can advance the same package while its registry phase is still
+running. Queuing release workflows does not serialize merges to the release
+branch. If no eligible tag target remains, the run fails with the package/version,
+missing tag, original publication source and observed branch version identified.
+Retaining the manifest preserves that evidence but does not create an eligible
+target. A maintainer can restore the existing-tag repair path by verifying and
+creating the missing tag at the recorded publication source with appropriate
+authority; automatic publication does not acquire that additional authority.
+
 Libraries receive tags only. Binary GitHub releases are attached to their
 established tags; release creation cannot choose another commit implicitly.
 Binary builds use the actual peeled tag commit, not the version anchor, the
@@ -1080,6 +1113,13 @@ Each release publishes `{package}-v{version}-{target}.zip` and its matching
 `.sha256` sidecar. The ZIP contains the executable at its root, with the target's
 executable suffix and executable permissions where applicable. The package's
 `cargo-binstall` metadata must describe this same layout.
+
+The standard binary build uses Cargo's release profile and default features.
+Publication configuration does not accept arbitrary Cargo arguments or silently
+enable features to reach a binary. Preparation verifies that the selected binary's
+required features are enabled by that selection before publishing its package.
+The guide distinguishes this build selection from the external library API
+checker's all-features comparison.
 
 A release/target pair is complete only when both assets are uploaded. Execution
 refreshes completeness before building, repairs both members of an incomplete
@@ -1107,6 +1147,16 @@ A new push or manual recovery run can prepare its own manifest for the selected
 release snapshot. Neither path depends on a list of packages uploaded in the
 current attempt, and neither guarantees recovery of superseded versions whose
 missing tags cannot be established.
+
+Publication artifacts are handoff records, not a permanent release database.
+The shared workflow preserves intent and per-attempt outcomes for its documented
+artifact-retention period, including on failure. A failed-job rerun retrieves the
+original manifest and batch rather than rediscovering requests from today's
+branch. If that evidence is unavailable, it stops; an explicit recovery invocation
+can prepare new evidence for a chosen retained source commit. That recovery
+revalidates the source and remote state and is not a continuation of a missing
+receipt. A removed source commit or incompatible artifact schema requires an
+explicit diagnostic, never fallback to the latest source.
 
 Registry publication and all GitHub phases execute within the same workflow run.
 They do not depend on token-authored tags or releases triggering another workflow.
@@ -1142,7 +1192,8 @@ The check workflow resolves the configured release baseline for the tested event
 including merge-queue candidates, supplies publication configuration to `check`,
 and performs scoped external compatibility checks. Repositories needing a narrower
 version-readiness-only queue gate use the corresponding lower composite operation,
-with the tested queue baseline explicit. The release workflow owns the preparation and registry job, subsequent
+with the tested queue baseline explicit. The release workflow owns the preparation
+and registry job, subsequent
 GitHub reconciliation, native binary matrix, artifact handoff and failure
 reporting. Consumers supply their triggers, required permissions, optional
 publishing environment and configuration location.
@@ -1157,11 +1208,23 @@ meanings; public list inputs use comma-separated values rather than caller-writt
 JSON. Structured internal matrices and publication artifacts are produced by Rust.
 Reusable workflows invoke the composite from their own exact action-repository
 commit, not an independently moving major tag or the consumer's local action path.
+The bootstrap establishes that called-workflow identity separately from the
+caller's source identity. It cannot require publication credentials merely to
+resolve the action revision for a read-only check. Consumers can pin immutable
+workflow commits for reproducible full reruns; documentation distinguishes those
+from mutable major references.
 
 The shared flow gates writes to the configured repository and release branch.
 Read-only pull-request checks do not acquire publication credentials. The caller
 grants the required scopes, and individual jobs narrow them; the reusable workflow
 cannot add authority the caller did not grant.
+
+Public repositories can run read-only checks on fork pull requests under the
+repository's normal approval policy. They use the base repository's release
+history and the tested PR source, not a fork's similarly named branch, and acquire
+no write or OIDC authority. A policy-disallowed run is reported as not executed,
+not as a successful release check. Privileged `pull_request_target` execution of
+contributor code is not an integration requirement.
 
 Publication runs for the same repository, release branch and workspace use
 non-cancelling concurrency with `queue: max`. GitHub's
@@ -1212,10 +1275,18 @@ The shared installation input names and behavior match the benchmark action:
 
 Released installed-binary caches distinguish tool version, runner OS and
 architecture. `path` does not restore a released executable in place of the
-selected source. All methods install only the application, not test scaffolding
-or separately configured publication helpers. Installed execution has no dependency
+selected source. Each operation installs only the application and external tools
+it actually needs; publication-only jobs do not install compatibility checkers.
+No separately configured publication helper is required. Installed execution has no dependency
 on repository-root Folo scripts; its runtime prerequisites are supplied by the
 shared setup.
+
+The controller's supported Cargo/toolchain requirements are distinct from the
+consumer workspace's build toolchain. Bootstrap selects the toolchain needed to
+install the pinned application without inheriting an incompatible caller override.
+Source publication and binary builds use their documented source-toolchain
+contract. Unsupported combinations fail in preflight rather than first being
+discovered after a registry upload.
 
 Folo consumes the same shared workflow with `install-method: path`. The invocation
 checkout supplies automation while separate pinned worktrees supply release
@@ -1273,10 +1344,17 @@ provide precise interface details.
 The `increment-versions` skill is a self-contained directory that a consumer can
 copy into its repository. Its essential instructions and decision guidance travel
 with it. Before preparation or edits, it checks the installed tool's identity
-against its supported interface versions. Commands use the installed application and documented prerequisites,
+against its supported interface versions. Commands use the installed application
+and documented prerequisites,
 not Folo's Just recipes, sibling skills or root scripts. Repository and release
 branch choices come from the selected workspace and explicit configuration, not
 hardcoded Folo identities.
+
+The book identifies the tool/action/skill revision combination its walkthrough
+uses and retains access to revision-pinned instructions for older supported
+combinations. Upgrading an action does not silently update a copied skill. A
+consumer can verify compatibility before changing its repository or regenerating
+local evidence.
 
 The skill coordinates explicit compatibility evidence collection and publication
 preflight as well as offline planning; those optional external operations do not
