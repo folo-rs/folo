@@ -395,7 +395,7 @@ function Invoke-ScheduledReporting {
             try {
                 $checkPrefix = "https://api.github.com/repos/$Repository/check-runs/"
                 if ($job['check_run_url'] -cnotmatch "^$([regex]::Escape($checkPrefix))([1-9][0-9]*)$") {
-                    throw "Cancelled job $($job.id) lacks its check-run URL; cannot classify the cancellation."
+                    throw "Cancelled job $($job.id) has a missing or unexpected check-run URL '$($job['check_run_url'])'; cannot classify the cancellation."
                 }
                 $annotations = @(Get-ScheduledGitHubCollection "repos/$Repository/check-runs/$($Matches[1])/annotations")
                 $reasons = @($annotations | Where-Object {
