@@ -852,7 +852,9 @@ executable is checksum-pinned; subsequent tools follow the publisher-build trust
 [development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
 Quickinstall is disabled. Source-only and Git-pinned tools keep their source installation,
 and platform restrictions and version pairings remain intact. Tool caches reconcile exact
-pins independently of workspace build artifacts.
+pins independently of workspace build artifacts. Cache identities cover the complete source
+revision without a separate installation-input list. Book-only tools have independent
+storage so jobs that do not install them cannot reserve an incomplete snapshot.
 
 The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
 installed only where a job actually executes Callgrind measurements — the benchmark

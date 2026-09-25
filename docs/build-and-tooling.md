@@ -371,6 +371,9 @@ lines ensure that commands producing nonzero exit codes are treated as errors an
 script. (Standalone scripts additionally set `$VerbosePreference = 'Continue'`; module files set
 strict mode once at the top rather than per function.)
 
+A workflow `run:` that only invokes a standalone `.ps1` may delegate the preamble to that
+script. Keep the preamble inline when the step performs any additional PowerShell logic.
+
 ### PowerShell linting
 
 `just validate-scripts` runs [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
