@@ -10,31 +10,23 @@
 //! detection pass (in this crate) and the shell's object loader share one
 //! implementation rather than drifting apart.
 //!
-//! The worker count is the available parallelism capped at the slice length, so a
-//! single available CPU (Miri reports one by default) yields a single worker: one
-//! chunk covering the whole slice, dispatched as one task. There is no separate serial
-//! code path to keep in step — the one-worker case is just the degenerate partition,
-//! and the synchronous spawner that tests and Miri inject runs that one task inline on
-//! the calling thread, so the dispatch stays under Miri's checks.
+//! The worker count is the supplied parallelism capped at the slice length. Production
+//! wiring acquires that capacity from the host; tests supply it alongside their spawner.
+//! A capacity of one yields one chunk covering the whole slice, dispatched as one task.
+//! There is no separate serial code path to keep in step, and an inline spawner can
+//! exercise either single-worker or multi-worker partitions without querying the host.
 
 use std::num::NonZero;
-use std::thread;
 
 /// How many worker tasks to split `len` items across.
 ///
-/// The available parallelism capped at `len`, so no worker is handed an empty chunk.
+/// The supplied parallelism capped at `len`, so no worker is handed an empty chunk.
 /// This is `0` only when `len` is `0` (nothing to do) and otherwise at least `1` — a
 /// single available CPU, or a single-element slice, yields one worker, i.e. one chunk
 /// covering everything.
-//
-// Mutation-skipped: the return value only selects how the work is partitioned across
-// workers, never the result. Every worker count yields the same order-preserving
-// output, so no behavioral test can distinguish one partitioning from another.
-#[cfg_attr(test, mutants::skip)]
-pub fn worker_count(len: usize) -> usize {
-    thread::available_parallelism()
-        .map_or(1, NonZero::get)
-        .min(len)
+#[must_use]
+pub fn worker_count(len: usize, available_parallelism: NonZero<usize>) -> usize {
+    available_parallelism.get().min(len)
 }
 
 /// The lengths of exactly `workers` contiguous chunks that partition `len` items as
@@ -66,6 +58,14 @@ pub fn balanced_chunk_sizes(len: usize, workers: usize) -> impl Iterator<Item = 
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_count_caps_supplied_parallelism_at_the_input_length() {
+        // Cover no work, one worker, excess capacity, and more work than workers.
+        for (len, capacity, expected) in [(0, 4, 0), (7, 1, 1), (1, 4, 1), (3, 4, 3), (7, 4, 4)] {
+            assert_eq!(worker_count(len, NonZero::new(capacity).unwrap()), expected);
+        }
+    }
 
     #[test]
     fn balanced_chunk_sizes_splits_into_exactly_workers_balanced_chunks() {

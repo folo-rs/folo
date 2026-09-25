@@ -6,9 +6,7 @@
 //! seeded triples and the seeded machine key never match the host the harness runs
 //! on; without that every object would be filtered out.
 
-use std::num::NonZero;
 use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use all_the_time::Session;
@@ -17,6 +15,7 @@ use cargo_bench_history::{
     run_with_overrides,
 };
 use jiff::Timestamp;
+use many_cpus::SystemHardware;
 use serde::Deserialize;
 use tick::Clock;
 
@@ -133,7 +132,7 @@ pub(crate) async fn measure(
     // the finding count, not the history size. The structured counts are read
     // back from that file only after the span closes, so the read never distorts
     // the timing.
-    let cores = thread::available_parallelism().map_or(1, NonZero::get);
+    let cores = SystemHardware::current().processors().len();
 
     let mut best: Option<(Duration, Duration)> = None;
     let mut counts: Option<ReportCounts> = None;

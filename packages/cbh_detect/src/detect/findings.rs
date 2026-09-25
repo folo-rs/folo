@@ -1393,8 +1393,8 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
 /// tasks via `spawner`, then recombined in series order. History uses a serial
 /// testability prepass to establish the false-discovery family size before parallel
 /// detection. Branch mode prepares regimes and excursions in parallel, then constructs
-/// and scores the rectangular historical family on the calling thread. A single
-/// available CPU, as reported under Miri, yields one chunk and one task.
+/// and scores the rectangular historical family on the calling thread. The supplied
+/// parallelism limits the worker count, with one worker covering the entire input.
 ///
 /// The series are taken as an `Arc<[Series]>` so each blocking task can share them
 /// without copying. Production passes a Tokio-backed spawner; tests and Miri pass an
@@ -1403,12 +1403,20 @@ pub async fn find_changes_spawned(
     series: Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Detection {
     if context.mode == AnalysisMode::Branch {
-        return branch::find_changes_spawned(series, context, spawner).await;
+        return branch::find_changes_spawned(series, context, spawner, available_parallelism).await;
     }
     let census = census_of(&series, &context);
-    let candidates = detect_all_spawned(&series, context, census.judged(), spawner).await;
+    let candidates = detect_all_spawned(
+        &series,
+        context,
+        census.judged(),
+        spawner,
+        available_parallelism,
+    )
+    .await;
     let findings = finalize_findings(candidates, &census, &series, &context);
     Detection {
         findings,
@@ -1557,11 +1565,11 @@ fn detect_all(series: &[Series], context: &AnalysisContext, family_size: usize) 
 }
 
 /// Detects every series, distributed across workers: splits the series into one
-/// balanced contiguous chunk per worker (the worker count is the available
+/// balanced contiguous chunk per worker (the worker count is the supplied
 /// parallelism capped at the series count), runs each chunk on its own blocking task
 /// via `spawner`, and recombines the candidates in series order.
 ///
-/// A single available CPU (which is what Miri reports) yields a single worker — one
+/// A capacity of one yields a single worker — one
 /// chunk, one task covering every series — so the one-worker case is just the
 /// degenerate partition rather than a separate serial branch. An empty slice yields no
 /// workers and dispatches no task.
@@ -1570,9 +1578,10 @@ async fn detect_all_spawned(
     context: AnalysisContext,
     family_size: usize,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Vec<Candidate> {
     let len = series.len();
-    let workers = worker_count(len);
+    let workers = worker_count(len, available_parallelism);
 
     // Spawn every chunk before awaiting any, so the blocking tasks run concurrently;
     // each owns a shared `Arc` handle to the series and a `Copy` of the context.
@@ -1987,7 +1996,7 @@ mod tests {
     }
 
     /// The spawner-distributed [`find_changes_spawned`] must produce exactly the same
-    /// findings as the serial [`find_changes`] oracle. On a multi-core host this
+    /// findings as the serial [`find_changes`] oracle. An explicit worker capacity
     /// exercises the chunked spawn-and-recombine path across several chunks. The
     /// synchronous spawner runs each chunk inline on the calling thread.
     #[cfg_attr(
@@ -2022,12 +2031,6 @@ mod tests {
         };
 
         let serial = find_changes(&series, &context);
-        let spawned = futures::executor::block_on(find_changes_spawned(
-            Arc::from(series.as_slice()),
-            context,
-            &synchronous_spawner(),
-        ));
-
         // `Finding` is not `PartialEq`; its `Debug` projection is a faithful, total
         // rendering of every field, so equal debug output means equal findings. The
         // census is compared too: a chunked pass that lost a worker's account would
@@ -2037,7 +2040,16 @@ mod tests {
             "the fixture must raise some findings"
         );
         assert_eq!(serial.census.judged(), series.len());
-        assert_eq!(format!("{serial:#?}"), format!("{spawned:#?}"));
+        // Exercise both a single chunk and an uneven partition independently of host capacity.
+        for capacity in [1, 5] {
+            let spawned = futures::executor::block_on(find_changes_spawned(
+                Arc::from(series.as_slice()),
+                context,
+                &synchronous_spawner(),
+                NonZero::new(capacity).unwrap(),
+            ));
+            assert_eq!(format!("{serial:#?}"), format!("{spawned:#?}"));
+        }
     }
 
     #[test]

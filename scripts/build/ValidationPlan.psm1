@@ -207,7 +207,7 @@ function Get-ValidationScriptDomain {
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -cin @('cargo-release-plan', 'release-target-check')) {
+        if ($package -cin @('cargo-release-plan', 'crp_impl', 'release-target-check')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }

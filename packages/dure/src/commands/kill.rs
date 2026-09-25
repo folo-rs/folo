@@ -52,13 +52,11 @@ pub(crate) fn execute(
 mod tests {
     use std::path::PathBuf;
 
-    use tempfile::TempDir;
-
     use super::*;
     use crate::AppCommand;
     use crate::pal::error::PalError;
     use crate::pal::processes::{MockProcesses, ProcessLiveness};
-    use crate::pal::session_store::{FsSessionStore, SessionStore};
+    use crate::pal::session_store::{MemorySessionStore, SessionStore};
     use crate::protocol::PROTOCOL_VERSION;
     use crate::session_record::{ProcessIdentity, SessionRecord};
 
@@ -79,11 +77,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn missing_id_fails() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         let mut processes = MockProcesses::new();
         processes.expect_probe().never();
         let id = SessionId::from_u32(1).unwrap();
@@ -91,11 +86,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn terminates_recorded_identity_and_deletes() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store.publish(&record(id, 10, 100)).unwrap();
 
@@ -113,11 +105,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn a_supervisor_that_exits_first_is_reaped_and_reported_as_not_live() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store.publish(&record(id, 10, 100)).unwrap();
 
@@ -135,11 +124,8 @@ mod tests {
     }
 
     #[test]
-    // Talks to the real operating system: the session store is a real directory.
-    #[cfg_attr(miri, ignore)]
     fn a_record_survives_a_terminate_that_failed_for_another_reason() {
-        let dir = TempDir::new().unwrap();
-        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let store = MemorySessionStore::new();
         let id = store.allocate_id(&ProcessIdentity::for_test(1)).unwrap();
         store.publish(&record(id, 10, 100)).unwrap();
 

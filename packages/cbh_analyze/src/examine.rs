@@ -24,6 +24,7 @@
 //! and repeats the pivot once per matching discriminant set.
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::path::Path;
 
 use anyspawn::Spawner;
@@ -38,6 +39,7 @@ use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
+use many_cpus::SystemHardware;
 use serde::Serialize;
 use tick::Clock;
 
@@ -103,6 +105,8 @@ pub async fn execute(
     // The object-load work shares the ambient Tokio worker threads (mirrors
     // `analyze::execute`).
     let spawner = Spawner::new_tokio();
+    let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
+        .expect("a processor set is never empty");
     let outcome = examine_with(
         &git,
         &storage,
@@ -113,6 +117,7 @@ pub async fn execute(
         now,
         &reporter,
         &spawner,
+        available_parallelism,
     )
     .await;
     storage.report_cache_tally(&reporter);
@@ -136,6 +141,7 @@ pub(crate) async fn examine_with<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Result<RenderedReports, AnalyzeError>
 where
     G: GitHistory,
@@ -163,7 +169,18 @@ where
 
     let selection = Selection::from_examine(options);
     let dataset = select_dataset(
-        git, storage, project_id, config, &selection, filter, false, auto, now, reporter, spawner,
+        git,
+        storage,
+        project_id,
+        config,
+        &selection,
+        filter,
+        false,
+        auto,
+        now,
+        reporter,
+        spawner,
+        available_parallelism,
     )
     .await?;
 
@@ -867,6 +884,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap()
     }
@@ -892,6 +910,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         rendered
@@ -920,6 +939,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         rendered
@@ -945,6 +965,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &reporter,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         reporter.notes()
@@ -1872,6 +1893,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<UnknownMetricError>().unwrap();
@@ -1897,6 +1919,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
 
@@ -1951,6 +1974,7 @@ mod tests {
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::quiet(),
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<UnresolvedRefError>().unwrap();

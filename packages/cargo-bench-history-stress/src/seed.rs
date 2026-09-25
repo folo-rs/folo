@@ -17,6 +17,7 @@ use cbh_model::{
     Run, RunContext, ToolchainInfo,
 };
 use jiff::Timestamp;
+use many_cpus::SystemHardware;
 
 use crate::error::{Error, fail};
 use crate::logging::Logger;
@@ -108,7 +109,8 @@ pub(crate) fn seed(
             .to_owned()
     });
 
-    let workers = thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN);
+    let workers = NonZero::new(SystemHardware::current().processors().len())
+        .expect("a processor set is never empty");
     let bytes = write_tasks(root, scenario, sets, &tasks, workers, &write_file)?;
     let stats = SeedStats {
         objects: tasks.len(),
