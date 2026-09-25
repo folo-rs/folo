@@ -14,12 +14,13 @@ on:
     - .github/workflows/copilot-setup-steps.yml
 
 # This controls standalone setup-validation runs from the triggers above, not Copilot sessions.
-# The workflow name isolates these runs from code-review setup. head_ref groups PR runs by
-# source branch; ref covers pushes and manual dispatches. A new run cancels older validation
-# work in the same group so superseded checks do not keep consuming a runner.
+# The workflow name isolates these runs from code-review setup. PR numbers distinguish
+# same-named branches in different forks; ref covers pushes and manual dispatches.
+# A new run cancels older validation work in the same group so superseded checks do not
+# keep consuming a runner.
 # See .github/workflows/design.md#concurrency.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -868,6 +868,10 @@ Reviews start on a fresh standard GitHub-hosted Ubuntu runner with only a reposi
 no repository-specific tools or dependencies are installed. This keeps review startup fast
 and independent of development-toolchain provisioning without changing the coding environment.
 
+Standalone setup-validation runs use the workflow name and PR number as their concurrency
+identity, so same-named branches in different forks cannot cancel each other's checks.
+Push and manual runs use the ref instead. This grouping does not schedule Copilot sessions.
+
 ## Transient-fault handling
 
 CI touches unreliable infrastructure — package mirrors, the GitHub API, runner disks — where a
