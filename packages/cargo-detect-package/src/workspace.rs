@@ -126,117 +126,87 @@ fn normalize_path(path: &Path, fs: &impl Filesystem) -> PathBuf {
     canonical
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-
-    use serial_test::serial;
+    use std::io;
 
     use super::*;
-    use crate::pal::FilesystemFacade;
+    use crate::pal::MockFilesystem;
+
+    fn root() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\workspace")
+        } else {
+            PathBuf::from("/workspace")
+        }
+    }
+
+    fn filesystem() -> MockFilesystem {
+        let mut fs = MockFilesystem::new();
+        fs.expect_current_dir().returning(|| Ok(root()));
+        fs.expect_cargo_toml_exists()
+            .returning(|path| path == root());
+        fs.expect_read_cargo_toml()
+            .returning(|_| Ok("[workspace]\nmembers = []".to_owned()));
+        fs
+    }
 
     #[test]
-    #[serial] // This test depends on the current directory being inside a Cargo workspace.
     fn validate_workspace_context_nonexistent_file() {
-        // Nonexistent files are now rejected by validate_workspace_context, not detect_package.
-        let fs = FilesystemFacade::target();
+        let mut fs = filesystem();
+        fs.expect_exists().return_const(false);
+        fs.expect_canonicalize().returning(|path| {
+            if path == root() {
+                Ok(root())
+            } else {
+                Err(io::ErrorKind::NotFound.into())
+            }
+        });
+
         let error = validate_workspace_context(Path::new("nonexistent/file.rs"), &fs).unwrap_err();
         assert!(error.find_source::<CanonicalizeTargetPathError>().is_some());
     }
 
-    /// Creates a minimal temporary Cargo workspace for tests.
-    fn create_minimal_workspace_for_validation() -> tempfile::TempDir {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path();
-
-        fs::write(
-            workspace_root.join("Cargo.toml"),
-            r#"[workspace]
-members = ["test_pkg"]
-resolver = "2"
-"#,
-        )
-        .unwrap();
-
-        let test_pkg = workspace_root.join("test_pkg");
-        fs::create_dir_all(test_pkg.join("src")).unwrap();
-        fs::write(
-            test_pkg.join("Cargo.toml"),
-            r#"[package]
-name = "test_pkg"
-version = "0.1.0"
-edition = "2021"
-"#,
-        )
-        .unwrap();
-        fs::write(test_pkg.join("src/lib.rs"), "// minimal lib\n").unwrap();
-
-        temp_dir
-    }
-
     #[test]
-    #[serial] // This test changes the global working directory, so must run serially.
     fn validate_workspace_context_from_workspace() {
-        // This test ensures validation works when both current dir and target are in the same
-        // workspace. We use a temporary workspace to avoid running against the actual repo.
-        let workspace = create_minimal_workspace_for_validation();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(workspace.path()).unwrap();
+        let mut fs = filesystem();
+        fs.expect_exists().return_const(true);
+        fs.expect_canonicalize()
+            .returning(|path| Ok(path.to_owned()));
 
-        let target_file = Path::new("test_pkg/src/lib.rs");
+        let result = validate_workspace_context(Path::new("test_pkg/src/lib.rs"), &fs).unwrap();
 
-        let fs = FilesystemFacade::target();
-        let result = validate_workspace_context(target_file, &fs);
-
-        std::env::set_current_dir(original_dir).unwrap();
-
-        result.unwrap();
+        assert_eq!(result.workspace_root, root());
+        assert_eq!(
+            result.absolute_target_path,
+            root().join("test_pkg/src/lib.rs")
+        );
     }
 
     #[test]
-    #[serial] // This test changes the global working directory, so must run serially to avoid interference with other tests.
-    fn validate_workspace_context_from_temp_dir() {
-        // Save current directory.
-        let original_dir = std::env::current_dir().unwrap();
+    fn validate_workspace_context_outside_workspace() {
+        let mut fs = MockFilesystem::new();
+        fs.expect_current_dir().returning(|| Ok(root()));
+        fs.expect_cargo_toml_exists().return_const(false);
 
-        // Create a temporary directory that is not a workspace.
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        // Change to the temp directory.
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Validation should fail when targeting a file that does not exist.
-        let target_path = Path::new("nonexistent.rs");
-        let fs = FilesystemFacade::target();
-        let error = validate_workspace_context(target_path, &fs).unwrap_err();
+        let error = validate_workspace_context(Path::new("nonexistent.rs"), &fs).unwrap_err();
         assert!(
             error
                 .find_source::<CurrentDirectoryOutsideWorkspaceError>()
                 .is_some()
         );
-
-        // Restore original directory.
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
-    #[serial] // This test changes the global working directory, so must run serially.
     fn malformed_current_workspace_manifest_is_a_parse_error() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        fs::write(temp_dir.path().join("Cargo.toml"), "not valid TOML [").unwrap();
-        fs::write(temp_dir.path().join("target.rs"), "// target\n").unwrap();
+        let mut fs = MockFilesystem::new();
+        fs.expect_current_dir().returning(|| Ok(root()));
+        fs.expect_cargo_toml_exists().return_const(true);
+        fs.expect_read_cargo_toml()
+            .returning(|_| Ok("not valid TOML [".to_owned()));
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let filesystem = FilesystemFacade::target();
-        let result = validate_workspace_context(Path::new("target.rs"), &filesystem);
-
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let error = result.unwrap_err();
+        let error = validate_workspace_context(Path::new("target.rs"), &fs).unwrap_err();
         assert!(error.find_source::<crate::ParseManifestError>().is_some());
         assert!(
             error
@@ -246,112 +216,36 @@ edition = "2021"
     }
 
     #[test]
-    #[serial] // This test changes the global working directory, so must run serially to avoid interference with other tests.
     fn validate_workspace_context_different_workspaces() {
-        // This test verifies that the tool rejects when current dir and target are in different
-        // workspaces. We simulate this by creating a fake workspace structure.
-        let temp_dir = tempfile::tempdir().unwrap();
+        let mut fs = MockFilesystem::new();
+        fs.expect_current_dir().returning(|| Ok(root()));
+        fs.expect_cargo_toml_exists()
+            .returning(|path| path == root() || path == root().join("other_workspace"));
+        fs.expect_read_cargo_toml()
+            .returning(|_| Ok("[workspace]\nmembers = []".to_owned()));
+        fs.expect_canonicalize()
+            .returning(|path| Ok(path.to_owned()));
 
-        // Create a fake workspace in temp dir.
-        let fake_workspace = temp_dir.path().join("fake_workspace");
-        fs::create_dir_all(&fake_workspace).unwrap();
-        fs::write(
-            fake_workspace.join("Cargo.toml"),
-            r#"
-[workspace]
-members = ["package1"]
-"#,
-        )
-        .unwrap();
-
-        // Create a package in the fake workspace.
-        let fake_package = fake_workspace.join("package1");
-        fs::create_dir_all(&fake_package).unwrap();
-        fs::write(
-            fake_package.join("Cargo.toml"),
-            r#"
-[package]
-name = "fake_package"
-version = "0.1.0"
-"#,
-        )
-        .unwrap();
-
-        // Create another fake workspace to simulate cross-workspace access.
-        let other_workspace = temp_dir.path().join("other_workspace");
-        fs::create_dir_all(&other_workspace).unwrap();
-        fs::write(
-            other_workspace.join("Cargo.toml"),
-            r#"
-[workspace]
-members = ["other_package"]
-"#,
-        )
-        .unwrap();
-
-        // Create a package in the other workspace.
-        let other_package = other_workspace.join("other_package");
-        fs::create_dir_all(other_package.join("src")).unwrap();
-        fs::write(
-            other_package.join("Cargo.toml"),
-            r#"
-[package]
-name = "other_package"
-version = "0.1.0"
-"#,
-        )
-        .unwrap();
-        fs::write(other_package.join("src").join("lib.rs"), "// test file").unwrap();
-
-        // Try to target a file in the other workspace while running from fake workspace.
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&fake_workspace).unwrap();
-
-        // This should fail because we are in different workspaces.
-        let other_workspace_file = other_package.join("src").join("lib.rs");
-        let fs = FilesystemFacade::target();
-        let result = validate_workspace_context(&other_workspace_file, &fs);
-        result.unwrap_err();
-
-        // Restore original directory.
-        std::env::set_current_dir(original_dir).unwrap();
+        let target = root().join("other_workspace/src/lib.rs");
+        let error = validate_workspace_context(&target, &fs).unwrap_err();
+        assert!(error.find_source::<WorkspaceMismatchError>().is_some());
     }
 
     #[test]
-    #[serial] // This test changes the global working directory, so must run serially.
     fn validate_workspace_context_relative_path_outside() {
-        // A relative path with `..` components can escape the workspace the current directory
-        // belongs to. The whole tree is built under one temporary directory so the outcome
-        // does not depend on what happens to exist above the checkout on this machine.
-        let temp_dir = tempfile::tempdir().unwrap();
+        let mut fs = filesystem();
+        fs.expect_exists().return_const(true);
+        fs.expect_canonicalize().returning(|path| {
+            let relative_target = root().join("../outside_workspace/file.rs");
+            if path == relative_target {
+                Ok(root().parent().unwrap().join("outside_workspace/file.rs"))
+            } else {
+                Ok(path.to_owned())
+            }
+        });
 
-        let workspace_root = temp_dir.path().join("workspace");
-        fs::create_dir_all(&workspace_root).unwrap();
-        fs::write(
-            workspace_root.join("Cargo.toml"),
-            r#"[workspace]
-members = []
-resolver = "2"
-"#,
-        )
-        .unwrap();
-
-        // A sibling of the workspace root: it exists, so path resolution succeeds, but no
-        // manifest at or above it declares a workspace.
-        let outside_dir = temp_dir.path().join("outside_workspace");
-        fs::create_dir_all(&outside_dir).unwrap();
-        fs::write(outside_dir.join("file.rs"), "// outside any workspace\n").unwrap();
-
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&workspace_root).unwrap();
-
-        let filesystem = FilesystemFacade::target();
-        let result =
-            validate_workspace_context(Path::new("../outside_workspace/file.rs"), &filesystem);
-
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let error = result.unwrap_err();
+        let error =
+            validate_workspace_context(Path::new("../outside_workspace/file.rs"), &fs).unwrap_err();
         assert!(
             error
                 .find_source::<TargetPathOutsideWorkspaceError>()

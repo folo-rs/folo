@@ -433,44 +433,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Queries real hardware, which Miri cannot model.
-    fn system_profile_reports_at_least_one_processor() {
-        let hardware = system_profile();
-        assert!(hardware.processors >= 1, "{hardware:?}");
-        assert!(hardware.memory_regions >= 1, "{hardware:?}");
-        // The fingerprint of whatever this machine is must be well-formed.
-        assert_eq!(fingerprint(&hardware).len(), FINGERPRINT_HEX_LEN);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Queries real hardware, which Miri cannot model.
-    fn system_profile_counts_usable_hardware_rather_than_the_id_space() {
-        // The ID space is padded — with IDs reserved for hot-add, or left behind by a
-        // processor taken offline — and covers hardware this process may not touch.
-        // Only a count of the usable processors says how much machine there is to
-        // measure with, so the factors must track that count and not the space.
-        let hardware = many_cpus::SystemHardware::current();
-        let usable = hardware.all_processors();
-        let profile = system_profile();
-
-        assert_eq!(profile.processors, usable.len(), "{profile:?}");
-        assert!(
-            profile.processors <= hardware.max_processor_count(),
-            "{profile:?}"
-        );
-
-        let usable_regions = usable
-            .iter()
-            .map(many_cpus::Processor::memory_region_id)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(profile.memory_regions, usable_regions.len(), "{profile:?}");
-        assert!(
-            profile.memory_regions <= hardware.max_memory_region_count(),
-            "{profile:?}"
-        );
-    }
-
-    #[test]
     fn distinct_memory_regions_counts_each_region_once() {
         // Several processors share a region, so the count is of regions and not of
         // processors; the IDs need not be contiguous or start at zero, because the

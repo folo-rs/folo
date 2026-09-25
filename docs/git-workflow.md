@@ -84,9 +84,12 @@ the reason for a level above the SemVer floor; identify mechanical realignment
 without inventing a consumer-facing change.
 
 If there are no released-content or version changes, state that explicitly
-instead of omitting the section. Identify first-publication packages separately
-with their initial versions and the maintainer handoff; an empty increment plan
-does not mean there is nothing to release.
+instead of omitting the section. Identify new packages separately with their manual
+bootstrap versions, higher versions intended for the first automated release, and
+the maintainer handoff. Manual bootstrap publication and Trusted Publishing setup
+must precede the first merge; that merge performs the second publication. See
+[the first-publication procedure](../RELEASING.md#first-publish-of-a-new-crate).
+An empty increment plan does not mean there is nothing to release.
 
 Refresh the evidence, plan, and section when the source, release baseline, group
 membership, or decisions change. The section describes the final current PR,

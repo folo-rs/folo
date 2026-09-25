@@ -23,6 +23,16 @@ delegating. Their inner `*_with` orchestrators receive generic ports and explici
 which keeps policy deterministic and same-crate tests in memory. The component crates own the
 adapter implementations; `cbh_analyze` selects and coordinates them.
 
+The query entry points acquire the quota-respecting processor count from `many_cpus` alongside
+the production spawner, including processors across Windows processor groups. The process-wide
+default set respects hard resource limits rather than inheriting the calling thread's soft
+affinity: tasks may execute on other runtime threads. This query does not change thread affinity
+or runtime sizing. The processor set is nonempty. That nonzero capacity is passed through
+dataset loading and detection, each capping its worker count at its input length. Inner
+orchestrators and their in-memory tests supply execution capacity explicitly rather than
+discovering hardware during partitioning. Seeded-history integration tests exercise the real
+command wiring and Tokio execution without running a benchmark engine.
+
 Every command selects the ordinary storage facade. Read-only queries synchronize its optional
 cloud cache before the shared selection pipeline and report cache activity afterward.
 Git-topology selection separates the target branch's measurements from the base-ref history

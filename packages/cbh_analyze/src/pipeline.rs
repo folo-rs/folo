@@ -5,6 +5,7 @@
 //! (`list`, `prune`, `examine`, `bless`) share.
 
 use std::io::IsTerminal;
+use std::num::NonZero;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +32,7 @@ use cbh_render::{
 };
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
+use many_cpus::SystemHardware;
 use tick::Clock;
 
 use super::comparison_base::classify_comparison_base_lags;
@@ -100,6 +102,8 @@ pub async fn execute(
     // the analysis shares the ambient Tokio worker threads rather than spawning its
     // own short-lived ones.
     let spawner = Spawner::new_tokio();
+    let available_parallelism = NonZero::new(SystemHardware::current().processors().len())
+        .expect("a processor set is never empty");
     let outcome = analyze_with(
         &git,
         &storage,
@@ -111,6 +115,7 @@ pub async fn execute(
         &reporter,
         color,
         &spawner,
+        available_parallelism,
     )
     .await;
     // Surface the cache hit/miss tally after the load, so a slow analyze can be
@@ -205,6 +210,7 @@ pub(crate) async fn analyze_with<G, S>(
     reporter: &dyn Reporter,
     color: bool,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
 ) -> Result<(RenderedReports, usize), AnalyzeError>
 where
     G: GitHistory,
@@ -223,7 +229,18 @@ where
     };
     let load_started = Instant::now();
     let dataset = select_dataset(
-        git, storage, project_id, config, &selection, filter, true, auto, now, reporter, spawner,
+        git,
+        storage,
+        project_id,
+        config,
+        &selection,
+        filter,
+        true,
+        auto,
+        now,
+        reporter,
+        spawner,
+        available_parallelism,
     )
     .await?;
     reporter.timing(
@@ -310,7 +327,7 @@ where
         mut census,
         branch_comparisons,
         branch_trace,
-    } = find_changes_spawned(Arc::clone(&series), context, spawner).await;
+    } = find_changes_spawned(Arc::clone(&series), context, spawner, available_parallelism).await;
     // The ghost filter judged nothing either, and it ran before detection could see
     // those series, so its exclusions join the same account.
     census.record_unjudged(UnjudgedReason::Ghost, ghost_series);
@@ -1092,6 +1109,7 @@ mod tests {
             reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap()
     }
@@ -1150,6 +1168,7 @@ mod tests {
             &reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         assert!(
@@ -1191,6 +1210,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<UnresolvedRefError>().unwrap();
@@ -1215,6 +1235,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
@@ -1348,6 +1369,7 @@ mod tests {
             &reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         assert!(
@@ -1373,6 +1395,7 @@ mod tests {
             &reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         assert!(
@@ -1402,6 +1425,7 @@ mod tests {
             &reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         assert!(
@@ -1446,6 +1470,7 @@ mod tests {
             &reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
 
@@ -1487,6 +1512,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err()
     }
@@ -1549,6 +1575,7 @@ mod tests {
             &reporter,
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         assert!(
@@ -2744,6 +2771,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<BaseBranchUnavailableError>().unwrap();
@@ -2777,6 +2805,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<MergeBaseUnavailableError>().unwrap();
@@ -2809,6 +2838,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<MergeBaseUnavailableError>().unwrap();
@@ -2869,6 +2899,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .expect("a flagged regression must not fail the analysis");
         assert_eq!(regressions, 1, "the seeded step is a flagged regression");
@@ -2917,6 +2948,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<InvalidResultSetError>().unwrap();
@@ -2941,6 +2973,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
@@ -2970,6 +3003,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         assert!(error.find_source::<NoOutputSelectedError>().is_some());
@@ -2994,6 +3028,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<UnknownEngineError>().unwrap();
@@ -3019,6 +3054,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap_err();
         let found = error.find_source::<UnresolvedRefError>().unwrap();
@@ -3060,6 +3096,7 @@ mod tests {
             &RecordingReporter::quiet(),
             false,
             &spawner(),
+            NonZero::<usize>::MIN,
         ))
         .unwrap();
         let report = rendered.json.expect("the JSON report was rendered");

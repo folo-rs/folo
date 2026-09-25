@@ -4,8 +4,49 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+use cargo_release_plan::{RunInput, RunOutcome, run};
 use serde_json::{Value, json};
 use tempfile::tempdir;
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads report files and directories on the real filesystem"
+)]
+fn reads_file_or_directory_and_rejects_unsupported_schema() {
+    let directory = tempdir().unwrap();
+    write_report(directory.path());
+    let path = directory.path().join("report.json");
+    for report in [&path, directory.path()] {
+        let RunOutcome::ArtifactQuery { message } = run(&RunInput::AnalysisOrder {
+            report: report.to_path_buf(),
+            verbose: false,
+        })
+        .unwrap() else {
+            panic!("analysis order returns a query");
+        };
+        assert_eq!(
+            serde_json::from_str::<Value>(&message).unwrap(),
+            json!([{"order": 1, "packages": ["api"], "cyclic": false}])
+        );
+    }
+    let mut report: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let schema = report.get("schema_version").unwrap().as_u64().unwrap();
+    // Header rejection does not require a body from the unsupported protocol.
+    report = json!({"schema_version": schema + 1});
+    fs::write(&path, report.to_string()).unwrap();
+    run(&RunInput::AnalysisOrder {
+        report: path.clone(),
+        verbose: false,
+    })
+    .unwrap_err();
+    fs::remove_file(&path).unwrap();
+    run(&RunInput::AnalysisOrder {
+        report: path,
+        verbose: false,
+    })
+    .unwrap_err();
+}
 
 #[test]
 #[cfg_attr(

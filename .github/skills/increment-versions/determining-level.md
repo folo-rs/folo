@@ -118,7 +118,11 @@ plain SemVer triplet. The tooling chooses the realignment. Judge each publishabl
 own released changes and choose no increment when it has none. Do not assess source changes in
 `non_publishable_packages` or assign those alignment-only helpers a semantic change level.
 
-A publishable package in `report.json.packages` that has no anchor has never been released, so it
-has no version to increment. It follows the first-publication path in
-[`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate) instead of taking a change
-level.
+A publishable package in `report.json.packages` that has no anchor has no Git release baseline
+for this assessment. Do not assign a change level merely because it is new to the release
+branch, and do not infer that it has never reached crates.io. Follow the first-publication path
+in [`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate): a maintainer manually
+publishes its bootstrap version before the first merge and configures Trusted Publishing.
+The first merge must carry a higher version for the second publication, the first automated
+one. Record that bootstrap and intended automated-release version separately from Git anchors;
+version-group expansion may supply the required increase.

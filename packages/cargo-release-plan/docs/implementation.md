@@ -5,8 +5,12 @@ describes the internal boundaries that keep that behavior consistent.
 
 ## Architecture
 
-The binary is intentionally thin. `main` parses Cargo's injected subcommand
-argument, then delegates to the library `run()` entry used by integration tests.
+The binary and library facade are intentionally thin. `main` parses Cargo's injected
+subcommand argument, then delegates to the library `run()` entry used by integration
+tests. The facade explicitly re-exports its supported API from
+[`crp_impl`](../../crp_impl/docs/implementation.md), which owns the implementation,
+unit tests, implementation-boundary integrations and benchmarks. Both packages
+share an exact dependency and release version.
 The selected command drives command-specific paths through shared components:
 
 ```text
@@ -72,10 +76,10 @@ Git failure must be interpreted in process: a path absent from a revision. A
 translated diagnostic would otherwise turn ordinary package creation or deletion
 into an error.
 
-Output-capture unit tests use repository-independent Git operations in disposable
-directories to cover successful output capture and nonzero exits. Tests that need
-repository state create it explicitly in temporary fixtures; integration tests
-share a hermetic fixture. The source tree's Git metadata is never a test prerequisite.
+Output capture and nonzero exits belong to integration coverage, including
+repository-independent Git operations in disposable directories. Tests that need
+repository state use explicit hermetic integration fixtures. The source tree's
+Git metadata is never a test prerequisite.
 
 Cargo subprocess arguments retain the required `Cargo.toml` basename even when
 canonicalized captured inputs record another spelling. This conversion follows
@@ -83,6 +87,23 @@ the containing directory's probed alias behavior; it never redirects a distinct
 manifest on a sensitive filesystem. Git lookups continue to use recorded spelling.
 
 ### Test boundaries
+
+The [workspace in-process boundary](../../../docs/testing.md#unit-tests-stay-inside-the-process)
+applies to every fixture and acquisition call. Avoiding Cargo metadata or keeping
+a real Git history small does not make an acquisition test a unit test. Tests of
+real Git, Cargo and filesystem adapters belong in Cargo integration targets;
+decision tests supply acquired values without calling those adapters.
+
+`crp_impl/tests/boundaries/` preserves direct assertions on acquisition, files,
+repository state and private error conditions. Its Git fixture cannot be imported
+by library unit tests. The unit-only Git helpers construct inert handles and
+tree entries without observing the host.
+
+The executable-connected `cargo-release-plan/tests/integration/` suite stays in
+the binary's package: Cargo supplies `CARGO_BIN_EXE_cargo-release-plan` only to that
+package's integration targets. This is the executable-ownership exception to the
+usual implementation-crate test layout, not a second implementation or nested
+build harness. The shell also checks its explicit re-export surface.
 
 Captured-input decisions use acquired metadata and a read-only per-directory case
 probe. Unit tests supply regular-file, missing-file and error observations, mixed
@@ -95,7 +116,9 @@ are compiled for all test hosts because those transformations are pure.
 Offline resolver invocation and changed-artifact selection have in-process cores
 that preserve arguments, working directories, bytes and errors. Preparation and
 preview retain integration-owned Git/Cargo workspace orchestration and completion
-output; their decision helpers, changed-write selection and convergence loop remain
+output. Convergence receives a digest operation alongside the resolver pass:
+production uses Git hashing, while unit tests provide in-process state identities.
+Their decision helpers, changed-write selection and convergence loop remain
 mutation targets. Read-only verification separately tests live-input validation
 before retained-candidate validation. Only the corresponding real acquisition and
 process adapters are excluded from mutation discovery.
@@ -111,6 +134,12 @@ without acquiring repository state or resolving a Cargo workspace. Orchestration
 tests inject acquisition at its existing boundary so they exercise production
 ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
+
+Proposal and expansion inject artifact operations into their command cores.
+Their unit tests retain input-collision checks, acquisition and publication order,
+plan generation, rendered output, and error propagation without touching files.
+Proposal publication also checks stale-output invalidation and failed-write cleanup.
+Real artifact path interpretation and file access stay in integration coverage.
 
 Anchored classification converts acquired evidence into a verdict through an
 in-process boundary that owns version-regression rejection and evidence retention.
@@ -177,19 +206,19 @@ use Cargo's test classifications: ordinary testing includes integration targets,
 while mutation testing selects only library unit-test targets under the
 [workspace policy](../../../docs/testing.md#mutation-testing-target-selection).
 
-History acquisition unit tests use small hermetic Git histories without loading
-Cargo metadata. They verify first-parent ordering, manifest selection and endpoint
+History acquisition belongs in integration tests using small hermetic Git histories
+without loading Cargo metadata. These verify first-parent ordering, manifest selection and endpoint
 retention directly. Local shallow fetches exercise missing-parent evidence and
 preserve the distinction between a truncated branch and a true root in the same
 repository; commit messages remain separate from parent headers.
 
-Installation acquisition unit tests use small temporary repositories without
+Installation acquisition belongs in integration tests using small temporary repositories without
 Cargo metadata or resolution. They distinguish historical blobs from work-tree
 files, check ancestor and filename configuration precedence, and retain missing
 versus unreadable-input behavior. Pure source-comparison and patch-applicability
 tests cover the decisions independently of acquisition.
 
-Released-file discovery unit tests use small Git indexes and filesystem fixtures
+Released-file discovery acquisition belongs in integration tests using small Git indexes and filesystem fixtures
 without constructing or resolving Cargo workspaces. They exercise selection,
 presence, modes and cleaned blob bytes at the acquisition boundary. Optional
 reads and hash-input validation inject metadata and byte-read observations so
@@ -242,9 +271,10 @@ complete triplet and rejects compound requirements; separate prerelease and
 build-metadata checks retain the plain-release-only rule.
 
 Dependency unit tests use synthetic metadata and parsed manifests for declaration
-and exposure decisions. Small shared Git fixtures cover tracked-member selection
-and historical path acquisition without Cargo resolution. Canonical fallback
-tests use equivalent filesystem paths without requiring symlink privileges.
+and exposure decisions. Tracked-member selection uses an inert repository handle
+and recorded paths, without initializing Git. Real Git and historical path
+acquisition belong in integration fixtures. Canonical fallback integration tests
+use equivalent filesystem paths without requiring symlink privileges.
 Exposure tests retain propagation through private intermediaries, revisit
 earlier dependents until closure settles, and distinguish normal edges from
 build and development edges at every hop.
@@ -630,8 +660,8 @@ scale with workspace size:
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
 or parse state, and its fixed allocator model would omit a material part of their
-cost. The benchmark-only surface is available in unit-test builds and through
-`private-test-util`, but does not participate in normal builds. Small unit tests
+cost. The benchmark-only surface is available in `crp_impl` unit-test builds and through
+its `private-test-util` feature, but does not participate in normal builds. Small unit tests
 exercise the adapters' byte and line statistics, root selection and repeated-walk
 totals without running a benchmark harness. Both adapters and their underlying
 algorithms participate in library-only mutation testing; benchmark smoke runs
