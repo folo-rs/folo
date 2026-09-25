@@ -8,6 +8,10 @@ supplies evidence for choosing increments, applies the complete version decision
 before merge, and publishes the resulting crates, GitHub releases and prebuilt
 binaries afterward.
 
+Tag creation that the workflow cannot complete is an explicit manual-recovery
+case. The workflow reports the failure and the operator action needed to resume;
+it does not prevent further merges or acquire broader tagging authority.
+
 The application supplies the mechanical operations throughout this process.
 People still judge compatibility and approve changes; workflows supply execution
 and permissions. Version validation and publication share one release model,
@@ -1087,12 +1091,27 @@ without selecting a replacement target or imposing new version policy on them.
 This can occur during ordinary concurrent development, not only after a failed
 run: another merge can advance the same package while its registry phase is still
 running. Queuing release workflows does not serialize merges to the release
-branch. If no eligible tag target remains, the run fails with the package/version,
-missing tag, original publication source and observed branch version identified.
-Retaining the manifest preserves that evidence but does not create an eligible
-target. A maintainer can restore the existing-tag repair path by verifying and
-creating the missing tag at the recorded publication source with appropriate
-authority; automatic publication does not acquire that additional authority.
+branch. If tag creation cannot complete after applicable bounded retries, the
+application leaves that tag absent and records the release as failed. It skips
+that release's tag-dependent work while continuing independent releases. The
+reconciliation phase and overall workflow remain failed; skipping this work is
+not a successful no-op.
+
+The workflow posts a failure issue identifying the affected package/version, exact
+missing tag, recorded publication source commit, reason for failure and original
+workflow run. For a superseded version it also identifies the observed conflicting
+branch version. Recovery instructions tell an operator to verify the source,
+create the missing tag at that recorded commit using their greater access rights,
+and retry the original failed workflow. They do not instruct the operator to tag
+the latest branch tip or move an existing tag.
+
+On retry, reconciliation refreshes remote tags and recognizes a manually created
+tag through the ordinary existing-tag path. It validates the requested package
+identity at the resolved target and does not reapply the current-candidate
+requirement used only to create a missing tag. For a binary package it can then
+create the GitHub release and emit the missing binary batches. Already published
+crate versions and completed asset pairs are retained. Manual tagging clears this
+tag-creation blocker; unrelated publication failures remain independently visible.
 
 Libraries receive tags only. Binary GitHub releases are attached to their
 established tags; release creation cannot choose another commit implicitly.
@@ -1145,14 +1164,17 @@ source verification, skips and retries.
 A rerun retains the original requests and resumes from observed remote state.
 A new push or manual recovery run can prepare its own manifest for the selected
 release snapshot. Neither path depends on a list of packages uploaded in the
-current attempt, and neither guarantees recovery of superseded versions whose
-missing tags cannot be established.
+current attempt. A superseded version whose tag is missing follows the operator
+handoff above; a new run against the latest source is not a substitute for retrying
+the original version's publication.
 
 Publication artifacts are handoff records, not a permanent release database.
 The shared workflow preserves intent and per-attempt outcomes for its documented
 artifact-retention period, including on failure. A failed-job rerun retrieves the
-original manifest and batch rather than rediscovering requests from today's
-branch. If that evidence is unavailable, it stops; an explicit recovery invocation
+original manifest and any existing batch rather than rediscovering requests from
+today's branch. After manual tagging, GitHub reconciliation can emit the previously
+blocked batch from that original manifest. If required evidence is unavailable,
+the rerun stops; an explicit recovery invocation
 can prepare new evidence for a chosen retained source commit. That recovery
 revalidates the source and remote state and is not a continuation of a missing
 receipt. A removed source commit or incompatible artifact schema requires an
@@ -1197,6 +1219,13 @@ and registry job, subsequent
 GitHub reconciliation, native binary matrix, artifact handoff and failure
 reporting. Consumers supply their triggers, required permissions, optional
 publishing environment and configuration location.
+
+Per-release tag failures do not suppress validated batches for other releases.
+The workflow admits such batches only after registry prerequisites and their
+manifest/batch validation succeed, even if reconciliation reports another release
+as failed. Missing or invalid batch artifacts and cancellation do not grant that
+admission. The final result retains the reconciliation failure and the reporter
+posts its operator instructions; successful independent jobs cannot hide it.
 
 The `working-directory` input selects the Cargo project; `config` uses the same
 workspace-relative path rules as the CLI. Runtime inputs describe the invocation,
