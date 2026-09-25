@@ -1,7 +1,7 @@
 //! Verifies candidate source snapshots before release scripts create missing tags.
 //!
-//! This nonpublished controller utility reads a separate, caller-owned worktree;
-//! GitHub operations and publication remain the responsibility of release orchestration.
+//! This compatibility executable delegates source validation to cargo-release-plan's
+//! implementation partition. Its integration target retains the executable-boundary coverage.
 
 #![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
 #![allow(
@@ -9,21 +9,7 @@
     reason = "This nonpublished library exposes implementation operations to its integration target, not a public API"
 )]
 
-pub use command::{capture, git};
-pub use metadata::Metadata;
-pub use repository::Repository;
-pub use run::run;
-
-mod cli;
-mod command;
-mod metadata;
-mod repository;
-mod run;
-mod verification_repository;
-mod verify;
-
-#[cfg(test)]
-mod verification_tests;
+pub use crp_impl::publication::candidate::{Metadata, Repository, capture, git, run};
 
 #[cfg(test)]
 ::testing::set_allocator!();

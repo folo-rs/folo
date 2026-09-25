@@ -50,6 +50,24 @@ eligibility and archive metadata needed by publication. The optional configured
 `check` composes this validation with ordinary version readiness; unconfigured
 assessment performs no publication discovery.
 
+Publication preparation composes that policy with the candidate verifier under
+`publication::candidate`. The verifier owns clean-head/index checks, tracked
+input containment, first-parent membership and candidate-relative version
+validation. The compatibility `release-target-check` executable delegates to
+these same operations while repository workflows consume its command interface.
+Its executable-connected integration tests remain in that package; pure decisions
+and their unit tests belong to `crp_impl`.
+
+The preparation boundary fetches the configured GitHub branch through a
+per-invocation Git credential helper and captures its resolved commit. It does not
+depend on a local remote nickname or modify global authentication configuration.
+Full locked metadata verifies resolution without changing it. The publication
+manifest then contains repository-relative paths and all exact package requests.
+Canonical serde serialization supplies its SHA-256 content identity; schema,
+paths, configuration and identities are revalidated on read and before writes.
+Atomic no-clobber promotion prevents a different intent from replacing an existing
+handoff. Outcomes are not part of that identity and belong to separate artifacts.
+
 Artifact-only planning shares the report producer's serde model. Report loading
 validates the schema and cross-package identities before consumers build dependency
 graphs or version targets. Analysis ordering follows recorded dependencies rather

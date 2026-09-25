@@ -5,8 +5,8 @@ use ohno::AppError;
 use semver::Version;
 use serde::Deserialize;
 
-use crate::Repository;
-use crate::repository::{VerificationError, canonicalize};
+use crate::publication::candidate::Repository;
+use crate::publication::candidate::repository::{VerificationError, canonicalize};
 
 /// Validates Cargo's identity response before the release checker assesses package content.
 #[derive(Debug, Deserialize)]
@@ -62,6 +62,7 @@ impl Metadata {
         &self,
         required: &BTreeMap<String, Version>,
         verbose: bool,
+        mut diagnostic: impl FnMut(&str),
     ) -> Result<(), AppError> {
         for (name, version) in required {
             let mut matches = self.packages.iter().filter(|package| package.name == *name);
@@ -83,11 +84,11 @@ impl Metadata {
                 .into());
             }
             if verbose {
-                eprintln!(
-                    "[release-target-check] {name}@{version} matches a tracked publishable workspace \
+                diagnostic(&format!(
+                    "{name}@{version} matches a tracked publishable workspace \
                      member; locked, offline, no-deps metadata supplies identity without refreshing \
                      dependency resolution"
-                );
+                ));
             }
         }
         Ok(())
@@ -294,7 +295,9 @@ mod tests {
             metadata.packages.first().unwrap().manifest_path,
             PathBuf::from("workspace").join("Cargo.toml")
         );
-        metadata.validate_packages(&required(), false).unwrap();
+        metadata
+            .validate_packages(&required(), false, |_| {})
+            .unwrap();
     }
 
     #[test]
@@ -322,8 +325,10 @@ mod tests {
             metadata.workspace_members.push("another-id".into());
             let mut required = required();
             required.insert("another".into(), Version::new(1, 0, 0));
-            metadata.validate_packages(&required, false).unwrap();
-            metadata.validate_packages(&required, true).unwrap();
+            metadata
+                .validate_packages(&required, false, |_| {})
+                .unwrap();
+            metadata.validate_packages(&required, true, |_| {}).unwrap();
         }
     }
 
@@ -353,7 +358,9 @@ mod tests {
             mismatch,
             build_mismatch,
         ] {
-            let error = metadata.validate_packages(&required, false).unwrap_err();
+            let error = metadata
+                .validate_packages(&required, false, |_| {})
+                .unwrap_err();
             assert!(error.find_source::<VerificationError>().is_some());
         }
     }
@@ -367,6 +374,8 @@ mod tests {
         let mut required = required();
         required.insert("other".into(), Version::new(1, 0, 0));
         required.insert("widget".into(), Version::new(2, 0, 0));
-        _ = metadata.validate_packages(&required, false).unwrap_err();
+        _ = metadata
+            .validate_packages(&required, false, |_| {})
+            .unwrap_err();
     }
 }

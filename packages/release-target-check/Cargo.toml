@@ -11,22 +11,18 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["ohno::app::error::AppError", "serde_core::de::Deserialize"]
+allowed_external_types = ["crp_impl::*"]
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
-cargo-release-plan = { workspace = true }
+crp_impl = { workspace = true }
 mimalloc = { workspace = true }
-ohno = { workspace = true, features = ["app-err"] }
-semver = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 
 [dev-dependencies]
-mutants = { workspace = true }
-static_assertions = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 testing = { path = "../testing" }
 

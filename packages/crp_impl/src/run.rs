@@ -10,6 +10,7 @@ use crate::inspect_plan::run_inspect_plan;
 use crate::preview::{run_prepare, run_preview};
 use crate::propose::run_propose;
 use crate::publication::packages::check_publication;
+use crate::publication::prepare::prepare as prepare_publication;
 use crate::report::run_report;
 use crate::resolved::run_verify_preview;
 use crate::semver_targets::run_semver_targets;
@@ -22,6 +23,19 @@ use crate::verbose::Verbose;
     reason = "The supported facade permits exhaustive matching on the application's command inputs"
 )]
 pub enum RunInput {
+    /// Capture immutable publication intent from a clean merged source snapshot.
+    PreparePublish {
+        /// Source checkout's Cargo manifest.
+        manifest_path: PathBuf,
+        /// Workspace-relative publication configuration; omitted selects the conventional file.
+        config: Option<PathBuf>,
+        /// Immutable source commit that must match the checkout.
+        source: String,
+        /// Publication manifest destination.
+        output: PathBuf,
+        /// Explain captured release inputs.
+        verbose: bool,
+    },
     /// Inspect validated expanded-plan facts for external tooling.
     InspectPlan {
         /// Expanded plan artifact.
@@ -222,6 +236,22 @@ pub enum RunOutcome {
 /// `passed: false`, not an error.
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     match input {
+        RunInput::PreparePublish {
+            manifest_path,
+            config,
+            source,
+            output,
+            verbose,
+        } => {
+            let message = prepare_publication(
+                manifest_path,
+                config.as_deref(),
+                source,
+                output,
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::Prepare { message })
+        }
         RunInput::InspectPlan {
             plan,
             require_resolved,

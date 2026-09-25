@@ -52,8 +52,7 @@ function Install-StandaloneSevenZip {
     param([Parameter(Mandatory)][string] $Destination)
 
     $installed = Join-Path $Destination '7za.exe'
-    if ((Test-Path -LiteralPath $installed) -and
-        ((& $installed i) -match "7-Zip.* $([regex]::Escape($script:SevenZipVersion)) ")) {
+    if ((Test-Path -LiteralPath $installed) -and (Test-StandaloneSevenZip -Path $installed)) {
         Write-Host "Standalone 7-Zip $script:SevenZipVersion is available."
         return
     }
@@ -80,6 +79,31 @@ function Install-StandaloneSevenZip {
     }
 }
 
+function Test-StandaloneSevenZip {
+    # A cached executable is only usable when the native version probe succeeds.
+    # Nonzero exits and loader failures need replacement, not another failed setup attempt.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][string] $Path)
+
+    $previousPreference = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        $output = & $Path i 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Verbose "Replacing cached archive tool because its version probe exited $exitCode." -Verbose
+            return $false
+        }
+        return [bool] ($output -match "7-Zip.* $([regex]::Escape($script:SevenZipVersion)) ")
+    } catch [System.Management.Automation.ApplicationFailedException] {
+        Write-Verbose "Replacing cached archive tool because it could not start: $_" -Verbose
+        return $false
+    } finally {
+        $PSNativeCommandUseErrorActionPreference = $previousPreference
+    }
+}
+
 function Install-ReleaseArchiveTool {
     [CmdletBinding()]
     param([string] $Destination = (Join-Path $(if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }) 'bin'))
@@ -93,18 +117,20 @@ function Install-ReleaseArchiveTool {
         if ($env:GITHUB_PATH) {
             Add-Content -LiteralPath $env:GITHUB_PATH -Value $Destination -Encoding utf8NoBOM
         }
-        $null = Get-Command 7za -ErrorAction Stop
-        7za i | Select-Object -First 3 | Out-Host
+        $tool = Get-Command 7za -CommandType Application -ErrorAction Stop
+        & $tool.Source i | Select-Object -First 3 | Out-Host
         return
     }
-    $missing = @('zip', 'unzip' | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+    $missing = @(@('zip', 'unzip') | Where-Object {
+            -not (Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue)
+        })
     if ($missing.Count -gt 0) {
         Write-Host "Installing missing release archive tools: $($missing -join ', ')."
         Invoke-ArchivePackageInstall -Platform $platform
     }
     foreach ($tool in @('zip', 'unzip')) {
-        $null = Get-Command $tool -ErrorAction Stop
-        & $tool -v | Select-Object -First 2 | Out-Host
+        $application = Get-Command $tool -CommandType Application -ErrorAction Stop
+        & $application.Source -v | Select-Object -First 2 | Out-Host
     }
 }
 

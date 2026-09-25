@@ -3309,6 +3309,7 @@ dependencies = [
  "command-group",
  "ctrlc",
  "dunce",
+ "mimalloc",
  "mutants",
  "ohno",
  "semver",
@@ -3324,14 +3325,10 @@ dependencies = [
 name = "release-target-check"
 version = "0.0.0"
 dependencies = [
- "cargo-release-plan",
+ "crp_impl",
  "mimalloc",
- "mutants",
  "ohno",
- "semver",
- "serde",
  "serde_json",
- "static_assertions",
  "tempfile",
  "testing",
 ]

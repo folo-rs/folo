@@ -4,8 +4,8 @@ use std::process::ExitCode;
 
 use ohno::AppError;
 
-use crate::cli::Cli;
-use crate::verify::verify;
+use crate::publication::candidate::cli::Cli;
+use crate::publication::candidate::verify::verify;
 
 /// Verifies the candidate selected by this process's command-line arguments.
 ///
@@ -45,7 +45,7 @@ fn run_using(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::repository::VerificationError;
+    use crate::publication::candidate::repository::VerificationError;
 
     fn arguments() -> Vec<OsString> {
         [

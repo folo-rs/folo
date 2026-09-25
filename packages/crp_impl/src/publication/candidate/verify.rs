@@ -1,19 +1,22 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
-use cargo_release_plan::{CheckFormat, RunInput, RunOutcome};
 use ohno::AppError;
 
-use crate::cli::Cli;
-use crate::repository::{VerificationError, validate_around};
-use crate::verification_repository::VerificationRepository;
-use crate::{Metadata, Repository};
+use crate::publication::candidate::cli::Cli;
+use crate::publication::candidate::repository::{VerificationError, validate_around};
+use crate::publication::candidate::verification_repository::VerificationRepository;
+use crate::publication::candidate::{Metadata, Repository};
+use crate::verbose::Verbose;
+use crate::{CheckFormat, RunInput, RunOutcome};
 
 // Only real-system wiring is excluded. The same sequence below runs with in-memory evidence;
 // integration tests cover discovery, subprocesses and the executable connection.
 #[cfg_attr(test, mutants::skip)]
 pub(crate) fn verify(cli: &Cli) -> Result<String, AppError> {
-    verify_using(cli, Repository::discover, |message| eprintln!("{message}"))
+    verify_using(cli, Repository::discover, |message| {
+        Verbose::new(true).note(|| message.to_owned());
+    })
 }
 
 pub(crate) fn verify_using<R: VerificationRepository>(
@@ -27,7 +30,7 @@ pub(crate) fn verify_using<R: VerificationRepository>(
     let manifest = repository.require_tracked(&cli.manifest_path)?;
     if cli.verbose {
         diagnostic(&format!(
-            "[release-target-check] candidate {} equals clean HEAD and belongs to the first-parent \
+            "Candidate {} equals clean HEAD and belongs to the first-parent \
              history of supplied main tip {}; side-branch ancestry alone is not sufficient",
             cli.commit, cli.release_line
         ));
@@ -52,10 +55,10 @@ pub(crate) fn verify_using<R: VerificationRepository>(
     )?;
     let metadata = Metadata::parse(&metadata)?;
     repository.validate_inputs(&metadata, &manifest)?;
-    metadata.validate_packages(&cli.packages, cli.verbose)?;
+    metadata.validate_packages(&cli.packages, cli.verbose, &mut diagnostic)?;
     if cli.verbose {
         diagnostic(&format!(
-            "[release-target-check] release invariants use candidate {} as their baseline, not \
+            "Release invariants use candidate {} as their baseline, not \
              later main tip {}; each version retains its original first-parent anchor, including \
              inherited values and locked binary closures",
             cli.commit, cli.release_line
@@ -107,7 +110,7 @@ fn finish_check(
             }
             if verbose {
                 diagnostic(&format!(
-                    "[release-target-check] {message} HEAD and cleanliness still match the \
+                    "{message} HEAD and cleanliness still match the \
                      candidate after metadata and release verification"
                 ));
             }

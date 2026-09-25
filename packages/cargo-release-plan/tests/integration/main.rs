@@ -28,6 +28,7 @@ mod path_case;
 mod preview;
 mod preview_safety;
 mod propose;
+mod publication;
 mod report;
 mod status;
 

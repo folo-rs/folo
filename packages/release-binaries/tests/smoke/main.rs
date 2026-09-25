@@ -18,3 +18,5 @@ mod github;
 mod harness;
 mod packaging;
 mod sources;
+
+::testing::set_allocator!();

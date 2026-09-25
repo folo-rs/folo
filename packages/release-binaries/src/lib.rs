@@ -13,3 +13,6 @@ mod native;
 mod plan;
 mod run;
 mod source;
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -57,6 +57,15 @@ impl Cli {
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
+            Command::PreparePublish(args) => RunInput::PreparePublish {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                config: args.config,
+                source: args.source,
+                output: args.output,
+                verbose: args.verbose,
+            },
             Command::InspectPlan(args) => RunInput::InspectPlan {
                 plan: args.plan,
                 require_resolved: args.require_resolved,
@@ -175,6 +184,8 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Validate clean merged source and capture its immutable publication requests.
+    PreparePublish(PreparePublishArgs),
     /// Validate an expanded plan and print publication and evidence facts as JSON.
     InspectPlan(InspectPlanArgs),
     /// Print dependency-ordered analysis batches from a report as JSON.
@@ -203,6 +214,30 @@ enum Command {
     Expand(ExpandArgs),
     /// Install captured files without resolution, or make proposed manifest-only edits.
     Apply(ApplyArgs),
+}
+
+/// Source selection and artifact destination for publication preparation.
+#[derive(Debug, Parser)]
+struct PreparePublishArgs {
+    /// Cargo manifest in the clean source checkout.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+
+    /// Publication configuration relative to the selected workspace.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Full immutable source commit ID; the source checkout must match it.
+    #[arg(long)]
+    source: String,
+
+    /// Manifest output file; an existing file must contain identical publication intent.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Explain source and publication validation.
+    #[arg(long)]
+    verbose: bool,
 }
 
 /// Report-only commands never discover or resolve a workspace.

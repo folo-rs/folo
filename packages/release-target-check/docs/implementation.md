@@ -18,14 +18,17 @@ identity for binary builds.
 
 ## Ownership and evidence
 
-The binary entry point delegates to the library's `run()` function. The library
-owns argument parsing, verification, diagnostics, and the implementation's unit
-tests. In-memory parsing and decision tests participate in Cargo's library-only
-mutation selection. All real filesystem and child-process tests live in one Cargo
+The binary entry point delegates through its thin library to
+`crp_impl::publication::candidate`, which owns argument parsing, verification,
+diagnostics and in-process unit tests. The owning application's
+[implementation guide](../../cargo-release-plan/docs/implementation.md) describes
+their reuse by publication preparation. In-memory parsing and decision tests
+participate in that partition's library-only mutation selection.
+All executable-connected filesystem and child-process tests live in one Cargo
 integration target, including direct adapter calls and the executable boundary.
-The nonpublished library exposes the implementation operations those tests need;
-it is a private-use implementation crate, not a public library API. Metadata fields
-and application error leaves remain private.
+The nonpublished library re-exports only the implementation operations those tests
+and the compatibility executable need; it has no independent release policy.
+Metadata fields and application error leaves remain private to the implementation.
 
 Git subprocesses establish exact HEAD identity and first-parent membership.
 Cleanliness checks reject staged edits, tracked edits, untracked files and index

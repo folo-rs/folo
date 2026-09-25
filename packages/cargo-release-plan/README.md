@@ -35,6 +35,8 @@ cargo release-plan expand --plan <plan.json> --out <expanded.json>
 cargo release-plan inspect-plan --plan <expanded.json> [--require-resolved]
     [--manifest-path <path>] [--verbose]
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
+cargo release-plan prepare-publish --source <commit> --output <publication.json>
+    [--manifest-path <path>] [--config <path>] [--verbose]
 ```
 
 `--version` identifies the installed application, not the packages in a workspace.
@@ -103,6 +105,27 @@ appear only in Cargo's list. It also resolves the dependency graph and performs
 Cargo's package-preparation work, so gating on it would give up the normal
 offline, no-resolve path. A divergence on a clean tree is evidence that the
 rules need fixing.
+
+### `prepare-publish`
+
+Captures publication intent from a clean checkout whose HEAD matches the full
+`--source` commit ID. It reads the selected workspace's committed
+`.cargo/release_plan.toml` unless `--config` selects another file, fetches the
+configured release branch, and verifies first-parent membership, tracked
+manifests/configuration/lockfile, version readiness and locked dependency
+consistency. This operation requires Git and Cargo; private GitHub repositories
+also require GitHub CLI authentication.
+
+The output records every publishable package's declared version, source commit,
+repository-relative input paths and effective configuration, including binary
+names and native targets. It includes unchanged packages because version
+readiness does not establish whether their publication completed. The manifest
+is immutable: repeating identical preparation can reuse it, but different intent
+requires another output path. Keep the file outside tracked source or in an
+ignored artifact directory.
+
+Preparation does not upload packages, create tags, choose versions or repair a
+lockfile. Its publication manifest is distinct from the pre-merge version plan.
 
 ### `prepare`
 

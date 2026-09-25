@@ -20,6 +20,7 @@ all-features = true
 command-group = { workspace = true }
 ctrlc = { workspace = true, features = ["termination"] }
 dunce = { workspace = true }
+mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

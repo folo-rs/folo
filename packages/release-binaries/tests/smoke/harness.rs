@@ -33,6 +33,7 @@ impl Fixture {
             "rust-toolchain.toml",
             "scripts/release/Install-ReleaseSourceToolchain.ps1",
             "scripts/setup/RustToolchain.psm1",
+            "scripts/utility/Constants.psm1",
             "scripts/utility/Retry.psm1",
         ] {
             let destination = path.join(relative);
