@@ -1,20 +1,20 @@
-name: Copilot Setup Steps
+name: Copilot Code Review
 
-# This workflow sets up the development environment for GitHub Copilot coding agent.
-# See https://docs.github.com/en/copilot/how-tos/agents/copilot-coding-agent/customizing-the-development-environment-for-copilot-coding-agent
+# Keep review setup independent of coding-agent tooling to minimize startup cost.
+# See .github/workflows/design.md#copilot-agent-environments.
 on:
   workflow_dispatch:
   push:
     branches:
     - main
     paths:
-    - .github/workflows/copilot-setup-steps.yml
+    - .github/workflows/copilot-code-review.yml
   pull_request:
     paths:
-    - .github/workflows/copilot-setup-steps.yml
+    - .github/workflows/copilot-code-review.yml
 
-# This controls standalone setup-validation runs from the triggers above, not Copilot sessions.
-# The workflow name isolates these runs from code-review setup. PR numbers distinguish
+# This controls standalone setup-validation runs from the triggers above, not Copilot reviews.
+# The workflow name isolates these runs from coding-agent setup. PR numbers distinguish
 # same-named branches in different forks; ref covers pushes and manual dispatches.
 # A new run cancels older validation work in the same group so superseded checks do not
 # keep consuming a runner.
@@ -24,15 +24,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Copilot requires this job ID even in the review-specific workflow.
   copilot-setup-steps:
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
-    
-    - name: Setup environment
-      uses: ./.github/actions/setup-environment
+      with:
+        persist-credentials: false
