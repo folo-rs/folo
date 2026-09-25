@@ -1,0 +1,20 @@
+name: Release action identity
+
+# Proves the external workflow can resolve its own immutable action source using
+# only the caller run's read permissions, independently of the caller checkout.
+# Ref: packages/cargo-release-plan/docs/design.md#consumption-and-configuration.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release-action-identity.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  identity:
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity.yml@f2f0621e8e1550ab831c75b70c292bb7315ea77d
+    with:
+      expected-sha: f2f0621e8e1550ab831c75b70c292bb7315ea77d
