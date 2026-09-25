@@ -58,7 +58,8 @@ function Install-StandaloneSevenZip {
     }
     # Windows' libarchive supports 7z. Select it explicitly: Git's GNU tar can precede it on
     # PATH and interprets a Windows drive letter in the archive path as a remote hostname.
-    $tar = Get-Command (Join-Path $env:SystemRoot 'System32' 'tar.exe') -CommandType Application -ErrorAction Stop
+    $tar = Get-Command (Join-Path $env:SystemRoot 'System32' 'tar.exe') -CommandType Application -ErrorAction Stop |
+        Select-Object -First 1
     $work = Join-Path ([IO.Path]::GetTempPath()) "release-archive-tools-$([guid]::NewGuid().ToString('N'))"
     $null = New-Item -ItemType Directory -Path $work
     try {
@@ -117,7 +118,7 @@ function Install-ReleaseArchiveTool {
         if ($env:GITHUB_PATH) {
             Add-Content -LiteralPath $env:GITHUB_PATH -Value $Destination -Encoding utf8NoBOM
         }
-        $tool = Get-Command 7za -CommandType Application -ErrorAction Stop
+        $tool = Get-Command 7za -CommandType Application -ErrorAction Stop | Select-Object -First 1
         & $tool.Source i | Select-Object -First 3 | Out-Host
         return
     }
@@ -129,7 +130,7 @@ function Install-ReleaseArchiveTool {
         Invoke-ArchivePackageInstall -Platform $platform
     }
     foreach ($tool in @('zip', 'unzip')) {
-        $application = Get-Command $tool -CommandType Application -ErrorAction Stop
+        $application = Get-Command $tool -CommandType Application -ErrorAction Stop | Select-Object -First 1
         & $application.Source -v | Select-Object -First 2 | Out-Host
     }
 }

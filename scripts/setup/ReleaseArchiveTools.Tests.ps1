@@ -30,6 +30,17 @@ Describe 'Release archive prerequisite setup' {
         }
     }
 
+    It 'invokes the first native executable when PATH contains multiple copies' {
+        Mock Get-Command -ModuleName ReleaseArchiveTools {
+            [pscustomobject]@{ Source = $Name[0] }
+            [pscustomobject]@{ Source = 'second-copy-must-not-run' }
+        }
+        Install-ReleaseArchiveTool
+        Should -Invoke zip -ModuleName ReleaseArchiveTools -Times 1 -Exactly
+        Should -Invoke unzip -ModuleName ReleaseArchiveTools -Times 1 -Exactly
+        Should -Invoke Invoke-ArchivePackageInstall -ModuleName ReleaseArchiveTools -Times 0 -Exactly
+    }
+
     It 'installs a missing archive tool on <Platform> and verifies both executables' -ForEach @(
         @{ Platform = 'linux' }, @{ Platform = 'macos' }
     ) {
