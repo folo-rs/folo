@@ -47,8 +47,14 @@
 //! A simple scenario that merely copies memory from a foreign buffer to a local one
 //! (`benches/many_cpus_benchmarking_harness_demo.rs`):
 //!
-//! ```rust ignore (benchmark)
-//! const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;
+//! ```rust
+//! use std::hint::black_box;
+//! use std::ptr;
+//!
+//! use many_cpus_benchmarking::Payload;
+//!
+//! /// Large enough to copy across many cache lines without a bulk-throughput workload.
+//! const COPY_BYTES_LEN: usize = 1024 * 1024;
 //!
 //! /// Sample benchmark scenario that copies bytes between the two paired payloads.
 //! ///
@@ -86,10 +92,13 @@
 //!             to.set_len(COPY_BYTES_LEN);
 //!         }
 //!
-//!         // Read from the destination to prevent the compiler from optimizing the copy away.
-//!         _ = black_box(to[0]);
+//!         // Keep the entire copy observable, not just its first byte.
+//!         _ = black_box(&to);
 //!     }
 //! }
+//! # let (mut payload, _) = CopyBytes::new_pair();
+//! # payload.prepare();
+//! # payload.process();
 //! ```
 //!
 //! This scenario is executed in a Criterion benchmark by calling [`execute_runs()`][6] and providing
@@ -97,7 +106,8 @@
 //!
 //! ```rust ignore (benchmark)
 //! fn entrypoint(c: &mut Criterion) {
-//!     execute_runs::<CopyBytes, 1>(c, "my_benchmark", WorkDistribution::all());
+//!     // Amortize worker startup and cache clearing over several bounded payloads.
+//!     execute_runs::<CopyBytes, 10>(c, "my_benchmark", WorkDistribution::all());
 //! }
 //! ```
 //!
@@ -369,3 +379,6 @@ mod work_distribution;
 pub use payload::*;
 pub use run::*;
 pub use work_distribution::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

@@ -35,6 +35,81 @@ Standard validation and its close companion share the `standard-validation-`
 ref-specific concurrency group. The merge-blocking job/check name and ruleset
 target are exactly `required-checks`.
 
+## Development tool bootstrap and caching
+
+`setup-environment` restores caches before invoking `scripts/setup/install-just.ps1`
+and then the ordinary `just install-tools` recipe. Both use the same verified binstall
+bootstrap and publisher-first policy as local development. Bootstrap constants are loaded
+through `scripts/utility/Constants.psm1`, also used by the pre-setup benchmark canary.
+See [development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
+
+The Cargo tool cache owns the installed executables and their `.crates.toml`,
+`.crates2.json` and `binstall` metadata, which record installed versions and Git revisions
+so restored tools can be reused or reconciled. It excludes rustup proxies. Its key includes
+the platform, runner image and checked-out commit. The commit covers every tracked
+installation input without maintaining a separate file list, including historical checkouts
+whose revision differs from the workflow event's SHA. A same-image fallback restores an
+earlier snapshot, and installation always reconciles the exact pins before use.
+This trades a fresh archive and branch-scoped cache entry per commit for complete input
+coverage; restored matching tools do not need another download or compilation. These entries
+share the repository cache budget with build artifacts and toolchains, so the additional
+snapshots can evict other useful caches. Input-list maintenance is avoided at this storage
+and upload cost, rather than by treating a cache hit as proof that installation can be skipped.
+This cache is separate from `rust-cache`, whose binary caching is disabled, so changing
+a tool pin does not discard workspace compilation artifacts. Standalone lint tools and
+Bicep retain their independent caches.
+
+Book jobs install into a separate Cargo install root and cache that entire root, including
+the binaries and registration metadata, after shared setup. Only book jobs populate this
+cache, so ordinary setup jobs cannot reserve its immutable key before book tools exist.
+Its key follows the same platform/image/commit policy. The install step selects this root
+without changing Cargo's registry home and adds its `bin` directory to subsequent steps'
+PATH. Local `just book-install` still follows the caller's ordinary install-root selection.
+
+The install steps supply the job's ephemeral GitHub token for public release discovery.
+Local installation does not require authentication or modify credential configuration.
+No step bootstraps binstall through compilation or disables signature verification.
+
+### Shared environment cache identity
+
+The scheduled `cache-warmup.yml` job invokes `setup-environment` on the default branch, where
+GitHub permits pull-request and branch consumers to restore its caches. Other jobs, including
+the benchmark setup hook, invoke the same composite. There is no warmup-specific cache key.
+Manual warmup runs use the selected ref; use the default branch to populate broadly reusable
+caches. Successful consumers can also save missing environment entries within GitHub's normal
+ref scoping.
+The Linux warmup matrix includes both values of `install-valgrind` because the APT cache key
+includes the requested package set. Non-Linux platforms need only one warmup variant.
+
+The composite restores rustup's cache and then completes the pinned toolchain set **before**
+`Swatinem/rust-cache` computes its key. `RustToolchain.psm1` owns the common installer used by
+both CI preparation and `just install-tools`: stable with the manifest's components, MSRV, the
+general analysis nightly and the schema-paired external-types nightly. It reads `constants.env`
+without exporting those dotenv values into the workflow environment. Missing pins or installation
+failures stop setup rather than allowing a partial toolchain set to reach cache lookup.
+The rustup key includes the pin files and installer inputs so component-policy changes invalidate
+the saved toolchain set as well.
+
+`rust-cache` hashes installed compiler identities and Cargo/Rust environment variables in
+addition to workspace inputs. Its action step fixes `RUST_BACKTRACE` to the same value for
+every caller because that runtime diagnostic setting does not alter compilation. The override
+is local to the cache action; validation and other commands retain their own backtrace behavior.
+The existing Cargo defaults are shared, while genuine compiler inputs, runner image, platform,
+architecture and manifest/lockfile hashes retain their normal cache separation and compatible
+dependency fallback.
+
+Installed Cargo tools remain in the independent cache described above. Warmup runs
+the complete installer before saving environment caches, while consumers reconcile any missing
+or stale inputs after restoration. `save-build-cache` defaults to `false`; jobs opt in only when
+they compile in the cached checkout. This includes repository-native CLI verification, not only
+library tests and builds. Script-domain selection and no-op publication need not compile anything,
+so they leave saving disabled. Mutation jobs build private copies, and the benchmark hook prepares
+the invocation checkout rather than the separate measurement checkout; neither owns this cache.
+GitHub cache entries are immutable, and `rust-cache` does not resave
+an exact hit; letting a setup-only job save first would prevent later compilation from filling
+that entry. All jobs can still restore it. This switch does not affect saving
+rustup, installed-tool or other environment caches.
+
 ## Benchmark workflow artifacts
 
 Folo delegates its ordinary benchmark job graphs to
@@ -167,11 +242,19 @@ The matrix checks out the resolved `to` commit with full history, while configur
 setup hook and source installation remain invocation-owned. The core tool validates and traverses
 the inclusive first-parent range, preserving the selected project directory in its worktrees.
 
-Folo passes `install-method: path`, `source-path: .`, shared exclusions, all features and the
-shared repetition count and compiler stability flags. Fixed skip-existing behavior
-makes each platform resumable. `ignore-errors: true` continues past per-commit build/benchmark
-failures; `best-effort: true` separately opts into whole-matrix-job `continue-on-error`, including
-the shared hosted-runner timeout. Generic callers default both policies to false.
+Folo pins the released v2 reusable workflow to an immutable commit and passes
+`install-method: path`, `source-path: .`, shared exclusions, all features and the shared
+repetition count and compiler stability flags. Fixed skip-existing behavior makes each platform
+resumable. `max-commits: '1'` reaches the core as an attempt budget after existing-result
+prefiltering; it does not change range preparation or first-parent traversal. The chosen budget
+matches [observed nightly capacity](design.md#nightly-history-backfill), not a hard time bound.
+Each attempted commit retains its full repetitions, storage and flush/cleanup; the final log
+summary distinguishes stored, existing, empty, failed and deferred work.
+
+The caller omits `ignore-errors`, retaining its strict false default. The v2 workflow has no
+whole-job failure-suppression input or job-level `continue-on-error`. Its matrix keeps
+`fail-fast: false` and the six-hour exceptional watchdog; genuine failures and timeout remain
+unsuccessful job conclusions rather than successful bounded completion.
 
 Backfill creates no receipts, analysis job, report artifacts, publication sink or public outputs.
 Shared run/work concurrency prefixes differ from Folo's caller group; non-cancelling
@@ -188,11 +271,32 @@ tools work together without requiring published tool versions or a full performa
 
 `benchmark-action-canary.yml` calls the action repository's `history.yml` and `backfill.yml`
 at the revisions specified in their `uses:` references, with tools built from the Folo checkout
-under test.
+under test. Its backfill calls use the same released revision as the production backfill caller.
 On a pull request, it runs only when the source branch belongs to `folo-rs/folo`, not a fork.
 History publication is disabled; backfill has no publication.
 Its standalone fixture writes deterministic Criterion artifacts through the existing faker
 library instead of measuring elapsed time.
+
+The canary is `workflow_call`-only. Standard validation invokes it as `benchmark-canary` and
+includes that result in both `required-checks` and main-push failure reporting. Deep validation
+reuses the same graph through Standard and forwards its required token permissions. Main
+pushes and scheduled/manual main calls select full scope; PRs combine explicit fixture/tooling
+paths with Cargo delta's transitive impact on the CLI, companion and faker consumers. Private
+CBH partitions and lower-level libraries therefore need no duplicated path/package inventory.
+The path plan records credential eligibility separately from relevance. Forks never call Azure;
+they still execute the selected credential-free preflight. The merge queue retains its separate
+shallow graph and the same required-check context, without this runtime canary.
+
+Preparation runs `just verify-caller-fixture` before the hosted call. The shared PowerShell
+boundary uses Git to require a clean checkout and full `cargo metadata --locked` in the standalone
+fixture workspace. `--no-deps` does not resolve dependencies and is not a lockfile freshness
+check. The fixture lockfile is independent of the root workspace lockfile; path-package version
+changes require `cargo update --manifest-path .github/fixtures/bench-history-caller/Cargo.toml
+--offline --workspace` before committing. Validation must reject drift, never refresh it during
+measurement. Native integration tests demonstrate committed path-version drift, missing locks
+and dirty inputs against actual Cargo and Git.
+`just verify-lockfile` also invokes the shared locked-resolution check during version planning,
+without demanding cleanliness while release edits are still being prepared.
 
 The caller uses the existing test identity and storage account. A read-only configuration job
 exports their non-secret identifiers without signing in: Azure login masks the client ID,
@@ -213,6 +317,9 @@ For backfill, configuration freezes the real event head and its first parent as 
 `to` and `from` endpoints. The shared workflow runs the nested synthetic fixture on Linux,
 Windows and Apple Silicon macOS, using `.cargo/backfill_history.toml` to select the isolated
 `reusable-backfill-canary` project in the existing test container.
+Both real endpoints must have consistent fixture locks. A lockfile repair checkpoint followed
+by its guard/workflow integration provides valid adjacent inputs; changing the range, discarding
+dirty flags or weakening the clean-endpoint assertions would hide the defect.
 
 The separate `verify-backfill` job queries `list runs --json` across all stored machine keys and
 targets at the frozen endpoint. It checks the expected project and requires both current range
@@ -235,6 +342,15 @@ endpoint query establish actual stored results independently of the explicit-ran
 A separate no-eligible call uses an age older than all repository history; job evidence must
 show successful preparation and no executed backfill matrix. Neither scenario copies the
 planner into the caller. Frozen-clock tests own exact cutoff and calendar assertions.
+The no-work verifier matches the complete nested job-name segment, so Standard and Deep caller
+prefixes do not hide executed work or substitute an unrelated preparation job.
+The no-work probe uses its own configuration path because the reusable action keys concurrency
+by that path; it must not compete with rolling collection for the same pending-run slot.
+
+The reusable canary's always-run `result` job requires success from every configuration, storage,
+collection, backfill and verification job. Only the inner no-eligible backfill matrix may skip;
+its preparation and no-work verification must succeed. Missing, failed, cancelled or unexpectedly
+skipped contract jobs fail the reusable call and the Standard fan-in.
 
 Invalid input, failed collection, stale attempts and lifecycle mutation cases remain covered
 by the companion's mock/native suites and the action adapter tests. A successful synthetic
@@ -505,6 +621,9 @@ using its affected-package output. The execution-domain output must agree with t
 selection. Every selected tooling job must succeed; every tooling dependency must be present,
 even when not selected. Preparation remains a must-succeed dependency, so a failed planner
 cannot turn downstream skips into merge approval.
+The same reconstruction checks the explicit hosted-canary output against the path/trust plan
+and affected consumers. A selected call must succeed; skipping is accepted only for an
+explicitly irrelevant or credential-ineligible call, never for absent or malformed scope.
 
 The classifier only observes what `needs` supplies, so it also rejects an unconditional gate
 that its must-succeed list names but the payload omits. A name that drifts out of the `needs:`
@@ -615,11 +734,24 @@ platform coverage is disclosed for human review, not claimed as a passing result
 
 The `report` job depends on planning and every check matrix and runs on failure.
 It uses the same main checkout as the other jobs. Its normal GitHub permissions
-allow reading Actions results and writing an issue. Preinstalled PowerShell and
+allow reading Actions results and check-run annotations and writing an issue. Preinstalled PowerShell and
 the GitHub CLI are sufficient, even when checker/toolchain setup failed.
 
 The reporter reads the run's effective job results, including executions reused by
 a job rerun, and collects available check summaries and failed-job log excerpts.
+After resolving effective executions, it examines completed cancelled jobs through
+their check-run annotation URLs. A failure annotation stating that the job exceeded
+its maximum execution time includes that job in the report without rewriting its
+`cancelled` conclusion. The observed platform reason takes precedence in the error
+summary; diagnostics identify interrupted execution and absence of a final checker
+result in the available summary. Partial results remain observations, not outcomes
+for unfinished work. Other cancellations do not independently create a report.
+Annotation lookup failures fail reporting rather than silently classifying a
+cancellation as intentional. Established failures are published first, with linked
+cancellation-reason gaps, before that reporting invocation fails. Reused executions retain their original check-run,
+log and artifact identities; newer successful executions supersede earlier cancellations.
+This selection does not change the workflow's failure-based report-job trigger or
+assert that an all-cancelled workflow invokes reporting.
 It does not require the overall workflow to finish before reporting. Missing artifacts or
 inaccessible logs are explicit gaps in the report, not reasons to omit a failure.
 Issue content contains observed failures and direct links, not serialized API

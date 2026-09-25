@@ -1,7 +1,7 @@
 use futures::executor::block_on;
 
-use crate::github::Comparison;
 use crate::github::fake::FakeGitHub;
+use crate::github::{Comparison, Issue};
 use crate::lifecycle::tests::harness::{
     clock, context, findings, only_issue, owner, publish, report, seed_retained_findings, sha,
 };
@@ -10,6 +10,50 @@ use crate::lifecycle::{
 };
 use crate::marker;
 use crate::result::{AnalysisMode, Outcome};
+
+#[test]
+fn persisted_annotation_is_replaced_without_rewriting_the_report() {
+    let github = FakeGitHub::new();
+    // These are persisted wire bodies, deliberately independent of the production formatters.
+    let retained = "<!-- cargo-bench-history:project:issue:regression -->\n\
+        <!-- cargo-bench-history:project:run:1:1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n\
+        <!-- cargo-bench-history:project:analyzed-sha:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n\
+        <!-- cargo-bench-history:project:state:findings -->\n\n\
+        Retained report with its original whitespace.\n";
+    let start = "<!-- cargo-bench-history:project:annotation:start -->";
+    let end = "<!-- cargo-bench-history:project:annotation:end -->";
+    github.seed_issue(Issue {
+        number: 7,
+        title: "Benchmark history findings for project (updated 2026-01-01)".to_owned(),
+        body: format!(
+            "{retained}\n\n{start}\n\
+            <!-- cargo-bench-history:project:run:2:1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n\
+            <!-- cargo-bench-history:project:state:preflight -->\n\
+            Superseded annotation\n{end}"
+        ),
+        open: true,
+    });
+    let incoming = owner(2, 2, 'b');
+    block_on(issue_inconclusive(
+        &github,
+        &context(),
+        &clock(2),
+        &Inconclusive::Empty(incoming.clone()),
+    ))
+    .unwrap();
+    let after = only_issue(&github);
+    let parsed = IssueBody::parse(&after.body, &context().instance).unwrap();
+    assert_eq!(parsed.report, retained);
+    assert_eq!(parsed.owner, owner(1, 1, 'a'));
+    assert_eq!(parsed.commit, sha('a'));
+    let annotation = parsed.annotation.unwrap();
+    assert_eq!(annotation.owner, incoming);
+    assert!(annotation.state == AnnotationState::Inconclusive);
+    assert_eq!(after.body.matches(start).count(), 1);
+    assert_eq!(after.body.matches(end).count(), 1);
+    assert!(!after.body.contains("Superseded annotation"));
+    assert!(after.open);
+}
 
 #[test]
 fn preflight_marks_clean_results_stale_without_changing_the_retained_verdict() {

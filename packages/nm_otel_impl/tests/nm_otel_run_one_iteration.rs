@@ -49,3 +49,5 @@ fn run_one_iteration_exports_recorded_events() {
     );
     drop(provider);
 }
+
+::testing::set_allocator!();

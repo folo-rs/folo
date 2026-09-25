@@ -27,3 +27,5 @@ fn ui() {
     // This pattern will pick up any .rs file in any package's directory
     t.compile_fail("tests/ui/*/*.rs");
 }
+
+::testing::set_allocator!();

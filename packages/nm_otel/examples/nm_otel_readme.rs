@@ -28,3 +28,5 @@ async fn main() {
 
     publisher.publish_forever().await;
 }
+
+::testing::set_allocator!();

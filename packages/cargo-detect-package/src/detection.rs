@@ -84,50 +84,46 @@ pub(crate) fn extract_package_name(
     Err(PackageNameMissingError::new(dir.join("Cargo.toml")).into())
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::ParseManifestError;
-    use crate::pal::FilesystemFacade;
+    use crate::pal::MockFilesystem;
+
+    fn manifest_filesystem(manifest: &str) -> MockFilesystem {
+        let mut fs = MockFilesystem::new();
+        let manifest = manifest.to_owned();
+        fs.expect_read_cargo_toml()
+            .returning(move |_| Ok(manifest.clone()));
+        fs
+    }
 
     #[test]
     fn extract_package_name_double_quotes() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        fs::write(
-            temp_dir.path().join("Cargo.toml"),
+        let fs = manifest_filesystem(
             r#"
 [package]
 name = "test-package"
 version = "0.1.0"
 "#,
-        )
-        .unwrap();
+        );
 
-        let fs = FilesystemFacade::target();
-        let result = extract_package_name(temp_dir.path(), &fs).unwrap();
+        let result = extract_package_name(Path::new("package"), &fs).unwrap();
         assert_eq!(result, DetectedPackage::Package("test-package".to_string()));
     }
 
     #[test]
     fn extract_package_name_single_quotes() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        fs::write(
-            temp_dir.path().join("Cargo.toml"),
+        let fs = manifest_filesystem(
             r#"
 [package]
 name = 'test-package-single'
 version = "0.1.0"
 "#,
-        )
-        .unwrap();
+        );
 
-        let fs = FilesystemFacade::target();
-        let result = extract_package_name(temp_dir.path(), &fs).unwrap();
+        let result = extract_package_name(Path::new("package"), &fs).unwrap();
         assert_eq!(
             result,
             DetectedPackage::Package("test-package-single".to_string())
@@ -136,10 +132,7 @@ version = "0.1.0"
 
     #[test]
     fn extract_package_name_with_comments_and_complex_toml() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        fs::write(
-            temp_dir.path().join("Cargo.toml"),
+        let fs = manifest_filesystem(
             r#"
 # This is a comment
 [package]
@@ -152,11 +145,9 @@ description = "A test package with complex TOML"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 "#,
-        )
-        .unwrap();
+        );
 
-        let fs = FilesystemFacade::target();
-        let result = extract_package_name(temp_dir.path(), &fs).unwrap();
+        let result = extract_package_name(Path::new("package"), &fs).unwrap();
         assert_eq!(
             result,
             DetectedPackage::Package("complex-package".to_string())
@@ -165,19 +156,14 @@ serde = { version = "1.0", features = ["derive"] }
 
     #[test]
     fn extract_package_name_missing() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        fs::write(
-            temp_dir.path().join("Cargo.toml"),
+        let fs = manifest_filesystem(
             r#"
 [package]
 version = "0.1.0"
 "#,
-        )
-        .unwrap();
+        );
 
-        let fs = FilesystemFacade::target();
-        let error = extract_package_name(temp_dir.path(), &fs).unwrap_err();
+        let error = extract_package_name(Path::new("package"), &fs).unwrap_err();
         assert!(error.find_source::<PackageNameMissingError>().is_some());
     }
 
@@ -196,41 +182,23 @@ version = "0.1.0"
 
     #[test]
     fn detect_package_with_invalid_toml() {
-        // Test that detect_package returns an error when the package has invalid TOML.
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path();
-
-        // Create workspace Cargo.toml.
-        fs::write(
-            workspace_root.join("Cargo.toml"),
-            r#"[workspace]
-members = ["bad_package"]
-"#,
-        )
-        .unwrap();
-
-        // Create bad_package with intentionally malformed TOML.
+        let workspace_root = Path::new("workspace");
         let bad_package = workspace_root.join("bad_package");
-        fs::create_dir_all(bad_package.join("src")).unwrap();
-        fs::write(
-            bad_package.join("Cargo.toml"),
+        let mut fs = manifest_filesystem(
             r#"# Intentionally malformed TOML - missing closing bracket
 [package
 name = "bad_package"
 version = "0.1.0"
 "#,
-        )
-        .unwrap();
-        fs::write(bad_package.join("src/lib.rs"), "// test\n").unwrap();
-
-        // Create a WorkspaceContext pointing to the file in bad_package.
+        );
+        fs.expect_is_file().return_const(true);
+        fs.expect_cargo_toml_exists()
+            .returning(move |path| path == bad_package);
         let context = WorkspaceContext {
-            absolute_target_path: bad_package.join("src/lib.rs").canonicalize().unwrap(),
-            workspace_root: workspace_root.canonicalize().unwrap(),
+            absolute_target_path: workspace_root.join("bad_package/src/lib.rs"),
+            workspace_root: workspace_root.to_owned(),
         };
 
-        let fs = FilesystemFacade::target();
-        // detect_package should fail because the Cargo.toml is malformed.
         let error = detect_package(&context, &fs).unwrap_err();
         assert!(error.find_source::<ParseManifestError>().is_some());
     }

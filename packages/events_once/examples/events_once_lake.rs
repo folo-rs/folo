@@ -22,3 +22,5 @@ where
     let payload = rx.await.unwrap();
     println!("Received payload: {payload:?}");
 }
+
+::testing::set_allocator!();

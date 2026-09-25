@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use futures::executor::block_on;
 use serde_json::{Value, json};
 
+use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::execute::run_with;
 use crate::action::port::Output;
 use crate::action::tests::fake::{FakeHost, FakePublisher, SHA, analysis};
@@ -99,6 +100,11 @@ fn build_defaults_exclusions_and_write_modes_are_per_command() {
         assert!(args.contains(&"--exclude=other".into()));
         assert!(args.contains(&"--all-features".into()));
         assert!(args.contains(&"--best-of=1".into()));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().starts_with("--max-commits"))
+        );
         assert!(!args.contains(&"--skip-existing".into()));
         assert!(
             !args
@@ -116,6 +122,32 @@ fn build_defaults_exclusions_and_write_modes_are_per_command() {
                 "instance=action-test\n"
             );
         }
+    }
+}
+
+#[test]
+fn backfill_forwards_only_a_nonempty_commit_limit() {
+    for limit in ["", "2"] {
+        let input = json!({
+            "command":"backfill", "from":"HEAD~2", "to":"HEAD", "max-commits":limit,
+        });
+        let host = FakeHost::new(&input);
+        host.reply("");
+        block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap();
+        let processes = host.processes.borrow();
+        assert_eq!(processes.len(), 1);
+        let expected: Vec<OsString> = if limit == "2" {
+            vec!["--max-commits=2".into()]
+        } else {
+            Vec::new()
+        };
+        let actual: Vec<_> = processes[0]
+            .args
+            .iter()
+            .filter(|arg| arg.to_string_lossy().starts_with("--max-commits"))
+            .cloned()
+            .collect();
+        assert_eq!(actual, expected);
     }
 }
 
@@ -290,9 +322,20 @@ fn shallow_unresolved_and_failed_analysis_never_emit_outputs() {
     for shallow in ["true", "not-a-boolean"] {
         let host = FakeHost::new(&analysis("analyze-history"));
         host.reply(shallow);
-        block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap_err();
+        let error = block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap_err();
+        if shallow == "true" {
+            assert_eq!(
+                error.find_source::<InvalidInput>().unwrap().input,
+                "checkout"
+            );
+            assert!(error.find_source::<InvalidOutput>().is_none());
+        } else {
+            assert!(error.find_source::<InvalidOutput>().is_some());
+            assert!(error.find_source::<InvalidInput>().is_none());
+        }
         assert_eq!(host.processes.borrow().len(), 1);
         assert!(host.scratches.borrow().is_empty());
+        assert!(host.outputs.borrow().is_empty());
     }
 }
 

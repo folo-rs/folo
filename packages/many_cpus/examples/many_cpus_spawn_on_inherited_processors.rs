@@ -46,3 +46,5 @@ fn main() {
     // otherwise disappear instantly, making it hard to see what happened.
     thread::sleep(Duration::from_secs(10));
 }
+
+::testing::set_allocator!();

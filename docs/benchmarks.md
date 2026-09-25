@@ -33,6 +33,53 @@ benchmark function and in the same benchmark group.
 
 Do not forget to register benchmarks in `Cargo.toml`.
 
+Benchmark executables follow the [executable allocator policy](testing.md#executable-allocators):
+mimalloc natively, with allocation instrumentation wrapping that same backend.
+When comparing a tracking wrapper against an untracked allocator, use
+`testing::DefaultAllocator` for both sides so the difference measures tracking,
+not a change of allocator. Allocator changes affect benchmark baselines and must
+not be interpreted as changes to the measured library algorithms.
+
+## Bound routine workloads
+
+Routine benchmarks are microbenchmarks, not production-sized data sets or stress
+tests. Keep each elementary operation millisecond-scale, preferably microseconds
+or a few milliseconds, never seconds. Keep the workload small enough for
+Criterion's full default sample count to fit its normal short measurement window.
+Prefer a meaningful low and high
+size for scaling; additional variants need a distinct algorithmic reason.
+
+Choose sizes from the work being exercised, not from production limits. Preserve
+the intended algorithm branch, tie pattern, evidence diversity, and setup
+invariants when reducing a fixture. Explain that purpose next to its size
+constants, and keep identifiers accurate when the measured workload changes.
+Do not claim production-ceiling coverage for a reduced workload. If an essential
+branch cannot be measured as bounded meaningful work, report that conflict rather
+than weakening production behavior to make the benchmark faster.
+
+Check actual per-iteration estimates and a full-sampling run of every changed high
+case. A configured measurement interval is not an execution-time limit: Criterion
+can exceed it when even one iteration per sample is too expensive. Do not hide
+oversized iterations with `--quick`, fewer samples, or a longer measurement window.
+Remove duration overrides supported only by a vague claim of noisy results;
+intentional overrides need a specific measurement reason.
+
+For an already bounded elementary operation, explicit flat sampling can retain
+the full sample count within the default window when linear sampling's minimum
+triangular iteration schedule is too expensive. Explain that choice; flat and
+linear sampling do not have identical statistical properties. This is not a
+substitute for reducing an oversized fixture.
+
+Also inspect untimed setup, teardown, and `iter_custom` loops. Batching, worker
+startup, cache preparation, and report generation can dominate elapsed runtime
+even when the reported operation is small. Keep setup bounded and distinguish
+these costs from measured work. Measure serially on shared machines, retain the
+sampling warnings and per-case estimates, and treat timings as workload-budget
+evidence rather than precise performance comparisons.
+
+Manual exploratory benchmarks whose purpose requires large working sets or
+production-scale exhaustion are separate from these routine microbenchmarks.
+
 ## Avoid syscalls unless I/O is the thing being measured
 
 Unless the benchmark's *purpose* is to measure I/O or some other
@@ -42,6 +89,14 @@ unpredictable latency that depends on kernel scheduling, filesystem and device
 state, caches, and unrelated processes on the machine. That is noise which has
 nothing to do with the code under test and which varies from run to run and from
 machine to machine.
+
+Calling a disk-writing API does not by itself make a general report benchmark an
+I/O benchmark. Measure available in-memory aggregation, rendering, or serialization
+operations instead; remove redundant scenarios rather than adding public API just
+for a benchmark. Deliberate I/O benchmarks need an explicit I/O-specific purpose
+and workload, separate from ordinary microbenchmarks. Emitting Criterion or tracker
+reports after measurement is harness output, not a reason to include file writes
+inside each measured iteration.
 
 When a benchmark needs a stand-in "workload" to represent the body of a task,
 use a small, deterministic, CPU-only computation seeded with `black_box` (so the

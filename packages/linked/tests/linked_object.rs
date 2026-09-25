@@ -27,3 +27,5 @@ fn very_empty_struct() {
 
     drop(Empty::new());
 }
+
+::testing::set_allocator!();

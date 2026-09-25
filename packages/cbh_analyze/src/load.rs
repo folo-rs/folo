@@ -3,6 +3,7 @@
 //! recombination that keeps a long history's runs from all being held resident.
 
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZero;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -401,6 +402,7 @@ pub(crate) struct WorkerFold {
 pub(crate) async fn fold_runs_chunked<S>(
     storage: &S,
     spawner: &Spawner,
+    available_parallelism: NonZero<usize>,
     ranked: Vec<(usize, String, StorageKey)>,
     order: &Arc<HashMap<String, usize>>,
     dirty_base_exception: &Arc<HashMap<String, bool>>,
@@ -418,7 +420,7 @@ where
     if total == 0 {
         return Ok(combined);
     }
-    let workers = worker_count(total);
+    let workers = worker_count(total, available_parallelism);
 
     let mut items = ranked.into_iter();
     let mut handles = Vec::with_capacity(workers);
@@ -494,9 +496,99 @@ fn ordinal_of(rank: usize) -> u32 {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use cbh_detect::testing::synchronous_spawner;
     use cbh_model::{DiscriminantSet, Engine};
+    use cbh_storage::MemoryStorage;
+    use futures::executor::block_on;
+    use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn chunked_fold_preserves_runs_across_supplied_worker_capacities() {
+        let storage = MemoryStorage::new();
+        let mut ranked = Vec::new();
+        let mut order = HashMap::new();
+        // Key order differs from topology, and the dirty run carries an admission exception.
+        for (rank, (commit, dirty, topo_index)) in
+            [("c0", false, 2), ("c1", true, 0), ("c2", false, 1)]
+                .into_iter()
+                .enumerate()
+        {
+            // The dirty key requires an observation second; its value is immaterial here.
+            let snapshot = if dirty { "dirty-1" } else { "clean" };
+            let key = format!(
+                "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/{snapshot}.json"
+            );
+            let document = json!({
+                "results": [{
+                    "id": { "segments": ["worker-fold"] },
+                    "metrics": [{ "kind": "instruction_count", "value": 100 }]
+                }]
+            });
+            block_on(storage.put(&key, document.to_string().as_bytes())).unwrap();
+            let parsed = parse_key(&key).unwrap();
+            ranked.push((rank, key, parsed));
+            order.insert(commit.to_owned(), topo_index);
+        }
+        let order = Arc::new(order);
+        let exceptions = Arc::new(HashMap::from([("c1".to_owned(), true)]));
+        let expected_admitted = ranked
+            .iter()
+            .map(|(_, key, parsed)| (key.clone(), parsed.is_dirty()))
+            .collect::<Vec<_>>();
+
+        // Serial, uneven multi-worker, and more capacity than work use the same fold.
+        for capacity in [1, 2, 4] {
+            let fold = block_on(fold_runs_chunked(
+                &storage,
+                &synchronous_spawner(),
+                NonZero::new(capacity).unwrap(),
+                ranked.clone(),
+                &order,
+                &exceptions,
+                Arc::from([]),
+            ))
+            .unwrap();
+
+            assert_eq!(fold.run_index.total(), 3);
+            assert_eq!(fold.run_index.commit_span(), Some(("c1", "c0")));
+            assert_eq!(fold.admitted, expected_admitted);
+            let series = fold.builder.finish();
+            assert_eq!(series.len(), 1);
+            let one = series.first().unwrap();
+            assert_eq!(one.id.qualified(), "worker-fold");
+            assert_eq!(
+                one.points
+                    .iter()
+                    .map(|point| (
+                        point.commit.as_deref().unwrap(),
+                        point.object_ordinal,
+                        point.dirty
+                    ))
+                    .collect::<Vec<_>>(),
+                vec![("c1", 1, true), ("c2", 2, false), ("c0", 0, false)]
+            );
+        }
+    }
+
+    #[test]
+    fn chunked_fold_of_no_runs_is_empty() {
+        let fold = block_on(fold_runs_chunked(
+            &MemoryStorage::new(),
+            &synchronous_spawner(),
+            NonZero::<usize>::MIN,
+            Vec::new(),
+            &Arc::new(HashMap::new()),
+            &Arc::new(HashMap::new()),
+            Arc::from([]),
+        ))
+        .unwrap();
+
+        assert!(fold.run_index.is_empty());
+        assert!(fold.admitted.is_empty());
+        assert!(fold.builder.finish().is_empty());
+    }
 
     #[test]
     fn run_index_counts_runs_and_reports_emptiness() {
@@ -655,21 +747,18 @@ mod tests {
     }
 
     /// Lists candidates and siblings from `storage`, unwrapping the result.
-    fn list(
-        storage: &cbh_storage::MemoryStorage,
-        discriminants: &DiscriminantSetQuery,
-    ) -> CandidateListing {
+    fn list(storage: &MemoryStorage, discriminants: &DiscriminantSetQuery) -> CandidateListing {
         list_reported(storage, discriminants).0
     }
 
     /// Lists candidates and siblings, returning the recording reporter so a test can
     /// inspect the per-key diagnostics.
     fn list_reported(
-        storage: &cbh_storage::MemoryStorage,
+        storage: &MemoryStorage,
         discriminants: &DiscriminantSetQuery,
     ) -> (CandidateListing, cbh_diag::RecordingReporter) {
         let reporter = cbh_diag::RecordingReporter::new();
-        let listing = futures::executor::block_on(list_candidates(
+        let listing = block_on(list_candidates(
             storage,
             "folo",
             discriminants,
@@ -685,9 +774,9 @@ mod tests {
         // The selection covers only m1, but a clean run under m2 that shares the
         // engine and triple is retained as a machine-relaxed sibling — never as a
         // selected candidate.
-        let storage = cbh_storage::MemoryStorage::new();
+        let storage = MemoryStorage::new();
         let put = |key: &str| {
-            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+            block_on(storage.put(key, b"{}")).unwrap();
         };
         put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json");
         put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json");
@@ -707,9 +796,9 @@ mod tests {
         // A machine-relaxed sibling is kept for lag classification, so its verbose note
         // must say it was retained, never that it was skipped for not matching the
         // discriminants. A genuinely non-matching key (a dirty run) still reads as skipped.
-        let storage = cbh_storage::MemoryStorage::new();
+        let storage = MemoryStorage::new();
         let put = |key: &str| {
-            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+            block_on(storage.put(key, b"{}")).unwrap();
         };
         let selected = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json";
         let sibling = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json";
@@ -752,9 +841,9 @@ mod tests {
         // A sibling must be an exact clean.json under the same engine and triple. A
         // dirty snapshot, a blessing sidecar, and a run under a different engine or
         // triple are all rejected even though their machine key differs from m1.
-        let storage = cbh_storage::MemoryStorage::new();
+        let storage = MemoryStorage::new();
         let put = |key: &str| {
-            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+            block_on(storage.put(key, b"{}")).unwrap();
         };
         put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json");
         put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/dirty-5.json");
@@ -782,14 +871,14 @@ mod tests {
     fn sibling_listing_is_empty_without_collection() {
         // The sibling query commands do not need siblings, so `collect_siblings =
         // false` keeps the extra list empty regardless of what the partition holds.
-        let storage = cbh_storage::MemoryStorage::new();
-        futures::executor::block_on(storage.put(
+        let storage = MemoryStorage::new();
+        block_on(storage.put(
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json",
             b"{}",
         ))
         .unwrap();
 
-        let listing = futures::executor::block_on(list_candidates(
+        let listing = block_on(list_candidates(
             &storage,
             "folo",
             &query("callgrind", "x86_64-unknown-linux-gnu", "m1"),

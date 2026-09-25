@@ -55,3 +55,5 @@ fn manual_pop_back() {
 
     println!("Popped from back (300), then front (100, 200).");
 }
+
+::testing::set_allocator!();

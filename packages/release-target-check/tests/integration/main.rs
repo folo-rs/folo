@@ -10,3 +10,5 @@ mod repository;
 mod repository_fixture;
 mod scheduling;
 mod snapshots;
+
+::testing::set_allocator!();

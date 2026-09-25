@@ -35,6 +35,12 @@ or elapsed-time assertions. Separate test binaries isolate the process-wide even
 They verify initial publication, unchanged observations and fresh observations across
 collections, including retention of counter delta state.
 
+Private builder, registry and delta-state assertions use OpenTelemetry's no-op provider.
+They exercise the same exporter without initializing the SDK's resource detectors or clock.
+Assertions about exported SDK metric data use the existing supplied-report driver in the
+integration target. These reports do not register events, so they can share a binary with
+real collection coverage without contaminating the process-wide event registry.
+
 Mutation exclusions cover only that adapter and its trivial integration-test forwarder.
 The supplied-report driver, exporter and delta algorithms remain mutation targets.
 Pre-built reports exercise export behavior but do not establish that real collection

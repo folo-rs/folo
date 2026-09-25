@@ -6,9 +6,8 @@
 )]
 
 use std::hint::black_box;
-use std::time::Duration;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use many_cpus::SystemHardware;
 use new_zealand::nz;
 use par_bench::{Run, ThreadPool};
@@ -30,8 +29,10 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("many_cpus_processor_set_builder/processor_set_builder");
 
-    // Results from this are really unstable for whatever reason. Give it more time to stabilize.
-    group.measurement_time(Duration::from_secs(30));
+    // Topology queries and worker handoffs are already elementary millisecond-scale work.
+    // Linear sampling's minimum triangular iteration schedule can exceed the default window;
+    // flat sampling keeps the full sample count without requiring that schedule.
+    group.sampling_mode(SamplingMode::Flat);
 
     // Single-threaded benchmarks using Run pattern for consistent overhead.
     Run::new()
@@ -87,3 +88,5 @@ fn entrypoint(c: &mut Criterion) {
 
     group.finish();
 }
+
+::testing::set_allocator!();

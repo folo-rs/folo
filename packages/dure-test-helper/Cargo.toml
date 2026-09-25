@@ -11,11 +11,17 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+mimalloc = { workspace = true }
+
 # Windows-only for the same reason the helper itself is (see `dure/docs/implementation.md`,
 # "Platform gate"): a non-Windows build compiles to an empty stub.
 [target.'cfg(windows)'.dependencies]
 serde_json = { workspace = true }
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

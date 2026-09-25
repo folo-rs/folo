@@ -33,3 +33,5 @@ fn main() {
 
     println!("README example completed successfully!");
 }
+
+::testing::set_allocator!();

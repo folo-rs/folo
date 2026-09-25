@@ -283,7 +283,7 @@ mod tests {
     }
 
     // Every test calling an allocating wrapper method or its panic check shares this lock. The
-    // library harness uses the system allocator, so unrelated tests cannot consume the armed flag.
+    // library harness uses an untracked allocator, so unrelated tests cannot consume the armed flag.
     // Restore the flag and unlock before propagating a failure, including a caught mutant.
     // Ref: docs/implementation.md, "Allocation tripwire".
     fn with_allocator_test(test: impl FnOnce() + Send + UnwindSafe + 'static) {

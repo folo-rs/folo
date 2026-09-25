@@ -32,3 +32,18 @@ Waker metadata uses a separate typed pool because every entry has the same metad
 Polling visits entries front-to-back and polls only entries whose activation state was
 set. A completed future is replaced by its output value, releasing the pooled future
 without changing its position in the deque.
+
+## Benchmark boundaries
+
+The local and thread-mobile collections use the same benchmark populations and future
+shapes. Build-and-drain scenarios cover activity ratios, while transient churn holds
+inactive entries resident to expose occupancy-sensitive polling and pool reuse.
+
+Wake-burst scenarios capture every resident future's waker with an initial pending poll,
+then enable the entire population and invoke all captured wakers before polling again.
+Criterion and Callgrind measure that completion poll, including release of completed
+future pool slots. A setup-owned readiness flag outlives the poll, so there is no
+per-future heap deallocation. Construction, initial registration, waking and output
+draining are excluded. The small and large populations expose per-ready-entry work without
+introducing thread scheduling. Criterion uses bounded batches of populations to amortize
+timer overhead; the measured deque is not necessarily the most recently prepared one.

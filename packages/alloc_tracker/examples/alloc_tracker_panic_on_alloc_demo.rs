@@ -12,9 +12,10 @@
 use alloc_tracker::Allocator;
 #[cfg(feature = "panic_on_next_alloc")]
 use alloc_tracker::{Allocator, panic_on_next_alloc};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 #[cfg(feature = "panic_on_next_alloc")]
 fn main() {

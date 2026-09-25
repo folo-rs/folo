@@ -187,3 +187,6 @@ pub use region_cached_ext::*;
 /// Macros require these things to be public but they are not part of the public API.
 #[doc(hidden)]
 pub mod __private;
+
+#[cfg(test)]
+::testing::set_allocator!();

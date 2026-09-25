@@ -378,6 +378,20 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_are_opt_in() {
+        let cli = Cli::try_parse_from([
+            "companion",
+            "alert",
+            "--run-id",
+            "42",
+            "--run-url",
+            "https://github.com/folo-rs/folo/actions/runs/42",
+        ])
+        .unwrap();
+        assert!(!cli.verbose());
+    }
+
+    #[test]
     fn alert_has_run_but_no_attempt_and_common_options_are_retained() {
         let cli = Cli::try_parse_from([
             "companion",

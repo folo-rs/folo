@@ -52,3 +52,5 @@ fn noop_job_has_no_effect() {
 
     drop(job);
 }
+
+::testing::set_allocator!();

@@ -79,8 +79,10 @@ build matrix. Today that set is:
 derivation correctly excludes it.
 
 The `mimalloc` global allocator is orthogonal to distribution and is applied to
-every binary regardless of whether it is published (tracked separately in
-[#304](https://github.com/folo-rs/folo/issues/304)).
+Cargo executable targets regardless of whether they are published, with a
+system-allocator fallback under Miri. Development harnesses select it explicitly
+rather than inheriting it from library dependencies; see
+[executable allocators](testing.md#executable-allocators).
 
 ## The `release.yml` workflow
 
@@ -475,19 +477,27 @@ declaration against the workflow's target table.
 There is one manual publish path and no separate release recipe to maintain:
 plain `cargo publish` (per crate, in dependency order). It is used only for
 **emergencies** (CI publishing broken) and for the **bootstrap publish** of a
-brand-new crate (below). For real releases the expectation is that a manual
-publish is immediately followed by a normal release-workflow run. For a binary
-crate, that run creates the tag and GitHub release that release-plz skips once
-crates.io already has the version, then uploads the prebuilt assets.
+brand-new crate (below). An emergency publication of a merged version is followed
+by a normal release-workflow run. For a binary crate, that run creates the tag and
+GitHub release that release-plz skips once crates.io already has the version, then
+uploads the prebuilt assets. A bootstrap publication precedes the first merge and
+follows the distinct version sequence below.
 
 ### First publish of a new crate
 
 crates.io does not allow Trusted Publishing for a crate that has never been
 published (its trusted publisher can only be configured on an existing crate). So
 a brand-new crate's **first** version must be published manually with `cargo
-publish` (a token login), after which its trusted publisher is configured on
-crates.io. Re-run `release.yml` after configuring it; binary crates receive their
-GitHub release and prebuilt assets in that run. Subsequent releases go through CI.
+publish` **before its first merge**, from the feature branch containing the crate
+and in dependency order. The maintainer then configures its trusted publisher on
+crates.io and prepares a higher version for the first merge. That merge triggers
+the **second publication**, the first one performed by CI. Binary crates receive
+their GitHub release and prebuilt assets for that merged version.
+
+The bootstrap version is not the version to merge unchanged. The existing `main`
+release workflow cannot publish unmerged feature-branch source. See
+[`RELEASING.md`](../RELEASING.md#first-publish-of-a-new-crate) for the maintainer
+handoff and version/release-plan requirements.
 
 `just check-never-published` (the `increment-versions` skill's preflight) checks
 each publishable crate against the crates.io sparse index and, for any that does

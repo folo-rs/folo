@@ -69,6 +69,12 @@ verify-lockfile:
         exit 1
     }
 
+    # This standalone workspace consumes released path packages but does not share the root
+    # lock. Check it during version planning too, before commits or hosted collection.
+    # Ref: docs/release-versioning.md#on-a-pull-request.
+    Import-Module "{{ justfile_directory() }}/scripts/bench-history/CallerFixture.psm1" -Force
+    Assert-CallerFixtureLock -Workspace "{{ justfile_directory() }}"
+
 # Warns about publishable crates that crates.io has never seen. Trusted Publishing cannot
 # perform a crate's first-ever publish (it can only be configured on a crate that already
 # exists), so a brand-new crate's first release must be done by hand (cargo publish), after

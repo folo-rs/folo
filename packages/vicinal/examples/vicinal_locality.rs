@@ -35,3 +35,5 @@ fn main() {
         thread::sleep(Duration::from_millis(100));
     }
 }
+
+::testing::set_allocator!();

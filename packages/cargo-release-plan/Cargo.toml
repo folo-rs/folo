@@ -3,7 +3,7 @@
 name = "cargo-release-plan"
 description = "A Cargo subcommand that classifies publishable packages against their version anchors and applies increment plans"
 publish = true
-version = "0.3.17"
+version = "0.4.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -11,33 +11,18 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# Only the consumer build and declared benchmark target ship in the published
-# source package. Tests, the agent notes, and development manifests stay in git.
-# Cargo packs the README it detects whatever this says, so naming it here would
-# only imply otherwise.
-# Ref: docs/design.md, "Where Cargo adds content".
-include = ["src/**", "benches/cargo_release_plan_algorithms.rs"]
+include.workspace = true
 
 # Required so feature-gated public items appear in generated documentation.
 # Ref: docs/api-documentation.md, "Feature-gated documentation".
 [package.metadata.docs.rs]
 all-features = true
 
-# The benchmark target requires `private-test-util`. `cargo udeps` does not
-# enable features, so it skips the target and cannot observe this dependency.
-[package.metadata.cargo-udeps.ignore]
-development = ["criterion"]
-
 # Baseline of external types intentionally exposed in the public API. Any new
 # external type here causes the check to fail so accidental exposures are caught.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = [
-    "clap_builder::derive::Args",
-    "clap_builder::derive::CommandFactory",
-    "clap_builder::derive::FromArgMatches",
-    "clap_builder::derive::Parser",
-]
+allowed_external_types = ["crp_impl::*"]
 
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml, and these
@@ -50,30 +35,15 @@ pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version 
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
-[features]
-# Internal-only API surface for in-workspace benchmarks.
-private-test-util = []
-
 [dependencies]
-clap = { workspace = true, features = ["derive"] }
-ignore = { workspace = true }
+crp_impl = { workspace = true }
 mimalloc = { workspace = true }
-ohno = { workspace = true, features = ["app-err"] }
-semver = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-tempfile = { workspace = true }
-toml_edit = { workspace = true, features = ["parse", "display"] }
 
 [dev-dependencies]
-criterion = { workspace = true }
-mutants = { workspace = true }
-static_assertions = { workspace = true }
-
-[[bench]]
-name = "cargo_release_plan_algorithms"
-harness = false
-required-features = ["private-test-util"]
+ohno = { workspace = true, features = ["app-err"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+testing = { path = "../testing" }
 
 [lints]
 workspace = true

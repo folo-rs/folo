@@ -96,9 +96,16 @@ function Get-RequiredCheckFailure {
         if (($expectedDomains -join ' ') -cne ($actualDomains -join ' ')) {
             throw 'The script execution selection does not match the validation plan and Cargo delta.'
         }
+        $canary = Get-ValidationCanarySelection -PlanJson $planJson `
+            -AffectedPackageJson $needs.prepare.outputs.packages_json
+        if ($needs.prepare.outputs.benchmark_canary -cne
+            (ConvertTo-Json -InputObject $canary.run_hosted -Compress)) {
+            throw 'The hosted canary selection does not match the validation plan and Cargo delta.'
+        }
         $selection = @{
             'test-scripts' = $expectedDomains.Count -gt 0 -or $plan.script_analysis -or $plan.bicep
             'validate-workflows' = $plan.workflows
+            'benchmark-canary' = $canary.run_hosted
         }
         $smoke = Test-ReleaseBinarySmokeSelected -PlanJson $planJson `
             -AffectedPackageJson $needs.prepare.outputs.packages_json

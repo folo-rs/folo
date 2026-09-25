@@ -31,3 +31,6 @@ pub use state::EventState;
 #[cfg(any(test, feature = "private-test-util"))]
 #[doc(hidden)]
 pub use test_metric_reader::*;
+
+#[cfg(test)]
+::testing::set_allocator!();

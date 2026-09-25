@@ -41,3 +41,5 @@ fn main() {
 
     println!("awaiter notified and consumed.");
 }
+
+::testing::set_allocator!();

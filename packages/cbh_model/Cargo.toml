@@ -4,7 +4,7 @@
 name = "cbh_model"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.16"
+version = "0.2.19"
 
 authors.workspace = true
 edition.workspace = true
@@ -48,6 +48,7 @@ smallvec = { workspace = true, features = ["serde"] }
 [dev-dependencies]
 criterion = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 [[bench]]
 name = "cbh_model"

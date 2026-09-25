@@ -603,3 +603,5 @@ fn native_missing_inputs_paths_environment_and_credentials_are_explicit_failures
     );
     assert!(!fixture.path("outputs").exists());
 }
+
+::testing::set_allocator!();

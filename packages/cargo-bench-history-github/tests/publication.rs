@@ -399,3 +399,5 @@ fn injected_adapter_rejects_bad_commands_and_bad_job_evidence() {
     .unwrap();
     Fixture::run(vec![command], "[]").unwrap_err();
 }
+
+::testing::set_allocator!();

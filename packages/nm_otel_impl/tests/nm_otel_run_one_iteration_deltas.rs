@@ -1,7 +1,7 @@
 //! Integration test for delta computation across explicitly requested collections.
 //!
-//! A separate binary prevents other tests from recording nm events, allowing exact assertions
-//! about the exported metrics.
+//! A separate binary isolates real nm event recording. Supplied-report cases do not register
+//! events and therefore share this target without affecting the real collection assertions.
 
 use nm::Event;
 use nm_otel::Publisher;
@@ -73,3 +73,7 @@ fn run_one_iteration_computes_deltas_across_collections() {
     );
     drop(provider);
 }
+
+mod reports;
+
+::testing::set_allocator!();

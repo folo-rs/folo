@@ -24,3 +24,13 @@ on its own. Do it as part of the next change that breaks the schema anyway.
 When the pinned Rust toolchain provides `clippy::definition_in_module_root` and
 `clippy::manual_bit_width`, enable both as warnings in the root `Cargo.toml` and
 adjust every reported violation. Rust 1.98.1 does not recognize either lint.
+
+## Isolate remaining workflow concurrency groups by pull request
+
+When updating general CI concurrency, replace source-branch grouping in
+[Standard validation](.github/workflows/standard-validation.yml),
+its [PR-close companion](.github/workflows/cancel-standard-validation.yml), and
+[Book](.github/workflows/book.yml) with PR-number grouping. Same-named branches in
+different forks can currently cancel each other's runs. Keep Standard validation
+and its close companion's group expressions synchronized, including the companion's
+reported group name, and preserve scheduled-run isolation.

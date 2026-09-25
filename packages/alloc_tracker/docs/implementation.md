@@ -91,7 +91,10 @@ allocator. Consuming it before raising the panic prevents the panic machinery's 
 allocations from retriggering the check.
 
 Library tests exercise this private check directly without installing the tracking allocator
-globally. Tests that call allocating methods of the tracking wrapper or arm the flag share a
+globally. Their harness uses the untracked workspace allocator; allocation-instrumented
+integration tests, examples and benchmarks wrap the same backend, which is mimalloc natively
+and the system allocator under Miri. Tests that call allocating methods of the tracking
+wrapper or arm the flag share a
 test-only mutex, so another test cannot consume an armed flag. The test helper catches failures,
 resets the flag and releases the lock before resuming unwind, preventing both flag leakage and
 lock poisoning. This synchronization does not change production code.

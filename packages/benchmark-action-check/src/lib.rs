@@ -4,3 +4,6 @@ mod check;
 mod run;
 
 pub use run::run;
+
+#[cfg(test)]
+::testing::set_allocator!();

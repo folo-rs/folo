@@ -10,3 +10,5 @@ fn main() {
     println!("Selected processors: {selected_processors:?}");
     println!("As cpulist: {}", cpulist::emit(selected_processors));
 }
+
+::testing::set_allocator!();

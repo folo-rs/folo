@@ -8,6 +8,42 @@ tests.
 The `unwrap()` / `expect()` rule (both test and production sides) lives in
 [`docs/error-handling.md`](error-handling.md).
 
+## Executable allocators
+
+Cargo executable targets use mimalloc outside Miri: applications, library unit-test
+harnesses, integration tests, examples and benchmarks. Miri uses its supported
+system allocator rather than executing mimalloc's native implementation.
+
+Allocator selection belongs to the executable, never to a library dependency.
+Application roots declare their own `#[global_allocator]`. Development targets
+invoke `::testing::set_allocator!()` once in the crate root, with `#[cfg(test)]` on
+library-root invocations. Use a path-only dev-dependency on `testing`; depending on
+that helper alone does not install an allocator. The macro leaves Miri's default
+allocator unchanged. A library's test declaration
+does not cover its separate integration executables, which each need their own
+root invocation. Targets excluded entirely by conditional compilation contain no
+code to configure. Unsupported-platform executable stubs still follow the native
+allocator policy.
+A benchmark explicitly listed in a package's `include` set declares mimalloc
+directly, because the unpublished `testing` dependency does not survive packaging.
+
+Allocation-instrumented targets instead declare
+`alloc_tracker::Allocator<testing::DefaultAllocator>` and construct it with
+`Allocator::new(testing::DefaultAllocator)`. The shared backend is mimalloc
+natively and `System` under Miri. Do not also invoke `set_allocator!()` in those
+targets: there must be exactly one global allocator in the executable and its
+dependencies. Feature-gated tracking needs a non-tracking allocator declaration
+when that feature is disabled.
+
+Tests of an allocator's explicit API may still instantiate other allocators
+locally. In particular, allocation-tripwire unit tests keep their global allocator
+untracked so unrelated harness allocations cannot consume the tripwire.
+
+This policy covers Cargo targets, not rustdoc-generated doctest executables or
+source fixtures compiled by tests. Documentation snippets demonstrate the
+consumer-facing API without repository-only allocator setup. Libraries retain
+the consuming application's allocator choice in ordinary builds.
+
 ## Unit tests stay inside the process
 
 A **unit test** exercises logic within the current process. Anything that reaches
@@ -20,6 +56,13 @@ Keep Rust unit tests in `#[cfg(test)]` modules and real-system tests in Cargo
 `tests/` targets. Apply the same boundary when organizing tests in other languages.
 Cargo's target selection is a mechanism, not a definition of test scope: placing
 an I/O test under `src/` does not make it a unit test.
+
+Apply this boundary transitively: fixture constructors, cleanup, and production
+acquisition called by a test count as part of that test. A helper that initializes
+Git, hashes through a subprocess, probes real filesystem path aliases, or checks a missing file
+still performs external I/O even when the assertions only inspect in-memory
+results. Small or hermetic fixtures are not exceptions. Review the call path, not
+only imports and explicit process launches in the test body.
 
 Test parsing, serialization, decisions and transformations using in-memory values,
 buffers and simple fakes. Separate these from the small adapters that perform I/O.

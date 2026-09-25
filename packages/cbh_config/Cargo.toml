@@ -4,7 +4,7 @@
 name = "cbh_config"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.16"
+version = "0.2.19"
 
 authors.workspace = true
 edition.workspace = true
@@ -45,6 +45,7 @@ toml = { workspace = true, features = ["parse", "serde"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }
+testing = { path = "../testing" }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

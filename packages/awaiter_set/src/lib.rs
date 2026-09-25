@@ -32,3 +32,6 @@ mod set;
 
 pub use awaiter::Awaiter;
 pub use set::AwaiterSet;
+
+#[cfg(test)]
+::testing::set_allocator!();

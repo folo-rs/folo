@@ -66,6 +66,11 @@ The seeded binary integration tests exercise real measurement and report acquisi
 without asserting elapsed times. No published clock or report-construction testing
 API is needed at this boundary.
 
+CPU-efficiency accounting uses the quota-respecting processor count from `many_cpus`,
+matching the capacity supplied to production analysis even across Windows processor groups.
+This denominator describes the process-wide processor budget, not the runtime's thread count
+or a thread's soft-affinity mask; the harness does not change either.
+
 ## Validation boundaries
 
 Library tests exercise scenario validation, its use by parsed-input execution,
@@ -83,7 +88,8 @@ protect error propagation. Miri covers each object format with a reduced metric
 fixture and shared accounting with compact sidecars, keeping repeated compression
 within the interpreter workload budget without changing production behavior.
 
-The seeding entry point discovers available parallelism and supplies the real
+The seeding entry point uses `many_cpus`'s nonempty, quota-respecting processor set
+for its worker count and supplies the real
 filesystem adapter. Object construction and encoding precede storage; only a
 successful write contributes its compressed length to the total. The adapter creates
 parent directories and writes the supplied bytes. This real-I/O boundary is covered by

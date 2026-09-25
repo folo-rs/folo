@@ -26,7 +26,8 @@ function Get-ValidationPlan {
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $ChangedPath,
-        [switch] $Full
+        [switch] $Full,
+        [bool] $CanaryTrusted = $false
     )
 
     $domains = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -34,13 +35,14 @@ function Get-ValidationPlan {
     $analysis = $Full.IsPresent
     $bicep = $Full.IsPresent
     $releaseBinarySmoke = $Full.IsPresent
+    $canary = $Full.IsPresent
     if ($Full) { $domains.UnionWith([string[]] $script:ScriptDomains) }
 
     foreach ($path in $ChangedPath) {
         # These inputs define selection or the shared invocation environment. Changes to the
         # planner and fan-in must exercise every selectable check, including their own tests.
-        $shared = $path -cin @('justfile', 'constants.env', 'rust-toolchain.toml', '.gitattributes', '.gitconfig') -or
-            $path -cmatch '^scripts/(build/(ValidationPlan|RequiredChecks)(\.Tests\.ps1|\.psm1)|setup/.+|utility/.+)$' -or
+        $shared = $path -cin @('justfile', 'constants.env', 'rust-toolchain.toml', '.gitattributes', '.gitconfig', '.gitignore') -or
+            $path -cmatch '^scripts/(build/(ValidationPlan|RequiredChecks|Delta)(\.Tests\.ps1|\.psm1)|setup/.+|utility/.+)$' -or
             $path -cmatch '^justfiles/just_(setup|testing)\.just$' -or
             $path -cmatch '^\.github/actions/setup-environment/'
         if ($shared) {
@@ -48,9 +50,21 @@ function Get-ValidationPlan {
             $analysis = $true
             $bicep = $true
             $releaseBinarySmoke = $true
+            $canary = $true
             $domains.UnionWith([string[]] $script:ScriptDomains)
             Write-Verbose "'$path' changes shared validation machinery; selecting all tooling checks."
             continue
+        }
+
+        if ($path -cmatch '^\.github/fixtures/bench-history-caller/' -or
+            $path -cmatch '^scripts/bench-history/' -or
+            $path -cmatch '^\.github/actions/bench-history-setup/' -or
+            $path -cin @('.github/workflows/standard-validation.yml', '.github/workflows/deep-validation.yml',
+                '.github/workflows/benchmark-action-canary.yml', 'justfiles/just_quality.just',
+                'delta.toml', '.cargo/config', '.cargo/config.toml')) {
+            $canary = $true
+            $null = $domains.Add('bench-history')
+            Write-Verbose "'$path' affects the synthetic caller or its execution/selection machinery; selecting caller integration."
         }
 
         if ($path -cmatch '^\.github/workflows/[^/]+\.ya?ml$' -or
@@ -154,6 +168,8 @@ function Get-ValidationPlan {
         script_analysis = $analysis
         bicep = $bicep
         release_binary_smoke = $releaseBinarySmoke
+        benchmark_canary = $canary
+        benchmark_canary_trusted = $CanaryTrusted
         script_domains = @($domains | Sort-Object)
     }
 }
@@ -166,8 +182,9 @@ function Read-ValidationPlan {
     $plan = ConvertFrom-Json -InputObject $Json -AsHashtable
     if ($plan -isnot [hashtable] -or $plan.workflows -isnot [bool] -or
         $plan.script_analysis -isnot [bool] -or $plan.bicep -isnot [bool] -or
-        $plan.release_binary_smoke -isnot [bool]) {
-        throw 'Validation plan must contain explicit workflow and script-analysis decisions.'
+        $plan.release_binary_smoke -isnot [bool] -or
+        $plan.benchmark_canary -isnot [bool] -or $plan.benchmark_canary_trusted -isnot [bool]) {
+        throw 'Validation plan must contain explicit tooling and canary scope/trust decisions.'
     }
     $null = Read-ScriptDomain -Value $plan.script_domains
     return $plan
@@ -198,15 +215,16 @@ function Get-ValidationScriptDomain {
     )
 
     $plan = Read-ValidationPlan -Json $PlanJson
-    $packages = ConvertFrom-Json -InputObject $AffectedPackageJson -NoEnumerate
-    if ($packages -isnot [array]) { throw 'Affected packages must be an explicit array.' }
+    $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -isnot [string]) { throw 'Affected package names must be strings.' }
-        if ($package -cin @('cargo-release-plan', 'release-target-check', 'release-binaries')) {
+        if ($package -cin @('cargo-release-plan', 'crp_impl', 'release-target-check', 'release-binaries')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
+    }
+    if ((Get-ValidationCanarySelection -PlanJson $PlanJson -AffectedPackageJson $AffectedPackageJson).check_fixture) {
+        $domains += 'bench-history'
     }
     return @($domains | Sort-Object -Unique)
 }
@@ -222,11 +240,47 @@ function Test-ReleaseBinarySmokeSelected {
     )
 
     $plan = Read-ValidationPlan -Json $PlanJson
-    $packages = ConvertFrom-Json -InputObject $AffectedPackageJson -NoEnumerate
-    if ($packages -isnot [array] -or @($packages | Where-Object { $_ -isnot [string] }).Count -gt 0) {
-        throw 'Affected packages must be an explicit array of names.'
-    }
+    $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     return $plan.release_binary_smoke -or 'release-binaries' -cin $packages
+}
+
+function Read-ValidationAffectedPackage {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Json)
+
+    $packages = ConvertFrom-Json -InputObject $Json -NoEnumerate
+    if ($packages -isnot [array]) { throw 'Affected packages must be an explicit array.' }
+    foreach ($package in $packages) {
+        if ($package -isnot [string] -or [string]::IsNullOrWhiteSpace($package)) {
+            throw 'Affected package names must be nonempty strings.'
+        }
+    }
+    return $packages
+}
+
+function Get-ValidationCanarySelection {
+    # These are the executable consumers the canary exercises. Cargo delta supplies their
+    # transitive dependency impact, including private CBH partitions; do not list those again.
+    # Ref: .github/workflows/implementation.md#reusable-workflow-canary.
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $PlanJson,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $AffectedPackageJson
+    )
+
+    $plan = Read-ValidationPlan -Json $PlanJson
+    $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
+    $affected = @($packages | Where-Object {
+            $_ -cin @('cargo-bench-history', 'cargo-bench-history-github', 'cargo-bench-history-faker')
+        })
+    $scope = $plan.benchmark_canary -or $affected.Count -gt 0
+    Write-Verbose "Caller integration: path/full selection=$($plan.benchmark_canary), affected consumers=$($affected -join ', '), trusted event=$($plan.benchmark_canary_trusted). Fixture checks need no credentials; hosted collection requires both scope and trust."
+    return @{
+        check_fixture = $scope
+        run_hosted = $scope -and $plan.benchmark_canary_trusted
+    }
 }
 
 function Get-ScriptTestPath {
@@ -307,18 +361,24 @@ function Get-ValidationWorkflowPlan {
     param(
         [Parameter(Mandatory)][ValidateSet('push', 'pull_request', 'schedule', 'workflow_dispatch')][string] $EventName,
         [Parameter(Mandatory)][hashtable] $EventData,
-        [Parameter(Mandatory)][string] $Ref
+        [Parameter(Mandatory)][string] $Ref,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Repository
     )
 
     if ($EventName -cne 'pull_request') {
         if ($Ref -cne 'refs/heads/main') { throw 'Full validation is reserved for main.' }
         Write-Verbose "$EventName on main selects every tooling check without a changed-path comparison."
-        return Get-ValidationPlan -ChangedPath @() -Full
+        return Get-ValidationPlan -ChangedPath @() -Full -CanaryTrusted ($Repository -ceq 'folo-rs/folo')
     }
+    $headRepository = $EventData.pull_request.head.repo.full_name
+    if ($headRepository -isnot [string] -or [string]::IsNullOrWhiteSpace($headRepository)) {
+        throw 'Canary credential selection requires the pull-request head repository.'
+    }
+    $trusted = $Repository -ceq 'folo-rs/folo' -and $headRepository -ceq $Repository
     $paths = @(Get-ValidationChangedPath -EventData $EventData)
-    return Get-ValidationPlan -ChangedPath $paths
+    return Get-ValidationPlan -ChangedPath $paths -CanaryTrusted $trusted
 }
 
 Export-ModuleMember -Function Get-ValidationPlan, Read-ValidationPlan, Read-ScriptDomain,
     Get-ValidationScriptDomain, Get-ScriptTestPath, Get-ValidationWorkflowPlan,
-    Test-ReleaseBinarySmokeSelected
+    Test-ReleaseBinarySmokeSelected, Get-ValidationCanarySelection

@@ -100,3 +100,5 @@ fn reports_can_be_merged_across_threads() {
     // The important part is that reports could be moved between threads
     // and merged successfully
 }
+
+::testing::set_allocator!();

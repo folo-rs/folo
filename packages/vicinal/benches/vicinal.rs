@@ -11,11 +11,12 @@ use events_once::EventPool;
 use futures::executor::block_on;
 use many_cpus::SystemHardware;
 use new_zealand::nz;
+use testing::DefaultAllocator;
 use threadpool::ThreadPool;
 use vicinal::Pool;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Keeps the low and high cases distinct without making each sample excessively long.
 const TASK_BATCH_SIZE: usize = 100;

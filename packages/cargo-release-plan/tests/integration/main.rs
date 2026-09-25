@@ -27,5 +27,8 @@ mod packaging;
 mod path_case;
 mod preview;
 mod preview_safety;
+mod propose;
 mod report;
 mod status;
+
+::testing::set_allocator!();

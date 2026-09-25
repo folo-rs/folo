@@ -11,9 +11,10 @@ use std::hint::black_box;
 use std::thread;
 
 use alloc_tracker::{Allocator, Session};
+use testing::DefaultAllocator;
 
 #[global_allocator]
-static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
+static ALLOCATOR: Allocator<DefaultAllocator> = Allocator::new(DefaultAllocator);
 
 /// Performs allocation-intensive work across multiple threads.
 /// This function spawns worker threads that each perform memory allocations.

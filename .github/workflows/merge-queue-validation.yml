@@ -29,6 +29,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
         id: setup
+        with:
+          save-build-cache: "true"
       - name: Run format-check
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.platform == 'ubuntu-latest' }}
         shell: pwsh
@@ -59,6 +61,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "true"
       - name: Check package versions
         shell: pwsh
         env:

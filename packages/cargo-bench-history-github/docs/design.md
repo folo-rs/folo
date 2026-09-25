@@ -25,7 +25,12 @@ work and drives the selected command. The measured working directory independent
 checkout and configuration; the project namespace uses the core tool's canonical storage identity.
 
 Collection and backfill preserve the core tool's scope, feature, repetition and write-mode
-choices. Optional compiler flags append additional rustc arguments to the effective ambient
+choices. Backfill alone accepts optional `max-commits`, a positive integer within the
+executing platform's `usize` range. Omitted or empty input leaves replay unlimited.
+The core applies the limit to replay attempts after skipping recorded commits; the companion
+does not truncate the range or add a default cap.
+
+Optional compiler flags append additional rustc arguments to the effective ambient
 flags, preserving encoded argument boundaries and unrelated options. Empty input preserves the
 environment unchanged. Composition uses Cargo's whitespace splitting rather than a shell
 parser or option-rewriting language; repeated options retain rustc's own semantics.

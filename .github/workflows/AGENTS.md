@@ -20,7 +20,8 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
 - Every `run:` step uses `shell: pwsh`; prefer PowerShell over Bash. The `setup-environment`
   composite is the only exception - it bootstraps PowerShell itself.
 - Every `run: pwsh` step opens with the standard preamble (`Set-StrictMode -Version Latest` plus
-  the two error-preference lines); see `docs/build-and-tooling.md`.
+  the two error-preference lines), except a direct standalone script invocation whose script
+  owns that preamble; see `docs/build-and-tooling.md`.
 - Keep steps and `just` recipes thin. Prefer nonpublished Rust utilities for structured parsing
   and policy logic; use PowerShell where Rust execution is impractical at the calling boundary.
   Follow [the language guidance](../../docs/build-and-tooling.md#automation-language-and-boundaries).

@@ -6,7 +6,9 @@ use crate::github::{Comparison, Issue};
 use crate::lifecycle::tests::harness::{
     clock, context, failure, findings, only_issue, owner, publish, report, sha,
 };
-use crate::lifecycle::{IssueBody, alert, annotate, comment_failed, issue_failed, issue_preflight};
+use crate::lifecycle::{
+    IssueBody, UninterpretableIssue, alert, annotate, comment_failed, issue_failed, issue_preflight,
+};
 use crate::result::{AnalysisMode, Outcome};
 
 fn pending_issue() -> (FakeGitHub, PendingArgs, Issue) {
@@ -157,6 +159,64 @@ fn alert_is_one_per_run_and_preserves_human_closed_content() {
     ))
     .unwrap();
     assert_eq!(github.issues().len(), 2);
+}
+
+#[test]
+fn persisted_alerts_preserve_open_and_closed_content() {
+    for open in [true, false] {
+        let github = FakeGitHub::new();
+        let issue = Issue {
+            number: 7,
+            title: "Benchmark history workflow failed for project (run 42)".to_owned(),
+            // Independent persisted input protects discovery from a coupled formatter change.
+            body: "<!-- cargo-bench-history:project:issue:failure-alert -->\n\
+                <!-- cargo-bench-history:project:alert-run:42 -->\n\
+                Retained investigation"
+                .to_owned(),
+            open,
+        };
+        github.seed_issue(issue.clone());
+        let args = failure(owner(42, 1, 'a'), Conclusion::Failure);
+        block_on(alert(
+            &github,
+            &context(),
+            args.pending.run.run_id,
+            &args.run_url,
+        ))
+        .unwrap();
+        assert_eq!(only_issue(&github), issue);
+    }
+}
+
+#[test]
+fn persisted_alert_body_must_match_project_run_and_kind() {
+    let args = failure(owner(42, 1, 'a'), Conclusion::Failure);
+    for (project, run, kind) in [
+        ("project.extra", 42, "failure-alert"),
+        ("project", 43, "failure-alert"),
+        ("project", 42, "regression"),
+    ] {
+        let github = FakeGitHub::new();
+        let issue = Issue {
+            number: 7,
+            title: "Benchmark history workflow failed for project (run 42)".to_owned(),
+            body: format!(
+                "<!-- cargo-bench-history:project:issue:{kind} -->\n\
+                <!-- cargo-bench-history:{project}:alert-run:{run} -->"
+            ),
+            open: true,
+        };
+        github.seed_issue(issue.clone());
+        let error = block_on(alert(
+            &github,
+            &context(),
+            args.pending.run.run_id,
+            &args.run_url,
+        ))
+        .unwrap_err();
+        assert!(error.find_source::<UninterpretableIssue>().is_some());
+        assert_eq!(only_issue(&github), issue);
+    }
 }
 
 #[test]

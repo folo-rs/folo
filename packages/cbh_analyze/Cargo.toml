@@ -4,7 +4,7 @@
 name = "cbh_analyze"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.2.16"
+version = "0.2.19"
 
 authors.workspace = true
 edition.workspace = true
@@ -56,6 +56,7 @@ cbh_render = { workspace = true }
 cbh_storage = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
+many_cpus = { workspace = true }
 nonempty = { workspace = true }
 ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -70,6 +71,7 @@ cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 tick = { workspace = true, features = ["test-util"] }
 
 [lints]

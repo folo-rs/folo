@@ -85,7 +85,10 @@ further validation.
 Readable reports include useful diagnostics, source and direct job links; full logs
 and tool artifacts supplement rather than replace the explanation. Setup failures
 are reported even when no checker artifact exists.
-Successful runs and cancellation without a failed job do not create failure issues.
+Successful runs and intentional operator cancellation alone do not create failure issues.
+When reporting runs, platform-confirmed execution-limit cancellations belong in the
+report with their actual conclusion and interrupted diagnostics, without attributing
+unfinished work to a source defect or inventing checker outcomes.
 Generated diagnostics remain separate from source inputs, including while a checker
 copies the source tree for isolated execution. Partial logs remain available after
 interruption, and genuine checker failures retain their status and artifacts.
@@ -146,6 +149,15 @@ so required-check reporting does not depend on GitHub's workflow-level path filt
 The `prepare` job publishes both Cargo and non-Cargo scope. Its complete outputs are required
 before downstream checks can run or be accepted as intentionally skipped.
 
+The deterministic benchmark caller canary is a required integration check when its tools or
+execution inputs are affected. Cargo dependency impact selects its executable consumers, including
+changes in private implementation packages and their dependencies. Fixture, caller, setup and
+validation-planning inputs also select it; unrelated changes do not require Azure collection.
+The standalone fixture's locked-resolution and cleanliness preflight needs no credentials and
+runs for relevant fork PRs too. Hosted collection only runs for same-repository PRs and main
+pushes or scheduled/manual main calls. A selected canary must complete every contract check;
+missing scope or unexpected skips cannot pass the required fan-in.
+
 Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
 base. Live binstall metadata validation accompanies it because Cargo target discovery can
@@ -183,6 +195,8 @@ formatting and version readiness. Clippy compiles all targets and features on Li
 Windows and macOS. No affected-package selection precedes these checks. Minimum-dependency,
 SemVer, binstall, runtime and other standard checks remain in PR and full main validation,
 not in the queue gate.
+The benchmark caller canary follows that runtime-test policy: it runs in Standard validation,
+not on `merge_group`, and does not require expanding the Azure federated subjects.
 
 This gate trades repeated pre-merge validation for earlier merges. Passing PRs do not
 prove that their combined changes pass runtime tests. Full Standard validation on main
@@ -601,8 +615,8 @@ See [canary implementation](implementation.md#reusable-workflow-canary) for the 
 A scheduled caller densifies the per-machine-key series the push workflow leaves
 sparse. At 02:00 UTC — clear of the cache warmup's midnight slot — it invokes the shared
 `backfill.yml` workflow over a window of recent `main` commits, in fixed skip-existing mode on
-the same platforms, so whichever machine key its runner draws that night receives the newest commits
-that key is missing. It is purely a producer: it performs no analysis, emits no receipts or
+the same platforms, prioritizing the newest missing commit for whichever machine key its runner
+draws that night. It is purely a producer: it performs no analysis, emits no receipts or
 reports, and has no publication sink or alert.
 Analysis stays with the push workflow, which surveys a densified series the next time one of its
 runners draws that same machine key.
@@ -620,22 +634,28 @@ is relative to preparation time, not to the selected end. Quiet history and an o
 older than that horizon produce a single-commit range. Scheduled and manual runs are
 restricted to `main` in this repository.
 
-Folo explicitly opts into best-effort execution: being killed by the clock is an expected outcome.
-One commit costs as much as a push-collect and more — the backfill worktree's build directory sits
-outside the shared
-dependency cache, so it always builds cold — so a night fills roughly one gap per platform
-against the shared workflow's fixed six-hour hosted-runner ceiling. The caller passes
-`best-effort: true`, which sets the matrix jobs' `continue-on-error`, and `ignore-errors: true`,
-which lets the core walk past per-commit build or benchmark failures. These are independent
-opt-ins, both false by default for generic callers; ignoring per-commit failures does not suppress
-infrastructure errors. Because backfill works newest-first, whatever the run managed to finish
-is the most comparison-relevant part of the range. A kill landing in the
-seconds a commit spends writing its per-engine results leaves that commit stored for only some
-engines, and later runs count it as filled; repairing it takes a `backfill --overwrite` over
-that commit. The accepted cost is that a
-genuinely broken nightly — bad credentials, a tool bug, every commit failing — is equally green
-and silent; this is an opportunistic job, and such breakage still surfaces within hours in the
-push workflow, which does alert.
+The caller sets `max-commits: '1'` to attempt at most one missing commit per platform each night.
+A complete commit with `best-of: 3` usually takes roughly four to five hours, including a cold
+backfill worktree build outside the shared dependency cache, so this matches observed nightly
+capacity. Preparation and source installation also consume the job budget. It is a work bound,
+not a duration guarantee: the shared six-hour hosted-runner ceiling remains an exceptional
+watchdog, never a normal completion mechanism.
+
+The full inclusive range remains eligible, traversed newest-first. Already-recorded commits
+are skipped before applying the attempt budget. Empty harvests, failed benchmarks and
+write-time duplicates consume an attempt; pre-check skips do not. A successful bounded pass
+finishes the selected commit's full repetitions, engine storage and cleanup, then reports
+stored, existing, empty, failed and deferred work without claiming the whole range completed.
+An empty or failed attempt can consume the pass without storing new measurements and remains
+eligible on later runs: the limit creates no persistent skip marker or cursor.
+Later passes can fill further gaps for the same machine key while they remain in the window.
+
+Build, benchmark, credential, tool and infrastructure failures remain visible as failed jobs.
+The caller does not opt into per-commit error continuation, and the shared workflow does not
+suppress unsuccessful job conclusions. Matrix fail-fast stays disabled so one platform's failure
+does not cancel the other. A watchdog termination is also a failure; if it interrupts per-engine
+storage, a partially stored commit may still require `backfill --overwrite` to repair.
+The nightly creates no alert issue; its workflow conclusion is the failure signal.
 
 It carries its own concurrency group instead of joining history collection's. A scheduled run's
 SHA *is* the current tip, so sharing that SHA-keyed, cancel-in-progress group would put the
@@ -645,8 +665,8 @@ stops a manual dispatch from duplicating a scheduled run, queueing it instead. T
 caller group is distinct from the reusable workflow's run and canonical project/platform queues,
 which retain earlier invocations without event/SHA deduplication or cancellation. The dispatch
 exists as an escape hatch: it can override the computed newest endpoint to step over a commit
-that fails slowly and would otherwise be re-selected every night. The shared preparation resolves
-the selected endpoints to full commit SHAs, and execution checks out the resolved `to` commit with
+that fails or yields no measurements and would otherwise be re-selected every night. The shared
+preparation resolves the selected endpoints to full commit SHAs, and execution checks out the resolved `to` commit with
 full history. The core tool owns first-parent validation and traversal. Historical scope comes from
 each historical workspace, not a benchmark-inventory check at the invocation head.
 
@@ -822,9 +842,25 @@ verification without release queries or writes.
 
 ## Cache warmup
 
-A scheduled workflow recompiles the shared dependency cache on every runner image daily so
-it is never evicted for inactivity. Without it, a cold cache would force every parallel
-validation job to compile all dependencies from scratch.
+The scheduled warmup prepares and caches the complete shared development environment on the
+default branch for each supported runner platform. Validation, release, benchmark and other
+setup consumers reuse that environment rather than maintaining workflow-specific toolsets.
+Manual warmup runs intended for cross-branch reuse also run on the default branch.
+Linux warmup covers both ordinary setup and the Valgrind-enabled package set used by benchmarks.
+
+Warmup and consumers use the same preparation and cache identity for equivalent platform,
+runner-image and build inputs. Cache lookup must not depend on whether toolchains were restored
+or installed during this job, nor on diagnostic settings such as backtrace reporting.
+Compiler-affecting settings and platform compatibility boundaries remain part of build-cache
+identity. See [shared environment cache identity](implementation.md#shared-environment-cache-identity).
+
+Caches are an optimization, not a prerequisite: eviction, changed pins and runner-image rolls
+can require a cold setup. Consumers reconcile the declared environment and may populate missing
+environment caches. Saving workspace build artifacts is opt-in for jobs that compile in the
+cached checkout; setup-only jobs and builds in isolated checkouts must not claim its shared
+immutable build-cache entry with an empty target directory.
+Periodic warmup reduces inactivity misses but does not guarantee retention or prebuild every
+consumer's workspace compilation.
 
 ## Shared infrastructure
 
@@ -832,8 +868,9 @@ All non-trivial jobs use the `setup-environment` composite action to install a s
 consistent toolchain (`just`, PowerShell, the Rust toolchain, and release tooling);
 deviating from it to hand-pick a minimal per-job toolchain costs more in maintenance than
 the mostly-cached setup time it would save. Toolchain versions are defined once in
-`constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
-commands they call, so no version is ever duplicated into a workflow file.
+`constants.env` and `rust-toolchain.toml`. Shared setup helpers read these pins before Just is
+available, and developer recipes use those same helpers, so no version or toolchain set is
+duplicated into a workflow file.
 
 The Linux ARM64 PowerShell bootstrap uses an upstream release archive because the
 Microsoft APT repository does not provide a native package. Its pinned runtime must
@@ -842,6 +879,15 @@ fixture's requirement. Regression tests in the `bench-history` script domain com
 pin with those executable requirements, so both bootstrap and bundle changes select them.
 The bundle integration tests exercise parameter validation, cleanup and mocked deployment
 without Azure access.
+
+Development tools prefer publisher binaries with locked source fallback. The bootstrap
+executable is checksum-pinned; subsequent tools follow the publisher-build trust policy in
+[development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
+Quickinstall is disabled. Source-only and Git-pinned tools keep their source installation,
+and platform restrictions and version pairings remain intact. Tool caches reconcile exact
+pins independently of workspace build artifacts. Cache identities cover the complete source
+revision without a separate installation-input list. Book-only tools have independent
+storage so jobs that do not install them cannot reserve an incomplete snapshot.
 
 The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
 installed only where a job actually executes Callgrind measurements — the benchmark
@@ -854,6 +900,19 @@ cache is scoped to the runner image version, so it rolls forward with the image 
 serving debug symbols that no longer match — and because that scoping makes every image roll
 resolve packages afresh, the APT index is refreshed on every Linux job rather than trusted as
 the image left it.
+
+## Copilot agent environments
+
+The coding agent uses `copilot-setup-steps.yml` to provision the shared development tooling.
+Code review uses the independent `copilot-code-review.yml` configuration, which
+[takes precedence for reviews](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review#customizing-copilot-code-reviews-environment).
+Reviews start on a fresh standard GitHub-hosted Ubuntu runner with only a repository checkout:
+no repository-specific tools or dependencies are installed. This keeps review startup fast
+and independent of development-toolchain provisioning without changing the coding environment.
+
+Standalone setup-validation runs use the workflow name and PR number as their concurrency
+identity, so same-named branches in different forks cannot cancel each other's checks.
+Push and manual runs use the ref instead. This grouping does not schedule Copilot sessions.
 
 ## Transient-fault handling
 
@@ -903,6 +962,5 @@ allowance; sizing a cap to the warm-cache setup time alone would make a cache mi
 fail the job. Jobs whose work is comfortably bounded carry no explicit cap and rely on
 GitHub's default ceiling, which already clears a cold setup with room to spare. Explicit caps
 exist only to stop a genuinely stuck run, never to bound the expected duration. The nightly
-history backfill is the deliberate exception: its work is unbounded by nature (it keeps filling
-gaps until it runs out of range), so it takes the ceiling as its run budget and pairs the cap
-with `continue-on-error` so being cut off is an ordinary end rather than a failure.
+history backfill uses an attempt limit for normal completion and retains the shared six-hour
+ceiling as an exceptional watchdog. Exceeding that ceiling remains a failed job.

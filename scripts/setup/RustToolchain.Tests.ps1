@@ -1,9 +1,10 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for RustToolchain.psm1. The real rustup/rustc are isolated behind mocks in the
 # module's scope (so nothing is installed), and Start-Sleep is mocked in the Retry module's scope so
-# the install-retry backoff does not actually wait. File I/O (channel parse, GITHUB_ENV export) runs
-# for real against temp files so the on-disk result is asserted.
+# the install-retry backoff does not actually wait. Toolchain-set tests use in-memory constants;
+# file-boundary tests (channel parse, GITHUB_ENV export) use temporary files.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'RustToolchain.psm1') -Force
@@ -112,6 +113,78 @@ Describe 'Install-RustupToolchain' {
     }
 }
 
+Describe 'Install-RustToolchainSet' {
+    BeforeEach {
+        Mock Read-DotEnvFile -ModuleName RustToolchain {
+            return @{
+                RUST_MSRV = '1.2.0'
+                RUST_NIGHTLY = 'nightly-2026-01-02'
+                RUST_NIGHTLY_EXTERNAL_TYPES = 'nightly-2026-01-01'
+            }
+        }
+        Mock Install-RustupToolchain -ModuleName RustToolchain { }
+    }
+
+    It 'reconciles the complete pinned set and required components on every invocation' {
+        # Repeating setup must not change the toolchain set presented to cache lookup.
+        Install-RustToolchainSet -ConstantsPath 'fixture.env'
+        Install-RustToolchainSet -ConstantsPath 'fixture.env'
+
+        Should -Invoke Read-DotEnvFile -ModuleName RustToolchain -Times 2 -Exactly -ParameterFilter {
+            $Path -eq 'fixture.env'
+        }
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 8 -Exactly
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 2 -Exactly -ParameterFilter {
+            [string]::IsNullOrEmpty($Channel)
+        }
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 2 -Exactly -ParameterFilter {
+            $Channel -eq '1.2.0'
+        }
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 2 -Exactly -ParameterFilter {
+            $Channel -eq 'nightly-2026-01-02' -and
+            ($Component -join ' ') -eq 'miri rustfmt rust-src llvm-tools-preview'
+        }
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 2 -Exactly -ParameterFilter {
+            $Channel -eq 'nightly-2026-01-01' -and $InstallProfile -eq 'minimal' -and
+            $Component.Count -eq 0
+        }
+    }
+
+    It 'rejects missing pins before starting any installation' {
+        Mock Read-DotEnvFile -ModuleName RustToolchain { return @{} }
+
+        { Install-RustToolchainSet } | Should -Throw
+
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 0 -Exactly
+    }
+
+    It 'rejects a blank later pin before starting any installation' {
+        Mock Read-DotEnvFile -ModuleName RustToolchain {
+            return @{
+                RUST_MSRV = '1.2.0'
+                RUST_NIGHTLY = 'nightly-2026-01-02'
+                RUST_NIGHTLY_EXTERNAL_TYPES = ' '
+            }
+        }
+
+        { Install-RustToolchainSet } | Should -Throw
+
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 0 -Exactly
+    }
+
+    It 'propagates an installation failure instead of completing with a partial set' {
+        Mock Install-RustupToolchain -ModuleName RustToolchain -ParameterFilter {
+            $Channel -eq 'nightly-2026-01-02'
+        } { throw 'installation failed' }
+
+        { Install-RustToolchainSet } | Should -Throw
+
+        Should -Invoke Install-RustupToolchain -ModuleName RustToolchain -Times 0 -Exactly -ParameterFilter {
+            $Channel -eq 'nightly-2026-01-01'
+        }
+    }
+}
+
 Describe 'Install-RustToolchain' {
     BeforeEach {
         $script:tempDir = Join-Path ([IO.Path]::GetTempPath()) ("folo-toolchain-" + [guid]::NewGuid())
@@ -128,6 +201,7 @@ Describe 'Install-RustToolchain' {
 
         Mock rustup -ModuleName RustToolchain { $global:LASTEXITCODE = 0 }
         Mock rustc -ModuleName RustToolchain { $global:LASTEXITCODE = 0 }
+        Mock Install-RustToolchainSet -ModuleName RustToolchain { }
         Mock Start-Sleep -ModuleName Retry { }
     }
     AfterEach {
@@ -150,6 +224,12 @@ Describe 'Install-RustToolchain' {
         Should -Invoke rustup -ModuleName RustToolchain -Times 1 -Exactly -ParameterFilter {
             ($args -contains 'default') -and ($args -contains '1.2.3')
         }
+    }
+
+    It 'prepares the complete development toolchain set before returning to CI' {
+        Install-RustToolchain -ManifestPath $script:manifest -GitHubEnvPath $script:githubEnv
+
+        Should -Invoke Install-RustToolchainSet -ModuleName RustToolchain -Times 1 -Exactly
     }
 
     It 'exports CARGO_INCREMENTAL and CARGO_TERM_COLOR when they are unset' {

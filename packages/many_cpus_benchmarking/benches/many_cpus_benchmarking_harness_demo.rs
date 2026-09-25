@@ -15,7 +15,7 @@ criterion_group!(benches, entrypoint);
 criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
-    // We use a BATCH_SIZE of 10, which means 10 * 64 = 640 MB of memory used per worker pair.
+    // Amortize worker startup and cache clearing over several bounded payloads.
     execute_runs::<CopyBytes, 10>(
         c,
         "many_cpus_benchmarking_harness_demo",
@@ -23,7 +23,8 @@ fn entrypoint(c: &mut Criterion) {
     );
 }
 
-const COPY_BYTES_LEN: usize = 64 * 1024 * 1024;
+/// Large enough to copy across many cache lines without a bulk-throughput workload.
+const COPY_BYTES_LEN: usize = 1024 * 1024;
 
 /// Sample benchmark scenario that copies bytes between the two paired payloads.
 ///
@@ -61,7 +62,9 @@ impl Payload for CopyBytes {
             to.set_len(COPY_BYTES_LEN);
         }
 
-        // Read from the destination to prevent the compiler from optimizing the copy away.
-        _ = black_box(to.first().unwrap());
+        // Keep the entire copy observable, not just its first byte.
+        _ = black_box(&to);
     }
 }
+
+::testing::set_allocator!();
