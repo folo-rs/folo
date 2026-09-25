@@ -96,7 +96,7 @@ The existing Cargo defaults are shared, while genuine compiler inputs, runner im
 architecture and manifest/lockfile hashes retain their normal cache separation and compatible
 dependency fallback.
 
-Installed Cargo tools remain in the independent pin-keyed cache described above. Warmup runs
+Installed Cargo tools remain in the independent cache described above. Warmup runs
 the complete installer before saving environment caches, while consumers reconcile any missing
 or stale inputs after restoration. Setup-only callers set `save-build-cache: false`: warmup,
 validation scope preparation, book rendering and cloud-agent preparation restore the Rust build
