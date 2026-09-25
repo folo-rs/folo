@@ -165,6 +165,14 @@ mod tests {
     }
 
     #[test]
+    fn alert_identity_distinguishes_projects_and_runs() {
+        let project: Instance = "project".parse().unwrap();
+        let other: Instance = "project.extra".parse().unwrap();
+        assert_ne!(alert_run(&project, 42), alert_run(&project, 43));
+        assert_ne!(alert_run(&project, 42), alert_run(&other, 42));
+    }
+
+    #[test]
     fn analyzed_sha_round_trips_through_body() {
         let instance: Instance = "default".parse().unwrap();
         let sha: CommitSha = "0123456789abcdef0123456789abcdef01234567".parse().unwrap();

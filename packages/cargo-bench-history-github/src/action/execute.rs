@@ -23,6 +23,10 @@ use crate::workflow::projection::report_outputs;
 use crate::workflow::receipt::machine_key;
 
 /// Connects the installed root-action command to native effects and lazy publication setup.
+// Selecting native adapters is integration-only; run_with retains in-process mutation coverage.
+// tests/action.rs checks real dispatch and failure propagation.
+// Ref: workspace docs/testing.md, "Mutation testing coverage and skipping mutations".
+#[cfg_attr(test, mutants::skip)]
 pub(crate) async fn run(args: ActionArgs) -> Result<(), AppError> {
     run_with(args, &NativeHost, &LivePublisher).await
 }

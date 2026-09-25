@@ -52,6 +52,11 @@ port so offline commands cannot construct the credentialed adapter. Native integ
 exercise real Git, configuration loading, persistent temporary reports and an executable
 fixture without running benchmark engines or network operations.
 
+The native adapter-selection forwarder is excluded from library-only mutation testing;
+its integration tests observe real dispatch and failure propagation. The injected orchestration
+remains mutation-tested, including the distinction between remediable shallow-checkout input
+and malformed Git output, with neither failure emitting successful outputs.
+
 Namespace resolution calls `cbh_config`'s configuration-path, configuration-loading and project-ID
 helpers, then `cbh_model`'s storage-segment normalization. Compatible version-plus-path
 dependencies reuse that behavior without declaring a lockstep release group with the core.
@@ -202,6 +207,12 @@ The clock is `tick::Clock`; calendar conversion uses Jiff with the UTC time zone
 host's local zone. Tests inject frozen instants. Report metadata and the bounded annotation
 are parsed separately, so a pending run's ownership never replaces the retained report's
 ownership or analyzed commit. Malformed and duplicated identity metadata are errors.
+
+Persisted-body tests supply annotation delimiters and alert identities independently of the
+formatters. They protect namespace separation, report retention and replacement, and discovery
+of existing open or closed alerts without relying solely on writer/reader round trips.
+The in-memory search port separately checks title and state eligibility; lifecycle tests retain
+the independent exact-title and fresh-read safeguards.
 
 Clean issue publication only updates the all-clear body. There is no issue-closing operation
 in the companion. Empty-scope comment publication shares ordinary update/create reconciliation

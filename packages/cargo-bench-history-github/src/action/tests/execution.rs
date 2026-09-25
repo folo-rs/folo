@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use futures::executor::block_on;
 use serde_json::{Value, json};
 
+use crate::action::errors::{InvalidInput, InvalidOutput};
 use crate::action::execute::run_with;
 use crate::action::port::Output;
 use crate::action::tests::fake::{FakeHost, FakePublisher, SHA, analysis};
@@ -321,9 +322,20 @@ fn shallow_unresolved_and_failed_analysis_never_emit_outputs() {
     for shallow in ["true", "not-a-boolean"] {
         let host = FakeHost::new(&analysis("analyze-history"));
         host.reply(shallow);
-        block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap_err();
+        let error = block_on(run_with(host.args(), &host, &FakePublisher::default())).unwrap_err();
+        if shallow == "true" {
+            assert_eq!(
+                error.find_source::<InvalidInput>().unwrap().input,
+                "checkout"
+            );
+            assert!(error.find_source::<InvalidOutput>().is_none());
+        } else {
+            assert!(error.find_source::<InvalidOutput>().is_some());
+            assert!(error.find_source::<InvalidInput>().is_none());
+        }
         assert_eq!(host.processes.borrow().len(), 1);
         assert!(host.scratches.borrow().is_empty());
+        assert!(host.outputs.borrow().is_empty());
     }
 }
 
