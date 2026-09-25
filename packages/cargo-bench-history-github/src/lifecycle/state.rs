@@ -234,3 +234,52 @@ impl UnwindSafe for UninterpretableIssue {}
 impl RefUnwindSafe for UninterpretableIssue {}
 impl UnwindSafe for EmptySummary {}
 impl RefUnwindSafe for EmptySummary {}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    // Persisted input must not be composed by the codec whose compatibility it exercises.
+    const BODY: &str = "Retained report\n\n\
+        <!-- cargo-bench-history:project:annotation:start -->\n\
+        Pending work\n\
+        <!-- cargo-bench-history:project:annotation:end -->";
+
+    #[test]
+    fn persisted_annotation_delimiters_select_only_their_namespace() {
+        let instance = "project".parse().unwrap();
+        assert_eq!(
+            split_annotation(BODY, &instance).unwrap(),
+            ("Retained report", Some("Pending work"))
+        );
+        let other = "project.extra".parse().unwrap();
+        assert_eq!(split_annotation(BODY, &other).unwrap(), (BODY, None));
+    }
+
+    #[test]
+    fn incomplete_ambiguous_and_misplaced_persisted_delimiters_are_rejected() {
+        let instance = "project".parse().unwrap();
+        let start = "<!-- cargo-bench-history:project:annotation:start -->";
+        let end = "<!-- cargo-bench-history:project:annotation:end -->";
+        for body in [
+            BODY.replace(start, ""),
+            BODY.replace(end, ""),
+            BODY.replace(start, &format!("{start}\n{start}")),
+            BODY.replace(end, &format!("{end}\n{end}")),
+            BODY.replace(
+                start,
+                "<!-- cargo-bench-history:project.extra:annotation:start -->",
+            ),
+            BODY.replace(
+                end,
+                "<!-- cargo-bench-history:project.extra:annotation:end -->",
+            ),
+            format!("{BODY}\nUnexpected trailing content"),
+            format!("Retained report\n\n{end}\nPending work\n{start}"),
+        ] {
+            let error = split_annotation(&body, &instance).unwrap_err();
+            assert!(error.find_source::<UninterpretableIssue>().is_some());
+        }
+    }
+}

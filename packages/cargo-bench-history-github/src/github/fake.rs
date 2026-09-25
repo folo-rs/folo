@@ -295,6 +295,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn issue_search_requires_both_title_match_and_eligible_state() {
+        let github = FakeGitHub::new();
+        let repository = "folo-rs/folo".parse().unwrap();
+        for (number, title, open) in [
+            (1, "Matching open", true),
+            (2, "Unrelated open", true),
+            (3, "Matching closed", false),
+            (4, "Unrelated closed", false),
+        ] {
+            github.seed_issue(Issue {
+                number,
+                title: title.to_owned(),
+                body: String::new(),
+                open,
+            });
+        }
+        for (include_closed, expected) in [(false, vec![1]), (true, vec![1, 3])] {
+            let candidates =
+                block_on(github.search_issues(&repository, "Matching", include_closed)).unwrap();
+            assert!(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.number)
+                    .eq(expected)
+            );
+        }
+    }
+
+    #[test]
     fn missing_update_targets_are_errors_without_creating_items() {
         let github = FakeGitHub::new();
         let repository = "folo-rs/folo".parse().unwrap();
