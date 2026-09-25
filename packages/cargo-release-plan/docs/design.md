@@ -2,34 +2,60 @@
 
 ## Purpose
 
-`cargo-release-plan` protects a release process where merging to a release branch
-publishes every changed package. It ensures that changed published content always
-carries a version the registry has not seen, while giving maintainers enough
-evidence to choose an appropriate increment.
+`cargo-release-plan` implements a release process where reviewed version
+increments merged to a designated **release branch** publish their packages. It
+supplies evidence for choosing increments, applies the complete version decision
+before merge, and publishes the resulting crates, GitHub releases and prebuilt
+binaries afterward.
 
-A package has **unreleased changes** when the content it would publish differs
-from its last release. Raising its version does not release that content; only the
-release process does. The version instead decides whether the next release is
-safe:
+The installed application owns this process end to end. Version assessment,
+publication eligibility, registry reconciliation, tag selection and binary
+publication share one release model, not separately configured release tools.
+A reusable GitHub Action and workflows expose the same operations to other
+repositories without requiring a Folo checkout or repository-local release scripts.
 
-* **Pending release** means the package has unreleased changes and its version is
-  already greater than the last released version.
-* **Needs an increment** means the package has unreleased changes but still
-  declares the last released version.
-* **Unchanged** means its published content still matches the last release.
+## Release lifecycle and scope
+
+Version assessment compares package content against release-branch history. A
+package's **anchor** is the commit on that history that introduced its declared
+release version. **Released content** means the content relevant to consumers of
+the Cargo package, including an installable binary's locked dependencies.
+
+* **Pending release** means the declared version is greater than its anchor's
+  version, or the package is preparing its first release.
+* **Needs an increment** means released content changed without advancing the
+  version beyond its anchor.
+* **Unchanged** means released content and version still match the anchor.
+
+These are version-assessment states, not observations of crates.io. A merged
+version can be unchanged against its anchor while its registry upload or binary
+publication is incomplete. Publication separately reconciles the versions declared
+in the validated source with the registry and GitHub.
 
 An **increment level** describes the compatibility significance of a change:
 `patch` for compatible corrections, `minor` for compatible additions, and `major`
 for breaking changes. An exact target version can be chosen instead when these
 levels do not express the intended release.
 
+Version choices belong before merge. Publication never chooses another version,
+repairs a manifest or refreshes the committed dependency resolution. Preparation
+of a publication is an automatic execution step, not a second human release gate.
+
+The supported publication path is Cargo workspaces following this version model,
+crates.io through Trusted Publishing, and GitHub tags, releases and native binary
+archives. Libraries receive package tags; packages with an installable binary
+also receive a GitHub release and prebuilt assets. Binary publication supports one
+executable per package. Cross-compilation, alternative registries or forges,
+changelog generation and arbitrary release-policy hooks are outside this scope.
+
 ## Design tenets
 
 ### The release branch is the source of truth
 
-Release state comes from the history of the branch that actually publishes, not
-from a pull request target or the registry. This keeps stacked pull requests and
-local work trees meaningful without network access.
+Version decisions come from the history of the branch that actually publishes,
+not from a pull request target or the registry. This keeps stacked pull requests
+and local work trees meaningful without network access. Remote publication state
+determines which delivery operations remain, not which versions are valid.
 
 ### One baseline, one anchor per package
 
@@ -128,6 +154,21 @@ The normal assessment path uses only repository history, the work tree, and
 dependency graph, or compiles packages. The same inputs therefore produce the
 same release decision without network or build-cache state.
 
+Online publication is an explicit command family. Its network access, credentials
+and Cargo builds do not become prerequisites of ordinary version assessment.
+
+### Publication reconciles immutable intent
+
+A publication fixes package versions and source identities before writing remote
+state. Retrying observes what already succeeded and completes only missing work.
+A failed query cannot establish absence, and a successful earlier phase cannot
+establish that later phases completed.
+
+Partial publication is not rolled back. Existing package versions and release
+tags remain authoritative; recovery does not overwrite them to make a run appear
+complete. Cargo owns package construction and registry upload mechanics, while
+the application enforces the release model and reconciles delivery.
+
 ### Rejected plans do not edit manifests
 
 Plan targets, version direction, and group expansion are validated before any
@@ -177,6 +218,12 @@ structured log records that attach each failure to the affected package
 manifest, so the workflow summary and pull-request file view make the problem
 visible without reading the raw log.
 
+With publication configuration supplied through `--config`, `check` also validates
+publication inputs: target selection, the single-binary requirement and
+`cargo-binstall` metadata. This remains an offline check. The GitHub integration's
+merge gate supplies that configuration explicitly and treats a missing file as an
+error; ordinary assessment without it retains its version-checking scope.
+
 `check --verify-packaging` audits the tool's artifact model against
 `cargo package --list`. It warns when Cargo and the tool select different paths
 but does not alter the release verdict. The probe allows dirty trees, so
@@ -185,9 +232,9 @@ dependency resolution and Cargo's package preparation work, which the normal
 offline assessment deliberately avoids. A mismatch on a clean tree is evidence
 that the artifact model needs correction.
 
-### Planning stages
+### Version-planning stages
 
-A plan exists in two stages, and they carry different guarantees about the
+A version plan exists in two stages, and they carry different guarantees about the
 packages a document names.
 
 A **proposed plan** is what a planner writes. Its entries may name a version
@@ -203,8 +250,8 @@ Resolving an expanded plan must therefore reproduce it exactly.
 
 Applying a plan also rewrites the requirements that dependents declare on the
 packages it moves. A dependent whose existing pending increment is sufficient
-need not receive another one. A dependent that would otherwise keep an
-already-published version needs its own release decision before application.
+need not receive another one. A dependent that would otherwise keep its
+anchor's version needs its own release decision before application.
 
 The expanded plan is applied unchanged, so the documented package/version set
 and applied document are the same artifact. Review and approval policy belong
@@ -230,7 +277,7 @@ Proposal generation consumes explicit `breaking`, `nonbreaking`, or `patch`
 decisions. It retains adequate pending version increases, aligns version groups
 without regression, and propagates required dependent releases. Public dependency
 breaks use the same compatibility rule as the release gate. Requirements rewritten
-by the proposal cannot leave a dependent at an already-published version.
+by the proposal cannot leave a dependent at its anchor's version.
 These mechanical requirements do not replace semantic judgement.
 
 The proposal is based on the report's declared versions and release anchors.
@@ -269,7 +316,7 @@ publication-eligible target names and any retained compatibility manifest.
 Non-publishable alignment targets remain part of validation but not publication.
 Requiring resolved evidence applies the same captured-state checks as a dry-run
 application. Inspection performs no writes or registry queries; external callers
-own publication availability checks.
+can use it independently of the publication commands' availability checks.
 
 ### Prepare evidence and preview resolution
 
@@ -324,6 +371,25 @@ Workspace commands use the workspace selected by `--manifest-path`. Artifact-onl
 planning commands instead use their supplied reports and decisions. `report` and
 `check` accept `--base` to name the shared release baseline.
 
+### Prepare and execute publication
+
+Publication uses a **publication manifest**: the validated source identity and
+exact package/version requests for a run. It is not a proposed or expanded version
+plan, and does not require retaining a pull request's planning artifacts.
+
+| Command | Role |
+| --- | --- |
+| `prepare-publish` | Validate the release snapshot and write its publication manifest without changing source or remote state. |
+| `publish registry` | Publish missing crate versions and confirm their registry availability. |
+| `publish github` | Reconcile package tags and binary GitHub releases, then emit platform batches for incomplete assets. |
+| `publish binaries` | Build and publish one platform batch from its immutable tag commits. |
+
+The manifest passes between phases as an artifact. A **platform batch** is the
+set of binary releases one native target must complete. Each phase validates its
+input identity and refreshes the remote state on which its decisions depend.
+Detailed source, completion and recovery guarantees are in
+[Publication](#publication).
+
 ## The release baseline
 
 The release baseline is the tip of the branch releases are made from. Passing it
@@ -334,6 +400,8 @@ request may target an unreleased parent branch.
 Without `--base`, the tool uses the default branch recorded for the `origin`
 remote and falls back to `origin/main` when the remote records none. These are
 conveniences for interactive use, not knowledge of the project's release policy.
+Publication configuration does not silently change this resolution. Shared
+version-checking workflows supply the appropriate baseline explicitly.
 
 The baseline is shared, while anchors differ by package:
 
@@ -350,9 +418,10 @@ work tree
   package-beta:  compare D -> work tree
 ```
 
-Running on the release branch itself reports packages awaiting its next publish.
-Running from a dirty work tree is also supported, which lets `check` find a
-missing increment before the edits are committed.
+Running on the release branch itself checks the merged source against its version
+anchors; it does not report registry-upload progress. Version assessment also
+supports dirty work trees, so `check` can find a missing increment before the edits
+are committed. Publication instead requires a clean, pinned release snapshot.
 
 ## Anchors
 
@@ -369,7 +438,7 @@ first reached the release branch, not the topic commit where it was typed:
          /        \
 A ---- B ---------- M ---- D   <- baseline first-parent history
                        ^
-                       version first released here; M is the anchor
+                       version reaches the release branch; M is the anchor
 ```
 
 A shallow history that hides a required version change cannot support a release
@@ -389,7 +458,7 @@ already present in the registry.
 ### Version monotonicity
 
 Versions move forward relative to the selected release line. A version below the
-anchor's version is an error because that release line has already published the
+anchor's version is an error because that release line already records the
 higher version.
 
 Publishing a patch for an older series remains possible by using a separate
@@ -503,13 +572,14 @@ comparisons case-insensitive.
 
 | Status            | Meaning                                                      |
 | ----------------- | ------------------------------------------------------------ |
-| `pending-release` | Version is above the anchor and the next release publishes it |
+| `pending-release` | Version is above the anchor, or the package has no anchor      |
 | `needs-increment` | Released content changed without a version increase           |
 | `unchanged`       | Released content and version still match the anchor            |
 
 Of these statuses, only `needs-increment` fails `check`; the manifest-level
 requirement and public-dependency rules fail it independently of status.
-`publish = false` packages are excluded.
+`publish = false` packages are excluded. None of these states proves registry,
+tag or binary-asset availability.
 
 ## Version groups
 
@@ -578,5 +648,318 @@ unified diffs, report binary changes without rendering binary bytes, and
 preserve addition, deletion, and mode information. Expensive line-level
 comparisons fall back to a whole-file replacement; this changes only the
 presentation, never the release verdict.
+
+## Publication
+
+### Configuration and eligibility
+
+Publication configuration is a committed `.cargo/release_plan.toml` in the
+selected Cargo workspace. A `--config` path selects another file; relative paths
+resolve from that workspace. Configuration declares the intended GitHub repository,
+release branch and binary target selection. Invocation-specific source identities
+and output locations are command inputs, not persistent configuration.
+
+The GitHub integration uses the same file through its `config` input rather than
+maintaining a second set of per-field overrides. Package-specific target
+restrictions belong under `[package.metadata.release-plan]` as `release-targets`.
+The application defines the supported native targets; the workspace selects among
+them, and package restrictions narrow that selection. Invalid targets and binary
+packages with no selected supported target are configuration errors. Multiple
+installable binaries are rejected, not silently reduced to one. Runner provisioning
+belongs to the workflow, not to package-version assessment.
+
+`prepare-publish` pins a clean source commit on the configured release branch's
+first-parent history. It verifies the tracked Cargo inputs, package identities,
+version groups, dependency requirements and released-content invariant against
+that commit's own anchors. The required lockfile must be present and consistent;
+publication does not repair it. Ignored build output is not a source change.
+Preparation repeats the merge gate's publication-input checks, including target
+selection and the tag/archive URLs in `cargo-binstall` metadata, before any upload.
+
+Every publishable workspace package at that snapshot contributes its exact
+name/version request, including packages assessed as unchanged. Nonpublishable
+version-alignment targets contribute no upload request. Preparation can read
+remote availability, but neither existing tags nor the report's pending-release
+subset substitutes for checking crates.io.
+
+### Publication artifacts
+
+The publication manifest binds the destination repository, release branch,
+repository-relative workspace location, source commit, effective configuration
+and package requests.
+It records the producing tool version and an explicit schema version. Consumers
+validate schema compatibility and the captured source/configuration before remote
+writes; they do not reinterpret the artifact against a moving checkout.
+
+Platform batches additionally bind each package version, executable, target,
+release tag and resolved tag commit. Neither kind of artifact contains credentials
+or runner-specific absolute source paths. Output artifacts remain transportable
+between jobs with different checkout locations.
+
+Artifacts record intent and observed outcomes separately. A prior success receipt
+is useful diagnostic evidence, not permission to skip a fresh completeness check.
+Missing or malformed required artifacts fail the phase rather than imply an empty
+release. A valid empty work set is a successful no-op with an explanation.
+
+### Registry publication
+
+`publish registry` reconciles every requested exact version with crates.io.
+Existing versions are not republished. Registry lookup failures are errors, not
+evidence that a version is absent. A yanked version still occupies its version
+identity; publication does not republish or unyank it. Presence alone does not
+prove that a dependency is usable under Cargo's resolution rules. An unavailable
+required dependency blocks its dependent's publication and prevents a complete
+registry-phase outcome.
+
+Cargo constructs and verifies the packages and publishes the selected missing
+versions using its workspace-publication dependency semantics. Version-assessment
+batches are not upload-order instructions: their development-dependency and
+version-group relationships serve different purposes. Package verification remains
+enabled, and the resulting installable binaries' dependency resolutions must agree
+with the validated locked closures. Packaging may normalize manifests and
+lockfiles, but must not introduce an unassessed dependency change.
+
+Completion requires observing the requested versions in the registry, including
+availability needed by dependent publications. A Cargo failure after upload does
+not prove that the upload failed. Before retrying, the application refreshes exact
+version availability and omits completed uploads. Transient retries and
+index-propagation waits are bounded; deterministic source or configuration errors
+remain failures rather than being hidden by repeated attempts.
+
+### Publishing identity
+
+Automatic registry publication uses GitHub Actions OIDC and crates.io Trusted
+Publishing. Short-lived credentials are acquired and renewed as needed for bounded
+publication attempts and revoked when no longer needed. Authentication failures
+do not select a stored-token fallback. Credentials never enter publication
+artifacts, diagnostics or command-line arguments.
+
+The consuming repository owns its Trusted Publisher registration and optional
+protected environment. Registration names that repository and its calling entry
+workflow filename, for both direct composite use and reusable-workflow use. The
+job performing the exchange uses the registered environment. GitHub's
+[reusable-workflow OIDC tokens](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows)
+retain the caller's identity; the additional called-workflow claim is not a
+replacement registration in the action repository. First publication of a crate
+and publisher registration remain explicit maintainer setup; automatic
+publication does not bypass that prerequisite.
+
+GitHub writes use the job's ambient repository token. Registry publication,
+GitHub reconciliation and binary publication retain separate permission scopes.
+Scopes are job-level; limiting credential exposure to child processes is separate.
+The application's binary-compilation subprocess environments omit registry and
+GitHub upload credentials; its GitHub operations receive the upload token.
+
+### Immutable tags and release-equivalent source
+
+`publish github` confirms registry publication for the manifest's complete
+package/version set before creating tags or releases. A successful registry phase
+with no new uploads still runs this reconciliation. Missing requested versions
+remain a failed prerequisite, not a smaller implicitly successful release.
+
+The package tag is `{package}-v{version}`. Existing tags are authoritative and
+never moved. For a missing tag, the application fetches and pins the configured
+release branch, verifies that it descends from the publication source, and checks
+the requested package version and its release-relevant content at that candidate.
+Equivalence uses the same anchor-based content model as version assessment,
+including inherited inputs and binary dependency closures.
+
+A later equivalent snapshot is a valid tag target even when its unrelated files
+differ from the registry-publication source. This permits new tags to use a
+current branch snapshot under the ambient GitHub token without requiring
+workflow-write credentials for historical workflow files. The write names the
+verified commit, not a moving branch reference. If branch movement prevents the
+write, a bounded retry verifies a fresh candidate without changing the requests.
+
+An old request is not relabeled when the branch advances to a newer package
+version. Automatic missing-tag recovery requires that the requested version remain
+available at an eligible snapshot. Existing tags remain usable for binary repair
+without selecting a replacement target or imposing new version policy on them.
+
+Libraries receive tags only. Binary GitHub releases are attached to their
+established tags; release creation cannot choose another commit implicitly.
+Binary builds use the actual peeled tag commit, not the version anchor, the
+publication source by assumption, or the latest branch tip. Release equivalence
+does not promise byte-identical binaries rebuilt in different environments.
+
+### Native binaries and asset completeness
+
+Binary discovery is package-driven and keeps the executable name distinct from
+the package name. Each native target has one batch, with packages built separately
+so their feature selections remain independent. Compatible Cargo artifacts are
+reused across the batch. Each source snapshot supplies its tracked toolchain,
+Cargo configuration and locked dependencies; installed automation remains
+independent of the source it builds.
+
+Each release publishes `{package}-v{version}-{target}.zip` and its matching
+`.sha256` sidecar. The ZIP contains the executable at its root, with the target's
+executable suffix and executable permissions where applicable. The package's
+`cargo-binstall` metadata must describe this same layout.
+
+A release/target pair is complete only when both assets are uploaded. Execution
+refreshes completeness before building, repairs both members of an incomplete
+pair, and verifies upload completion afterward. Independent package or target
+failures do not suppress the remaining work, but any required failure makes the
+run fail. Cancellation stops further work and publication while retaining
+diagnostics for operations already attempted.
+
+The nonpublishing binary mode consumes an existing frozen batch and builds and
+stages its requested archives without querying or writing GitHub releases. It
+retains source and archive verification and requires no upload credential. It
+does not discover tags or select a pre-publication source on the caller's behalf.
+
+### Outcomes and recovery
+
+Each publication phase emits structured outcomes identifying completed, already
+complete, blocked and failed work. Human summaries describe the same results,
+including partial successes and incomplete asset pairs. Progress and failures go
+to stderr; requested machine-readable outputs are not mixed with child-process
+diagnostics. `--verbose` explains the inputs and reasons behind selection,
+source verification, skips and retries.
+
+A rerun retains the original requests and resumes from observed remote state.
+A new push or manual recovery run can prepare its own manifest for the selected
+release snapshot. Neither path depends on a list of packages uploaded in the
+current attempt, and neither guarantees recovery of superseded versions whose
+missing tags cannot be established.
+
+Registry publication and all GitHub phases execute within the same workflow run.
+They do not depend on token-authored tags or releases triggering another workflow.
+Publication does not roll back successful uploads or fabricate completion to
+compensate for failed cleanup or reporting.
+
+## Reusable GitHub integration
+
+The integration follows the distribution and invocation conventions of
+[`cargo-bench-history`'s reusable action](../../cargo-bench-history/docs/reusable-action.md).
+The common patterns are a dedicated action repository, a command-selecting
+composite, reusable workflows, committed configuration, exact tool pins and
+source dogfooding. They do not require copying benchmark-specific report
+semantics or splitting release functionality into a companion executable.
+
+### Consumption and configuration
+
+The public `folo-rs/cargo-release-plan-action` repository contains a root
+`action.yml`, reusable workflows and their installation bootstrap. Rust behavior
+ships in the monorepo's `cargo-release-plan` package. The Marketplace-listed
+composite and reusable workflows share one action release and tag stream.
+
+The composite's required `command` selects version checking, preparation, registry
+publication, GitHub reconciliation, binary publication or failure reporting.
+Inputs that do not apply to that command are rejected. Substantive selection,
+validation, reconciliation and report composition belong to the installed application;
+PowerShell only bootstraps installation, and YAML supplies orchestration and
+input/artifact wiring.
+
+Reusable workflows provide the standard read-only merge check and release flow.
+The check workflow resolves the configured release baseline for the tested event,
+including merge-queue candidates, and supplies publication configuration to
+`check`. The release workflow owns the preparation and registry job, subsequent
+GitHub reconciliation, native binary matrix, artifact handoff and failure
+reporting. Consumers supply their triggers, required permissions, optional
+publishing environment and configuration location.
+
+The `working-directory` input selects the Cargo project; `config` uses the same
+workspace-relative path rules as the CLI. Runtime inputs describe the invocation,
+not another versioning policy or a scatter of configuration overrides.
+
+The lower composite layer supports repositories that need a different job graph,
+without bypassing the release invariant. Both layers use the same input names and
+meanings; public list inputs use comma-separated values rather than caller-written
+JSON. Structured internal matrices and publication artifacts are produced by Rust.
+Reusable workflows invoke the composite from their own exact action-repository
+commit, not an independently moving major tag or the consumer's local action path.
+
+The shared flow gates writes to the configured repository and release branch.
+Read-only pull-request checks do not acquire publication credentials. The caller
+grants the required scopes, and individual jobs narrow them; the reusable workflow
+cannot add authority the caller did not grant.
+
+Publication runs for the same repository, release branch and workspace use
+non-cancelling concurrency with `queue: max`. GitHub's
+[queued concurrency](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)
+retains pending invocations within the hosted queue capacity rather than replacing
+them with newer pushes. Queue rejection or platform cancellation is not a completed
+publication. Distinct platform batches run independently with matrix fail-fast
+disabled. Artifact names and concurrency identities derive from that release
+context rather than a caller-maintained instance identifier. Cross-job recovery
+preserves the manifest and batch identities across job reruns and does not mistake
+a missing artifact for no work.
+
+Repositories needing native build prerequisites can provide
+`.github/actions/release-plan-setup/action.yml`, using the same fixed-local-action
+convention as benchmark setup. The shared workflow invokes it from the invocation
+checkout before Cargo publication verification or binary builds. It prepares the
+environment without changing the validated source, and does not run in GitHub-only
+reconciliation jobs. There are no arbitrary hook paths or release-policy callbacks;
+unusual job arrangements use the lower composite layer.
+
+Failure reporting uses standard application-rendered summaries and a run-qualified
+GitHub failure issue, independent of successful release artifacts. Reports remain
+available for failed runs. Notification failures do not hide the original failure,
+and inability to install the application does not invoke a second shell publisher.
+Reporting does not require caller-created labels or message templates.
+
+### Installation and version selection
+
+The action's release manifest records its own version and the exact
+`cargo-release-plan` version it selects. Action and package versions are independent.
+Consumers select a tested action revision, not a separately overridden tool version.
+All phases of a released workflow use that selection.
+
+That manifest also declares the supported native target/runner pairs. Workspace
+configuration selects among those targets; it does not extend the shared runner
+matrix. Repositories placing a supported target on another native runner use the
+lower composite layer. The declared support set governs installation availability
+and the action release gate.
+
+The shared installation input names and behavior match the benchmark action:
+
+| `install-method` | Behavior |
+| --- | --- |
+| `binstall` | Default: install the exact manifest version from published binaries, allowing Cargo source installation when no archive matches. |
+| `install` | Install the exact crates.io version from its published source with its lockfile. |
+| `path` | Build the application from the Folo checkout selected by `source-path`, using that checkout's lockfile. |
+
+Released installed-binary caches distinguish tool version, runner OS and
+architecture. `path` does not restore a released executable in place of the
+selected source. All methods install only the application, not test scaffolding
+or separately configured publication helpers. Installed execution has no dependency
+on repository-root Folo scripts; its runtime prerequisites are supplied by the
+shared setup.
+
+Folo consumes the same shared workflow with `install-method: path`. The invocation
+checkout supplies automation while separate pinned worktrees supply release
+sources. This also lets the application publish its own package without installing
+the version being published first. The chosen action revision and source checkout
+are validated together; source dogfooding does not establish published-installation
+availability.
+
+### Releasing the action
+
+The action repository publishes immutable `vX.Y.Z` releases and a floating major
+reference. The major advances only to an appropriately compatible tested action
+release. A change to tool pins is an action release even when its YAML is unchanged.
+The action's release manifest is the authority for its tool selection.
+
+Tool changes that move a pinned version have a paired action change carrying the
+new exact pin and an independently chosen action version. Tool publication
+precedes action publication. The action's required installation gate installs
+the actual pinned crates.io package and every promised prebuilt target in isolated
+roots, bypassing installed-binary caches and disabling source fallback when
+checking archives. It verifies executable identity and the command contracts used
+by the action, not merely that some installation succeeded.
+
+Missing package versions or archives block the action release. Source dogfooding
+and a successful registry-only publication cannot substitute for the gate.
+Publication in the tool repository does not itself rerun a failed action check;
+the paired change follows availability and reruns that check. The final action
+release rechecks availability before publishing tags, and retries preserve
+existing immutable version tags without moving the major reference backward.
+
+The action README provides adoption examples; the application's user
+documentation owns the command and automation reference. Maintainer setup covers
+Trusted Publishing, branch protection, action-release checks and Marketplace
+registration without introducing stored cross-repository credentials.
 
 Internal ownership is documented in the [implementation guide](implementation.md).
