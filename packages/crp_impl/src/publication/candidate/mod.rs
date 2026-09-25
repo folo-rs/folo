@@ -1,6 +1,6 @@
 //! Verifies immutable release-source candidates using the application's shared version rules.
 
-pub(crate) use cli::Cli as CandidateRequest;
+pub(crate) use cli::{Cli as CandidateRequest, package_identifier};
 pub use command::{capture, git};
 pub use metadata::Metadata;
 pub use repository::Repository;

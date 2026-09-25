@@ -6,19 +6,19 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crp_impl::publication::resolution::verify_packaged_closure;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use testing::with_watchdog_timeout;
-use tiny_http::{Method, Request, Response, Server, StatusCode};
+use tiny_http::{Method, Request, Response, StatusCode};
 
 use crate::git_fixture::Repository;
+use crate::http_fixture::HttpService;
 
 #[test]
 #[cfg_attr(miri, ignore = "Runs Cargo and an isolated HTTP registry")]
@@ -47,6 +47,14 @@ fn cargo_orders_workspace_publication_and_preserves_locked_binary_dependencies()
         let state = registry.state.lock().unwrap();
         assert_eq!(state.order, ["publication-core", "publication-cli"]);
         let archive = &state.packages.get("publication-cli").unwrap().archive;
+        verify_packaged_closure(
+            &fixture.path().join("Cargo.toml"),
+            archive,
+            "publication-cli",
+            "1.0.0",
+            &format!("sparse+{}/index/", registry.http.url()),
+        )
+        .unwrap();
         let files = archive_files(archive);
         let lockfile = files
             .get("publication-cli-1.0.0/Cargo.lock")
@@ -67,7 +75,7 @@ fn cargo_orders_workspace_publication_and_preserves_locked_binary_dependencies()
             dependency["source"]
                 .as_str()
                 .unwrap()
-                .contains(&registry.url)
+                .contains(registry.http.url())
         );
         assert_eq!(
             fs::read(fixture.path().join("Cargo.lock")).unwrap(),
@@ -100,6 +108,59 @@ fn cargo_publishes_a_dependent_after_its_dependency_is_already_available() {
             registry.state.lock().unwrap().order,
             ["publication-core", "publication-cli"]
         );
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Runs Cargo and an isolated HTTP registry")]
+fn packaged_binary_can_prune_an_inactive_workspace_dependency_feature() {
+    with_watchdog_timeout(Duration::from_mins(5), || {
+        let registry = Registry::new();
+        let fixture = publication_workspace(&registry);
+        fixture.write(
+            "Cargo.toml",
+            b"[workspace]\nmembers = ['core', 'cli', 'optional']\nresolver = '3'\n",
+        );
+        fixture.write(
+            "optional/Cargo.toml",
+            b"[package]\nname='publication-optional'\nversion='1.0.0'\nedition='2024'\n\
+              license='MIT'\ndescription='Optional fixture dependency'\n\
+              repository='https://example.invalid/fixture'\n",
+        );
+        fixture.write("optional/src/lib.rs", b"pub fn optional() {}\n");
+        let core = fs::read_to_string(fixture.path().join("core/Cargo.toml")).unwrap();
+        fixture.write(
+            "core/Cargo.toml",
+            format!(
+                "{core}\n[dependencies]\npublication-optional = {{ path='../optional', \
+                version='1.0.0', registry='fixture', optional=true }}\n\
+                [features]\nextra = ['dep:publication-optional']\n"
+            )
+            .as_bytes(),
+        );
+        cargo(&fixture, &["generate-lockfile", "--offline"]);
+        fixture.command(&["add", "."]);
+        fixture.command(&["commit", "--quiet", "-m", "optional workspace dependency"]);
+        cargo(
+            &fixture,
+            &[
+                "publish",
+                "--registry",
+                "fixture",
+                "--locked",
+                "--workspace",
+            ],
+        );
+        let state = registry.state.lock().unwrap();
+        let archive = &state.packages.get("publication-cli").unwrap().archive;
+        verify_packaged_closure(
+            &fixture.path().join("Cargo.toml"),
+            archive,
+            "publication-cli",
+            "1.0.0",
+            &format!("sparse+{}/index/", registry.http.url()),
+        )
+        .unwrap();
     });
 }
 
@@ -188,7 +249,7 @@ fn publication_workspace(registry: &Registry) -> Repository {
         format!(
             "[registries.fixture]\nindex = 'sparse+{}/index/'\n\
              credential-provider = {provider}\n[net]\nretry = 0\n",
-            registry.url
+            registry.http.url()
         )
         .as_bytes(),
     );
@@ -269,53 +330,18 @@ fn archive_files(bytes: &[u8]) -> BTreeMap<String, String> {
 
 /// Implements only the sparse-index, upload and download boundaries used by this fixture.
 struct Registry {
-    url: String,
-    server: Arc<Server>,
+    http: HttpService,
     state: Arc<Mutex<RegistryState>>,
-    stopped: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
 }
 
 impl Registry {
     fn new() -> Self {
-        let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
-        let url = format!("http://{}", server.server_addr());
         let state = Arc::new(Mutex::new(RegistryState::default()));
-        let stopped = Arc::new(AtomicBool::new(false));
-        let thread = thread::spawn({
-            let server = Arc::clone(&server);
+        let http = HttpService::new({
             let state = Arc::clone(&state);
-            let stopped = Arc::clone(&stopped);
-            let url = url.clone();
-            move || {
-                while !stopped.load(Ordering::Acquire) {
-                    let Ok(request) = server.recv() else {
-                        break;
-                    };
-                    respond(request, &url, &mut state.lock().unwrap());
-                }
-            }
+            move |url, request| respond(request, url, &mut state.lock().unwrap())
         });
-        Self {
-            url,
-            server,
-            state,
-            stopped,
-            thread: Some(thread),
-        }
-    }
-}
-
-impl Drop for Registry {
-    fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Release);
-        self.server.unblock();
-        if let Some(thread) = self.thread.take() {
-            let result = thread.join();
-            if !thread::panicking() {
-                result.unwrap();
-            }
-        }
+        Self { http, state }
     }
 }
 
@@ -369,7 +395,8 @@ fn respond(mut request: Request, url: &str, state: &mut RegistryState) {
         let index = json!({
             "name": name, "vers": metadata.get("vers").unwrap(), "deps": dependencies,
             "cksum": checksum,
-            "features": metadata.get("features").unwrap(), "yanked": false
+            "features": {}, "features2": metadata.get("features").unwrap(),
+            "v": 2, "yanked": false
         });
         state.order.push(name.clone());
         assert!(

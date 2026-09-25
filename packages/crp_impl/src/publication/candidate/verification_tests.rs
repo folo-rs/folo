@@ -196,7 +196,8 @@ fn verifies_the_complete_sequence_before_emitting_success() {
             "Verified release target candidate: alpha@2.0.0, widget@1.2.3."
         );
         if verbose {
-            let [identity, alpha, widget, baseline, warning, verdict] = diagnostics.as_slice() else {
+            let [identity, alpha, widget, baseline, warning, verdict] = diagnostics.as_slice()
+            else {
                 panic!();
             };
             assert!(identity.contains("candidate"));

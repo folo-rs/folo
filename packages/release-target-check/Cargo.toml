@@ -2,7 +2,7 @@
 name = "release-target-check"
 description = "Verifies immutable main-line source snapshots for release orchestration"
 publish = false
-version = "0.0.0"
+version = "0.4.1"
 
 authors.workspace = true
 edition.workspace = true

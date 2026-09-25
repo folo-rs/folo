@@ -9,8 +9,10 @@ use crate::expand::run_expand;
 use crate::inspect_plan::run_inspect_plan;
 use crate::preview::{run_prepare, run_preview};
 use crate::propose::run_propose;
+use crate::publication::credentials::provide;
 use crate::publication::packages::check_publication;
 use crate::publication::prepare::prepare as prepare_publication;
+use crate::publication::registry::publish as publish_registry;
 use crate::report::run_report;
 use crate::resolved::run_verify_preview;
 use crate::semver_targets::run_semver_targets;
@@ -23,6 +25,21 @@ use crate::verbose::Verbose;
     reason = "The supported facade permits exhaustive matching on the application's command inputs"
 )]
 pub enum RunInput {
+    /// Reconcile exact crate versions and publish only those missing from crates.io.
+    PublishRegistry {
+        /// Immutable publication manifest.
+        publication: PathBuf,
+        /// Cargo manifest in the original source checkout.
+        manifest_path: PathBuf,
+        /// Structured phase outcome destination.
+        output: PathBuf,
+        /// Observe and describe missing versions without credentials or uploads.
+        dry_run: bool,
+        /// Explain reconciliation inputs and decisions.
+        verbose: bool,
+    },
+    /// Serve Cargo's internal per-upload credential protocol.
+    CredentialProvider,
     /// Capture immutable publication intent from a clean merged source snapshot.
     PreparePublish {
         /// Source checkout's Cargo manifest.
@@ -173,6 +190,13 @@ pub enum RunInput {
     reason = "The supported facade permits exhaustive matching on the application's command outcomes"
 )]
 pub enum RunOutcome {
+    /// Publication completed its attempt and persisted the phase outcome.
+    Publication {
+        /// Whether the requested operation succeeded; dry runs do not establish delivery.
+        passed: bool,
+        /// Human-readable disposition and outcome location.
+        message: String,
+    },
     /// A JSON-producing query completed.
     ArtifactQuery {
         /// JSON document for stdout.
@@ -236,6 +260,28 @@ pub enum RunOutcome {
 /// `passed: false`, not an error.
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     match input {
+        RunInput::PublishRegistry {
+            publication,
+            manifest_path,
+            output,
+            dry_run,
+            verbose,
+        } => {
+            let (passed, message) = publish_registry(
+                publication,
+                manifest_path,
+                output,
+                *dry_run,
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::CredentialProvider => {
+            provide()?;
+            Ok(RunOutcome::ArtifactQuery {
+                message: String::new(),
+            })
+        }
         RunInput::PreparePublish {
             manifest_path,
             config,

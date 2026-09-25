@@ -1029,7 +1029,8 @@ batches are not upload-order instructions: their development-dependency and
 version-group relationships serve different purposes. Package verification remains
 enabled, and the resulting installable binaries' dependency resolutions must agree
 with the validated locked closures. Packaging may normalize manifests and
-lockfiles, but must not introduce an unassessed dependency change.
+lockfiles, including pruning inactive dependency branches, but must not select a
+dependency identity outside the assessed binary installation closure.
 
 Completion requires observing the requested versions in the registry, including
 availability needed by dependent publications. A Cargo failure after upload does

@@ -11,6 +11,7 @@ mod expand;
 mod git;
 mod git_fixture;
 mod git_history_tests;
+mod http_fixture;
 mod manifest;
 mod metadata;
 mod metadata_dependency_tests;
@@ -20,6 +21,9 @@ mod preview;
 mod prospective;
 mod publication;
 mod publication_config;
+mod publication_credentials;
+mod publication_identity;
+mod publication_registry;
 mod resolved;
 
 ::testing::set_allocator!();

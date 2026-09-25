@@ -2,7 +2,7 @@
 name = "crp_impl"
 description = "Implementation crate for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.4.0"
+version = "0.4.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -53,12 +53,15 @@ private-test-util = []
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+flate2 = { workspace = true, features = ["rust_backend"] }
 ignore = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tar = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
 
@@ -66,11 +69,9 @@ toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
 # Tests and doctests exercise the supported facade as a consumer would.
 cargo-release-plan = { path = "../cargo-release-plan" }
 criterion = { workspace = true }
-flate2 = { workspace = true, features = ["rust_backend"] }
 mimalloc = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
-tar = { workspace = true }
 testing = { path = "../testing" }
 tiny_http = { workspace = true }
 

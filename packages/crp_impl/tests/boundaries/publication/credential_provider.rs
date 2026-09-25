@@ -7,6 +7,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 
 fn main() {
+    assert_eq!(env::args().skip(1).collect::<Vec<_>>(), ["--cargo-plugin"]);
     println!(r#"{{"v":[1]}}"#);
     io::stdout().flush().unwrap();
     let mut request = String::new();

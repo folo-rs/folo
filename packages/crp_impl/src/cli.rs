@@ -46,6 +46,11 @@ impl Cli {
         if argv.get(1).is_some_and(|arg| arg == "release-plan") {
             argv.remove(1);
         }
+        // Cargo invokes providers with only its plugin marker; configured extra arguments
+        // belong to the JSON request, not executable argv.
+        if argv.get(1).is_some_and(|arg| arg == "--cargo-plugin") {
+            argv.insert(1, OsString::from("credential-provider"));
+        }
         Self::try_parse_from(argv).map_err(|error| EarlyExit::from_clap(&error))
     }
 
@@ -57,6 +62,16 @@ impl Cli {
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
+            Command::Publish(PublishCommand::Registry(args)) => RunInput::PublishRegistry {
+                publication: args.publication,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                output: args.output,
+                dry_run: args.dry_run,
+                verbose: args.verbose,
+            },
+            Command::CredentialProvider(_) => RunInput::CredentialProvider,
             Command::PreparePublish(args) => RunInput::PreparePublish {
                 manifest_path: args
                     .manifest_path
@@ -184,6 +199,11 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Deliver the versions captured in an immutable publication manifest.
+    #[command(subcommand)]
+    Publish(PublishCommand),
+    #[command(hide = true)]
+    CredentialProvider(CredentialProviderArgs),
     /// Validate clean merged source and capture its immutable publication requests.
     PreparePublish(PreparePublishArgs),
     /// Validate an expanded plan and print publication and evidence facts as JSON.
@@ -214,6 +234,40 @@ enum Command {
     Expand(ExpandArgs),
     /// Install captured files without resolution, or make proposed manifest-only edits.
     Apply(ApplyArgs),
+}
+
+/// Publication phases share immutable intent, not a mutable version plan.
+#[derive(Debug, Subcommand)]
+enum PublishCommand {
+    /// Reconcile crates.io and upload missing versions using Cargo.
+    Registry(RegistryArgs),
+}
+
+/// Registry source selection, output and nonpublishing observation mode.
+#[derive(Debug, Parser)]
+struct RegistryArgs {
+    /// Immutable publication manifest produced by prepare-publish.
+    #[arg(long)]
+    publication: PathBuf,
+    /// Cargo manifest in the clean publication source.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    /// Structured outcome file, separate from publication intent.
+    #[arg(long)]
+    output: PathBuf,
+    /// Read remote availability without exchanging credentials or uploading.
+    #[arg(long)]
+    dry_run: bool,
+    /// Explain registry observations and upload selection.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Cargo's explicit plugin marker prevents accidental interactive credential requests.
+#[derive(Debug, Parser)]
+struct CredentialProviderArgs {
+    #[arg(long, required = true)]
+    cargo_plugin: bool,
 }
 
 /// Source selection and artifact destination for publication preparation.
@@ -488,5 +542,11 @@ mod tests {
                 format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
             );
         }
+    }
+
+    #[test]
+    fn cargo_plugin_marker_selects_the_internal_provider() {
+        let cli = Cli::from_args_os(["cargo-release-plan", "--cargo-plugin"]).unwrap();
+        assert!(matches!(cli.into_input(), RunInput::CredentialProvider));
     }
 }

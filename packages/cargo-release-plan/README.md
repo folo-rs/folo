@@ -37,6 +37,8 @@ cargo release-plan inspect-plan --plan <expanded.json> [--require-resolved]
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 cargo release-plan prepare-publish --source <commit> --output <publication.json>
     [--manifest-path <path>] [--config <path>] [--verbose]
+cargo release-plan publish registry --publication <publication.json> --output <outcome.json>
+    [--manifest-path <path>] [--dry-run] [--verbose]
 ```
 
 `--version` identifies the installed application, not the packages in a workspace.
@@ -126,6 +128,29 @@ ignored artifact directory.
 
 Preparation does not upload packages, create tags, choose versions or repair a
 lockfile. Its publication manifest is distinct from the pre-merge version plan.
+
+### `publish registry`
+
+Reconciles every exact version in a publication manifest with crates.io, then
+uses Cargo to verify and upload only missing versions. Run against the same clean
+source snapshot used for preparation. Source configuration and the complete package
+request set must match the captured intent.
+
+Automatic uploads require GitHub Actions OIDC and the packages' Trusted Publisher
+registration for the calling workflow. There is no stored-token fallback.
+Cargo 1.95 or later is required when uploads are needed. Cargo owns dependency
+ordering and verification; the application checks that packaged binary dependencies
+do not introduce identities outside the assessed locked closure.
+
+`--dry-run` reads registry availability without acquiring publication credentials
+or uploading. The outcome explicitly distinguishes this plan from a completed
+publication. A yanked version still occupies its identity and is not republished.
+Query failure does not establish absence.
+
+`--output` must name a new outcome file for this attempt. It records the publication
+identity, per-package observations, completion state and diagnostics. Existing
+versions and completed uploads remain in place after failure; retry using the
+original publication manifest and another outcome destination.
 
 ### `prepare`
 

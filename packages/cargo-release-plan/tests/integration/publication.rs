@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use cargo_release_plan::{RunInput, run};
+use cargo_release_plan::{RunInput, RunOutcome, run};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -98,6 +98,56 @@ fn rejects_different_existing_intent_without_overwriting_it() {
     fixture.git(&["branch", "--force", "stable", "HEAD"]);
     run(&preparation(&fixture, path.clone())).unwrap_err();
     assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Executes Cargo and Git and persists phase outcomes")]
+fn empty_registry_work_needs_no_identity_and_never_overwrites_intent() {
+    let fixture = publication_source();
+    write_package(&fixture, "library", "1.0.0", "publish = false\n");
+    fixture.commit("private workspace");
+    fixture.git(&["branch", "--force", "stable", "HEAD"]);
+    let output = TempDir::new().unwrap();
+    let publication = output.path().join("publication.json");
+    run(&preparation(&fixture, publication.clone())).unwrap();
+    let intent = fs::read(&publication).unwrap();
+    for dry_run in [false, true] {
+        let outcome = output.path().join(format!("registry-{dry_run}.json"));
+        let input = RunInput::PublishRegistry {
+            publication: publication.clone(),
+            manifest_path: fixture.manifest(),
+            output: outcome.clone(),
+            dry_run,
+            verbose: false,
+        };
+        assert!(matches!(
+            run(&input).unwrap(),
+            RunOutcome::Publication { passed: true, .. }
+        ));
+        let report: Value = serde_json::from_slice(&fs::read(&outcome).unwrap()).unwrap();
+        assert_eq!(report.get("complete").unwrap(), !dry_run);
+        assert_eq!(report.get("dry_run").unwrap(), dry_run);
+        assert!(
+            report
+                .get("packages")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let manifest: Value = serde_json::from_slice(&intent).unwrap();
+        assert_eq!(report.get("publication_id"), manifest.get("id"));
+        run(&input).unwrap_err();
+    }
+    run(&RunInput::PublishRegistry {
+        publication: publication.clone(),
+        manifest_path: fixture.manifest(),
+        output: publication.clone(),
+        dry_run: false,
+        verbose: false,
+    })
+    .unwrap_err();
+    assert_eq!(fs::read(publication).unwrap(), intent);
 }
 
 fn preparation(fixture: &Fixture, output: PathBuf) -> RunInput {

@@ -94,20 +94,22 @@ fn package_request(value: &OsStr) -> Result<(String, Version), AppError> {
         .ok_or_else(invalid)?;
     // Cargo package names use ASCII alphanumerics, hyphens and underscores.
     // Exclude path/registry-qualified selectors: the request identifies a workspace member.
-    if !name
-        .bytes()
-        .next()
-        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
+    if !package_identifier(name) {
         return Err(invalid().into());
     }
     let version = Version::parse(version).map_err(|error| {
         InvalidArgumentsError::caused_by("package version must be an exact SemVer version", error)
     })?;
     Ok((name.to_owned(), version))
+}
+
+pub(crate) fn package_identifier(name: &str) -> bool {
+    name.bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn immutable_id(value: OsString) -> Result<String, AppError> {

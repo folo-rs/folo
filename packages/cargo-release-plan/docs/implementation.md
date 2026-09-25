@@ -85,6 +85,39 @@ groups. Together these enforce strictly increasing members without a redundant s
 comparison. Shape tests keep package references reciprocal while independently varying
 group size, canonical naming, ordering and uniqueness.
 
+## Registry publication boundaries
+
+Registry observations distinguish an absent exact version from an unavailable
+query. Cargo owns workspace packaging, verification and dependency-ordered
+uploads; the application selects only missing requests and rechecks availability
+after the attempt. Outcomes preserve partial completion and distinguish a dry-run
+plan from confirmed delivery. Each attempt writes a new outcome file rather than
+overwriting intent or earlier receipts.
+
+The Cargo credential provider acquires a fresh GitHub assertion and crates.io
+token per upload, after Cargo package verification. It checks the requested
+registry/package/version and the binary archive's Cargo-supplied checksum before
+releasing a credential. Normalized workspace registry identities are compared
+with the source's installation closure using the existing lockfile model.
+Packaging may prune inactive feature branches, but cannot select an identity
+outside that assessed closure. Cargo's compilation still verifies the package.
+
+Cargo starts short-lived provider processes. Invocation-owned temporary files
+therefore retain identity context and issued token leases for the parent to revoke
+after Cargo exits. They live outside source and publication artifact directories,
+are never transported between jobs, and are removed when the attempt completes.
+This avoids a separate credential broker service or token-renewal scheduler.
+Registry and GitHub credential variables are removed from Cargo's environment;
+the provider receives only its private context location. This is credential
+handling within the trusted publication job, not process isolation from reviewed
+build code running under the same account.
+
+OIDC HTTP errors report the operation and status without echoing response bodies,
+and credential values have no diagnostic representation. Revocation and temporary
+directory failures remain failed outcomes even when uploads succeeded. The
+registry build directory is independently owned, so packaging cannot dirty a
+source checkout merely because that repository has no target-directory ignore.
+
 ## Subprocess boundaries
 
 All repository access goes through `GitRepo`, which spawns the installed `git`.

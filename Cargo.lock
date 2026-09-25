@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-freeze-deps"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "clap",
  "mimalloc",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "crp_impl",
  "mimalloc",
@@ -1191,7 +1191,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crp_impl"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cargo-release-plan",
  "clap",
@@ -1201,6 +1201,7 @@ dependencies = [
  "mimalloc",
  "mutants",
  "ohno",
+ "reqwest",
  "semver",
  "serde",
  "serde_json",
@@ -3323,7 +3324,7 @@ dependencies = [
 
 [[package]]
 name = "release-target-check"
-version = "0.0.0"
+version = "0.4.1"
 dependencies = [
  "crp_impl",
  "mimalloc",
@@ -3341,6 +3342,7 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",
@@ -3357,6 +3359,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

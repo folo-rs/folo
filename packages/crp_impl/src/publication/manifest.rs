@@ -10,11 +10,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::publication::candidate::package_identifier;
 use crate::publication::config::{Configuration, NativeTarget};
 use crate::{ReadFileError, WriteFileError};
 
 /// Content-addressed intent; progress is recorded separately and never written into this file.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicationManifest {
     pub id: String,
@@ -39,7 +40,7 @@ impl PublicationManifest {
         Ok(manifest)
     }
 
-    fn validate(&self) -> Result<(), AppError> {
+    pub(crate) fn validate(&self) -> Result<(), AppError> {
         self.publication.validate()?;
         if self.id != self.publication.identity()? {
             return Err(InvalidManifest::new(
@@ -85,7 +86,7 @@ impl PublicationManifest {
 }
 
 /// Frozen source and configured destinations, without any observed remote completion state.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Publication {
     pub schema_version: u32,
@@ -131,7 +132,7 @@ impl Publication {
         for package in &self.packages {
             if previous.is_some_and(|name: &str| name >= package.name.as_str())
                 || !relative_file(&package.manifest)
-                || package.name.is_empty()
+                || !package_identifier(&package.name)
                 || semver::Version::parse(&package.version).is_err()
             {
                 return Err(InvalidManifest::new(
@@ -143,7 +144,7 @@ impl Publication {
                 let selected = self
                     .configuration
                     .binary_targets(&package.name, Some(&binary.targets))?;
-                if binary.name.is_empty() || selected != binary.targets {
+                if !package_identifier(&binary.name) || selected != binary.targets {
                     return Err(InvalidManifest::new(
                         "publication binary request differs from configured targets".to_owned(),
                     )
@@ -157,7 +158,7 @@ impl Publication {
 }
 
 /// Exact package request; its source is the manifest's immutable publication commit.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Package {
     pub name: String,
@@ -167,7 +168,7 @@ pub struct Package {
 }
 
 /// Archive promises for the package's single default-feature executable.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Binary {
     pub name: String,

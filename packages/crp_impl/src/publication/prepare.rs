@@ -14,7 +14,7 @@ use crate::publication::manifest::{
     Binary, InvalidManifest, PUBLICATION_SCHEMA_VERSION, Package, Publication, PublicationManifest,
     immutable_commit,
 };
-use crate::publication::packages::PublicationWorkspace;
+use crate::publication::packages::{PackageRequest, PublicationWorkspace};
 use crate::verbose::Verbose;
 
 pub(crate) fn prepare(
@@ -74,20 +74,7 @@ pub(crate) fn prepare(
             workspace.root(),
         )
     })?;
-    let packages = requests
-        .into_iter()
-        .map(|request| {
-            Ok(Package {
-                name: request.name,
-                version: request.version,
-                manifest: tracked_relative(&repository, &request.manifest)?,
-                binary: request.binary.map(|binary| Binary {
-                    name: binary.name,
-                    targets: binary.targets,
-                }),
-            })
-        })
-        .collect::<Result<_, AppError>>()?;
+    let packages = capture_requests(&repository, requests)?;
     let publication = PublicationManifest::new(Publication {
         schema_version: PUBLICATION_SCHEMA_VERSION,
         tool_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -104,6 +91,26 @@ pub(crate) fn prepare(
         publication.id,
         output.display()
     ))
+}
+
+pub(crate) fn capture_requests(
+    repository: &Repository,
+    requests: Vec<PackageRequest>,
+) -> Result<Vec<Package>, AppError> {
+    requests
+        .into_iter()
+        .map(|request| {
+            Ok(Package {
+                name: request.name,
+                version: request.version,
+                manifest: tracked_relative(repository, &request.manifest)?,
+                binary: request.binary.map(|binary| Binary {
+                    name: binary.name,
+                    targets: binary.targets,
+                }),
+            })
+        })
+        .collect()
 }
 
 fn tracked_relative(repository: &Repository, path: &Path) -> Result<String, AppError> {
