@@ -13,6 +13,11 @@ on:
     paths:
     - .github/workflows/copilot-code-review.yml
 
+# This controls standalone setup-validation runs from the triggers above, not Copilot reviews.
+# The workflow name isolates these runs from coding-agent setup. head_ref groups PR runs by
+# source branch; ref covers pushes and manual dispatches. A new run cancels older validation
+# work in the same group so superseded checks do not keep consuming a runner.
+# See .github/workflows/design.md#concurrency.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
