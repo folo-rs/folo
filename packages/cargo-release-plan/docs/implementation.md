@@ -93,6 +93,13 @@ manifest on a sensitive filesystem. Git lookups continue to use recorded spellin
 
 ### Test boundaries
 
+Registry-publication boundary tests invoke real Cargo against an isolated sparse
+registry. The fixture retains uploaded archives and immediately exposes their
+index entries, so ordering and package verification exercise Cargo's own behavior
+without production registry access. Archive inspection checks normalized dependency
+identity and preservation of the source lockfile. The HTTP fixture explicitly uses
+HTTP/1.1; it does not implement cleartext HTTP/2 upgrades.
+
 The [workspace in-process boundary](../../../docs/testing.md#unit-tests-stay-inside-the-process)
 applies to every fixture and acquisition call. Avoiding Cargo metadata or keeping
 a real Git history small does not make an acquisition test a unit test. Tests of

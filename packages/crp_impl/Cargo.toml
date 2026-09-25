@@ -65,10 +65,14 @@ toml_edit = { workspace = true, features = ["parse", "display"] }
 # Tests and doctests exercise the supported facade as a consumer would.
 cargo-release-plan = { path = "../cargo-release-plan" }
 criterion = { workspace = true }
+flate2 = { workspace = true, features = ["rust_backend"] }
 mimalloc = { workspace = true }
 mutants = { workspace = true }
+sha2 = { workspace = true }
 static_assertions = { workspace = true }
+tar = { workspace = true }
 testing = { path = "../testing" }
+tiny_http = { workspace = true }
 
 [[bench]]
 name = "cargo_release_plan_algorithms"

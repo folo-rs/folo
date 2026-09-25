@@ -18,6 +18,7 @@ mod metadata_discovery_tests;
 mod metadata_installation_tests;
 mod preview;
 mod prospective;
+mod publication;
 mod resolved;
 
 ::testing::set_allocator!();
