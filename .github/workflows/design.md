@@ -85,7 +85,10 @@ further validation.
 Readable reports include useful diagnostics, source and direct job links; full logs
 and tool artifacts supplement rather than replace the explanation. Setup failures
 are reported even when no checker artifact exists.
-Successful runs and cancellation without a failed job do not create failure issues.
+Successful runs and intentional operator cancellation alone do not create failure issues.
+When reporting runs, platform-confirmed execution-limit cancellations belong in the
+report with their actual conclusion and interrupted diagnostics, without attributing
+unfinished work to a source defect or inventing checker outcomes.
 Generated diagnostics remain separate from source inputs, including while a checker
 copies the source tree for isolated execution. Partial logs remain available after
 interruption, and genuine checker failures retain their status and artifacts.

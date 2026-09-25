@@ -74,6 +74,13 @@ excerpts. It links full logs and tool-generated artifacts and explains missing
 diagnostics or checks that never ran. The reporter describes observations, not
 inferred root causes.
 
+An execution-limit cancellation remains unsuccessful validation even when GitHub
+labels the job `cancelled`. When reporting runs, it includes cancelled jobs whose
+check annotations identify the execution limit, retaining the actual conclusion,
+observed reason, diagnostic links and interrupted-result status. Other cancellations
+alone do not establish a validation defect. Missing final checker results and
+unfinished mutation work are not inferred from partial diagnostics.
+
 Reports start with `[Copilot speaking]`. Bounded per-job excerpts may continue in
 readable Markdown comments, not API response blobs or encoded pages. Every
 unsuccessful job retains diagnostic links, and clipped text has an omission notice.

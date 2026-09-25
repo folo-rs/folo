@@ -287,6 +287,9 @@ jobs:
     permissions:
       contents: read
       actions: read
+      # Cancellation classification reads platform deadline annotations from check runs.
+      # Ref: .github/workflows/implementation.md#failure-reporting.
+      checks: read
       issues: write
     steps:
       - uses: actions/checkout@v7

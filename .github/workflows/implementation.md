@@ -711,11 +711,24 @@ platform coverage is disclosed for human review, not claimed as a passing result
 
 The `report` job depends on planning and every check matrix and runs on failure.
 It uses the same main checkout as the other jobs. Its normal GitHub permissions
-allow reading Actions results and writing an issue. Preinstalled PowerShell and
+allow reading Actions results and check-run annotations and writing an issue. Preinstalled PowerShell and
 the GitHub CLI are sufficient, even when checker/toolchain setup failed.
 
 The reporter reads the run's effective job results, including executions reused by
 a job rerun, and collects available check summaries and failed-job log excerpts.
+After resolving effective executions, it examines completed cancelled jobs through
+their check-run annotation URLs. A failure annotation stating that the job exceeded
+its maximum execution time includes that job in the report without rewriting its
+`cancelled` conclusion. The observed platform reason takes precedence in the error
+summary; diagnostics identify interrupted execution and absence of a final checker
+result in the available summary. Partial results remain observations, not outcomes
+for unfinished work. Other cancellations do not independently create a report.
+Annotation lookup failures fail reporting rather than silently classifying a
+cancellation as intentional. Established failures are published first, with linked
+cancellation-reason gaps, before that reporting invocation fails. Reused executions retain their original check-run,
+log and artifact identities; newer successful executions supersede earlier cancellations.
+This selection does not change the workflow's failure-based report-job trigger or
+assert that an all-cancelled workflow invokes reporting.
 It does not require the overall workflow to finish before reporting. Missing artifacts or
 inaccessible logs are explicit gaps in the report, not reasons to omit a failure.
 Issue content contains observed failures and direct links, not serialized API
