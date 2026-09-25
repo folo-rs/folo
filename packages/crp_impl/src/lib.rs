@@ -57,6 +57,7 @@ pub mod plan;
 pub mod preview;
 mod propose;
 pub mod prospective;
+pub mod publication;
 mod report;
 pub mod resolved;
 mod run;

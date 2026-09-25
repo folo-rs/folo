@@ -1,6 +1,7 @@
 //! Real Cargo publication against an isolated registry, without production credentials.
 
 use std::collections::BTreeMap;
+use std::env::consts::EXE_SUFFIX;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{Cursor, Read};
@@ -25,45 +26,7 @@ fn cargo_orders_workspace_publication_and_preserves_locked_binary_dependencies()
     // Cold native compilation is normally brief; this only prevents a stuck external tool.
     with_watchdog_timeout(Duration::from_mins(5), || {
         let registry = Registry::new();
-        let fixture = Repository::new();
-        fixture.write(
-            "Cargo.toml",
-            b"[workspace]\nmembers = ['core', 'cli']\nresolver = '3'\n",
-        );
-        fixture.write(".gitignore", b"/target\n/cargo-home\n");
-        fixture.write(
-            ".cargo/config.toml",
-            format!(
-                "[registries.fixture]\nindex = 'sparse+{}/index/'\n\
-                 credential-provider = 'cargo:token'\n[net]\nretry = 0\n",
-                registry.url
-            )
-            .as_bytes(),
-        );
-        let metadata = "version = '1.0.0'\nedition = '2024'\nlicense = 'MIT'\n\
-                        description = 'Local publication fixture'\n\
-                        repository = 'https://example.invalid/fixture'\n";
-        fixture.write(
-            "core/Cargo.toml",
-            format!("[package]\nname = 'publication-core'\n{metadata}").as_bytes(),
-        );
-        fixture.write("core/src/lib.rs", b"pub fn value() -> u8 { 7 }\n");
-        fixture.write(
-            "cli/Cargo.toml",
-            format!(
-                "[package]\nname = 'publication-cli'\n{metadata}\n\
-                 [dependencies]\npublication-core = {{ version = '=1.0.0', \
-                 path = '../core', registry = 'fixture' }}\n"
-            )
-            .as_bytes(),
-        );
-        fixture.write(
-            "cli/src/main.rs",
-            b"fn main() { assert_eq!(publication_core::value(), 7); }\n",
-        );
-        cargo(&fixture, &["generate-lockfile", "--offline"]);
-        fixture.command(&["add", "."]);
-        fixture.command(&["commit", "--quiet", "-m", "publication source"]);
+        let fixture = publication_workspace(&registry);
         let original_lockfile = fs::read(fixture.path().join("Cargo.lock")).unwrap();
 
         // Deliberately request the dependent first: Cargo owns publication ordering.
@@ -113,19 +76,171 @@ fn cargo_orders_workspace_publication_and_preserves_locked_binary_dependencies()
     });
 }
 
+#[test]
+#[cfg_attr(miri, ignore = "Runs Cargo and an isolated HTTP registry")]
+fn cargo_publishes_a_dependent_after_its_dependency_is_already_available() {
+    // Native compiler startup varies across runners; no assertion waits for this deadline.
+    with_watchdog_timeout(Duration::from_mins(5), || {
+        let registry = Registry::new();
+        let fixture = publication_workspace(&registry);
+        for package in ["publication-core", "publication-cli"] {
+            cargo(
+                &fixture,
+                &[
+                    "publish",
+                    "--registry",
+                    "fixture",
+                    "--locked",
+                    "-p",
+                    package,
+                ],
+            );
+        }
+        assert_eq!(
+            registry.state.lock().unwrap().order,
+            ["publication-core", "publication-cli"]
+        );
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Runs Cargo, build scripts and a credential provider")]
+fn cargo_requests_uncached_publish_credentials_after_package_verification() {
+    // The events establish ordering directly, without delays or token-expiry timers.
+    with_watchdog_timeout(Duration::from_mins(5), || {
+        let registry = Registry::new();
+        let fixture = publication_workspace(&registry);
+        cargo(
+            &fixture,
+            &[
+                "publish",
+                "--registry",
+                "fixture",
+                "--locked",
+                "--workspace",
+            ],
+        );
+        let events = fs::read_to_string(fixture.path().join("target/events.jsonl")).unwrap();
+        let events: Vec<Value> = events
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let last_build = events
+            .iter()
+            .rposition(|event| event.get("operation").unwrap() == "build")
+            .unwrap();
+        let publication_requests: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.get("operation").unwrap() == "publish")
+            .collect();
+        assert_eq!(
+            publication_requests
+                .iter()
+                .map(|(_, event)| event.get("name").unwrap().as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["publication-core", "publication-cli"]
+        );
+        assert!(
+            publication_requests
+                .iter()
+                .all(|(position, _)| *position > last_build),
+            "{events:?}"
+        );
+    });
+}
+
+fn publication_workspace(registry: &Registry) -> Repository {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers = ['core', 'cli']\nresolver = '3'\n",
+    );
+    fixture.write(".gitignore", b"/target\n/cargo-home\n");
+    fixture.write(
+        "provider.rs",
+        include_bytes!("publication/credential_provider.rs"),
+    );
+    fs::create_dir_all(fixture.path().join("target")).unwrap();
+    let provider = fixture
+        .path()
+        .join("target")
+        .join(format!("credential-provider{EXE_SUFFIX}"));
+    let output = Command::new("rustc")
+        .args([
+            "--edition=2024",
+            "--crate-name=fixture_provider",
+            "provider.rs",
+            "-o",
+        ])
+        .arg(&provider)
+        .current_dir(fixture.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let provider = serde_json::to_string(&[provider.to_str().unwrap()]).unwrap();
+    fixture.write(
+        ".cargo/config.toml",
+        format!(
+            "[registries.fixture]\nindex = 'sparse+{}/index/'\n\
+             credential-provider = {provider}\n[net]\nretry = 0\n",
+            registry.url
+        )
+        .as_bytes(),
+    );
+    let metadata = "version = '1.0.0'\nedition = '2024'\nlicense = 'MIT'\n\
+                    description = 'Local publication fixture'\n\
+                    repository = 'https://example.invalid/fixture'\n";
+    fixture.write(
+        "core/Cargo.toml",
+        format!("[package]\nname = 'publication-core'\n{metadata}").as_bytes(),
+    );
+    fixture.write("core/src/lib.rs", b"pub fn value() -> u8 { 7 }\n");
+    fixture.write(
+        "cli/Cargo.toml",
+        format!(
+            "[package]\nname = 'publication-cli'\n{metadata}\n\
+             [dependencies]\npublication-core = {{ version = '=1.0.0', \
+             path = '../core', registry = 'fixture' }}\n"
+        )
+        .as_bytes(),
+    );
+    fixture.write(
+        "cli/src/main.rs",
+        b"fn main() { assert_eq!(publication_core::value(), 7); }\n",
+    );
+    for package in ["core", "cli"] {
+        fixture.write(
+            &format!("{package}/build.rs"),
+            include_bytes!("publication/build_events.rs"),
+        );
+    }
+    cargo(&fixture, &["generate-lockfile", "--offline"]);
+    fixture.command(&["add", "."]);
+    fixture.command(&["commit", "--quiet", "-m", "publication source"]);
+    fixture
+}
+
 fn cargo(fixture: &Repository, args: &[&str]) {
     let output = Command::new("cargo")
         .args(args)
         .current_dir(fixture.path())
         .env("CARGO_HOME", fixture.path().join("cargo-home"))
         .env("CARGO_TARGET_DIR", fixture.path().join("target"))
-        // This registry accepts a fixture credential only; no external service is contacted.
-        .env("CARGO_REGISTRIES_FIXTURE_TOKEN", "local-fixture")
+        .env(
+            "CRP_PUBLICATION_EVENTS",
+            fixture.path().join("target/events.jsonl"),
+        )
         .env("CARGO_TERM_COLOR", "never")
         .env("CARGO_HTTP_PROXY", "")
         // The local protocol fixture serves HTTP/1.1, not cleartext HTTP/2 upgrades.
         .env("CARGO_HTTP_MULTIPLEXING", "false")
         .env_remove("CARGO_REGISTRY_TOKEN")
+        .env_remove("CARGO_REGISTRIES_FIXTURE_TOKEN")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTFLAGS")
         .output()

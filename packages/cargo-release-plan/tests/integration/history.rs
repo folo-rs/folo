@@ -71,6 +71,7 @@ fn shallow_history_without_a_version_change_is_an_error() {
         manifest_path: clone.path().join("Cargo.toml"),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
     assert!(

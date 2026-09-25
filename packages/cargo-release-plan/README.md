@@ -19,7 +19,8 @@ elsewhere), or `cargo install cargo-release-plan` to always build from source. T
 ```text
 cargo release-plan --version
 cargo release-plan report --out-dir <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
-cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|github] [--verify-packaging] [--verbose]
+cargo release-plan check [--base <rev>] [--manifest-path <path>] [--config <path>]
+    [--format text|github] [--verify-packaging] [--verbose]
 cargo release-plan prepare --output <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
 cargo release-plan analysis-order --report <file-or-dir> [--verbose]
 cargo release-plan semver-targets --report <file-or-dir> [--verbose]
@@ -75,6 +76,25 @@ automated workflow supplied by the release-versioning stack's separate skill
 layer.
 
 `--format github` also emits GitHub Actions workflow annotations.
+
+`--config` additionally validates publication configuration and binary archive
+inputs without contacting a registry or resolving dependencies. The path is
+relative to the selected Cargo workspace, not the invocation directory:
+
+```toml
+schema-version = 1
+repository = "example/widgets"
+release-branch = "main"
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+```
+
+Store this as `.cargo/release_plan.toml` and pass
+`--config .cargo/release_plan.toml`. Binary packages must declare the matching
+GitHub repository and binstall ZIP layout, contain one executable buildable with
+default features, and retain a selected target after optional
+`[package.metadata.release-plan] release-targets` restrictions.
+Library-only workspaces may use `targets = []`.
+Omitting `--config` retains ordinary offline version checking.
 
 `--verify-packaging` cross-checks this tool's released-content rules against
 `cargo package --list`. Divergences are printed as warnings and do not fail the

@@ -116,6 +116,7 @@ impl Cli {
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 format: args.format.into(),
                 verify_packaging: args.verify_packaging,
+                config: args.config,
                 verbose: args.verbose,
             },
             Command::Expand(args) => RunInput::Expand {
@@ -334,6 +335,10 @@ struct CheckArgs {
     /// Path to the workspace `Cargo.toml`.
     #[arg(long)]
     manifest_path: Option<PathBuf>,
+
+    /// Validate publication settings from this workspace-relative configuration file.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     /// How to render diagnostics.
     #[arg(long, value_enum, default_value_t = CliCheckFormat::Text)]

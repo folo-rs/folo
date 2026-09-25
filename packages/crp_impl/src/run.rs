@@ -9,6 +9,7 @@ use crate::expand::run_expand;
 use crate::inspect_plan::run_inspect_plan;
 use crate::preview::{run_prepare, run_preview};
 use crate::propose::run_propose;
+use crate::publication::packages::check_publication;
 use crate::report::run_report;
 use crate::resolved::run_verify_preview;
 use crate::semver_targets::run_semver_targets;
@@ -120,6 +121,8 @@ pub enum RunInput {
         format: CheckFormat,
         /// When set, warn on divergence from `cargo package --list` without failing.
         verify_packaging: bool,
+        /// Optional publication configuration, relative to the selected workspace.
+        config: Option<PathBuf>,
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
     },
@@ -307,8 +310,12 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             manifest_path,
             format,
             verify_packaging,
+            config,
             verbose,
         } => {
+            if let Some(config) = config {
+                check_publication(manifest_path, config, Verbose::new(*verbose))?;
+            }
             let (passed, message, warnings) = run_check(
                 base.as_deref(),
                 manifest_path,

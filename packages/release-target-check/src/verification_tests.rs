@@ -112,6 +112,7 @@ impl VerificationRepository for Evidence<'_> {
             manifest_path,
             format,
             verify_packaging,
+            config,
             verbose,
         } = input
         else {
@@ -121,6 +122,7 @@ impl VerificationRepository for Evidence<'_> {
         assert_eq!(*manifest_path, canonical_manifest());
         assert!(matches!(format, CheckFormat::Text));
         assert!(!verify_packaging);
+        assert!(config.is_none());
         assert_eq!(*verbose, self.cli.verbose);
         self.step("checker")?;
         Ok(self.outcome.clone())

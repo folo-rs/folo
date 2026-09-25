@@ -200,6 +200,7 @@ fn a_released_symbolic_link_stops_the_run() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
 
@@ -233,6 +234,7 @@ fn an_indexed_symlink_in_a_regular_checkout_stops_the_run() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
 
@@ -267,6 +269,7 @@ fn a_new_package_with_an_indexed_symlink_stops_the_run() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
 
@@ -306,6 +309,7 @@ fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
 

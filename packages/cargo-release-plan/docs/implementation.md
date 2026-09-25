@@ -42,6 +42,14 @@ The implementation partition's compiled package version identifies the applicati
 because their exact dependency keeps the release versions equal. Installation
 checks do not need to inspect a consumer repository to identify the executable.
 
+The publication subject validates committed policy independently of remote state.
+Its configuration owns supported native targets but no runner assignments.
+Package discovery shares the unresolved Cargo-metadata acquisition boundary with
+classification, projecting the binary names, required features, registry
+eligibility and archive metadata needed by publication. The optional configured
+`check` composes this validation with ordinary version readiness; unconfigured
+assessment performs no publication discovery.
+
 Artifact-only planning shares the report producer's serde model. Report loading
 validates the schema and cross-package identities before consumers build dependency
 graphs or version targets. Analysis ordering follows recorded dependencies rather
@@ -99,6 +107,13 @@ index entries, so ordering and package verification exercise Cargo's own behavio
 without production registry access. Archive inspection checks normalized dependency
 identity and preservation of the source lockfile. The HTTP fixture explicitly uses
 HTTP/1.1; it does not implement cleartext HTTP/2 upgrades.
+
+The same fixture runs a standalone credential provider that records Cargo's
+requests alongside package build-script events. Uncached, operation-specific
+credentials are requested separately for each upload after verification. This
+keeps the token-acquisition boundary aligned with the upload rather than the
+potentially long compilation phase. Partial publication is exercised by uploading
+the dependency first and publishing only the remaining dependent afterward.
 
 The [workspace in-process boundary](../../../docs/testing.md#unit-tests-stay-inside-the-process)
 applies to every fixture and acquisition call. Avoiding Cargo metadata or keeping

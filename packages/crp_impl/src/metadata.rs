@@ -398,6 +398,12 @@ pub(crate) fn load_tracked_work_tree(
 }
 
 fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
+    let metadata = capture_metadata(manifest_path)?;
+    Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+}
+
+/// Acquires Cargo's unresolved workspace description for subject-specific projections.
+pub(crate) fn capture_metadata(manifest_path: &Path) -> Result<String, AppError> {
     // Named registries come from the selected workspace's Cargo configuration,
     // not an unrelated directory from which this tool happens to be invoked.
     // Make the argument absolute before changing Cargo's working directory.
@@ -412,7 +418,7 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
     // can still be classified; no registry packages are consulted.
     // The requested schema version is pinned because the `Metadata*`
     // projections in this module deserialize exactly that documented contract.
-    let metadata = run_capture(
+    run_capture(
         "cargo",
         &[
             "metadata",
@@ -423,8 +429,7 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
             &manifest_path.to_string_lossy(),
         ],
         cwd,
-    )?;
-    Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+    )
 }
 
 /// Uses Cargo's required manifest basename without changing the selected file.

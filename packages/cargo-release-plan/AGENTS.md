@@ -75,6 +75,8 @@ groups", and `docs/implementation.md`, "Workspace snapshots".
 
 ## Release-process ownership
 
-`docs/release-versioning.md`, `docs/git-workflow.md`, `RELEASING.md`, Standard
-validation, and `just gh-release` own the surrounding release process. Do not
-change them from this package.
+The application owns reusable release behavior; implement it in `crp_impl` and
+document it in the owning design, implementation guide and user book.
+Repository instructions and workflow callers select Folo policy rather than
+reimplementing that behavior. Keep the existing publisher operational until
+the unified tool and action pass their bootstrap and cutover gates.

@@ -69,6 +69,7 @@ pub(crate) fn verify_using<R: VerificationRepository>(
                 manifest_path: manifest,
                 format: CheckFormat::Text,
                 verify_packaging: false,
+                config: None,
                 verbose: cli.verbose,
             })
         },

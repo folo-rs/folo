@@ -166,6 +166,7 @@ fn github_format_emits_workflow_annotations() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Github,
         verify_packaging: false,
+        config: None,
         verbose: false,
     })
     .unwrap();
