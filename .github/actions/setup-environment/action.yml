@@ -26,25 +26,36 @@ inputs:
     required: false
     default: "false"
 
+outputs:
+  image-version:
+    description: Hosted runner image used to scope installed-tool caches.
+    value: ${{ steps.cache-identity.outputs.image-version }}
+  source-revision:
+    description: Checked-out commit whose tool installation inputs are being used.
+    value: ${{ steps.cache-identity.outputs.source-revision }}
+
 runs:
   using: composite
   steps:
-    - name: Resolve runner image version (Linux)
-      # Feeds the runner image version into the APT cache key below. GitHub-hosted runners set
+    - name: Resolve cache identity
+      # Feeds the runner image version into the APT and Cargo tool cache keys below. Hosted runners set
       # ImageVersion (e.g. 20260810.271) on every job, but a composite action's `with:` block
       # cannot be relied on to resolve the `env` context, whereas the `steps` context always
       # resolves - so the value is exported as a step output instead. Fail loudly when it is
       # absent rather than emitting an empty string, because an empty key component would
       # silently restore the image-independent cache this step exists to eliminate.
-      id: image
-      if: runner.os == 'Linux'
+      # Use the actual checkout, not github.sha: benchmark jobs may set up historical commits.
+      # Ref: .github/workflows/implementation.md#development-tool-bootstrap-and-caching.
+      id: cache-identity
       shell: bash
       run: |
         if [ -z "$ImageVersion" ]; then
-          echo "ImageVersion is not set; the APT cache cannot be scoped to the runner image." >&2
+          echo "ImageVersion is not set; caches cannot be scoped to the runner image." >&2
           exit 1
         fi
-        echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
+        revision=$(git rev-parse --verify HEAD)
+        echo "image-version=$ImageVersion" >> "$GITHUB_OUTPUT"
+        echo "source-revision=$revision" >> "$GITHUB_OUTPUT"
 
     - name: Refresh APT package index (Linux)
       # cache-apt-pkgs-action never refreshes the index (its `refresh` input is documented as
@@ -93,7 +104,7 @@ runs:
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
         packages: ${{ inputs.install-valgrind == 'true' && 'build-essential cmake valgrind' || 'build-essential cmake' }}
-        version: 1-${{ steps.image.outputs.version }}
+        version: 1-${{ steps.cache-identity.outputs.image-version }}
         execute_install_scripts: true
 
     - name: Install PowerShell (Linux ARM64)
@@ -140,7 +151,7 @@ runs:
       # Keyed on OS + arch + a hash of the files that pin every toolchain version
       # (constants.env holds RUST_MSRV/RUST_NIGHTLY; rust-toolchain.toml holds the stable
       # channel), so any version bump invalidates the cache automatically. Unlike the
-      # compiled cargo-tool binaries in ~/.cargo/bin, rustup toolchains are prebuilt,
+      # source-installed cargo-tool binaries, rustup toolchains are prebuilt,
       # relocatable artifacts that do not link against image-specific dylibs, so the runner
       # ImageVersion is deliberately left out of the key.
       uses: actions/cache@v6
@@ -176,6 +187,10 @@ runs:
         # This enables more reuse, e.g. the Copilot workflow can reuse artifacts from the
         # validate workflow, which speeds up copilot executions.
         shared-key: prerequisites
+        # Cargo tools have a separate cache. Do not let rust-cache save/clean the
+        # same binaries or metadata, or a tool-version bump invalidate workspace compilation.
+        # Ref: .github/workflows/implementation.md#development-tool-bootstrap-and-caching.
+        cache-bin: false
         # Include the runner image version (e.g. macos-15-arm64 20260511.0048.1) in the
         # cache key. Cached binaries can subtly depend on image-specific dylibs and tools,
         # so caches must not flow across image versions even when the lockfile and rust
@@ -183,13 +198,37 @@ runs:
         # runner. env-vars is additive on top of the rust-cache defaults.
         env-vars: ImageVersion
 
+    - name: Cache Cargo tools
+      # Save binary and source installs together with their registration metadata. Exclude
+      # rustup's cargo-* proxies: the runner/toolchain setup, not this cache, owns those.
+      # A same-image fallback restores older pins; installation reconciles them before saving.
+      # The checkout commit covers every install input without a maintained file-hash list.
+      # Workspace compilation remains in the independent Rust cache.
+      # Ref: .github/workflows/implementation.md#development-tool-bootstrap-and-caching.
+      uses: actions/cache@v6
+      with:
+        # Cargo's .crates.* and binstall metadata record installed versions/revisions for reuse.
+        path: |
+          ~/.cargo/bin/cargo-*
+          !~/.cargo/bin/cargo-clippy*
+          !~/.cargo/bin/cargo-fmt*
+          !~/.cargo/bin/cargo-miri*
+          ~/.cargo/bin/just*
+          ~/.cargo/bin/release-plz*
+          ~/.cargo/bin/gungraun-runner*
+          ~/.cargo/.crates.toml
+          ~/.cargo/.crates2.json
+          ~/.cargo/binstall
+        key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-identity.outputs.image-version }}-${{ steps.cache-identity.outputs.source-revision }}
+        restore-keys: |
+          cargo-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-identity.outputs.image-version }}-
+
     - name: Cache actionlint and ShellCheck
       # just install-tools fetches pinned actionlint and ShellCheck as standalone binaries
       # (scripts/setup/install-actionlint.ps1, scripts/setup/install-shellcheck.ps1) into ~/.cargo/bin on
-      # every job and every platform. Unlike the cargo-installed tools that also live there,
-      # these are plain downloaded files with no cargo install-metadata, so Swatinem/rust-cache's
-      # bin caching never tracks them and they are otherwise re-downloaded and re-extracted every
-      # run. Caching the two binaries lets each script's "pinned version already present" check
+      # every job and every platform. Their independent pins live in those scripts, so their
+      # cache is separate from the Cargo tool pins. Caching the binaries lets each script's
+      # "pinned version already present" check
       # short-circuit the download on a hit, so this step is restored before Install development
       # tools below (which runs install-tools).
       #
@@ -206,8 +245,11 @@ runs:
         key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup/install-actionlint.ps1', 'scripts/setup/install-shellcheck.ps1') }}
 
     - name: Install just
-      shell: bash
-      run: cargo install just --locked
+      # Bootstrap only after the tool cache restore. No source build of binstall is needed.
+      shell: pwsh
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: ./scripts/setup/install-just.ps1
 
     # Azure CLI's managed compiler is outside cargo's cache. Share the pinned Bicep binary
     # so offline template validation does not add a repeated install to standard setup.
@@ -232,6 +274,7 @@ runs:
       shell: bash
       env:
         INSTALL_AZURITE: ${{ inputs.install-azurite }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         if [ "$INSTALL_AZURITE" = "true" ]; then
           SKIP_AZURITE=false

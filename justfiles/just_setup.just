@@ -15,6 +15,7 @@ install-tools:
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module "{{ justfile_directory() }}/scripts/setup/RustToolchain.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/setup/CargoTools.psm1" -Force
 
     # This is the single source of truth for which tools - and which versions - get installed. CI
     # runs this same recipe on nearly every job via the setup-environment composite action, so
@@ -36,29 +37,34 @@ install-tools:
     # needs neither miri/rustfmt nor rust-src.
     Install-RustupToolchain -Channel $env:RUST_NIGHTLY_EXTERNAL_TYPES -InstallProfile minimal
 
-    # Every tool is pinned to an explicit version from constants.env (dotenv, configured in the
-    # root justfile, exposes each `FOO_VERSION` as `$env:FOO_VERSION`). This is deliberate: a plain
-    # `cargo install <crate>` never upgrades an already-installed crate - it prints "already
-    # installed" and skips - so an unpinned tool would freeze at whatever version first landed. With
-    # a pin, `cargo install <crate>@<version>` replaces an installed version that differs from the
-    # pin and is a fast no-op when it already matches, so bumping a tool is just editing its version
-    # in constants.env. (cargo-mutants is installed further down because it is skipped on ARM.)
+    # Exact version pins apply to both publisher binaries and locked source fallback.
+    # The helper also bootstraps binstall when a contributor already has Just.
+    # Ref: docs/build-and-tooling.md#development-tool-installation.
+    # cargo-audit's nested release tag is not discovered automatically. The template names
+    # only RustSec's own release archives and still permits source fallback on missing targets.
+    Install-CargoTool -Package "cargo-audit@$env:CARGO_AUDIT_VERSION" `
+        -PackageUrl '{ repo }/releases/download/cargo-audit/v{ version }/{ name }-{ target }-v{ version }.{ archive-format }'
+    Install-CargoTool -Package @(
+        "cargo-delta@$env:CARGO_DELTA_VERSION"
+        "cargo-freeze-deps@$env:CARGO_FREEZE_DEPS_VERSION"
+        "cargo-hack@$env:CARGO_HACK_VERSION"
+        "cargo-llvm-cov@$env:CARGO_LLVM_COV_VERSION"
+        "cargo-machete@$env:CARGO_MACHETE_VERSION"
+        "cargo-nextest@$env:CARGO_NEXTEST_VERSION"
+        "cargo-semver-checks@$env:CARGO_SEMVER_CHECKS_VERSION"
+        "cargo-udeps@$env:CARGO_UDEPS_VERSION"
+        "release-plz@$env:RELEASE_PLZ_VERSION"
+    )
+
+    # These pins lack publisher archives or a verified discovery layout (cargo-careful's raw
+    # executables). cargo-sort's v2.1.4 archives report 2.1.3, so use the crates.io source to
+    # preserve the pin: https://github.com/DevinR528/cargo-sort/issues/138.
     cargo install `
-        cargo-audit@$env:CARGO_AUDIT_VERSION `
         cargo-careful@$env:CARGO_CAREFUL_VERSION `
-        cargo-delta@$env:CARGO_DELTA_VERSION `
         cargo-ensure-no-default-features@$env:CARGO_ENSURE_NO_DEFAULT_FEATURES_VERSION `
-        cargo-freeze-deps@$env:CARGO_FREEZE_DEPS_VERSION `
-        cargo-hack@$env:CARGO_HACK_VERSION `
-        cargo-llvm-cov@$env:CARGO_LLVM_COV_VERSION `
-        cargo-machete@$env:CARGO_MACHETE_VERSION `
-        cargo-nextest@$env:CARGO_NEXTEST_VERSION `
-        cargo-semver-checks@$env:CARGO_SEMVER_CHECKS_VERSION `
         cargo-sort@$env:CARGO_SORT_VERSION `
         cargo-sort-derives@$env:CARGO_SORT_DERIVES_VERSION `
-        cargo-udeps@$env:CARGO_UDEPS_VERSION `
-        release-plz@$env:RELEASE_PLZ_VERSION `
-        --locked
+        --root (Get-CargoInstallRoot) --locked
 
     # cargo-check-external-types powers `just check-external-types`. It is installed from a git
     # commit rather than the pinned `@version` block above because the latest crates.io release
@@ -69,14 +75,14 @@ install-tools:
     #
     # Unlike the `@version` tools above, a plain reinstall cannot reconcile a git pin: cargo keys
     # "already installed" on the crate *version*, which does not change between the commits we pin,
-    # so it would keep an older commit after a rev bump. rust-cache compounds this by restoring the
-    # previously compiled binary under a key that excludes the rev. So we read the commit cargo
-    # recorded in .crates2.json and reinstall with --force only when it differs from the pin: a rev
+    # so it would keep an older commit after a rev bump. A fallback cache restore may also contain
+    # an older binary. We read the commit cargo recorded in .crates2.json and reinstall with
+    # --force only when it differs from the pin: a rev
     # bump always takes effect, while an unchanged pin stays a no-op instead of recompiling the tool
     # on every CI job. constants.env pins a full 40-character commit SHA, which .crates2.json records
     # verbatim, so an exact comparison suffices.
-    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME ".cargo" }
-    $cratesMetadata = Join-Path $cargoHome ".crates2.json"
+    $cargoRoot = Get-CargoInstallRoot
+    $cratesMetadata = Join-Path $cargoRoot ".crates2.json"
     $installedRev = ""
     if (Test-Path -LiteralPath $cratesMetadata) {
         $json = Get-Content -LiteralPath $cratesMetadata -Raw | ConvertFrom-Json
@@ -94,7 +100,7 @@ install-tools:
         cargo install cargo-check-external-types `
             --git $env:CARGO_CHECK_EXTERNAL_TYPES_GIT `
             --rev $env:CARGO_CHECK_EXTERNAL_TYPES_REV `
-            --locked --force
+            --root $cargoRoot --locked --force
     }
 
     # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its
@@ -105,7 +111,7 @@ install-tools:
     # ARM machines (where running mutation testing locally is not supported).
     $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
     if ($arch -ne [System.Runtime.InteropServices.Architecture]::Arm64) {
-        cargo install cargo-mutants@$env:CARGO_MUTANTS_VERSION --locked
+        Install-CargoTool -Package "cargo-mutants@$env:CARGO_MUTANTS_VERSION"
     } else {
         Write-Host "Skipping cargo-mutants install on ARM64 (winapi 0.2.8 has no aarch64 support)."
     }
@@ -127,7 +133,7 @@ install-tools:
     # runtime with VersionMismatch. Keep GUNGRAUN_RUNNER_VERSION, the workspace Cargo.toml entry,
     # and the install command in `docs/callgrind-benchmarks.md` in sync when bumping.
     if ($IsLinux) {
-        cargo install gungraun-runner@$env:GUNGRAUN_RUNNER_VERSION --locked
+        Install-CargoTool -Package "gungraun-runner@$env:GUNGRAUN_RUNNER_VERSION"
     }
 
     # azcopy drives the bulk upload in the cargo-bench-history Azure stress harness

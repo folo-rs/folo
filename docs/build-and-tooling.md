@@ -59,6 +59,65 @@ collection. The synthetic benchmark emits fixed data, not timed measurements; us
 for a local smoke run. The hosted canary checks the actual head and its first parent, so both
 must carry consistent fixture locks.
 
+## Development tool installation
+
+`scripts/setup/install-just.ps1` bootstraps the command runner without requiring Just.
+It and the `install-tools` / `book-install` recipes share `scripts/setup/CargoTools.psm1`.
+Versions come from `constants.env`, read directly during bootstrapping and through
+Just's dotenv environment in recipes. The bootstrap runs in PowerShell because the
+Rust automation environment and command runner are not yet prepared.
+
+Cargo tools prefer binaries from their publishers, with `cargo install --locked`
+as the fallback when no usable archive is found. Exact version pins apply on both
+paths, including downgrades; an already matching installation is reused. Git-revision
+installs and known source-only tools retain explicit source installation. Platform
+exclusions and the Gungraun runner/library and mdBook/preprocessor version pairings
+apply equally to binary and source installs.
+The cargo-audit invocation supplies its publisher's nested release-tag URL explicitly,
+because automatic discovery does not find those archives.
+Cargo-sort uses crates.io source because the publisher's archive at the pinned release
+reports a different version; see [the upstream report](https://github.com/DevinR528/cargo-sort/issues/138).
+
+The binstall bootstrap downloads an official archive for the host platform and
+verifies a checked-in SHA-256 before executing it. Update the archive digests in
+`CargoTools.psm1` together with `CARGO_BINSTALL_VERSION`, obtaining them from the
+corresponding GitHub release's asset metadata. Bootstrap uses the executable at
+the chosen installation root rather than another copy on PATH.
+
+Development tools installed by binstall are trusted publisher builds, not locally
+reproduced builds of the crates.io source. Signatures are verified when the publisher
+configures them; unsigned artifacts are allowed. Exact versions do not pin archive
+contents, compiler choices or dependency builds. `--locked` constrains source fallback
+only. This tradeoff avoids compiling the toolset on every cold setup without requiring
+every publisher to support signed releases.
+
+Quickinstall's third-party builds and telemetry are disabled. Binstall does not
+discover local GitHub credentials automatically; public downloads work without login.
+CI supplies its ephemeral job token to reduce API rate limiting. No PAT or persistent
+authentication change is required. Downloads require access to crates.io and publisher
+release hosts, normally GitHub. Compilation tools remain prerequisites for workspace
+builds and source fallback. Cold setup benefits most; existing caches still matter.
+
+Cargo tools install into `CARGO_INSTALL_ROOT`, then `CARGO_HOME`, then the default
+home Cargo directory, in that precedence order. Its `bin` directory must already be
+on PATH for subsequent tool use; setup does not edit persistent PATH or execution
+policy. Cargo/binstall registration metadata is retained for version reconciliation
+and cache restoration. The standalone non-Cargo installers keep their own destinations.
+The shared Cargo installer selects its root explicitly rather than reading Cargo's
+`install.root` configuration key.
+
+### Windows source-build troubleshooting
+
+Normal setup uses a prebuilt binstall executable and does not need binstall's native
+compression or cryptography build dependencies. A manual source installation should
+use `cargo install cargo-binstall@<pin> --locked`, with the pin from `constants.env`.
+When it fails, inspect the original error before installing additional prerequisites:
+dependency-resolution failures and missing native tools require different remedies.
+Visual Studio's C++ workload does not imply that its bundled CMake is on the calling
+shell's PATH. Check CMake or assembler requirements against the failing dependency
+and version; do not install them speculatively or remove the workspace's existing
+compiler prerequisites merely because binaries usually avoid tool compilation.
+
 ## Validating changes
 
 Validate changes via `just validate-local`. This runs a number of different checks
@@ -270,9 +329,10 @@ to collect diagnostics and file an issue. See
 
 ## Scripting
 
-You can assume PowerShell 7 (`pwsh`) is available on every operating system and
-environment. Where a script is justified, prefer PowerShell 7 commands to Bash
-commands.
+PowerShell 7.6 or later (`pwsh`) is required on every operating system and environment.
+Declare `#requires -Version 7.6` in new or modified standalone scripts and modules,
+including executable test fixtures; require a newer version when an API needs it.
+Where a script is justified, prefer PowerShell commands to Bash commands.
 
 ### Script purpose and decision comments
 
@@ -311,6 +371,9 @@ reading a non-existent property, indexing out of bounds) into hard errors. The t
 lines ensure that commands producing nonzero exit codes are treated as errors and fail the
 script. (Standalone scripts additionally set `$VerbosePreference = 'Continue'`; module files set
 strict mode once at the top rather than per function.)
+
+A workflow `run:` that only invokes a standalone `.ps1` may delegate the preamble to that
+script. Keep the preamble inline when the step performs any additional PowerShell logic.
 
 ### PowerShell linting
 

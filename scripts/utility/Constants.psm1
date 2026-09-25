@@ -1,9 +1,8 @@
-#requires -Version 7
+#requires -Version 7.6
 
-# Reads the existing non-secret test identity configuration for the hosted benchmark caller
-# canary before Rust/bootstrap setup. Production callers use repository variables directly.
-# Missing values fail here rather than causing an opaque federation error in another job.
-# Ref: .github/workflows/implementation.md#reusable-workflow-canary.
+# Reads repository constants before Just's dotenv loading is available. Used by tool
+# bootstrapping and the hosted benchmark caller canary, both before Rust helper preparation.
+# Ref: docs/build-and-tooling.md#development-tool-installation.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -33,10 +32,7 @@ function Read-DotEnvFile {
 }
 
 function Get-RequiredConstant {
-    # Returns $Values[$Name], throwing when it is absent or blank. Federation with an empty
-    # AZURE_CLIENT_ID / AZURE_TENANT_ID would otherwise fail far later with an opaque error; failing
-    # here names the exact missing constant. Accessing a missing hashtable key returns $null under
-    # strict mode (it does not throw), so the explicit blank check is what catches an absent key.
+    # Fail at configuration loading rather than passing an empty pin or identity to a subprocess.
     [CmdletBinding()]
     [OutputType([string])]
     param(

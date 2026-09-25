@@ -847,6 +847,15 @@ pin with those executable requirements, so both bootstrap and bundle changes sel
 The bundle integration tests exercise parameter validation, cleanup and mocked deployment
 without Azure access.
 
+Development tools prefer publisher binaries with locked source fallback. The bootstrap
+executable is checksum-pinned; subsequent tools follow the publisher-build trust policy in
+[development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
+Quickinstall is disabled. Source-only and Git-pinned tools keep their source installation,
+and platform restrictions and version pairings remain intact. Tool caches reconcile exact
+pins independently of workspace build artifacts. Cache identities cover the complete source
+revision without a separate installation-input list. Book-only tools have independent
+storage so jobs that do not install them cannot reserve an incomplete snapshot.
+
 The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
 installed only where a job actually executes Callgrind measurements — the benchmark
 collection jobs, the test jobs that smoke-run every bench target, and the cache warmup that

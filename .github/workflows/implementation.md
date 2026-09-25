@@ -35,6 +35,41 @@ Standard validation and its close companion share the `standard-validation-`
 ref-specific concurrency group. The merge-blocking job/check name and ruleset
 target are exactly `required-checks`.
 
+## Development tool bootstrap and caching
+
+`setup-environment` restores caches before invoking `scripts/setup/install-just.ps1`
+and then the ordinary `just install-tools` recipe. Both use the same verified binstall
+bootstrap and publisher-first policy as local development. Bootstrap constants are loaded
+through `scripts/utility/Constants.psm1`, also used by the pre-setup benchmark canary.
+See [development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
+
+The Cargo tool cache owns the installed executables and their `.crates.toml`,
+`.crates2.json` and `binstall` metadata, which record installed versions and Git revisions
+so restored tools can be reused or reconciled. It excludes rustup proxies. Its key includes
+the platform, runner image and checked-out commit. The commit covers every tracked
+installation input without maintaining a separate file list, including historical checkouts
+whose revision differs from the workflow event's SHA. A same-image fallback restores an
+earlier snapshot, and installation always reconciles the exact pins before use.
+This trades a fresh archive and branch-scoped cache entry per commit for complete input
+coverage; restored matching tools do not need another download or compilation. These entries
+share the repository cache budget with build artifacts and toolchains, so the additional
+snapshots can evict other useful caches. Input-list maintenance is avoided at this storage
+and upload cost, rather than by treating a cache hit as proof that installation can be skipped.
+This cache is separate from `rust-cache`, whose binary caching is disabled, so changing
+a tool pin does not discard workspace compilation artifacts. Standalone lint tools and
+Bicep retain their independent caches.
+
+Book jobs install into a separate Cargo install root and cache that entire root, including
+the binaries and registration metadata, after shared setup. Only book jobs populate this
+cache, so ordinary setup jobs cannot reserve its immutable key before book tools exist.
+Its key follows the same platform/image/commit policy. The install step selects this root
+without changing Cargo's registry home and adds its `bin` directory to subsequent steps'
+PATH. Local `just book-install` still follows the caller's ordinary install-root selection.
+
+The install steps supply the job's ephemeral GitHub token for public release discovery.
+Local installation does not require authentication or modify credential configuration.
+No step bootstraps binstall through compilation or disables signature verification.
+
 ## Benchmark workflow artifacts
 
 Folo delegates its ordinary benchmark job graphs to

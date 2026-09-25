@@ -1,13 +1,14 @@
+#Requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Exercises the canary's dotenv and required-identifier boundary against fixture files,
-# without reading real repository configuration or accessing Azure.
+# Integration tests for bootstrap/canary constants loading, using fixture files without
+# reading real repository configuration or accessing the network.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'AzureFederation.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot 'Constants.psm1') -Force
 }
 
 Describe 'Read-DotEnvFile' {
