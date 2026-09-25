@@ -2,6 +2,13 @@ name: Setup Environment
 description: Setup development environment for Folo project
 
 inputs:
+  save-build-cache:
+    description: >-
+      Whether this compiling job saves Cargo dependency and workspace build artifacts. Saving
+      is opt-in so setup-only jobs cannot claim an immutable cache key with an empty target
+      directory. All jobs can restore these caches; environment caches are still saved.
+    required: false
+    default: "false"
   install-azurite:
     description: >-
       Whether `just install-tools` should also install the Azurite blob-storage emulator.
@@ -136,42 +143,23 @@ runs:
       run: git lfs install
     
     - name: Cache Rust toolchains
-      # Restored BEFORE the toolchain is installed so the pinned stable, the MSRV, the general
-      # pinned nightly (whose profile pulls rust-src, llvm-tools-preview and miri) and the dedicated
-      # external-types nightly (minimal profile) are all served from cache, turning every
-      # `rustup toolchain install` - the install step below and the ones inside `just install-tools` -
-      # into a no-op on a hit. rust-cache below caches ~/.cargo and ./target but never ~/.rustup, so
-      # re-installing these toolchains is the single largest uncached cost of this composite.
-      #
-      # It also means every toolchain is already present when Swatinem/rust-cache runs, so its
-      # shared `prerequisites` key (which enumerates `rustup toolchain list`) reflects the
-      # exact toolchain set. A deliberate bump of any pin then rebuilds that cache, which is
-      # what we want.
-      #
-      # Keyed on OS + arch + a hash of the files that pin every toolchain version
-      # (constants.env holds RUST_MSRV/RUST_NIGHTLY; rust-toolchain.toml holds the stable
-      # channel), so any version bump invalidates the cache automatically. Unlike the
-      # source-installed cargo-tool binaries, rustup toolchains are prebuilt,
-      # relocatable artifacts that do not link against image-specific dylibs, so the runner
-      # ImageVersion is deliberately left out of the key.
+      # Restore before reconciling every declared toolchain and component. A miss must still
+      # produce the complete inventory before rust-cache enumerates it for its own key.
+      # Pins and installer inputs invalidate this cache; prebuilt rustup toolchains are
+      # relocatable, so unlike compiled Cargo tools they need no runner-image key.
+      # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
       uses: actions/cache@v6
       with:
         path: |
           ~/.rustup/toolchains
           ~/.rustup/update-hashes
-        key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml') }}
+        key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml', 'scripts/setup/RustToolchain.psm1', 'scripts/utility/Constants.psm1') }}
 
-    - name: Install Rust toolchain
-      # In-repo replacement for a marketplace toolchain action (scripts/setup/RustToolchain.psm1,
-      # Pester-tested). It installs the pinned stable channel read from rust-toolchain.toml - the
-      # single source of truth, never hardcoded - and wraps the `rustup toolchain install` in an
-      # item-level retry, because that install pulls from package mirrors onto runner disks where a
-      # transient fault (a network blip or a disk I/O error) is not a real failure and must not drop
-      # the whole job. Owning the step also avoids a floating `@master` marketplace dependency.
-      #
-      # Pinning to the exact channel (rather than latest stable) keeps the installed toolchain set -
-      # and thus Swatinem/rust-cache's key, which enumerates `rustup toolchain list` - stable until
-      # we deliberately bump the pin, so an upstream stable release never silently busts the cache.
+    - name: Prepare Rust toolchains
+      # The shared installer also serves just install-tools. It prepares stable, MSRV and the
+      # pinned nightlies here, not after cache lookup, even when the rustup cache missed.
+      # PowerShell is required because Just and the Rust automation helpers are not ready yet.
+      # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
       shell: pwsh
       run: |
         Set-StrictMode -Version Latest
@@ -182,11 +170,19 @@ runs:
 
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
+      # Diagnostic settings are not compiler inputs. Normalize the cache action's environment
+      # across warmup, validation and other consumers without overriding their runtime settings.
+      # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
+      env:
+        RUST_BACKTRACE: "1"
       with:
         # We use the same shared key for all the different workflows that use this action.
         # This enables more reuse, e.g. the Copilot workflow can reuse artifacts from the
         # validate workflow, which speeds up copilot executions.
         shared-key: prerequisites
+        # Warmup and other setup-only jobs populate environment caches, not workspace artifacts.
+        # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
+        save-if: ${{ inputs.save-build-cache }}
         # Cargo tools have a separate cache. Do not let rust-cache save/clean the
         # same binaries or metadata, or a tool-version bump invalidate workspace compilation.
         # Ref: .github/workflows/implementation.md#development-tool-bootstrap-and-caching.

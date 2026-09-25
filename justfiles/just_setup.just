@@ -22,20 +22,9 @@ install-tools:
     # there is no separate CI install path to keep in sync. The only per-job variation is the
     # skip_azcopy / skip_azurite flags above, which trim two tools no ordinary CI job needs.
 
-    # First, we install/upgrade the stable toolchain in `rust-toolchain.toml`. Omitting Channel is
-    # intentional: rustup reads the manifest, including its requested components.
-    Install-RustupToolchain
-
-    # Then we install the other toolchains used by specific commands.
-    Install-RustupToolchain -Channel $env:RUST_MSRV
-    Install-RustupToolchain -Channel $env:RUST_NIGHTLY `
-        -Component @('miri', 'rustfmt', 'rust-src', 'llvm-tools-preview')
-
-    # Dedicated nightly for `just check-external-types` (see constants.env,
-    # RUST_NIGHTLY_EXTERNAL_TYPES, for why it must be separate from RUST_NIGHTLY). The minimal
-    # profile is enough: the check only drives rustdoc, which ships with the rustc component - it
-    # needs neither miri/rustfmt nor rust-src.
-    Install-RustupToolchain -Channel $env:RUST_NIGHTLY_EXTERNAL_TYPES -InstallProfile minimal
+    # CI uses this same set before cache lookup, including when the rustup cache is empty.
+    # Ref: .github/workflows/implementation.md#shared-environment-cache-identity.
+    Install-RustToolchainSet
 
     # Exact version pins apply to both publisher binaries and locked source fallback.
     # The helper also bootstraps binstall when a contributor already has Just.

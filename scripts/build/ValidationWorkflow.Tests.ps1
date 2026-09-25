@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Checks relationships between workflow outputs, validation fan-ins, dependencies and job definitions
@@ -109,6 +110,20 @@ Describe 'Validation job references' {
                 }
             }
         }
+    }
+}
+
+Describe 'Shared environment preparation order' {
+    It 'completes toolchain preparation before the build cache reads compiler identities' {
+        $action = Get-Content -LiteralPath (Join-Path $root '.github/actions/setup-environment/action.yml') -Raw
+        $steps = @([regex]::Matches($action, '(?ms)^    - .*?(?=^    - |\z)') |
+            ForEach-Object { $_.Value })
+        $preparation = @($steps | Where-Object { $_ -match '(?m)^\s+Install-RustToolchain\s*$' })
+        $cache = @($steps | Where-Object { $_ -match '(?m)^\s+uses: Swatinem/rust-cache@' })
+        $preparation.Count | Should -Be 1
+        $cache.Count | Should -Be 1
+        [array]::IndexOf($steps, $preparation[0]) |
+            Should -BeLessThan ([array]::IndexOf($steps, $cache[0]))
     }
 }
 

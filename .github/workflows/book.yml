@@ -81,8 +81,12 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup environment
+        # Book rendering does not compile workspace crates; preserve the compiling jobs' cache.
+        # Ref: implementation.md#shared-environment-cache-identity.
         id: environment
         uses: ./.github/actions/setup-environment
+        with:
+          save-build-cache: "false"
 
       - name: Cache book tools
         # Book-only installs own their binaries AND registration metadata. Ordinary setup jobs
