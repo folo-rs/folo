@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for RustToolchain.psm1. The real rustup/rustc are isolated behind mocks in the

@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Checks relationships between workflow outputs, validation fan-ins, dependencies and job definitions

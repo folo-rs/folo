@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Prepares the pinned toolchain set for .github/actions/setup-environment and just install-tools.
 # CI completes this before Rust cache lookup, so restored and newly installed environments
