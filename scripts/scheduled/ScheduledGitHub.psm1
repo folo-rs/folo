@@ -383,11 +383,40 @@ function Invoke-ScheduledReporting {
                 } | Sort-Object run_attempt | Select-Object -First 1
             } else { $latest }
         })
-    $failedJobs = @($jobs | Where-Object {
-        $_.name -cne 'report' -and $_.status -ceq 'completed' -and
-            $_.conclusion -cin @('failure', 'timed_out', 'action_required')
+    $cancellationReasons = @{}
+    $cancellationGaps = [Collections.Generic.List[string]]::new()
+    $failedJobs = @(foreach ($job in $jobs) {
+        if ($job.name -ceq 'report' -or $job.status -cne 'completed') { continue }
+        if ($job.conclusion -cin @('failure', 'timed_out', 'action_required')) { $job }
+        elseif ($job.conclusion -ceq 'cancelled') {
+            # GitHub encodes an execution-limit termination as cancelled, like an operator
+            # cancellation. Only its explicit deadline annotation establishes this failure.
+            # Ref: ../../.github/workflows/implementation.md#failure-reporting.
+            try {
+                $checkPrefix = "https://api.github.com/repos/$Repository/check-runs/"
+                if ($job['check_run_url'] -cnotmatch "^$([regex]::Escape($checkPrefix))([1-9][0-9]*)$") {
+                    throw "Cancelled job $($job.id) lacks its check-run URL; cannot classify the cancellation."
+                }
+                $annotations = @(Get-ScheduledGitHubCollection "repos/$Repository/check-runs/$($Matches[1])/annotations")
+                $reasons = @($annotations | Where-Object {
+                    $_.annotation_level -ceq 'failure' -and
+                        $_.message -cmatch '^The job(?: running on runner .+)? has exceeded the maximum execution time\b'
+                } | ForEach-Object { $_.message })
+                if ($reasons.Count -gt 0) {
+                    $cancellationReasons[$job.id] = $reasons -join "`n"
+                    $job
+                }
+            } catch {
+                # Preserve established failures before failing this reporting invocation.
+                # An unavailable reason must not silently dismiss an unknown cancellation.
+                $cancellationGaps.Add("Cancellation reason unavailable for [$($job.name)]($($job.html_url)) (conclusion: cancelled): $($_.Exception.Message)")
+            }
+        }
     })
-    if ($failedJobs.Count -eq 0) { return 'No failed validation jobs; earlier reports are unchanged.' }
+    if ($failedJobs.Count -eq 0) {
+        if ($cancellationGaps.Count -gt 0) { throw ($cancellationGaps -join "`n") }
+        return 'No failed validation jobs; earlier reports are unchanged.'
+    }
 
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
     $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
@@ -401,6 +430,7 @@ function Invoke-ScheduledReporting {
     }
 
     $notices = [Collections.Generic.List[string]]::new()
+    $notices.AddRange($cancellationGaps)
     $artifacts = @()
     try { $artifacts = @(Get-ScheduledGitHubCollection "$endpoint/artifacts" -Property artifacts) }
     catch { $notices.Add("Result artifact inventory is unavailable: $($_.Exception.Message)") }
@@ -430,12 +460,21 @@ function Invoke-ScheduledReporting {
         } catch { $diagnostics.Add("Job logs unavailable: $($_.Exception.Message) Full log: $($job.html_url)") }
         finally { [IO.File]::Delete($logPath) }
         $diagnostics.Add("Job execution attempt: $($job.run_attempt)")
+        if ($cancellationReasons.ContainsKey($job.id)) {
+            # Keep the platform reason ahead of incidental checker errors in the inventory.
+            $summary = $cancellationReasons[$job.id]
+            $diagnostics.Add("Execution-limit cancellation: $summary")
+            $diagnostics.Add('Job execution was interrupted; available checker diagnostics may be incomplete. Unfinished work has no inferred outcome.')
+        }
         $resultArtifacts = @($artifacts | Where-Object name -CEQ "scheduled-result-$RunId-$($job.run_attempt)-$($job.name)")
         foreach ($artifact in $resultArtifacts) {
             $artifactUrls.Add("https://github.com/$Repository/actions/runs/$RunId/artifacts/$([long]$artifact.id)")
             try {
                 $text = Read-ScheduledArtifactText $Repository $artifact $OutputDirectory
                 if ([string]::IsNullOrWhiteSpace($text)) { throw 'The check summary is empty.' }
+                if ($cancellationReasons.ContainsKey($job.id) -and $text -cnotmatch '(?m)^## Final result:') {
+                    $diagnostics.Add('No final checker result was recorded in the available check summary.')
+                }
                 $diagnostics.Add($text)
             } catch { $diagnostics.Add("Check summary unavailable: $($_.Exception.Message)") }
         }
@@ -492,6 +531,9 @@ function Invoke-ScheduledReporting {
             $observed = Invoke-ScheduledGitHubJson "repos/$Repository/issues/$($duplicate.number)"
             if ($observed.state -ceq 'closed') { $observed }
         }
+    }
+    if ($cancellationGaps.Count -gt 0) {
+        throw "Report: $($report.html_url). Cancellation classification remains incomplete: $($cancellationGaps -join "`n")"
     }
     return "Report: $($report.html_url)"
 }

@@ -37,6 +37,7 @@ Describe 'Same-workflow failure reporting' {
                 run_id = 10; run_attempt = 1; status = 'in_progress'; conclusion = $null; steps = @()
             })
             $script:artifacts = @()
+            $script:annotations = @()
             $script:issues = @()
             $script:comments = @()
             $script:writes = [Collections.Generic.List[hashtable]]::new()
@@ -52,6 +53,7 @@ Describe 'Same-workflow failure reporting' {
                     '^repos/example/repo/actions/runs/10$' { return $script:run }
                     '/jobs\?filter=all&per_page=100&page=1$' { return @{ jobs = $script:jobs } }
                     '/artifacts\?per_page=100&page=1$' { return @{ artifacts = $script:artifacts } }
+                    '^repos/example/repo/check-runs/120/annotations\?per_page=100&page=1$' { return ,$script:annotations }
                     '^search/issues\?.*&page=1$' {
                         return @{ items = $script:issues; total_count = $script:issues.Count; incomplete_results = $false }
                     }
@@ -128,9 +130,171 @@ Describe 'Same-workflow failure reporting' {
             @{ Conclusion = 'cancelled' }, @{ Conclusion = 'neutral' }
         ) {
             $script:jobs[0].conclusion = $Conclusion
+            $script:jobs[0].check_run_url = 'https://api.github.com/repos/example/repo/check-runs/120'
+            $script:annotations = @(@{ annotation_level = 'failure'; message = 'The operation was canceled.' })
             $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
             $script:writes.Count | Should -Be 0
             Should -Invoke Read-ScheduledArtifactText -Times 0
+        }
+        It 'reports an execution-limit cancellation with other failure present: <OtherFailure>' -ForEach @(
+            @{ OtherFailure = $true; Duration = '6h0m0s' }
+            @{ OtherFailure = $false; Duration = '30m0s' }
+        ) {
+            $script:jobs[0].name = 'mutants-windows-latest-1'
+            $script:jobs[0].conclusion = 'cancelled'
+            $script:jobs[0].check_run_url = 'https://api.github.com/repos/example/repo/check-runs/120'
+            $script:jobs[0].steps = @(@{ name = 'Run check'; conclusion = 'cancelled' })
+            if ($OtherFailure) { $script:jobs[1].conclusion = 'failure' }
+            $reason = "The job has exceeded the maximum execution time of $Duration"
+            $script:annotations = @(
+                @{ annotation_level = 'failure'; message = $reason }
+                @{ annotation_level = 'failure'; message = 'The operation was canceled.' }
+            )
+            $script:artifacts = @(@{ id = 31; name = 'scheduled-result-10-1-mutants-windows-latest-1'; expired = $false })
+            Mock Read-ScheduledArtifactText {
+                "# Check mutants-windows-latest-1`nReplay: just mutants 1/2`nPartial checker diagnostics"
+            }
+
+            $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+
+            $script:writes.Count | Should -Be 1
+            $text = $script:writes[0].body.body
+            $text | Should -Match '\| \[mutants-windows-latest-1\].*\| cancelled \|'
+            $text | Should -Match ([regex]::Escape($reason))
+            $text | Should -Match '/job/20'
+            $text | Should -Match '/artifacts/31'
+            $text | Should -Match 'interrupted'
+            $text | Should -Match 'No final checker result'
+            $text | Should -Match 'Partial checker diagnostics'
+            $text | Should -Not -Match 'Final result:|0 missed|all mutants'
+        }
+        Context 'Execution-limit cancellation evidence' {
+            BeforeEach {
+                $script:jobs[0].name = 'mutants-windows-latest-1'
+                $script:jobs[0].conclusion = 'cancelled'
+                $script:jobs[0].check_run_url = 'https://api.github.com/repos/example/repo/check-runs/120'
+                $script:annotations = @(@{
+                    annotation_level = 'failure'
+                    message = 'The job has exceeded the maximum execution time of 6h0m0s'
+                })
+            }
+            It 'retains the platform reason when logs and artifacts are unavailable' {
+                Mock Save-ScheduledGitHubFile { throw [IO.IOException]::new() }
+                $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+                $text = $script:writes[0].body.body
+                $text | Should -Match '\| cancelled \| The job has exceeded the maximum execution time'
+                $text | Should -Match 'Job logs unavailable'
+                $text | Should -Match 'No check-summary artifact'
+                $text | Should -Match 'interrupted'
+                $text | Should -Match '/job/20'
+            }
+            It 'retains a final checker result when interruption happened after finalization' {
+                $script:artifacts = @(@{ id = 31; name = 'scheduled-result-10-1-mutants-windows-latest-1'; expired = $false })
+                Mock Read-ScheduledArtifactText { "# Check`n## Final result: FAILED`n`nExit code: 1" }
+                $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+                $text = $script:writes[0].body.body
+                $text | Should -Match 'Final result: FAILED'
+                $text | Should -Not -Match 'No final checker result'
+            }
+            It 'reads later annotation pages before deciding that cancellation is ordinary' {
+                Mock Invoke-ScheduledGitHubJson {
+                    return ,@(1..100 | ForEach-Object { @{ annotation_level = 'notice'; message = "Notice $_" } })
+                } -ParameterFilter { $Endpoint -ceq 'repos/example/repo/check-runs/120/annotations?per_page=100&page=1' }
+                Mock Invoke-ScheduledGitHubJson { return ,$script:annotations } -ParameterFilter {
+                    $Endpoint -ceq 'repos/example/repo/check-runs/120/annotations?per_page=100&page=2'
+                }
+                $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+                $script:writes[0].body.body | Should -Match '\| cancelled \|'
+            }
+            It 'does not publish when cancellation evidence lookup fails' {
+                Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter {
+                    $Endpoint -match '/annotations\?'
+                }
+                { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+                $script:writes.Count | Should -Be 0
+            }
+            It 'publishes established failures with cancellation gaps before failing the reporter' {
+                $script:jobs[1].conclusion = 'failure'
+                Mock Invoke-ScheduledGitHubJson { throw [IO.IOException]::new() } -ParameterFilter {
+                    $Endpoint -match '/annotations\?'
+                }
+                { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+                $script:writes.Count | Should -Be 1
+                $text = $script:writes[0].body.body
+                $text | Should -Match '\| failure \|'
+                $text | Should -Match 'Cancellation reason unavailable'
+                $text | Should -Match 'conclusion: cancelled'
+                $text | Should -Match '/job/20'
+                $text | Should -Not -Match 'maximum execution time|No failed validation jobs'
+            }
+            It 'recognizes the runner-qualified execution-limit annotation' {
+                $script:annotations[0].message = 'The job running on runner GitHub Actions 2 has exceeded the maximum execution time of 360 minutes.'
+                $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+                $text = $script:writes[0].body.body
+                $text | Should -Match '\| cancelled \|'
+                $text | Should -Match ([regex]::Escape($script:annotations[0].message))
+            }
+            It 'rejects a <Case> check-run URL rather than silently omitting a cancelled job' -ForEach @(
+                @{ Case = 'missing'; Url = $null }
+                @{ Case = 'different repository'; Url = 'https://api.github.com/repos/other/repo/check-runs/120' }
+            ) {
+                $script:jobs[0].check_run_url = $Url
+                { Invoke-ScheduledReporting example/repo 10 1 $script:directory } | Should -Throw
+                $script:writes.Count | Should -Be 0
+            }
+            It 'does not turn <Case> into an execution-limit failure' -ForEach @(
+                @{ Case = 'absent annotations'; Annotations = @() }
+                @{ Case = 'ordinary cancellation'; Annotations = @(@{ annotation_level = 'failure'; message = 'The operation was canceled.' }) }
+                @{ Case = 'unrelated failure'; Annotations = @(@{ annotation_level = 'failure'; message = 'Test assertion failed.' }) }
+                @{ Case = 'nonfailure annotation'; Annotations = @(@{ annotation_level = 'notice'; message = 'The job has exceeded the maximum execution time of 6h0m0s' }) }
+            ) {
+                $script:annotations = $Annotations
+                $null = Invoke-ScheduledReporting example/repo 10 1 $script:directory
+                $script:writes.Count | Should -Be 0
+                Should -Invoke Save-ScheduledGitHubFile -Times 0
+            }
+            It 'uses the original cancelled execution after a cached reporter rerun' {
+                $script:run.run_attempt = 2
+                $copy = $script:jobs[0].Clone()
+                $copy.id = 40
+                $copy.run_attempt = 2
+                $copy.check_run_url = 'https://api.github.com/repos/example/repo/check-runs/140'
+                $script:jobs += $copy
+                $script:artifacts = @(
+                    @{ id = 31; name = 'scheduled-result-10-1-mutants-windows-latest-1'; expired = $false }
+                    @{ id = 32; name = 'scheduled-result-10-2-mutants-windows-latest-1'; expired = $false }
+                )
+                $null = Invoke-ScheduledReporting example/repo 10 2 $script:directory
+                $text = $script:writes[0].body.body
+                $text | Should -Match '/runs/10/attempts/2'
+                $text | Should -Match 'Job execution attempt: 1'
+                $text | Should -Match '/job/20'
+                $script:artifactReads | Should -Be @(31)
+                Should -Invoke Invoke-ScheduledGitHubJson -Times 1 -Exactly -ParameterFilter {
+                    $Endpoint -ceq 'repos/example/repo/check-runs/120/annotations?per_page=100&page=1'
+                }
+            }
+            It 'does not resurrect a deadline cancellation after a <Conclusion> rerun' -ForEach @(
+                @{ Conclusion = 'success' }, @{ Conclusion = 'cancelled' }
+            ) {
+                $script:run.run_attempt = 2
+                $rerun = $script:jobs[0].Clone()
+                $rerun.id = 40
+                $rerun.run_attempt = 2
+                $rerun.started_at = '2026-09-11T00:02:10Z'
+                $rerun.completed_at = '2026-09-11T00:02:20Z'
+                $rerun.check_run_url = 'https://api.github.com/repos/example/repo/check-runs/140'
+                $rerun.conclusion = $Conclusion
+                $script:jobs += $rerun
+                Mock Invoke-ScheduledGitHubJson {
+                    return ,@(@{ annotation_level = 'failure'; message = 'The operation was canceled.' })
+                } -ParameterFilter { $Endpoint -ceq 'repos/example/repo/check-runs/140/annotations?per_page=100&page=1' }
+                $null = Invoke-ScheduledReporting example/repo 10 2 $script:directory
+                $script:writes.Count | Should -Be 0
+                Should -Invoke Invoke-ScheduledGitHubJson -Times 0 -Exactly -ParameterFilter {
+                    $Endpoint -match '/check-runs/120/'
+                }
+            }
         }
         It 'ignores in-progress jobs and a completed failed reporter' {
             $script:jobs[0].status = 'in_progress'
