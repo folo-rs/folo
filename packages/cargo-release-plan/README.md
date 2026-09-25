@@ -17,6 +17,7 @@ to fetch a prebuilt binary on supported targets (transparently building from sou
 elsewhere), or `cargo install cargo-release-plan` to always build from source. Then:
 
 ```text
+cargo release-plan --version
 cargo release-plan report --out-dir <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
 cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|github] [--verify-packaging] [--verbose]
 cargo release-plan prepare --output <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
@@ -34,6 +35,9 @@ cargo release-plan inspect-plan --plan <expanded.json> [--require-resolved]
     [--manifest-path <path>] [--verbose]
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
+
+`--version` identifies the installed application, not the packages in a workspace.
+It works without a Cargo workspace or Git repository.
 
 `--base` names the **release baseline**: the tip of the branch releases are made
 from, which is not necessarily the branch a pull request targets. CI should pass

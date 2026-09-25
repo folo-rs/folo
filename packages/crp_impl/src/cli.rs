@@ -21,10 +21,9 @@ use crate::{CheckFormat, RunInput};
 #[command(
     name = "cargo-release-plan",
     about = "Classify publishable packages against version anchors and apply increment plans.",
-    // Cargo subcommands are versioned by the crate that ships them, and a
-    // `--version` flag here would report this binary's own version as if it
-    // were a property of the workspace being planned.
-    disable_version_flag = true
+    // The implementation partition and application share an exact release version.
+    // Installation checks identify that executable, independently of a consumer workspace.
+    version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -430,6 +429,24 @@ mod tests {
         match cli.into_input() {
             RunInput::Check { .. } => {}
             other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_identifies_the_application_without_a_workspace() {
+        let cases: &[&[&str]] = &[
+            &["cargo-release-plan", "--version"],
+            &["cargo-release-plan", "-V"],
+            &["cargo-release-plan", "release-plan", "--version"],
+            &["cargo-release-plan", "release-plan", "-V"],
+        ];
+        for args in cases {
+            let exit = Cli::from_args_os(args.iter().copied()).unwrap_err();
+            assert!(exit.status.is_ok());
+            assert_eq!(
+                exit.output.trim(),
+                format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
+            );
         }
     }
 }

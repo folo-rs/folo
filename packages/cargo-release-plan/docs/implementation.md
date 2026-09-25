@@ -37,6 +37,11 @@ build the work-tree model, `git` owns repository facts, `anchor` resolves releas
 history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
+Executable identity is handled by CLI parsing before workspace acquisition.
+The implementation partition's compiled package version identifies the application
+because their exact dependency keeps the release versions equal. Installation
+checks do not need to inspect a consumer repository to identify the executable.
+
 Artifact-only planning shares the report producer's serde model. Report loading
 validates the schema and cross-package identities before consumers build dependency
 graphs or version targets. Analysis ordering follows recorded dependencies rather

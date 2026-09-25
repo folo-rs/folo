@@ -7,6 +7,8 @@
 use std::fs;
 use std::process::{Command, Output};
 
+use tempfile::TempDir;
+
 use crate::fixture::{Fixture, write_package};
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary; Miri cannot emulate that.
@@ -23,6 +25,25 @@ fn cargo_injected_subcommand_is_stripped() {
     let output = release_plan(&["release-plan", "--help"], None);
     assert!(output.status.success());
     assert!(stdout(&output).contains("Usage"));
+}
+
+#[cfg_attr(miri, ignore = "Spawns the compiled application in an empty directory")]
+#[test]
+fn version_reports_the_installed_application_without_a_workspace() {
+    let directory = TempDir::new().unwrap();
+    for args in [&["--version"][..], &["release-plan", "--version"][..]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args(args)
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).is_empty());
+        assert_eq!(
+            stdout(&output).trim(),
+            format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
+        );
+    }
 }
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary; Miri cannot emulate that.
