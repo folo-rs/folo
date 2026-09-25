@@ -8,18 +8,78 @@ supplies evidence for choosing increments, applies the complete version decision
 before merge, and publishes the resulting crates, GitHub releases and prebuilt
 binaries afterward.
 
-The installed application owns this process end to end. Version assessment,
-publication eligibility, registry reconciliation, tag selection and binary
-publication share one release model, not separately configured release tools.
-A reusable GitHub Action and workflows expose the same operations to other
-repositories without requiring a Folo checkout or repository-local release scripts.
+The application supplies the mechanical operations throughout this process.
+People still judge compatibility and approve changes; workflows supply execution
+and permissions. Version validation and publication share one release model,
+not separately configured release tools. A reusable GitHub Action and workflows
+expose these operations to other repositories without requiring a Folo checkout
+or repository-local release scripts.
 
-## Release lifecycle and scope
+This document describes the behavior of the product and how its participants
+fit together. The public user guide teaches adoption and operation; the
+implementation guide describes internal construction.
 
-Version assessment compares package content against release-branch history. A
-package's **anchor** is the commit on that history that introduced its declared
-release version. **Released content** means the content relevant to consumers of
-the Cargo package, including an installable binary's locked dependencies.
+## The release process
+
+### From a source change to a delivered release
+
+**Released content** means the content relevant to consumers of the Cargo package,
+including an installable binary's locked dependencies. Not every repository edit
+changes released content.
+
+A **version assessment** establishes which released content changed and whether
+the declared versions cover those changes. It uses a **release baseline**: a
+frozen commit identifying the release-branch history available to the assessment.
+Within that history, each package has its own **anchor**, the newest first-parent
+commit that changed its parsed version. The anchor supplies the package's
+comparison version and content. The baseline selects history; the anchor selects
+the package-specific comparison point.
+
+A **semantic decision** judges the significance of the changed consumer contract:
+`breaking`, `nonbreaking` or `patch`. A **version plan** translates those decisions
+into package versions, including required group and dependency effects. The
+resulting resolved plan fixes the manifest and lockfile edits to apply.
+
+The process connects these concepts as follows:
+
+1. Prepare the intended dependency resolution and collect an assessment against
+   one fixed baseline. Review source changes, inherited inputs, dependency effects
+   and external compatibility-check results.
+2. Choose semantic decisions, generate a version plan and preview its complete
+   effects. Assess additional effects exposed by preview before applying the
+   captured result.
+3. Review and merge the source changes together with their version changes.
+   Automated merge checks verify version readiness and supported compatibility
+   requirements; human review supplies the approval.
+4. Prepare a publication manifest from the clean, merged source. This manifest
+   fixes which package versions to deliver, not which versions to choose.
+5. Reconcile crates.io, then package tags and binary releases, then native binary
+   assets. Each phase observes remote state and completes missing work.
+
+For example, adding a compatible operation to a library calls for a `nonbreaking`
+semantic decision. The tool determines the appropriate version movement and
+propagates any related manifest or binary-lockfile effects. After review and merge,
+publication delivers those declared versions without reconsidering the decision.
+
+### Responsibilities
+
+| Participant | Responsibility |
+| --- | --- |
+| Maintainer or authoring agent | Understand the package's promises, judge behavioral and semantic compatibility, and explain the chosen levels. |
+| `cargo-release-plan` | Collect released-content evidence; validate version rules; compute and apply mechanical plan effects; validate publication inputs; reconcile and publish the chosen versions. |
+| External compatibility checker | Supply evidence about the API changes it can detect. `cargo-semver-checks` checks supported Rust library contracts; it does not cover every behavioral, CLI or data-format promise. |
+| `increment-versions` skill | Guide the authoring agent through evidence collection, semantic decisions, preview, application and verification. It uses the tool's operations rather than implementing another version resolver. |
+| Reviewer and repository merge policy | Approve the complete contribution and require its automated checks. Completing the skill is not approval to merge or publish. |
+| GitHub Action and reusable workflows | Install the selected tools, select event-specific inputs, provide jobs and permissions, transport artifacts and expose outcomes. They do not independently choose package versions or release policy. |
+| Cargo | Resolve dependencies when explicitly requested, construct and verify crate archives, and perform workspace registry uploads with Cargo's dependency-ordering semantics. |
+
+Thus "the tool does not infer API compatibility" describes the semantic boundary,
+not an absence of compatibility support. Selecting packages to compare, invoking
+an external checker in an explicit compatibility operation, and enforcing effects
+of an already-known breaking version are mechanical operations. Deciding whether
+an undocumented behavior change breaks a promise remains the author's task.
+
+### Version state is not publication state
 
 * **Pending release** means the declared version is greater than its anchor's
   version, or the package is preparing its first release.
@@ -27,19 +87,31 @@ the Cargo package, including an installable binary's locked dependencies.
   version beyond its anchor.
 * **Unchanged** means released content and version still match the anchor.
 
-These are version-assessment states, not observations of crates.io. A merged
-version can be unchanged against its anchor while its registry upload or binary
-publication is incomplete. Publication separately reconciles the versions declared
-in the validated source with the registry and GitHub.
+These states answer a pre-merge question: does this source have the version
+movement required by release history? They do not answer whether an upload
+succeeded. For example, after version `1.5.0` merges, that merge can be the new
+anchor. Assessing the merged source reports `unchanged` even if its crates.io
+upload is still waiting or failed.
 
-An **increment level** describes the compatibility significance of a change:
-`patch` for compatible corrections, `minor` for compatible additions, and `major`
-for breaking changes. An exact target version can be chosen instead when these
-levels do not express the intended release.
+Publication answers the separate delivery question by checking exact versions and
+assets remotely. It includes all publishable packages declared in the validated
+source, not only the assessment's pending-release subset.
+
+Semantic decisions are distinct from numeric **increment levels** (`patch`,
+`minor`, `major`). For stable versions, `nonbreaking` normally requires a minor
+increment and `breaking` a major increment. Pre-1.0 compatibility rules and
+already sufficient pending increments affect that translation. An exact target
+version can be chosen when numeric increments do not express the intended release.
+For example, a `nonbreaking` decision for `0.4.2` can require a numeric `patch`
+increment to `0.4.3`. The artifact reference distinguishes semantic
+`changes[].level` from numeric `increments[].level`; the shared field name does
+not make the vocabularies interchangeable.
 
 Version choices belong before merge. Publication never chooses another version,
 repairs a manifest or refreshes the committed dependency resolution. Preparation
 of a publication is an automatic execution step, not a second human release gate.
+
+### Scope
 
 The supported publication path is Cargo workspaces following this version model,
 crates.io through Trusted Publishing, and GitHub tags, releases and native binary
@@ -59,10 +131,10 @@ determines which delivery operations remain, not which versions are valid.
 
 ### One baseline, one anchor per package
 
-Every package is assessed against the same **release baseline**: the current tip
-of the release branch. Each package has its own **anchor** within that baseline's
-history, identifying the commit that last introduced its declared release
-version.
+Every package is assessed using the same frozen release baseline, normally the
+freshly fetched release-branch tip. Each package has its own anchor within that
+history. Fixing the baseline prevents unrelated packages from being assessed
+against different views of release history within one plan.
 
 ### Published artifacts decide relevance
 
@@ -75,11 +147,12 @@ contents release-relevant.
 
 ### Evidence and judgement stay separate
 
-The tool determines whether an increment is required and records the evidence.
-It does not infer API compatibility. A maintainer or automation with knowledge of
-the package's promises chooses semantic increment levels. Proposal generation
-completes their mechanical version effects from captured evidence. Resolution
-preview exposes additional dependency-resolution effects before application.
+Released-content analysis determines whether an increment is required and records
+the evidence. The author chooses semantic decisions using that evidence and
+external compatibility results. Proposal generation completes their mechanical
+version effects; resolution preview exposes additional dependency-resolution
+effects before application. A minimum imposed by a tool is not a complete semantic
+assessment.
 
 ### Consumer contracts
 
@@ -101,12 +174,20 @@ failure mode rather than its frequency: a package wrongly treated as public
 produces a finding a maintainer can act on, while one wrongly treated as private
 produces nothing at all. A malformed declaration is an error for the same reason.
 
-This bears on API-compatibility assessment, which is a consumer of the report
-rather than part of it. Assessing an implementation partition directly would
+This declaration selects evidence for the external compatibility checker; it
+does not ask `cargo-release-plan` to infer whether an API changed.
+`semver-targets` reads the report's consumer-contract flags and chooses the public
+library contracts that need comparison. Assessing an implementation partition directly would
 measure a surface no consumer can reach, and demand version increases of the
-public package for changes its consumers cannot observe. Assessing the public
-package instead loses nothing, because a re-exported item appears in the public
-package's own documented API.
+public package for changes its consumers cannot observe. A re-exported item
+appears in the public package's own documented API and is compared there.
+
+For example, if `widget_impl` and `widget` share a version group and only
+`widget_impl` declares `private-api = true`, an implementation change selects
+`widget` for library API comparison. Both packages still participate in
+released-content assessment and version alignment. The author separately judges
+behavioral effects; a package with no library target can still have a breaking CLI
+change that a Rust API checker cannot detect.
 
 ### Public dependencies
 
@@ -149,13 +230,15 @@ corrected by editing the requirement, not by incrementing anything.
 
 ### The release decision is offline and reproducible
 
-The normal assessment path uses only repository history, the work tree, and
+The normal released-content assessment path uses only repository history, the work tree, and
 `cargo metadata --no-deps`. It never contacts a registry, resolves the full
 dependency graph, or compiles packages. The same inputs therefore produce the
-same release decision without network or build-cache state.
+same classification without network or build-cache state.
 
-Online publication is an explicit command family. Its network access, credentials
-and Cargo builds do not become prerequisites of ordinary version assessment.
+Compatibility checking is a separate, explicit operation: its checker can compile
+packages and retrieve a published comparison version. Online publication is also
+an explicit command family. Neither becomes a prerequisite of ordinary offline
+`report` or `check`.
 
 ### Publication reconciles immutable intent
 
@@ -220,9 +303,11 @@ visible without reading the raw log.
 
 With publication configuration supplied through `--config`, `check` also validates
 publication inputs: target selection, the single-binary requirement and
-`cargo-binstall` metadata. This remains an offline check. The GitHub integration's
-merge gate supplies that configuration explicitly and treats a missing file as an
-error; ordinary assessment without it retains its version-checking scope.
+`cargo-binstall` metadata. This remains an offline check. The standard reusable
+check workflow supplies that configuration explicitly and treats a missing file
+as an error; ordinary assessment without it retains its version-checking scope.
+The lower composite exposes version readiness separately, so a repository can
+keep a deliberately narrower merge-queue check without weakening its full PR gate.
 
 `check --verify-packaging` audits the tool's artifact model against
 `cargo package --list`. It warns when Cargo and the tool select different paths
@@ -283,6 +368,34 @@ These mechanical requirements do not replace semantic judgement.
 The proposal is based on the report's declared versions and release anchors.
 Preview remains responsible for resolving prospective manifests and lockfiles;
 its additional evidence can require a fresh semantic decision.
+
+### Collect external compatibility evidence
+
+`check-compatibility` consumes either report evidence or a resolved plan's retained
+prospective workspace. It uses the report-selected consumer contracts and runs
+the supported external API checker. The operation records comparison inputs,
+checker identity, findings and diagnostics; it does not replace the author's
+semantic decisions.
+
+A self-comparison canary checks that the installed checker can perform a comparison
+before its evidence is relied upon. Findings, a valid empty target set and an
+execution failure remain distinct outcomes. Missing or incomplete comparison
+evidence is never reported as compatibility. When checking a preview, the tool
+verifies that evidence collection left its captured source and resolution intact.
+The shared workflow uses the result to enforce supported API compatibility;
+the skill uses it as a floor while assessing the complete contract.
+
+### Check first-publication prerequisites
+
+`check-published` is an explicit registry-read operation, separate from offline
+plan inspection. For a resolved plan, it validates the complete target set and
+checks whether its publishable packages are established on crates.io. Alignment-only
+helpers require no registry observation. Never-published packages and indeterminate
+queries block this pre-application gate; neither is silently treated as published.
+
+Workspace-wide discovery provides an early advisory handoff before a plan exists.
+This check does not publish first versions or prove that Trusted Publisher
+registration is configured. Those remain maintainer setup responsibilities.
 
 ### Expand version choices with `expand`
 
@@ -387,15 +500,30 @@ plan, and does not require retaining a pull request's planning artifacts.
 The manifest passes between phases as an artifact. A **platform batch** is the
 set of binary releases one native target must complete. Each phase validates its
 input identity and refreshes the remote state on which its decisions depend.
+Registry and GitHub reconciliation support a read-only `--dry-run` to expose
+current blockers and intended writes without exchanging publication credentials
+or changing remote state. A preview is not a completion receipt; missing tags
+cannot yield authoritative tag-bound build batches until actually established.
 Detailed source, completion and recovery guarantees are in
 [Publication](#publication).
 
 ## The release baseline
 
-The release baseline is the tip of the branch releases are made from. Passing it
-explicitly is most reliable because the caller knows the project's release
-process. It is not necessarily the branch a pull request targets: a stacked pull
-request may target an unreleased parent branch.
+The release baseline answers: **which release-branch history may this assessment
+treat as established version history?** It is one immutable commit, normally
+captured by fetching the release branch and resolving its tip before preparation.
+It is not a registry version, a tag, a merge-base calculation or the source
+checkout being assessed.
+
+The tool searches backward from this boundary to find each package's anchor.
+It then compares that anchor with the assessed work tree. Comparing only the
+baseline's files with the work tree would miss the purpose: accumulated package
+changes and a pending version movement must be judged together against that
+package's anchor.
+
+Passing `--base <commit>` explicitly is most reliable because the caller knows
+the project's release process. Resolve a branch name once for a planning run;
+do not let its movement change the history between report, preview and apply.
 
 Without `--base`, the tool uses the default branch recorded for the `origin`
 remote and falls back to `origin/main` when the remote records none. These are
@@ -408,7 +536,7 @@ The baseline is shared, while anchors differ by package:
 ```text
 release baseline history
 
-A ---- B ---- C ---- D ---- E   <- baseline tip
+A ---- B ---- C ---- D ---- E   <- frozen baseline
        ^           ^
        |           +-- package-beta anchor (version 2.1.0)
        +-------------- package-alpha anchor (version 1.4.0)
@@ -418,10 +546,34 @@ work tree
   package-beta:  compare D -> work tree
 ```
 
-Running on the release branch itself checks the merged source against its version
-anchors; it does not report registry-upload progress. Version assessment also
-supports dirty work trees, so `check` can find a missing increment before the edits
-are committed. Publication instead requires a clean, pinned release snapshot.
+Here both packages use history ending at `E`, but neither uses `E` as its content
+comparison point. If another package changes at `E`, it does not reset either
+of these anchors.
+
+| Context | Baseline and purpose |
+| --- | --- |
+| Local feature branch or ordinary PR | Freeze the actual release-branch tip to assess all accumulated changes, including an increment already present on the feature branch. |
+| Stacked PR | Still use the release branch, not the unreleased parent PR. Otherwise the parent's pending increment could be mistaken for an established release version. |
+| Merge queue | Use the release-branch base commit of the tested queue candidate, keeping the assessment tied to what the queue actually tested. |
+| Merged-source validation and publication preparation | Use the pinned source commit itself as the history boundary. Check its content against its own anchors; do not interpret this as registry-upload progress. |
+
+If the release branch advances during local planning, the skill refreshes the
+assessment before applying. Even an unchanged patch may need a different decision:
+another PR may have consumed the previously proposed version. Captured preparation
+and preview evidence must not be silently reassigned to the new baseline.
+
+Version assessment supports dirty work trees, so `check` can find a missing
+increment before edits are committed. Publication instead requires a clean,
+pinned release snapshot. Its **publication source** identifies the merged files
+whose declared versions are to be delivered. A **tag target** identifies the
+immutable commit a package tag actually names and from which its binaries build.
+The tag target can be a later release-equivalent commit; neither identity replaces
+the baseline used to assess the author's changes.
+
+The external API checker's comparison baseline is a separate input, commonly the
+latest published crate version. That comparison detects supported API changes.
+The release baseline described here selects Git history for version validity;
+using the word "baseline" in both tools does not make those inputs interchangeable.
 
 ## Anchors
 
@@ -649,6 +801,63 @@ preserve addition, deletion, and mode information. Expensive line-level
 comparisons fall back to a whole-file replacement; this changes only the
 presentation, never the release verdict.
 
+### A version-planning example
+
+The following sketches omit schema details and captured file bytes; they
+illustrate roles, not documents to submit to the CLI. A library `widget` and its
+private implementation `widget_impl` form a version group. Both start at `1.4.0`.
+
+```text
+prepared assessment
+  release baseline: E
+  widget:
+    anchor: B, version 1.4.0
+    declared version: 1.4.0
+    status: needs-increment
+    evidence: new public operation
+  widget_impl:
+    anchor: B, version 1.4.0
+    declared version: 1.4.0
+    status: needs-increment
+    evidence: implementation of that operation
+  group: [widget, widget_impl]
+
+analysis order
+  assess widget_impl before widget
+compatibility targets
+  [widget]
+
+author's semantic decisions
+  widget: nonbreaking
+  widget_impl: patch
+
+proposed version plan
+  widget group: version 1.5.0
+
+resolved expanded version plan
+  widget: version 1.5.0
+  widget_impl: version 1.5.0
+  captured inputs: original prepared source and baseline
+  captured edits: both manifests, affected requirements, resolved Cargo.lock
+  prospective evidence: report, patches and retained compatibility workspace
+```
+
+The proposal can name a group once; the expanded artifact names every version
+target. If preview exposes a binary's changed dependency closure, that package
+also appears in the resolved effects and receives semantic assessment before
+application. A nonpublishable group member appears for alignment, not upload.
+
+`prepared.json` binds the original inputs. `report.json` explains their released
+changes. The author's decisions are the semantic input to `propose`.
+`preview/plan.json` captures the complete applicable result; a structural
+`expand` result alone lacks the resolved state. The preview report and external
+compatibility results justify the final choice. Fresh post-application evidence
+verifies it without overwriting the evidence used to make it.
+
+After merge, publication does not consume these local planning files. It reads
+the reviewed versions from the merged repository and creates a different artifact
+for a different purpose.
+
 ## Publication
 
 ### Configuration and eligibility
@@ -684,20 +893,96 @@ subset substitutes for checking crates.io.
 
 ### Publication artifacts
 
-The publication manifest binds the destination repository, release branch,
-repository-relative workspace location, source commit, effective configuration
-and package requests.
-It records the producing tool version and an explicit schema version. Consumers
-validate schema compatibility and the captured source/configuration before remote
-writes; they do not reinterpret the artifact against a moving checkout.
+`prepare-publish` creates the publication manifest once from the validated merged
+source and its committed configuration. It discovers the workspace packages,
+excludes nonpublishable members, and captures every remaining exact version
+request. It also captures binary names, target selection and release-relevant
+source identity needed to validate subsequent operations.
 
-Platform batches additionally bind each package version, executable, target,
-release tag and resolved tag commit. Neither kind of artifact contains credentials
-or runner-specific absolute source paths. Output artifacts remain transportable
-between jobs with different checkout locations.
+The manifest contains the destination repository and release branch,
+repository-relative workspace and package locations, publication source commit,
+effective configuration, package requests, and expected tag/archive identities.
+It records the producing tool version and an explicit schema version. It contains
+neither semantic increment decisions nor mutable "published" flags.
 
-Artifacts record intent and observed outcomes separately. A prior success receipt
-is useful diagnostic evidence, not permission to skip a fresh completeness check.
+**The publication manifest does not change between phases or on retry.**
+Consumers validate schema compatibility and the captured source/configuration
+before remote writes; they do not reinterpret it against a moving checkout.
+Changing the requested versions, source or effective configuration requires a new
+preparation and a distinct manifest.
+
+Each phase produces a separate outcome linked to the input manifest's identity.
+`publish github` additionally produces derived platform batches after resolving
+the actual tag targets. Each batch binds its parent manifest, package versions,
+executables, target, release tags and peeled tag commits. The tag commits are
+not backfilled into the original manifest: they are observations made during
+GitHub reconciliation, possibly after the release branch has advanced.
+
+Neither manifests nor batches contain credentials or runner-specific absolute
+source paths. They remain transportable between jobs with different checkout
+locations. A batch is frozen once emitted; rerunning GitHub reconciliation may
+emit a new batch for the remaining work without editing an earlier one.
+
+These conceptual sketches omit protocol envelopes, content identities and
+ancillary fields; they are not literal input schemas:
+
+```text
+publication manifest P
+  source: M
+  repository: example/widgets
+  release branch: main
+  workspace: .
+  effective configuration: selected native targets and publication settings
+  requests:
+    widget 1.5.0       -> tag widget-v1.5.0
+    widget_impl 1.5.0  -> tag widget_impl-v1.5.0
+    widget-cli 2.0.1   -> tag widget-cli-v2.0.1
+      executable: widget
+      targets: [x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc]
+      assets per target: widget-cli-v2.0.1-{target}.zip and matching .sha256
+
+registry outcome for P
+  widget 1.5.0: already present
+  widget_impl 1.5.0: uploaded and available
+  widget-cli 2.0.1: uploaded and available
+
+GitHub outcome for P
+  package tags: established at verified commits
+  widget-cli release: present
+  Linux asset pair: complete
+  Windows asset pair: incomplete
+
+Windows batch derived from P
+  target: x86_64-pc-windows-msvc
+  widget-cli 2.0.1, executable widget
+  tag: widget-cli-v2.0.1
+  peeled tag commit: N (verified release-equivalent descendant of M)
+  requested assets: Windows ZIP and checksum
+
+binary outcome for the Windows batch
+  widget-cli 2.0.1: both assets uploaded and verified complete
+```
+
+The data flow is:
+
+```text
+merged source + configuration
+  -> prepare-publish -> immutable manifest P
+                         |-> publish registry -> registry outcome
+                         |-> publish github   -> GitHub outcome + frozen batches
+                                                              |
+                                                publish binaries
+                                                              |
+                                                binary outcomes
+```
+
+Registry completion is a prerequisite for GitHub writes; the diagram shows
+artifact consumption, not permission to run those phases concurrently.
+A prior success receipt is diagnostic evidence, not permission to skip a fresh
+completeness check. For example, a missing checksum after a previous successful
+run still requires asset repair. Outcomes describe that attempt; remote state
+determines what remains at the next attempt.
+
 Missing or malformed required artifacts fail the phase rather than imply an empty
 release. A valid empty work set is a successful no-op with an explanation.
 
@@ -844,8 +1129,9 @@ The public `folo-rs/cargo-release-plan-action` repository contains a root
 ships in the monorepo's `cargo-release-plan` package. The Marketplace-listed
 composite and reusable workflows share one action release and tag stream.
 
-The composite's required `command` selects version checking, preparation, registry
-publication, GitHub reconciliation, binary publication or failure reporting.
+The composite's required `command` selects version checking, compatibility
+checking, preparation, registry publication, GitHub reconciliation, binary
+publication or failure reporting.
 Inputs that do not apply to that command are rejected. Substantive selection,
 validation, reconciliation and report composition belong to the installed application;
 PowerShell only bootstraps installation, and YAML supplies orchestration and
@@ -853,8 +1139,10 @@ input/artifact wiring.
 
 Reusable workflows provide the standard read-only merge check and release flow.
 The check workflow resolves the configured release baseline for the tested event,
-including merge-queue candidates, and supplies publication configuration to
-`check`. The release workflow owns the preparation and registry job, subsequent
+including merge-queue candidates, supplies publication configuration to `check`,
+and performs scoped external compatibility checks. Repositories needing a narrower
+version-readiness-only queue gate use the corresponding lower composite operation,
+with the tested queue baseline explicit. The release workflow owns the preparation and registry job, subsequent
 GitHub reconciliation, native binary matrix, artifact handoff and failure
 reporting. Consumers supply their triggers, required permissions, optional
 publishing environment and configuration location.
@@ -902,8 +1190,9 @@ Reporting does not require caller-created labels or message templates.
 
 ### Installation and version selection
 
-The action's release manifest records its own version and the exact
-`cargo-release-plan` version it selects. Action and package versions are independent.
+The action's release manifest records its own version, the exact
+`cargo-release-plan` version it selects, and the supported external compatibility
+checker pin. Action and package versions are independent.
 Consumers select a tested action revision, not a separately overridden tool version.
 All phases of a released workflow use that selection.
 
@@ -948,7 +1237,9 @@ precedes action publication. The action's required installation gate installs
 the actual pinned crates.io package and every promised prebuilt target in isolated
 roots, bypassing installed-binary caches and disabling source fallback when
 checking archives. It verifies executable identity and the command contracts used
-by the action, not merely that some installation succeeded.
+by the action, not merely that some installation succeeded. The external
+compatibility checker has a separate installation and identity check; it is not
+an application archive produced by this project's release pipeline.
 
 Missing package versions or archives block the action release. Source dogfooding
 and a successful registry-only publication cannot substitute for the gate.
@@ -961,5 +1252,42 @@ The action README provides adoption examples; the application's user
 documentation owns the command and automation reference. Maintainer setup covers
 Trusted Publishing, branch protection, action-release checks and Marketplace
 registration without introducing stored cross-repository credentials.
+
+## User guide and reusable skill
+
+The public book teaches the complete process without relying on these internal
+design and implementation documents. It starts with motivation and goals, explains
+version assessment and publication as separate responsibilities, and introduces
+baselines, anchors, semantic decisions, plans and manifests before an integration
+walkthrough. The walkthrough covers repository configuration, local planning,
+Trusted Publishing setup, reusable GitHub workflows, an ordinary release and
+verification of its remote results. Recovery and custom workflow arrangements
+follow the standard path rather than obscuring it.
+
+General release-process guidance belongs in that book. Repository instructions
+select local policy and link to the book instead of maintaining another explanation
+of anchors, compatibility levels or publication recovery. The package README is
+an installation and quick-start entry point; CLI help and machine-format reference
+provide precise interface details.
+
+The `increment-versions` skill is a self-contained directory that a consumer can
+copy into its repository. Its essential instructions and decision guidance travel
+with it. Before preparation or edits, it checks the installed tool's identity
+against its supported interface versions. Commands use the installed application and documented prerequisites,
+not Folo's Just recipes, sibling skills or root scripts. Repository and release
+branch choices come from the selected workspace and explicit configuration, not
+hardcoded Folo identities.
+
+The skill coordinates explicit compatibility evidence collection and publication
+preflight as well as offline planning; those optional external operations do not
+change the offline contract of `report` and `check`. It preserves captured
+evidence, distinguishes operational failure from a compatibility finding, and
+reassesses after relevant source or release-branch movement. Its output explains
+the complete release set for PR review, including retained pending increments,
+group alignment and first-publication handoffs.
+
+Repository-specific follow-up, such as pairing releases with another action
+repository, belongs in repository instructions outside the copied skill. Completion
+does not authorize merging, first publication or release administration.
 
 Internal ownership is documented in the [implementation guide](implementation.md).
