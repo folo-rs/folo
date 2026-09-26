@@ -30,6 +30,9 @@ explicitly abandoned, preserve any remaining local work for the operator and end
 the worker turn. Do not revive
 a released claim, rerun completed checks or start another repair merely to keep
 the session active.
+Reopening an issue after this attempt completed does not renew its claim. A
+recurrence needs a fresh intake admission or explicit operator handoff; leave it
+open for that path rather than closing it because this session's old PR merged.
 
 Read every remaining issue's current discussion, assignees and linked PRs, and
 confirm this session and branch match its plain ownership comment. A claim on the

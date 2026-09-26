@@ -7,6 +7,11 @@ validation nightly. GitHub Actions runs the checks and reports failures. A human
 Copilot App session triages each report into independently actionable issues and
 repairs them through ordinary pull requests.
 
+Every open finding has a path to resolution: an owner with a next action, admission
+by repository intake, a named prerequisite to reconsider, or a specific human
+decision. Completion of a repair attempt and resolution of the current issue are
+separate facts when a finding recurs.
+
 ```text
 Nightly or manual standard + deep checks
               |
@@ -318,15 +323,72 @@ an atomic locking service.
 Post substantive progress, blockers, releases and handoffs, not heartbeats. A
 blocked owner retains the claim. Elapsed time, machine downtime or an idle session
 does not authorize takeover. The owner or a human maintainer must explicitly
-release or transfer work, accounting for unpublished changes before replacing an
-executor. `needs-human` blocks continuation until its stated requirement is
+release or transfer unfinished work, accounting for unpublished changes before
+replacing an executor. `needs-human` blocks continuation until its stated requirement is
 satisfied or evidence or a human correction establishes that it was not a
 blocker. The owner corrects an unsupported blocker in the discussion and removes
 the mistaken label without dismissing separate unresolved human requirements.
 This does not waive checks. To explicitly release a claim, remove the responsible
 assignee and record the release or handoff in discussion without disturbing other
 workers. Issue closure needs no assignment cleanup; assignees on closed issues do
-not indicate ongoing work.
+not indicate ongoing work. Reopening requires the ownership reconciliation below,
+not automatic reuse of the old assignment.
+
+### Reopened finding ownership
+
+A supported post-fix recurrence keeps the issue actionable without reviving the
+completed repair attempt. Triage links the applicable fix and recurrence evidence
+and distinguishes a current claim from a retained assignment. Intake owns
+reconciliation before admission; neither role silently assigns the new work to
+the old executor.
+
+Intake can retire an obsolete **agent** claim when GitHub confirms that the
+applicable merged PR closed the issue before its documented recurrence and
+reopening, native metadata confirms the old executor is inactive, and the complete
+discussion and assignment history show no renewed claim, human ownership or
+outstanding authorization/gate for the current work. A shared account alone proves
+none of these facts. Explicit native archival establishes inactivity; a missing
+executor record or failed lookup does not. Immediately before acting, intake
+refreshes the evidence, records the release with the fix/recurrence links and
+removes only that obsolete assignee. It reuses an existing release note if removal
+is still pending, verifies the resulting state and reconciles ambiguous writes or
+concurrent ownership changes without blindly replaying writes or duplicate notes.
+
+This is not permission to take over unfinished work. Human claims, renewed claims,
+closed-unmerged PRs and uncertain ownership/activity need explicit disposition.
+A merged partial repair with pending acceptance remains unfinished work, not a
+recurrence. For a grouped attempt, all admitted members still require disposition
+before its executor leaves capacity. No local work is deleted, no finished owner
+is woken and no housekeeping confirmation is required.
+
+The open recurrence returns to ordinary oldest-first admission and grouping,
+subject to capacity, blockers and package overlap. Releasing its obsolete claim
+does not authorize a new session outside those limits. Reconciliation runs even
+at capacity or with admissions paused, so completed ownership cannot permanently
+exclude new work.
+
+### Open finding status and next action
+
+Intake accounts for every open finding, independently of how many executors
+consume capacity. Its summary names the issue, current disposition and next
+action or reconsideration condition; findings sharing a disposition may be grouped.
+For an owned wait, name the triggering event and who performs the next action.
+It does not describe reopened issues as finished merely because their old PRs merged,
+or use an assignment as the only explanation for inaction. Completed attempts are
+read only as needed to establish ownership, disposition and capacity, not for
+another check/review pass or a routine historical PR inventory.
+
+A package-overlap wait names the actual packages and live prerequisite. Intake
+reassesses that prerequisite on subsequent invocations; merge, abandonment or
+scope changes require a new eligibility decision, not indefinite reuse of the
+old deferral. Owner-unavailable, ambiguous-claim, circular-dependency and missing
+disposition cases require a specific operator decision when automatic action is
+not authorized. Record substantive blockers on the issue and surface them to the
+operator, using `needs-human` only for genuine human intervention. Do not convert
+normal waiting into a blocker, send duplicate notices, or create timers.
+
+An open run report with `scheduled-finding` remains on the triage path, not repair
+admission. Summaries identify that route so filtering it does not hide open work.
 
 ## Repair and PR completion
 

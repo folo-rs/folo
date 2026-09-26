@@ -1,6 +1,6 @@
 ---
 name: scheduled-intake
-description: Recover unexpectedly stopped scheduled repair sessions and group related unclaimed scheduled-finding issues into at most one new repair session within Local App capacity. Coordinate newly discovered relationships and avoid package overlap except for stable, naturally dependent stacked repairs; existing owners monitor their own PRs.
+description: Keep open scheduled findings actionable by reconciling completed claims on reopened issues, recovering unexpectedly stopped owners and grouping related unclaimed findings into at most one new Local App repair session. Respect capacity, live ownership and package overlap; existing owners monitor their own PRs.
 ---
 
 # Scope
@@ -28,6 +28,9 @@ instructions. Final approval and merge remain human actions.
 Existing repair owners monitor their own PRs. Intake can recover an unexpectedly
 stopped owner under Stage 4, not take over its follow-up. Session and worktree
 housekeeping belongs to the operator and never gates admission.
+Every open finding must have a current owner and next action, an intake admission
+path, or a concrete blocker with a named prerequisite or operator decision. A
+retained assignment alone is not a path to resolution.
 
 # Stage 1: Read GitHub work and locate repair sessions
 
@@ -38,7 +41,7 @@ needed to establish ownership, capacity and package relationships. For example:
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-finding&sort=created&direction=asc&per_page=100" --jq '.[] | select(.pull_request == null) | select(.title | startswith("Scheduled validation failed on ") | not) | [.number, .title, .html_url] | @tsv'
+gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-finding&sort=created&direction=asc&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, .title, .html_url] | @tsv'
 ```
 
 | Placeholder | Value |
@@ -46,8 +49,8 @@ gh api --paginate "repos/{{REPOSITORY}}/issues?state=open&labels=scheduled-findi
 | `REPOSITORY` | This Local project's verified GitHub `owner/repository`. |
 
 Filter out run reports before reading discussion, assignees, branches and linked
-PRs for the remaining findings. Do not mistake an incomplete API read for an empty
-queue. Open issues whose titles start
+PRs for the remaining findings, retaining their numbers for the summary's triage
+route. Do not mistake an incomplete API read for an empty queue. Open issues whose titles start
 with the exact, case-sensitive prefix `Scheduled validation failed on ` belong
 to triage, not this repair queue, even if labeled `scheduled-finding`. Follow
 [run-report recognition](../../../docs/scheduled-validation.md#run-report-recognition).
@@ -61,6 +64,9 @@ Assignment on an open issue records ownership. Respect every live claim. The
 assignee may be shared by several agents: the plain owner/session/branch comment
 distinguishes them. A human-owned issue or PR is not
 automatically yours because it uses the same account.
+For reopened issues, distinguish a claim on the current work from an assignment
+left by a completed attempt. Reconcile the latter under Stage 3 before using
+assignment as an admission blocker; do not automatically resume the old owner.
 
 Use `list_sessions_and_chats`, `get_session` and `get_sessions_status` to locate
 this repository's scheduled repair sessions, including sessions from earlier
@@ -76,6 +82,9 @@ without an executor or create a session for each.
 Apply the completion rules in Stage 3 before investigating an inactive finished
 session further. A retained worktree or stale native PR state is not evidence of
 unfinished repair work when GitHub confirms the PR is merged.
+Read a completed attempt only to establish disposition, capacity or the ownership
+of a reopened finding. Do not review its old checks or treat its merge as resolving
+the recurrence.
 
 Read each incomplete repair's current **Version/release plan**, changed paths and
 substantive owner notes to estimate its edited and version-moving packages.
@@ -132,7 +141,7 @@ does not fix the issue or release its claim. Its owner or the operator must reco
 the disposition and explicitly release or block the claim. Do not silently start
 another attempt.
 
-# Stage 3: Exclude finished inactive sessions
+# Stage 3: Reconcile completed attempts and open findings
 
 Perform this reconciliation before comparing the count with `N`, including on an
 empty queue or when already at capacity. Read each known repair session's current
@@ -148,6 +157,9 @@ running CLI process or open worktree alone does not. A session still executing
 repair work remains counted until it becomes inactive. Do not interrupt it or
 request completion to free capacity. If native activity cannot be established,
 report that specific uncertainty rather than inventing free capacity.
+An explicit native `archived: true` result establishes inactivity because archival
+stops execution. A missing session or failed lookup does not establish archival
+or inactivity.
 
 An inactive repair also leaves capacity after explicit abandonment with its PR
 closed and claim released, or after a documented resolution or explicit
@@ -162,6 +174,69 @@ A merged shared PR accounts for the members it fixes without separate completion
 attestations. A member resolved without that PR needs its own documented
 disposition. Any retained unresolved member not covered by the merged PR keeps
 the session incomplete; closing the primary issue alone does not free its slot.
+
+## Return reopened findings to intake
+
+Excluding a completed executor from capacity does **not** exclude an open issue
+from the backlog. Follow
+[reopened finding ownership](../../../docs/scheduled-validation.md#reopened-finding-ownership).
+For an assignment left by a completed agent repair, require all of the following:
+
+* GitHub confirms the applicable repair merged and closed this issue, followed by
+  a documented post-fix recurrence and reopening.
+* The published agent claim identifies the assigned account and old executor;
+  native metadata establishes that executor is inactive. Reconcile its complete
+  admitted scope before excluding it from capacity.
+* The complete issue discussion and assignment/reopen timeline establish that the
+  assignment belongs only to that completed attempt. No later claim, reassignment,
+  human ownership, unresolved gate or authorized continuation covers the current work.
+
+Read the issue's complete GitHub timeline for assignment and closure transitions:
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+gh api --paginate "repos/{{REPOSITORY}}/issues/{{ISSUE_NUMBER}}/timeline?per_page=100" --jq '.[] | select(.event == "assigned" or .event == "unassigned" or .event == "closed" or .event == "reopened") | {event, created_at, actor: .actor.login, assignee: .assignee.login}'
+```
+
+| Placeholder | Value |
+|---|---|
+| `REPOSITORY` | This Local project's verified GitHub `owner/repository`. |
+| `ISSUE_NUMBER` | The reopened finding whose retained claim is being reconciled. |
+
+Compare these transitions with the applicable merge and published claim/recurrence
+notes. A later same-account assignment also requires reconciliation; a shared login
+does not prove that ownership is unchanged. Incomplete reads or unestablished
+assignment timing require an operator decision, not automatic release.
+
+With that evidence, intake may retire the completed agent claim without waking
+or restoring its executor. Immediately recheck state, discussion, assignment
+history and native activity. Reuse any existing release note for this same
+completed claim and recurrence; otherwise post a short explanation linking the
+merged PR and recurrence, stating that assignment removal is pending. Then remove
+only the verified obsolete assignee. A prior note with an assignee still present
+requires reconciliation and completion of the pending removal, not another note
+or an assumption of success. Preserve all other assignees, issue evidence and
+current claims. Verify the write and reread
+ownership before admission; reconcile ambiguous writes rather than retrying
+blindly. If ownership changes during reconciliation, stop and surface the collision,
+not an unverified release or an attempt to restore assignments automatically.
+
+This is completion reconciliation, not takeover of unfinished work. Do not apply
+it to human claims, closed-unmerged PRs, unknown activity, a merged partial repair
+with outstanding acceptance, or an assignment renewed for the recurrence.
+Ambiguous ownership requires a concrete operator handoff decision, not silent
+exclusion on every intake. Closed findings need no assignment cleanup.
+Account for a retained `needs-human` label's actual requirement as well: preserve
+unresolved gates, and surface any necessary operator cleanup of an obsolete gate
+rather than silently leaving the issue ineligible.
+
+The reopened issue stays open and returns to normal oldest-first grouping,
+capacity and overlap screening. A new executor is a new admission, not automatic
+recovery of the completed one. Perform this reconciliation even at capacity or
+when admission is paused. Record its current admission path or specific overlap
+prerequisite; do not replace the obsolete assignment with an unexplained wait.
 
 # Stage 4: Recover unexpectedly stopped repair sessions
 
@@ -342,6 +417,12 @@ discussion. For a substantive deferral, name the overlapping packages, related
 issue/PR, evidence and condition for reconsideration. Do not claim or assign a
 deferred new issue, add `needs-human` for routine package waiting, or repost
 unchanged reasons. No mandatory schema or coordination registry is needed.
+Reassess the actual prerequisite on each intake. A merged prerequisite whose work
+is no longer executing, a closed-unmerged prerequisite or removed overlap cannot
+remain an unchanged waiting reason. Reconsider admission or identify the concrete
+remaining decision; do not turn changed prerequisites into routine owner reminders.
+Surface circular dependencies or ownership/disposition gaps to the operator with
+the decision needed to unblock them.
 
 ## Create the admitted session
 
@@ -415,9 +496,21 @@ links and context, not a copied local-state payload.
 
 # Stage 6: Finish without a private lifecycle
 
-Report the refreshed incomplete count (or why it cannot be established) and limit,
-finished inactive repairs excluded, the new repair if any, relationship
-notifications, recovery requests and specific admission blockers in the native session.
+Report issue status separately from executor capacity. Account for every open
+finding in a concise list or table, grouping only issues with the same disposition:
+current owner and next action (for waiting work, the triggering event and who acts
+on it); eligible for a later admission under capacity/pacing;
+waiting on a named live prerequisite and reconsideration condition; or blocked on
+a specific operator decision. Run reports bearing the label remain triage work:
+identify that route rather than silently dropping them or admitting a repair.
+If evidence is insufficient, name the missing evidence and needed action. "Assigned",
+"inactive" or "deferred" alone is not an adequate status.
+
+Give the refreshed incomplete-session count (or its uncertainty) and limit,
+new admission, claim releases, relationship notifications and recovery requests.
+Describe completed attempts as excluded from **session capacity**, not as finished
+open issues. Only mention an old PR when needed to explain current ownership or
+a changed capacity decision; do not routinely list historical merged PRs.
 For recovery, report the stopped session and evidence, whether delivery or resumed
 execution was observed, and any uncertainty or operator action; do not equate
 message acceptance with successful repair. Explain package-overlap deferrals,
