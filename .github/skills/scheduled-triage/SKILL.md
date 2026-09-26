@@ -154,6 +154,12 @@ issue. Reopen a fixed issue only for a supported recurrence after the applicable
 fix; a run testing pre-fix code is not a recurrence. Link possible duplicates with
 their uncertainty rather than merging unrelated work. Inform an existing repair
 owner when a changed diagnosis affects their scope; do not silently retarget it.
+When reopening, distinguish the completed attempt from the recurrence in the
+handoff. Link the applicable merged PR and state whether a current owner has
+accepted the new work; do not imply that a retained old assignment is a new claim.
+Leave repair-claim reconciliation to intake under
+[reopened finding ownership](../../../docs/scheduled-validation.md#reopened-finding-ownership).
+Preserve live claims and human gates; do not wake completed executors.
 
 # Stage 3: Publish ordinary problem issues
 

@@ -7,6 +7,11 @@ validation nightly. GitHub Actions runs the checks and reports failures. A human
 Copilot App session triages each report into independently actionable issues and
 repairs them through ordinary pull requests.
 
+Every open finding has a path to resolution: an owner with a next action, admission
+by repository intake, a named prerequisite to reconsider, or a specific human
+decision. Completion of a repair attempt and resolution of the current issue are
+separate facts when a finding recurs.
+
 ```text
 Nightly or manual standard + deep checks
               |
@@ -318,15 +323,105 @@ an atomic locking service.
 Post substantive progress, blockers, releases and handoffs, not heartbeats. A
 blocked owner retains the claim. Elapsed time, machine downtime or an idle session
 does not authorize takeover. The owner or a human maintainer must explicitly
-release or transfer work, accounting for unpublished changes before replacing an
-executor. `needs-human` blocks continuation until its stated requirement is
+release or transfer unfinished work, accounting for unpublished changes before
+replacing an executor. `needs-human` blocks continuation until its stated requirement is
 satisfied or evidence or a human correction establishes that it was not a
 blocker. The owner corrects an unsupported blocker in the discussion and removes
 the mistaken label without dismissing separate unresolved human requirements.
-This does not waive checks. To explicitly release a claim, remove the responsible
+This does not waive checks. To explicitly release unfinished work, remove the responsible
 assignee and record the release or handoff in discussion without disturbing other
 workers. Issue closure needs no assignment cleanup; assignees on closed issues do
-not indicate ongoing work.
+not indicate ongoing work. Reopening requires the ownership reconciliation below,
+not automatic reuse of the old assignment.
+
+### Reopened finding ownership
+
+A supported post-fix recurrence keeps the issue actionable without reviving the
+completed repair attempt. Triage links the applicable fix and recurrence evidence
+and distinguishes a current claim from a retained assignment. Intake owns
+reconciliation before admission; neither role silently assigns the new work to
+the old executor.
+
+Intake can retire an obsolete **agent** claim when GitHub confirms that the
+applicable merged PR closed the issue before its documented recurrence and
+reopening, native metadata confirms the old executor is inactive, and the complete
+discussion and assignment history account for every claim associated with the
+retained assignment as completed, with no live claim, unexplained reassignment,
+human ownership or outstanding authorization/gate for the current work.
+Repeated completed attempts may share one assignment without new assignment
+events. A shared account alone proves none of these facts.
+Explicit native archival establishes inactivity; a missing
+executor record or failed lookup does not. Immediately before acting, intake
+refreshes the evidence and documents the latest completed claim with its ownership
+comment, fix and recurrence links, accounting for earlier claims sharing the
+assignment. It does not remove assignees: separate GitHub
+reads and writes cannot protect a newer same-account claim from that removal.
+Instead, the proven obsolete assignment does not block admission. Every other
+assignment and any newer claim or reassignment still require reconciliation;
+the note never releases current work. Reconciled completed claims are not live
+claims. Intake rereads ownership before admission
+and stops on a collision without changing assignments.
+If a new admission later withdraws, it records its own abandonment in discussion
+without removing an assignee retained from completed work.
+
+This is not permission to take over unfinished work. Human claims, renewed claims,
+closed-unmerged PRs and uncertain ownership/activity need explicit disposition.
+A merged partial repair with pending acceptance remains unfinished work, not a
+recurrence. For a grouped attempt, all admitted members still require disposition
+before its executor leaves capacity. No local work is deleted, no finished owner
+is woken and no housekeeping confirmation is required.
+
+The open recurrence returns to ordinary oldest-first admission and grouping,
+subject to capacity, blockers and package overlap. Reconciling its completed claims
+does not authorize a new session outside those limits. Reconciliation runs even
+at capacity or with admissions paused, so completed ownership cannot permanently
+exclude new work.
+
+### Completed-claim notifications
+
+A completed-claim note begins with `[Copilot speaking]` and carries the visible
+marker `scheduled-intake:completed-claim:<claim-comment-id>:<reopen-event-id>` on
+its own line. The identifiers are the numeric GitHub ID of the latest completed attempt's
+ownership comment and the numeric timeline ID of the issue's latest reopening.
+The marker deduplicates the explanation for that claim and recurrence; it is not
+an ownership claim, lock or eligibility verdict. Current evidence, not the marker,
+determines whether a retained assignment is obsolete.
+
+Read all comment pages and reuse a matching note before posting, refreshing the
+complete discussion immediately before the write. Failed or incomplete reads block
+posting. Read all comments back after a successful or ambiguous write before any
+retry; do not repost when a matching note exists. Concurrent duplicate notes do
+not change ownership or admission priority. This is the collaboration convention
+in [the automation guidelines](automation.md#make-notifications-useful-and-repeatable),
+not an atomic create-if-absent guarantee.
+
+Reuse an unmarked explanation that already identifies the same claim and recurrence
+without editing or duplicating it; a shared account does not identify the authoring
+session. A note promising pending assignment removal does not
+authorize the deletion; reevaluate the evidence using non-destructive reconciliation.
+
+### Open finding status and next action
+
+Intake accounts for every open finding, independently of how many executors
+consume capacity. Its summary names the issue, current disposition and next
+action or reconsideration condition; findings sharing a disposition may be grouped.
+For an owned wait, name the triggering event and who performs the next action.
+It does not describe reopened issues as finished merely because their old PRs merged,
+or use an assignment as the only explanation for inaction. Completed attempts are
+read only as needed to establish ownership, disposition and capacity, not for
+another check/review pass or a routine historical PR inventory.
+
+A package-overlap wait names the actual packages and live prerequisite. Intake
+reassesses that prerequisite on subsequent invocations; merge, abandonment or
+scope changes require a new eligibility decision, not indefinite reuse of the
+old deferral. Owner-unavailable, ambiguous-claim, circular-dependency and missing
+disposition cases require a specific operator decision when automatic action is
+not authorized. Record substantive blockers on the issue and surface them to the
+operator, using `needs-human` only for genuine human intervention. Do not convert
+normal waiting into a blocker, send duplicate notices, or create timers.
+
+An open run report with `scheduled-finding` remains on the triage path, not repair
+admission. Summaries identify that route so filtering it does not hide open work.
 
 ## Repair and PR completion
 
@@ -425,7 +520,9 @@ Every member of a stacked group must fit the same verified prerequisite chain.
 If a companion is ineligible, leave it unclaimed and reassess the remaining group
 rather than bypassing its blocker or unnecessarily deferring independent work.
 
-Only actionable unassigned and unclaimed findings can join a new group. Respect
+Only actionable unclaimed findings can join a new group. They must be unassigned
+or have only retained assignments reconciled under
+[reopened finding ownership](#reopened-finding-ownership). Respect
 `needs-human`, retained claims and competing work. Preserve the agreed scope of
 explicit handoffs. Do not automatically append findings to existing owners or
 combine sessions, branches or PRs; scope changes need an explicit handoff.
