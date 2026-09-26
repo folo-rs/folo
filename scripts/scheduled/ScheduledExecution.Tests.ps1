@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Drives the capture wrapper through real Just, with harmless stand-in recipes. Checker
@@ -108,6 +109,31 @@ Describe 'Shared recipe invocation' {
         Invoke-ScheduledCheck -Check $check -SourceRoot $recipeRoot -OutputDirectory $output -SourceSha $sourceSha |
             Should -Be 1
         Get-Content -LiteralPath (Join-Path $output 'summary.md') -Raw | Should -Match 'Process start canary'
+    }
+
+    It 'does not report success when pipeline interruption bypasses the capture result' {
+        $check = @(Get-ScheduledCheck | Where-Object recipe -EQ 'mutants')[0]
+        $runner = [PowerShell]::Create()
+        try {
+            # Stop only this runspace: pipeline interruption bypasses catch but still runs finally.
+            $null = $runner.AddScript({
+                param($modulePath, $check, $sourceRoot, $outputDirectory, $sourceSha)
+                Import-Module $modulePath -Force
+                & (Get-Module ScheduledExecution) {
+                    function script:Invoke-CapturedProcess {
+                        throw [System.Management.Automation.PipelineStoppedException]::new()
+                    }
+                }
+                Invoke-ScheduledCheck -Check $check -SourceRoot $sourceRoot `
+                    -OutputDirectory $outputDirectory -SourceSha $sourceSha
+            }).AddArgument((Join-Path $PSScriptRoot 'ScheduledExecution.psm1')).
+                AddArgument($check).AddArgument($recipeRoot).AddArgument($output).AddArgument($sourceSha)
+            $null = $runner.Invoke()
+            $runner.InvocationStateInfo.State | Should -Be ([System.Management.Automation.PSInvocationState]::Stopped)
+        } finally { $runner.Dispose() }
+        $summary = Get-Content -LiteralPath (Join-Path $output 'summary.md') -Raw
+        $summary | Should -Match 'Final result: FAILED'
+        $summary | Should -Not -Match 'Final result: PASSED'
     }
 
     It 'rejects source-local output <RelativePath> before starting capture or creating files' -ForEach @(

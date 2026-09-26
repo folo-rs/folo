@@ -196,6 +196,13 @@ source regions across runners rather than assigning consecutive source ranges to
 each shard. The shared recipe applies this to both local and CI runs while
 preserving the 1-based `N/M` shard argument. Unsharded runs select every mutant.
 
+The `mutants` Cargo profile omits debug data and enables incremental compilation.
+Each worker reuses unchanged compiler work within its private source and target
+tree as single-site mutations are applied and reverted. This reduces repeated
+compilation without reusing test verdicts: the baseline and every selected mutant
+still run through the same build and test phases. Build-cost measurements do not
+replace complete selected-mutant accounting or prove a hosted job budget.
+
 ### Coverage status policy
 
 Codecov requires at least 95% coverage for both the overall project and the
