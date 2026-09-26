@@ -17,7 +17,7 @@ After authorized merge, `.github/workflows/release.yml` publishes and reconciles
 the declared versions. Use the book's
 [ordinary release walkthrough](https://folo-rs.github.io/folo/cargo-release-plan/operations/ordinary-release.html)
 and [verification procedure](https://folo-rs.github.io/folo/cargo-release-plan/operations/verification.html).
-Do not run `just gh-release` manually; it is a CI-only publishing entry point.
+Do not invoke mutating publication commands without explicit maintainer authorization.
 
 ## First publish of a new crate
 

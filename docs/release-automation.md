@@ -12,7 +12,7 @@ Keep that filename stable when changing reusable orchestration; it is part of
 the publisher identity. Registry jobs use OIDC, GitHub reconciliation/binary jobs
 use the ambient repository token, and failure reporting needs issue permission.
 
-The workflow implementation and compatibility entry points are described in
+The workflow callers and validation integration are described in
 [the workflow implementation guide](../.github/workflows/implementation.md).
 Source changes to the release tool are exercised from the event checkout; binary
 release sources remain separate immutable tag checkouts.
@@ -56,6 +56,27 @@ branch tip in place of the recorded source.
 Other successfully published packages and archive pairs remain in place.
 The original workflow artifacts are required for ordinary failed-job retry;
 expired evidence needs explicit-source recovery rather than silent rediscovery.
+Dispatch `release.yml` on `main` with `source` set to the original full commit ID
+for that recovery. Leave `source` empty for ordinary releases. The controller
+still builds from the invocation checkout, independently of the release source.
+
+The mutually exclusive `verify-publishing-identity` dispatch exchanges and revokes
+a credential without publishing. Use it only to verify the registered caller,
+not as proof of complete package or archive delivery.
+
+## Cutover authorization
+
+Enabling a publisher revision requires explicit authorization and the shared
+action's completed acceptance gates. Keep the caller pinned to the tested action
+commit; source dogfooding does not replace its published-installation or live
+acceptance evidence. Repository protection and first-publication setup remain
+operator responsibilities.
+
+Retain the outer `release-${{ github.ref }}` concurrency group with non-cancelling
+`queue: max` until all earlier publisher runs, including pending runs and queued
+reruns, have drained or been explicitly handled. The shared workflow's inner
+workspace lock must remain distinct. Inspect those runs before cutover; never
+enable two publisher paths concurrently.
 
 ## First publish of a new crate
 

@@ -67,12 +67,11 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         @($after | Where-Object { $_.file -match $binaryPattern }).Count | Should -Be 0
         @($after.name | Sort-Object) | Should -Be @($libraryMutants.name | Sort-Object)
 
-        $packages = @('cargo-bench-history-stress', 'cargo-release-plan', 'release-binaries', 'release-target-check')
+        $packages = @('cargo-bench-history-stress', 'cargo-release-plan')
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
-            # Release entry points share one implementation; their thin compatibility libraries
-            # intentionally contain no independent policy mutations.
-            $libraryPackage = if ($packageName -cin @('cargo-release-plan', 'release-binaries', 'release-target-check')) {
+            # The release application's supported facade delegates to its implementation partition.
+            $libraryPackage = if ($packageName -ceq 'cargo-release-plan') {
                 'crp_impl'
             } else { $packageName }
             @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0

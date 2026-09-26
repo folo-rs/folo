@@ -19,17 +19,17 @@ slow-timeout = { period = "10s", terminate-after = 6, grace-period = "0s" }
 [test-groups]
 dure-windows-conpty = { max-threads = 1 }
 # Real Git/Cargo cases share one Windows slot across nextest processes. The integration
-# binary also serializes libtest threads. See packages/release-target-check/docs/implementation.md.
-release-target-check-windows = { max-threads = 1 }
+# module also serializes libtest threads. See packages/cargo-release-plan/docs/implementation.md.
+release-candidate-windows = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(dure) & binary(windows)'
 test-group = 'dure-windows-conpty'
 
 [[profile.default.overrides]]
-filter = 'package(release-target-check) & binary(integration)'
+filter = 'package(crp_impl) & binary(boundaries) & test(candidate::)'
 platform = 'cfg(windows)'
-test-group = 'release-target-check-windows'
+test-group = 'release-candidate-windows'
 
 # The one true end-to-end test (packages/cargo-bench-history/tests/cbh_real_engine.rs) runs a
 # real `cargo bench` in an isolated throwaway fixture that must resolve `criterion` from

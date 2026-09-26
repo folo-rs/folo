@@ -13,6 +13,12 @@ Run `cargo test -p crp_impl -p cargo-release-plan --tests` for the combined
 test surface. Mutation testing selects only library unit tests; real external
 acquisition belongs in integration targets.
 
+After moving test modules, run
+`just package="cargo-release-plan crp_impl" coverage-measure` on a supported native
+platform. Each test executable using `coverage(off)` needs its own
+`coverage_attribute` feature gate. Put an exclusion on the module declaration
+or in its source file, not both.
+
 `DepTargets::declares` and `metadata::resolved_member` fall back to filesystem
 canonicalization when lexical member lookup misses. Unit fixtures must supply
 matching lexical member paths; put alias and lookup-miss cases in the boundary

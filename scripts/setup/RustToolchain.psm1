@@ -78,8 +78,7 @@ function Install-RustupToolchain {
     # install is idempotent, so every failure is re-attempted within the bounded backoff; only a
     # genuinely deterministic failure (e.g. a bad channel pin) burns the full window before it
     # surfaces. rustup streams its own diagnostics to the log on each attempt, so throwing just the
-    # exit code keeps the failure legible without buffering that live stream - matching how the
-    # release-plz wrapper reports.
+    # exit code keeps the failure legible without buffering that live stream.
     [CmdletBinding()]
     param(
         [string] $Channel,

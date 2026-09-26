@@ -1,7 +1,8 @@
+use std::any::type_name;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use std::{env, fs, io, thread};
+use std::{env, fmt, fs, io, thread};
 
 use ohno::AppError;
 use tempfile::TempDir;
@@ -15,7 +16,7 @@ use crate::publication::binaries::model::{Asset, Binary, ITEM_MINUTES, InvalidPl
 use crate::publication::binaries::source::{Metadata, executable};
 
 /// Native state belongs to the controller; source worktrees supply only build inputs.
-pub(crate) struct Native {
+pub struct Native {
     controller: PathBuf,
     workspace: PathBuf,
     output: PathBuf,
@@ -29,10 +30,31 @@ pub(crate) struct Native {
     first_in_source: bool,
 }
 
+impl fmt::Debug for Native {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("controller", &self.controller)
+            .field("workspace", &self.workspace)
+            .field("triple", &self.triple)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The upload token is kept separate from the environment supplied to build children.
-pub(crate) struct Github {
+pub struct Github {
     repository: String,
+    executable: PathBuf,
     token: Option<OsString>,
+}
+
+impl fmt::Debug for Github {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Credential material has no diagnostic representation.
+        f.debug_struct(type_name::<Self>())
+            .field("repository", &self.repository)
+            .field("executable", &self.executable)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Retains a directory cleanup failure alongside the original Git cleanup error.
@@ -49,10 +71,26 @@ const QUERY_BUDGET: Duration = Duration::from_secs(300);
 const ITEM_BUDGET: Duration = Duration::from_secs(ITEM_MINUTES as u64 * 60);
 
 impl Github {
-    pub(crate) fn new(repository: String) -> Self {
+    #[must_use]
+    pub fn new(repository: String) -> Self {
+        Self::with_executable(
+            repository,
+            PathBuf::from("gh"),
+            env::var_os("GH_TOKEN").or_else(|| env::var_os("GITHUB_TOKEN")),
+        )
+    }
+
+    /// Supplies an explicit process boundary without changing the calling process environment.
+    #[must_use]
+    pub fn with_executable(
+        repository: String,
+        executable: PathBuf,
+        token: Option<OsString>,
+    ) -> Self {
         Self {
             repository,
-            token: env::var_os("GH_TOKEN").or_else(|| env::var_os("GITHUB_TOKEN")),
+            executable,
+            token,
         }
     }
 
@@ -73,7 +111,13 @@ impl Github {
             .into_iter()
             .collect::<Vec<_>>();
         for attempt in 1..=GITHUB_ATTEMPTS {
-            match capture(OsStr::new("gh"), &arguments, cwd, &environment, deadline) {
+            match capture(
+                self.executable.as_os_str(),
+                &arguments,
+                cwd,
+                &environment,
+                deadline,
+            ) {
                 Ok(output) => return Ok(output),
                 Err(error)
                     if !cancelled()
@@ -116,11 +160,11 @@ impl Github {
 impl Native {
     // Source/cached-target discovery requires filesystem and subprocess integration coverage.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn new(
+    pub fn new(
         controller: PathBuf,
         output: PathBuf,
         triple: String,
-        repository: String,
+        github: Github,
     ) -> Result<Self, AppError> {
         // Standard Win32 paths are required by PowerShell's script authorization/file APIs.
         let controller = dunce::canonicalize(controller)?;
@@ -156,7 +200,7 @@ impl Native {
             output,
             target,
             triple,
-            github: Github::new(repository),
+            github,
             source: None,
             metadata: None,
             staging: None,
@@ -482,6 +526,19 @@ fn deadline_after(budget: Duration) -> Instant {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_debug_retains_context_without_credential_material() {
+        let github = Github::with_executable(
+            "A/B".to_owned(),
+            PathBuf::from("X"),
+            Some(OsString::from("SECRET")),
+        );
+        let rendered = format!("{github:?}");
+        assert!(rendered.contains("A/B"));
+        assert!(rendered.contains("\"X\""));
+        assert!(!rendered.contains("SECRET"));
+    }
 
     #[test]
     fn cleanup_retains_each_failure_and_the_original_source() {

@@ -9,6 +9,8 @@
 //! The suite is split into one topic module per area of behavior over a shared
 //! [`harness`]; this file is the crate root that ties the modules together.
 
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 mod apply;
 mod artifact_commands;
 mod baseline;
@@ -23,6 +25,7 @@ mod harness;
 mod history;
 mod inspect_plan;
 mod lockfile;
+mod native_binaries;
 mod nesting;
 mod packaging;
 mod path_case;

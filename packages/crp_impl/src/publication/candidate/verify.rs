@@ -3,24 +3,23 @@ use std::path::Path;
 
 use ohno::AppError;
 
-use crate::publication::candidate::cli::Cli;
 use crate::publication::candidate::repository::{VerificationError, validate_around};
 use crate::publication::candidate::verification_repository::VerificationRepository;
-use crate::publication::candidate::{Metadata, Repository};
+use crate::publication::candidate::{CandidateRequest, Metadata, Repository};
 use crate::verbose::Verbose;
 use crate::{CheckFormat, RunInput, RunOutcome};
 
 // Only real-system wiring is excluded. The same sequence below runs with in-memory evidence;
 // integration tests cover discovery, subprocesses and the executable connection.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn verify(cli: &Cli) -> Result<String, AppError> {
+pub fn verify(cli: &CandidateRequest) -> Result<String, AppError> {
     verify_using(cli, Repository::discover, |message| {
         Verbose::new(true).note(|| message.to_owned());
     })
 }
 
 pub(crate) fn verify_using<R: VerificationRepository>(
-    cli: &Cli,
+    cli: &CandidateRequest,
     discover: impl FnOnce(&Path, &str) -> Result<R, AppError>,
     mut diagnostic: impl FnMut(&str),
 ) -> Result<String, AppError> {

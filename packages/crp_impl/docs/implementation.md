@@ -1,7 +1,7 @@
 # Release-plan implementation partition
 
 `crp_impl` owns repository and workspace acquisition, release classification,
-artifact planning and application for
+artifact planning, application and publication for
 [`cargo-release-plan`](../../cargo-release-plan/docs/design.md).
 The application's [implementation guide](../../cargo-release-plan/docs/implementation.md)
 describes the shared architecture.
@@ -17,6 +17,12 @@ Cargo and filesystem assertions run in this package's integration targets.
 The shell's executable-connected end-to-end suite stays with its binary so Cargo
 provides the actual executable path; no nested Cargo build or duplicate binary
 is needed by the harness.
+
+Publication owns configuration, immutable intent, candidate verification,
+registry and GitHub reconciliation, native batch execution and attempt reports.
+Candidate and upload process boundaries are covered here; the shell owns
+executable-connected manifest/batch and native no-upload tests. Runner mapping
+and workflow scheduling belong to the reusable action, not to a private CLI.
 
 The explicitly packaged algorithm benchmark selects mimalloc directly through
 a registry-backed development dependency. Other development targets select their

@@ -60,18 +60,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup-environment
-        with:
-          save-build-cache: "true"
       - name: Check package versions
-        shell: pwsh
-        env:
-          RELEASE_PLAN_BASE: ${{ github.event.merge_group.base_sha }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just validate-versions
+        uses: folo-rs/cargo-release-plan-action@ee950a82d73004f5e83f297814e89abcbb0a9562
+        with:
+          command: version-readiness
+          base: ${{ github.event.merge_group.base_sha }}
+          install-method: path
+          source-path: .
 
   required-checks:
     # The ruleset uses the same check name on PR and queue SHAs; neither queue job may skip.

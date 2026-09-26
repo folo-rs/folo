@@ -47,7 +47,6 @@ install-tools:
         "cargo-nextest@$env:CARGO_NEXTEST_VERSION"
         "cargo-semver-checks@$env:CARGO_SEMVER_CHECKS_VERSION"
         "cargo-udeps@$env:CARGO_UDEPS_VERSION"
-        "release-plz@$env:RELEASE_PLZ_VERSION"
     )
 
     # These pins lack publisher archives or a verified discovery layout (cargo-careful's raw

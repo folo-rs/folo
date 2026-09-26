@@ -42,8 +42,8 @@ asking - including as a smoke test of a new Callgrind benchmark.
 We generally prefer using Just commands over raw Cargo commands if there is a
 suitable Just command defined in one of the `*.just` files.
 
-Do **not** execute `just gh-release` — it performs real crates.io publishes and is
-a CI-only entry point (driven by the release workflow); never run it manually.
+Do **not** invoke mutating `cargo release-plan publish` commands without explicit
+publication authorization. Ordinary development and validation do not grant it.
 
 Do **not** use VS Code tasks, relying instead on `just` and, if necessary, `cargo`
 commands.
@@ -312,7 +312,7 @@ validation retain full scope. See
 
 ## Release archive tools
 
-`just install-tools` installs and verifies the ZIP tools used by `release-binaries`
+`just install-tools` installs and verifies the ZIP tools used by `cargo-release-plan`
 and `just release-binary-smoke`; runner images are not assumed to provide them.
 Windows receives the checksum-verified standalone `7za` executable from the pinned
 official 7-Zip extra archive in the Cargo bin directory. Windows ARM64 uses the x64

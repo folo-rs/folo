@@ -776,30 +776,16 @@ file nothing.
 
 Merging reviewed version increments to main publishes their packages to crates.io and
 reconciles GitHub tags, binary releases and cargo-binstall archives. The operational flow
-lives in [`docs/release-automation.md`](../../docs/release-automation.md).
+lives in [`docs/release-automation.md`](../../docs/release-automation.md). Folo consumes
+the shared cargo-release-plan action from an immutable tested revision, building the
+controller from the invocation source rather than requiring its own pending release.
 
 ### Release-equivalent snapshots
 
-A package's version anchor identifies the main commit that introduced its version. It
-remains the comparison baseline for version validation, not a mandatory release-tag target.
-A release tag identifies an immutable main snapshot containing the package's released
-content at that version. A later main commit is equally valid when the package version
-and its release-relevant content remain unchanged.
-
-This follows from the merge gate: released-content changes require a version increment.
-Equivalence uses the same package-content model as that gate, including inherited manifest
-values and an installable binary's locked dependency closure. It does not require identical
-unrelated workspace files, workflow files or build environments, and does not promise
-byte-identical rebuilt binaries. A crate already on crates.io is never republished;
-its recorded source commit can differ from the equivalent snapshot chosen for its
-GitHub release and prebuilt binaries.
-
-GitHub can require workflow-write authority when creating a tag at a historical commit
-whose workflow files differ from main. Actions' ambient token cannot receive that
-permission. Requiring every tag to point at its version anchor would therefore make
-unattended recovery depend on a permission the workflow does not possess. Selecting a
-verified current-main snapshot preserves package identity without adding credentials or
-blocking unrelated merges.
+The application's [release design](../../packages/cargo-release-plan/docs/design.md)
+owns source equivalence, immutable tags and operator recovery. Folo selects `main`
+as its release history and uses only the workflow's existing authority.
+It does not block concurrent merges or acquire stronger tagging credentials.
 
 ### Publication identity verification
 
@@ -816,42 +802,30 @@ Success validates that identity path, not every package-specific publisher grant
 
 ### Publication and recovery
 
-Registry publication and GitHub publication have separate owners. Release-plz publishes
-crates through Trusted Publishing but creates neither tags nor GitHub releases. A shared
-reconciler handles both ordinary GitHub publication and recovery after a partial or manual
-registry publish. Libraries receive tags; publishable binary packages also receive GitHub
-releases and prebuilt assets. Discovery remains package-driven rather than a hardcoded list.
+One shared graph owns registry publication, tag/release reconciliation, native delivery
+and reporting. Folo's caller stays thin, preserving the registered `release.yml`
+filename, canonical repository and main-only gate. The controller comes from the
+invocation checkout; an explicit recovery source selects publication data separately.
 
-The reconciler freezes the package/version requests from the successful registry
-publication's source snapshot. Before creating missing tags, it fetches main, pins its
-commit, and verifies a clean disposable checkout with the release validator. Every requested
-package must still be publishable at exactly the requested version. A version string alone
-does not authorize content that fails the release invariant.
+Release runs queue without cancellation. The caller retains its existing ref-based
+publisher lock while earlier runs drain, with `queue: max`; the shared graph uses
+a different workspace-scoped inner lock covering the entire nested run. Reusing
+the same lock name at both levels would make the caller wait on itself.
 
-Writes use the verified commit ID, never an unchecked moving `main` reference. If tag
-creation fails and main has advanced, a bounded retry selects and verifies a fresh snapshot.
-An unchanged main, failed verification or exhausted retry budget surfaces an error.
-Advancement to a different package version is not permission to relabel that version:
-automatic recovery of a superseded version is not guaranteed.
-
-Existing tags are authoritative and are never moved or overwritten. A missing binary release
-is attached to its existing tag, without asking GitHub to choose another target.
-Binary build jobs receive the tag's resolved commit ID separately from the release name,
-so source checkout remains pinned while assets are uploaded to the correct versioned release.
-Partial successes survive a retry; reconciliation creates only what remains missing.
+Partial reconciliation failures do not suppress valid independent native batches,
+but keep the overall release failed and produce an operator issue. If a concurrent
+version merge prevents automatic tagging, that issue names the missing tag and
+original source. The operator creates only that tag at the recorded source with
+appropriate rights, then retries the original run. Existing tags never move.
+Expired artifacts require explicit-source recovery, not substitution of current main.
 
 ### Platform-grouped binary builds
 
-A platform has one batch job containing its incomplete binary releases. It shares
-environment preparation and compatible Cargo artifacts while preserving separate
-package builds and separate release assets. Each binary retains its own version,
-tag and immutable source commit; batching never combines package feature selection
-or changes which source a release represents.
-
-Recovery refreshes each frozen item's archive/checksum completeness before doing
-build work. Independent failures do not suppress remaining work, and any failed
-required item fails the job. A nonpublishing mode retains source and archive
-verification without release queries or writes.
+The application owns binary batches and the shared action owns native runner mapping.
+Folo's configuration selects supported targets and its package metadata can narrow
+them. Its platform smoke and ordinary coverage exercise the same unified command
+and native execution boundaries; no private compatibility executable defines
+another job protocol.
 
 ## Cache warmup
 

@@ -7,11 +7,10 @@ use ohno::AppError;
 use semver::Version;
 use serde_json::json;
 
-use crate::publication::candidate::Metadata;
-use crate::publication::candidate::cli::Cli;
 use crate::publication::candidate::repository::VerificationError;
 use crate::publication::candidate::verification_repository::VerificationRepository;
 use crate::publication::candidate::verify::verify_using;
+use crate::publication::candidate::{CandidateRequest, Metadata};
 use crate::{CheckFormat, RunInput, RunOutcome};
 
 // Each external operation is bracketed by clean-head checks, even when it fails.
@@ -31,7 +30,7 @@ const SEQUENCE: &[&str] = &[
 
 /// Supplies in-memory evidence and records the sequence without running Git, Cargo or filesystem I/O.
 struct Evidence<'a> {
-    cli: &'a Cli,
+    cli: &'a CandidateRequest,
     calls: &'a RefCell<Vec<&'static str>>,
     failures: &'a [usize],
     metadata: &'a [u8],
@@ -133,8 +132,8 @@ struct BoundaryError {
     step: usize,
 }
 
-fn cli(verbose: bool) -> Cli {
-    Cli {
+fn cli(verbose: bool) -> CandidateRequest {
+    CandidateRequest {
         manifest_path: Path::new("requested").join("Cargo.toml"),
         // Distinct opaque IDs detect mixing candidate and release-line responsibilities.
         commit: "candidate".into(),

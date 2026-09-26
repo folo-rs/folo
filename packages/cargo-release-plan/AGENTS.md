@@ -79,8 +79,9 @@ groups", and `docs/implementation.md`, "Workspace snapshots".
 The application owns reusable release behavior; implement it in `crp_impl` and
 document it in the owning design, implementation guide and user book.
 Repository instructions and workflow callers select Folo policy rather than
-reimplementing that behavior. Keep the existing publisher operational until
-the unified tool and action pass their bootstrap and cutover gates.
+reimplementing that behavior. Keep the shared action revision immutable and
+validated. Preserve the registered `release.yml` caller and its publication
+authorization boundary; source-mode checks do not authorize a live release.
 
 Keep both library targets marked `private-api = true` with library documentation
 disabled. Assess the CLI and artifact contracts defined in `docs/design.md`,
