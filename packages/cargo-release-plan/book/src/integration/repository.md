@@ -82,10 +82,14 @@ and verify them. Adopt
 [`cargo-check-external-types`](https://github.com/awslabs/cargo-check-external-types)
 as a required API-validation gate.
 
-Pin the checker and its matching rustdoc nightly together. This concrete pair
-illustrates that separate pinning:
+Pin the checker and its matching rustdoc nightly together. The revision below
+provides the workspace and multi-target checking required by this gate. Select
+a published release only when it supports those operations; take the matching nightly from its
+`rust-toolchain.toml`, independently of your application's compiler.
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 $ExternalTypesRevision = "705a0941997ebeb3bfb1a7f14070ba342f79d879"
 $ExternalTypesNightly = "nightly-2026-03-20"
 rustup toolchain install $ExternalTypesNightly --profile minimal
@@ -161,8 +165,10 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 ```
 
-Binary packages must have one executable buildable with default features, and
-their repository and binstall layout must match publication configuration.
+Binary packages must declare one executable whose required features are enabled
+by the default feature selection. The offline check validates this metadata, not
+whether compilation succeeds; normal builds and native publication smoke checks
+cover buildability. Repository and binstall layout must match publication configuration.
 Package `release-targets` can narrow the workspace selection:
 
 ```toml

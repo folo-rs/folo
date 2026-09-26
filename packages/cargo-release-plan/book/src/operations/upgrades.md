@@ -16,7 +16,7 @@ workflows. The placeholder is not a claim that an action tag already exists.
 Record:
 
 - The immutable action revision.
-- Its exact `cargo-release-plan` and external checker pins.
+- Its exact `cargo-release-plan` and API compatibility checker (`cargo-semver-checks`) pins.
 - The immutable source revision of the copied skill directory.
 - The source revision of the book used for that combination.
 - Consumer-owned external-type checker/nightly pins and supported API targets.
@@ -44,6 +44,7 @@ retaining an older unsupported command interface.
 5. Copy the complete matching skill directory and record its revision.
 6. Verify OIDC exchange/revocation with the identity probe when the caller or
    publishing environment changes, and confirm package-specific grants separately.
+   Use the permanent release caller's identity-only mode.
 7. Regenerate stale local preparation/report/preview evidence rather than
    editing schema numbers.
 8. Inspect retained publication runs before changing the tool used for retries.
@@ -76,9 +77,9 @@ tests do not establish that a crates.io package exists or that each supported
 archive installs without fallback.
 
 Test source installation and promised native binary installation separately.
-Verify external checker installation independently; the release action does not
-manufacture that external tool's archives. Update the external-type checker and
-its rustdoc nightly together.
+Verify API compatibility checker installation independently; the release action
+does not manufacture that tool's archives. Update the external-type checker
+(`cargo-check-external-types`) and its rustdoc nightly together.
 
 Adding a target requires published tool support, native runner provisioning,
 archive verification and an assessed action/tool release. It is not a consumer

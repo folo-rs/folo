@@ -49,7 +49,7 @@ below its anchor is an error, not another status.
 
 Pending increments remain valid while a contribution develops: all of its
 released content ships under that version. Authors must still reassess whether
-new changes require a greater semantic level. Rerunning planning does not require
+new changes require a stronger semantic decision. Rerunning planning does not require
 another increment when the pending one is sufficient.
 
 Packages with `publish = false` receive no release status, but can participate in
@@ -66,8 +66,8 @@ archive exists. Publication checks exact remote versions and assets separately.
 It therefore considers **every publishable package in its selected source**, not
 only the report's pending-release entries.
 
-The release baseline is also not an external API checker's comparison version.
-A compatibility checker commonly compares against a published crate version.
+The release baseline is also not the API compatibility checker's comparison version.
+That checker commonly compares against a published crate version.
 That is useful API evidence, but it does not select Git history for this model.
 
 ## Select the right baseline

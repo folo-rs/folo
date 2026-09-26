@@ -16,11 +16,12 @@ cargo release-plan release-context [--manifest-path <path>] [--config <path>]
 cargo release-plan check-publishing-identity [--verbose]
 ```
 
-`release-context` loads committed publication configuration and prints
-`repository`, `release_branch`, `release_base`, `head`, `workspace_manifest`,
+`release-context` reads the selected working-tree configuration and prints
+`schema_version` (currently `1`), `repository`, `release_branch`, `release_base`, `head`, `workspace_manifest`,
 `config_path` and `concurrency_group`. It fetches the configured release branch
 unless `--base` supplies the tested baseline explicitly. It accepts dirty source
-and does not prepare a publication manifest.
+and does not require the configuration to match a committed file. In contrast,
+`prepare-publish` requires tracked committed inputs.
 
 `check-publishing-identity` requires GitHub Actions OIDC context but no workspace.
 It exchanges and revokes a short-lived crates.io credential without uploading.
@@ -70,8 +71,9 @@ requests blanket third-party upgrades.
 
 `analysis-order`, `semver-targets` and `propose` operate only on supplied
 artifacts. A report argument can be a JSON file or a directory containing
-`report.json`. They invoke neither Git nor Cargo. The first two print JSON to
-stdout; `propose` writes its plan to `--out` and prints a readable summary.
+`report.json`. They invoke neither Git nor Cargo. `analysis-order` and
+`semver-targets` print JSON to stdout; `propose` writes its plan to `--out` and
+prints a readable summary.
 
 ## Compatibility and publication preflight
 
@@ -84,7 +86,7 @@ cargo release-plan check-published [--plan <resolved-plan.json>]
 ```
 
 `check-compatibility` collects external API evidence without choosing semantic
-levels. Select exactly one source mode:
+decisions. Select exactly one source mode:
 
 - `--prepared` checks the captured original prepared inputs.
 - `--plan` checks a resolved preview's retained workspace.
@@ -164,14 +166,19 @@ Registry publication requires the original captured source. It queries exact
 availability and delegates verification and ordered uploads to Cargo. Automatic
 uploads require Cargo 1.95 or later and the calling workflow's crates.io Trusted
 Publisher registration with GitHub OIDC.
+The Cargo floor supports stable multi-package workspace publication: one
+`cargo publish` invocation accepts repeated `--package` arguments and orders
+dependent uploads. It is separate from the application's compiler requirement;
+revalidate that capability when changing the floor. See
+[Cargo's publish reference](https://doc.rust-lang.org/cargo/commands/cargo-publish.html#package-selection).
 
 Registry `--dry-run` reads availability without exchanging credentials or
 uploading. GitHub `--dry-run` observes tags, releases and assets without writes.
-Neither dry run is a complete publication receipt.
+Neither dry run is a completed publication outcome.
 
 `publish github` verifies registry availability for the complete manifest before
 reconciling package tags and binary releases. It writes an outcome and frozen
-native batches with relative routing paths and stable `batch_id` values.
+platform batches with relative routing paths and stable `batch_id` values.
 Missing-tag failures retain original-source recovery instructions and do not
 suppress independent valid work.
 
@@ -182,7 +189,7 @@ stages that frozen work without querying or writing GitHub, retaining source
 and archive verification.
 
 Every attempt needs new outcome and batch/artifact destinations. Name phase
-receipts `outcome.json` inside separate artifact subdirectories when handing
+outcomes `outcome.json` inside separate artifact subdirectories when handing
 them to the final reporter. The
 [publication walkthrough](../integration/publication.md) shows the complete
 sequence without caller-authored batch JSON.
@@ -204,9 +211,8 @@ The manifest can be omitted when unavailable; the report still runs but cannot
 claim complete delivery. Incomplete publication exits nonzero even when Markdown
 and issue creation succeed. `--no-issue` suppresses GitHub writes only.
 
-Binary receipts must match both publication and batch identity and be at least
-as new as the GitHub reconciliation that requested the work. A stable batch
-identity does not let an older success override newly observed missing assets.
+Retain run/attempt attribution so the reporter can enforce
+[outcome identity and freshness](artifacts.md#derived-batches-and-later-outcomes).
 
 ## Paths and output
 
@@ -217,7 +223,9 @@ explicit configuration-aware acquisition operation; unlike ordinary assessment,
 it fetches the configured branch when no tested `--base` is supplied.
 
 Ordinary artifact arguments resolve from the invocation directory. Publication
-`--config` resolves from the selected workspace. Paths recorded in transported
+relative `--config` paths resolve from the selected workspace; absolute overrides
+are also accepted. Publication requires the selected configuration to be tracked
+inside the repository. Paths recorded in transported
 publication artifacts are repository-relative, not host-absolute paths.
 
 Requested machine output stays separate from diagnostics. `--verbose` writes

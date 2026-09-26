@@ -1,7 +1,11 @@
-# Folo selects the repository and native targets; cargo-release-plan owns release policy.
+# Folo selects the repository, release branch and native targets.
+# cargo-release-plan supplies the shared release model and operations.
 schema-version = 1
 repository = "folo-rs/folo"
 release-branch = "main"
+# Select the supported native targets with provisioned runners.
+# Keep the legacy runner table aligned while it is used by release.yml.
+# Ref: docs/release-automation.md, Target selection; Get-ReleaseTarget in ReleaseAutomation.psm1.
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",

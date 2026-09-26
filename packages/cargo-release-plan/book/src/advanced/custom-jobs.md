@@ -79,7 +79,8 @@ remains the policy source.
 | Prepared source and prospective workspace | Bind semantic evidence and the exact plan application. |
 | Publication source | Fix the merged source and declared versions to deliver. |
 | Peeled tag commit | Fix the source actually used to build one binary release. |
-| Action/controller revision | Fix the implementation executing the workflow. |
+| Action revision | Fix the reusable workflow implementation and its released tool pins. |
+| Controller source in path installation | Select the application built from the invocation checkout. |
 
 Do not substitute one for another. In particular, a source checkout's
 `rust-toolchain.toml` must not accidentally select an incompatible compiler for

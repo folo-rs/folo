@@ -8,9 +8,9 @@ The standard reusable flow is
 `folo-rs/cargo-release-plan-action/.github/workflows/release.yml`.
 Select a tested published action release and replace `ACTION_REVISION` with the
 same verified immutable commit used for [release checks](github-checks.md).
-Keep registry, GitHub reconciliation, native batches and reporting in the same
-workflow run. Tags or releases created using GitHub's ambient token do not
-reliably start a second workflow.
+Keep registry, GitHub reconciliation, platform batches and reporting in the same
+workflow run. Tag and release events created using the workflow's `GITHUB_TOKEN`
+do not trigger downstream workflows.
 
 ## Add the release caller
 
@@ -28,24 +28,32 @@ on:
         description: Optional original release-source commit for explicit recovery
         type: string
         default: ''
+      verify-publishing-identity:
+        description: Verify OIDC exchange and revocation without publication
+        type: boolean
+        default: false
 
-permissions:
-  contents: write
-  actions: read
-  id-token: write
-  issues: write
+permissions: {}
 
 jobs:
   release:
-    if: github.repository == 'example/widgets'
+    if: github.repository == 'example/widgets' && !inputs.verify-publishing-identity
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      issues: write
     uses: folo-rs/cargo-release-plan-action/.github/workflows/release.yml@ACTION_REVISION
     with:
-      working-directory: .
-      config: .cargo/release_plan.toml
-      install-method: binstall
-      source-path: .
-      publishing-environment: ''
       source: ${{ inputs.source }}
+
+  identity:
+    if: github.repository == 'example/widgets' && github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@ACTION_REVISION
 ```
 
 Replace `example/widgets` and the example `main` branch with the configuration
@@ -53,17 +61,25 @@ for your repository. The shared flow also validates the destination and release
 branch before writes. The caller grants the scopes the flow needs; individual
 jobs narrow them.
 
-The inputs above show the defaults. Set `publishing-environment` to a protected
-GitHub environment when required, and register that same environment with
-crates.io. Released installation does not need tool source at `source-path`;
-that input matters only for explicit `install-method: path`.
+Omitted inputs use the [shared workflow defaults](../advanced/custom-jobs.md#shared-workflow-inputs).
+For a protected environment, add the same setting to both jobs and register that
+environment with crates.io:
+
+```yaml
+with:
+  publishing-environment: release
+```
+
+For source installation, add `install-method: path` and select the tool checkout
+with `source-path`. Released installation does not use `source-path`.
 
 An empty `source` uses the invocation's commit. For explicit recovery, supply the
 full original source SHA; the tool still verifies its release-branch membership.
 This is a new invocation with new evidence, never an automatic fallback when an
 old artifact is missing. The source override selects the release snapshot only.
-In source-install mode, `source-path` continues to select the controller from the
-invocation checkout, so recovering old source does not rebuild an old controller.
+The **controller** is the `cargo-release-plan` executable run by the workflow.
+In source-install mode, `source-path` selects its source from the invocation
+checkout, so recovering old publication source does not rebuild an old controller.
 
 ## Establish publishing identity
 
@@ -97,34 +113,20 @@ against code running under the same account.
 
 ### Verify identity without publishing
 
-The reusable `.github/workflows/identity-probe.yml` checks OIDC exchange and
-revocation without a Cargo workspace or publication. Before enabling the live
-release caller, this is a manual-only alternative for the **same registered
-entry workflow filename**:
+The permanent caller above includes a mutually exclusive identity-only mode.
+Dispatch it through the **same registered entry workflow filename**:
 
-```yaml
-name: Verify publishing identity
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  actions: read
-  id-token: write
-
-jobs:
-  identity:
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@ACTION_REVISION
-    with:
-      install-method: binstall
-      source-path: .
-      publishing-environment: ''
+```powershell
+gh workflow run release.yml --repo example/widgets --ref main `
+    --field verify-publishing-identity=true
 ```
 
-The identity probe has no `working-directory` or `config` input. Use the same
-selected action commit and environment as publication. Moving the probe to a
-differently named caller does not test the production caller identity.
+Run this before enabling routine publication and whenever the registered caller
+or environment changes. The reusable probe checks OIDC exchange and revocation
+without a Cargo workspace or publication; it has no `working-directory` or
+`config` input. It uses the same action commit and environment as publication.
+Do not move the probe to a differently named caller or replace the production file
+to run it.
 
 Its CLI operation is:
 
@@ -164,7 +166,7 @@ intent may reuse the manifest; different intent needs a different destination.
 
 In CI, prepare this manifest once and retain it for every subsequent phase and
 retry. A failed-job rerun downloads original intent rather than regenerating it
-from today's release branch.
+from the current release-branch tip.
 
 ## Inspect registry work without uploading
 
@@ -188,15 +190,16 @@ cargo release-plan publish registry --publication $Publication `
 Use a new outcome path on every attempt. Naming each live phase file
 `outcome.json` inside its own artifact subdirectory lets the final reporter
 discover it. Keep local dry-run and nonpublishing verification output separate
-from those workflow receipts. When the workspace is nested or the source
+from those publication outcomes. When the workspace is nested or the source
 checkout moved between jobs, `--manifest-path` must select the original
 publication-source workspace. Do not substitute a prospective planning workspace
 or later source commit.
 
-Cargo 1.95 or later owns verification, upload dependency ordering and index
-availability. The application verifies packaged binary dependency identities
-against the assessed locked closure. Neither a failed upload command nor an old
-success receipt replaces a fresh exact-version observation.
+The [Cargo runtime requirement](../reference/commands.md#prepare-and-publish-exact-versions)
+supports verification and dependency-ordered workspace uploads. The application
+verifies packaged binary dependency identities against the assessed locked closure.
+Neither a failed upload command nor an old successful outcome replaces a fresh
+exact-version observation.
 
 ## Continue through GitHub and native jobs
 
@@ -218,7 +221,7 @@ cargo release-plan publish github --publication $Publication `
     --output $GithubOutcome --batches $Batches
 ```
 
-The outcome supplies relative paths and `batch_id` values for frozen native
+The outcome supplies relative paths and `batch_id` values for frozen platform
 batches. Both the outcome path and batch directory must be new. For a nested
 workspace, pass `--manifest-path` for the original publication source, just as
 in registry publication.
@@ -265,7 +268,7 @@ cargo release-plan publish binaries --publication $Publication --batch $Batch `
 ```
 
 This mode still verifies source and archives. It does not discover a batch,
-select substitute source or produce a live publication completion receipt.
+select substitute source or produce a completed publication outcome.
 
 ## Report every attempt
 
@@ -304,16 +307,14 @@ still writes a report and failure issue; missing intent is always incomplete,
 never a successful empty release.
 
 Outcomes carry optional `github: {run_id, run_attempt}` metadata when produced in
-GitHub Actions. The reporter selects applicable phase/batch receipts within the
-run. Binary outcomes link both publication and batch identities. An earlier
-successful binary receipt cannot satisfy a later GitHub observation of missing
-assets, **even when the regenerated batch has the same `batch_id`**.
+GitHub Actions. Preserve it so the reporter can enforce
+[outcome identity and freshness](../reference/artifacts.md#derived-batches-and-later-outcomes).
 
 ## Prepare native build environments
 
-The initial native targets are Linux x64 and ARM64, Windows x64 and ARM64, and
-macOS ARM64. Configure the subset your packages support; the action revision owns
-the corresponding runner mapping.
+Configure the subset your packages support from the
+[supported native targets](../reference/configuration.md#workspace-publication-configuration).
+The action revision owns the corresponding runner mapping.
 
 Provide native libraries or other source-build prerequisites through the fixed
 optional `.github/actions/release-plan-setup/action.yml`. It prepares the
@@ -322,7 +323,7 @@ reconciliation jobs, and must not edit captured source.
 
 The action's controller installation, the invocation checkout and each tagged
 binary source are distinct. A historical tag need not contain the current
-controller or today's publication configuration.
+controller or current publication configuration.
 
 ## Queue and retain, without hiding failures
 

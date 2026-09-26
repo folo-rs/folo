@@ -22,15 +22,10 @@ Do not run `just gh-release` manually; it is a CI-only publishing entry point.
 ## First publish of a new crate
 
 Follow the [first-publication guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html):
-maintainer bootstrap happens from the feature branch before its first merge,
-in dependency order. Configure Trusted Publishing for owner `folo-rs`, repository
-`folo`, workflow `release.yml`. The first merge must carry a higher version for the
-second publication, which is the first automated release.
-
-The generic skill reports this handoff but does not perform it. Its
-`check-published` workspace scan is advisory; its resolved-plan check fails closed
-for missing or unavailable registry prerequisites. A package without a Git anchor
-may already have a manually published bootstrap version.
+complete maintainer bootstrap and Trusted Publishing setup before the package's
+first merge. Folo's registration uses owner `folo-rs`, repository `folo`, workflow
+`release.yml`, and any selected publishing environment. The generic skill
+reports this handoff but does not perform it.
 
 ## Recovery and emergency operation
 
@@ -46,7 +41,7 @@ it is not an action performed by the version-planning skill.
 named `required-checks`; individual conditionally selected matrix jobs are not
 ruleset requirements.
 
-Each publishable crate has its Trusted Publisher registration for the caller
-`release.yml`, with any selected protected environment matching that registration.
-The action's separate required installation gate verifies actual published tool
-versions and archives before an action release.
+Each publishable crate completes the [publisher setup](#first-publish-of-a-new-crate).
+The separate required installation gate in
+[`folo-rs/cargo-release-plan-action`](https://github.com/folo-rs/cargo-release-plan-action)
+verifies actual published tool versions and archives before that action is released.

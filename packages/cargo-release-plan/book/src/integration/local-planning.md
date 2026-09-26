@@ -3,7 +3,17 @@
 Local planning is preparation for review, not permission to merge or publish.
 The same workflow works when performed by a maintainer or guided by an agent.
 
-## Copy the matching skill
+## Prerequisites
+
+Use the `cargo-release-plan` `0.4.1` interface, report/plan schema `4` and
+semantic-decision schema `1`, with Git and the selected Cargo/Rust toolchain.
+The API compatibility checker (`cargo-semver-checks`) is required only when
+consumer contracts are selected. Private release repositories also need GitHub
+CLI authentication. Installation or upgrades follow your authorization policy.
+
+For direct CLI planning, continue with [Freeze history and prepare](#freeze-history-and-prepare).
+
+## Optional agent integration
 
 Copy the complete `.github/skills/increment-versions` directory from a known,
 immutable source revision matching your selected tool into the same location
@@ -17,11 +27,7 @@ Read the copied skill's prerequisites and compare its command interface with
 `cargo release-plan --version` and `--help` **before allowing it to edit files**.
 Selecting a newer skill does not upgrade an older executable.
 
-The matching skill supports `cargo-release-plan` `0.4.1`, report/plan schema `4`
-and semantic-decision schema `1`. Git, the selected Cargo/Rust toolchain and
-`cargo-semver-checks` are prerequisites. Private release repositories also need
-GitHub CLI authentication. Installation or upgrades follow your repository's
-authorization policy; the skill does not grant permission to install tools.
+The copied skill does not grant permission to install tools.
 
 Your repository's agent instructions should state its release branch, required
 checks and the expectation to run the skill when released content changes.
@@ -123,7 +129,7 @@ cargo release-plan preview --prepared (Join-Path $Prepared "prepared.json") `
 ## Inspect the prospective release
 
 Read the preview's `report.json`, diffs and complete `plan.json`. Assess new
-dependent or binary lockfile effects and raise semantic levels if necessary,
+dependent or binary lockfile effects and revise semantic decisions if necessary,
 then propose and preview again into fresh destinations.
 
 Inspect the final artifact:

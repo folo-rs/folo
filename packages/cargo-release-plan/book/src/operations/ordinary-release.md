@@ -37,7 +37,7 @@ Include:
 
 - Every group member and ungrouped version target reached by the complete plan.
 - Required dependent releases and requirement rewrites.
-- Semantic reasons, including any level above the external checker's floor.
+- Semantic reasons, including any decision above the API compatibility checker's floor.
 - Pending increments already present before the latest planning run.
 
 Do not invent a consumer-facing change for alignment-only movement. If no

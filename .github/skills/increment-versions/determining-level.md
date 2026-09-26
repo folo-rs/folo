@@ -4,6 +4,9 @@ Use this guide for every publishable package in the release-plan report. The dec
 the complete released change since the package's version anchor, including changes already
 pending release.
 
+The skill's [release model](SKILL.md#release-model) defines the baseline, package
+anchor, semantic decision and resolved plan used here.
+
 ## Evidence to inspect
 
 Read the package entry in `report.json`, its referenced diff when present, the package's
@@ -117,12 +120,12 @@ The group is patch-incremented when exact alignment would rewrite a dependency i
 publishable member that otherwise kept a published version, or when the highest version is not a
 plain SemVer triplet. The tooling chooses the realignment. Judge each publishable member on its
 own released changes and choose no increment when it has none. Do not assess source changes in
-`non_publishable_packages` or assign those alignment-only helpers a semantic change level.
+`non_publishable_packages` or assign those non-publishable version targets a semantic decision.
 
 A publishable package in `report.json.packages` that has no anchor has no Git release baseline
 for this assessment. Do not assign a change level merely because it is new to the release
-branch, and do not infer that it has never reached crates.io. Follow the first-publication path
-in the skill's first-publication handoff: a maintainer manually
+branch, and do not infer that it has never reached crates.io. Follow the
+[first-publication handoff](SKILL.md#first-publication-handoff): a maintainer manually
 publishes its bootstrap version before the first merge and configures Trusted Publishing.
 The first merge must carry a higher version for the second publication, the first automated
 one. Record that bootstrap and intended automated-release version separately from Git anchors;

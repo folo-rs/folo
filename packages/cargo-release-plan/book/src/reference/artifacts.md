@@ -2,7 +2,7 @@
 
 Local planning and post-merge publication serve different purposes and have
 separate schema lifecycles. Use tool-produced evidence where specified; do not
-fabricate captured inputs, identities or outcome receipts.
+fabricate captured inputs, identities or publication outcomes.
 
 ## Local decisions and plans
 
@@ -94,6 +94,7 @@ accept a detached report. This leaves the report/plan schema unchanged.
 
 | Field | Meaning |
 | --- | --- |
+| `schema_version` | Release-context format revision, currently `1`. |
 | `repository` | Configured GitHub `owner/repository`. |
 | `release_branch` | Configured release branch. |
 | `release_base` | Resolved immutable history boundary for this invocation. |
@@ -232,9 +233,9 @@ older batch. Binary outcomes link both the publication and batch identities.
 Phase outcomes include optional `github: {run_id, run_attempt}` metadata, which
 the workflow preserves across artifact transport.
 
-An older successful binary receipt cannot satisfy newer GitHub evidence of
+An older successful binary outcome cannot satisfy newer GitHub evidence of
 missing assets. This remains true when the new batch contains exactly the same
-requests and therefore has the same `batch_id`. Its receipt must be at least
+requests and therefore has the same `batch_id`. Its outcome must be at least
 as new as the selected GitHub reconciliation.
 
 Consume these artifacts through the matching tool/action interface rather than
@@ -262,7 +263,7 @@ or synthesize success from existing assets.
 
 The reporter recursively reads `outcome.json` files beneath `--outcomes`,
 retaining their artifact subdirectories and run/attempt linkage. It compares
-the latest applicable receipts with current job results and the original
+the latest applicable outcomes with current job results and the original
 manifest. Old successes cannot hide failed jobs or newer missing-asset evidence.
 
 `--output` names the new Markdown report. The command can report and file a

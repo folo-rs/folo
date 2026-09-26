@@ -50,7 +50,7 @@ Credentials are acquired per upload after package verification, rather than
 assuming one short-lived credential can cover an entire cold build. There is no
 stored-token or PAT fallback.
 
-## Source, tags and native batches
+## Source, tags and platform batches
 
 The **publication source** is the merged commit whose versions are requested.
 The **tag target** is the actual commit named by a package tag. A later commit
@@ -86,13 +86,12 @@ checksum assets are uploaded. An incomplete pair is repaired together.
 
 Every attempt writes a new outcome. Original manifests and emitted batches
 remain unchanged. Fresh remote observations determine work; a previous success
-receipt does not prove that an asset still exists.
+outcome does not prove that an asset still exists.
 
 GitHub Actions outcomes carry optional run and attempt linkage. The final
 reporter checks phase outcomes and current job results, not only artifact
-identities. If GitHub reconciliation observes missing assets on a later attempt,
-an earlier binary success cannot complete that work even when the regenerated
-batch has an identical `batch_id`.
+identities. The [artifact reference](../reference/artifacts.md#derived-batches-and-later-outcomes)
+defines which retained outcomes can satisfy current work.
 
 A dry run reports observations and intended work, never a completed publication.
 Missing required artifacts are errors, not empty work sets. Successful uploads

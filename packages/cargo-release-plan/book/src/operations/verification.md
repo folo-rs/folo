@@ -21,7 +21,7 @@ unchanged against their merged anchors still do.
 ## Read outcomes correctly
 
 The registry outcome's `publication_id` links it to the manifest. Its
-`dry_run` and `complete` fields distinguish planning from completion; inspect
+`dry_run` and `complete` fields distinguish observation-only attempts from completion; inspect
 per-package states and diagnostics too.
 
 An existing exact version is not uploaded again. A yanked version still exists,
@@ -32,10 +32,9 @@ Outcomes record what one attempt observed. They are not permanent proof of remot
 availability, and a subsequent attempt refreshes observations.
 
 In GitHub Actions, preserve the optional `github.run_id` and
-`github.run_attempt` metadata. Binary receipts must match their publication and
-batch identities and be at least as new as the GitHub reconciliation that
-requested them. An identical `batch_id` does not make an old binary success
-evidence for newly missing assets.
+`github.run_attempt` metadata. Check
+[outcome identity and freshness](../reference/artifacts.md#derived-batches-and-later-outcomes)
+before treating an earlier attempt as evidence for current work.
 
 Use `publish report` with the downloaded `outcome.json` artifact subdirectories
 and current job results to assess the whole run. It still requires GitHub run
@@ -67,24 +66,41 @@ commit; that does not make current branch HEAD the binary source.
 
 ## Inspect the ZIP and checksum
 
-For one selected target, download the pair into a fresh workspace-local directory:
+For the Windows target in this example, download the pair into a fresh
+workspace-local directory:
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 $Stem = "widget-cli-v2.0.1-x86_64-pc-windows-msvc"
 $Destination = Join-Path ".release-plan-work" "verify-windows"
 gh release download $Tag --repo $Repository --pattern "$Stem.*" `
     --dir $Destination
 $Archive = Join-Path $Destination "$Stem.zip"
-Get-FileHash $Archive -Algorithm SHA256
-Get-Content (Join-Path $Destination "$Stem.sha256")
+$Expected = (Get-Content (Join-Path $Destination "$Stem.sha256") -Raw).Split()[0]
+$Actual = (Get-FileHash $Archive -Algorithm SHA256).Hash
+if ($Expected -notmatch '\A[0-9a-fA-F]{64}\z' -or $Actual -ine $Expected) {
+    throw "The archive does not match its SHA-256 sidecar."
+}
 $Contents = Join-Path $Destination "contents"
 Expand-Archive $Archive -DestinationPath $Contents
 Get-ChildItem $Contents
 ```
 
-Compare the computed digest with the sidecar. This ZIP should contain
-`widget.exe` at its root; on Unix targets the member is `widget` with executable
-permissions. The package name still controls the tag and asset names.
+The comparison stops before extraction on a mismatch. This Windows ZIP should
+contain `widget.exe` at its root. The package name controls the tag and asset names.
+
+For a Unix-target archive, perform the same digest comparison, then inspect its
+stored mode using a mode-aware tool:
+
+```powershell
+zipinfo -l $Archive
+```
+
+Confirm that the root member is `widget` and its stored mode includes executable
+permissions. Use `unzip` for Unix extraction and installation checks.
+`Expand-Archive` does not preserve the ZIP member's Unix mode and therefore
+cannot verify that part of the contract.
 
 The sidecar supports explicit verification. Do not assume that ordinary
 cargo-binstall installation discovers it automatically or that a checksum proves

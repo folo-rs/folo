@@ -23,19 +23,20 @@ on:
         type: boolean
         default: false
 
-# Never cancel a publish mid-flight: releasing is not safe to interrupt. Keyed on the
-# ref so a later push to main queues behind the in-flight release rather than killing it.
+# Retain pending release commits as well as the running publication.
+# Ref: design.md#publication-and-recovery.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   verify-publishing-identity:
     if: github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity && github.repository == 'folo-rs/folo'
     # Keep the registered caller filename while checking the reusable workflow's OIDC identity.
     # Controller installation runs separately without OIDC. No package upload is performed.
-    # Ref: design.md#publication-identity-verification.
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@e4d98d54c913f41866774670a3e27236ddc1d5dd
+    # Ref: implementation.md#release-publication.
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@ee950a82d73004f5e83f297814e89abcbb0a9562
     with:
       install-method: path
       source-path: .
@@ -188,11 +189,10 @@ jobs:
     steps:
       - name: Checkout release controller
         uses: actions/checkout@v7
-        # Automation comes from the triggering commit; the helper creates distinct tag-pinned
-        # source worktrees, including for historical tags that predate this controller.
+        # The invocation checkout supplies the controller. Missing peeled tag commits are
+        # fetched individually when preparing immutable source worktrees.
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup environment

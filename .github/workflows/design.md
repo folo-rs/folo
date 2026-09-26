@@ -805,13 +805,16 @@ blocking unrelated merges.
 
 A manual `verify-publishing-identity` dispatch on `release.yml` verifies the
 registered caller through the reusable release action. The controller is built
-without OIDC permission and transferred to a separate identity-probe job, which
-exchanges and immediately revokes a temporary crates.io credential. It performs
-no package upload, tag/release write or binary publication.
+without granting installation code publishing identity authority. The probe
+exchanges and immediately revokes a temporary crates.io credential without
+package upload, tag/release writes or binary publication. The
+[implementation guide](implementation.md#release-publication) owns job isolation
+and executable transport.
 
 The probe and normal publication paths are mutually exclusive. Every mutating
 publication job explicitly excludes probe dispatches, including on `main`.
-The caller filename remains the one in the existing Trusted Publisher registration.
+The crates.io Trusted Publisher registration names `.github/workflows/release.yml`
+as the caller.
 Success validates that identity path, not every package-specific publisher grant.
 
 ### Publication and recovery
@@ -821,6 +824,10 @@ crates through Trusted Publishing but creates neither tags nor GitHub releases. 
 reconciler handles both ordinary GitHub publication and recovery after a partial or manual
 registry publish. Libraries receive tags; publishable binary packages also receive GitHub
 releases and prebuilt assets. Discovery remains package-driven rather than a hardcoded list.
+
+Release-triggered runs use non-cancelling queued concurrency to retain pending
+commits as well as the running publication. Hosted queue capacity and external
+cancellation remain operational limits; queuing does not serialize merges.
 
 The reconciler freezes the package/version requests from the successful registry
 publication's source snapshot. Before creating missing tags, it fetches main, pins its
@@ -842,15 +849,15 @@ Partial successes survive a retry; reconciliation creates only what remains miss
 
 ### Platform-grouped binary builds
 
-A platform has one batch job containing its incomplete binary releases. It shares
+Each selected native target triple has one batch job containing its incomplete binary releases. It shares
 environment preparation and compatible Cargo artifacts while preserving separate
 package builds and separate release assets. Each binary retains its own version,
 tag and immutable source commit; batching never combines package feature selection
 or changes which source a release represents.
 
-Recovery refreshes each frozen item's archive/checksum completeness before doing
+Recovery refreshes each binary release's archive/checksum completeness before doing
 build work. Independent failures do not suppress remaining work, and any failed
-required item fails the job. A nonpublishing mode retains source and archive
+binary release fails the job. A nonpublishing mode retains source and archive
 verification without release queries or writes.
 
 ## Cache warmup

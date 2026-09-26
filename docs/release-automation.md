@@ -14,8 +14,8 @@ use the ambient repository token, and failure reporting needs issue permission.
 
 The workflow implementation and compatibility entry points are described in
 [the workflow implementation guide](../.github/workflows/implementation.md).
-Source changes to the release tool are exercised from the event checkout; binary
-release sources remain separate immutable tag checkouts.
+The invocation checkout at the workflow event SHA supplies the release controller;
+binary builds use separate immutable source worktrees at the peeled package-tag commits.
 
 Publication runs are not cancelled when another merge arrives. A failed run
 retains its original requests and is retried rather than replacing them with the
@@ -46,12 +46,11 @@ published tag and asset identities.
 ## Failure recovery
 
 Follow the [recovery guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html).
-The workflow reports incomplete publication with a run-qualified issue. If
-concurrent merges make an older version impossible to tag automatically, its
-issue names the exact missing tag and original publication-source commit.
+The selected publisher's diagnostics and original workflow run identify the
+recovery work. The unified publication report additionally retains the exact
+missing tag and original publication source for superseded-version recovery.
 An operator creates only that missing tag with appropriate rights, then retries
-the original failed workflow. Do not retag an existing release or use today's
-branch tip in place of the recorded source.
+the original failed workflow. Existing tags remain unchanged.
 
 Other successfully published packages and archive pairs remain in place.
 The original workflow artifacts are required for ordinary failed-job retry;
@@ -59,10 +58,8 @@ expired evidence needs explicit-source recovery rather than silent rediscovery.
 
 ## First publish of a new crate
 
-Use the [first-publication procedure](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html)
-before the crate's first merge. Folo's registration is owner `folo-rs`, repository
-`folo`, caller workflow `release.yml`. The first automated release carries a
-version above the manually published bootstrap version.
+Complete the [Folo maintainer handoff](../RELEASING.md#first-publish-of-a-new-crate)
+before the crate's first merge.
 
 ## Tool and action release coordination
 
@@ -71,6 +68,6 @@ promised archive must be available before their corresponding action release.
 Source-mode CI does not replace that installation gate.
 
 Folo's benchmark integration has its own
-[paired-action policy](benchmark-action-releases.md). The release-action bootstrap
-uses the same pinning and publication-order pattern, with its own repository and
-release stream.
+[paired-action policy](benchmark-action-releases.md).
+[`folo-rs/cargo-release-plan-action`](https://github.com/folo-rs/cargo-release-plan-action)
+has its own release stream and exact published-installation gate.

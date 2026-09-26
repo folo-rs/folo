@@ -7,7 +7,7 @@ refresh cannot quietly change the release after its versions have been chosen.
 | --- | --- |
 | Prepared workspace and `prepared.json` | Perform the intended offline workspace resolution and capture the resulting inputs. |
 | `report.json` and `diffs` | Explain changed released content, package status and workspace relationships. |
-| Decisions document | Record the author's semantic levels. |
+| Decisions document | Record the author's semantic decisions. |
 | Proposed plan | Translate those decisions into version choices and required propagation. |
 | Preview | Resolve prospective versions and requirements in a retained disposable workspace. |
 | Resolved expanded `plan.json` | Name every version target and capture its final versions, file edits and original input identity. |

@@ -12,7 +12,7 @@ The author supplies semantic decisions:
 | --- | --- |
 | `breaking` | A change breaks a consumer promise. |
 | `nonbreaking` | A compatible addition extends the consumer contract. |
-| `patch` | A correction or other change needs no stronger semantic level. |
+| `patch` | A correction or other change needs no stronger semantic decision. |
 
 Consumer promises include documented behavior, CLI arguments, data formats,
 feature availability and build requirements, not just Rust function signatures.

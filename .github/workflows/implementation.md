@@ -43,7 +43,7 @@ bootstrap and publisher-first policy as local development. Bootstrap constants a
 through `scripts/utility/Constants.psm1`, also used by the pre-setup benchmark canary.
 See [development tool installation](../../docs/build-and-tooling.md#development-tool-installation).
 
-The Cargo tool cache owns the installed executables and their `.crates.toml`,
+The shared development-tool cache owns Cargo-installed executables and their `.crates.toml`,
 `.crates2.json` and `binstall` metadata, which record installed versions and Git revisions
 so restored tools can be reused or reconciled. It excludes rustup proxies. Its key includes
 the platform, runner image and checked-out commit. The commit covers every tracked
@@ -58,6 +58,11 @@ and upload cost, rather than by treating a cache hit as proof that installation 
 This cache is separate from `rust-cache`, whose binary caching is disabled, so changing
 a tool pin does not discard workspace compilation artifacts. Standalone lint tools and
 Bicep retain their independent caches.
+
+The same cache retains the managed Windows archive executable and its accompanying
+license. Keeping them together preserves the standalone tool's complete installation.
+The source-revision key covers its installer; setup reconciles restored archive
+tools before use.
 
 Book jobs install into a separate Cargo install root and cache that entire root, including
 the binaries and registration metadata, after shared setup. Only book jobs populate this
@@ -376,6 +381,11 @@ They use the same Linux, macOS and Windows matrix as Clippy and minimum-dependen
 including on pull requests. `check-frozen` runs last because it
 rewrites the manifests and lockfile, so later checks cannot accidentally use frozen inputs.
 Each platform proceeds independently rather than waiting for other platforms' Clippy results.
+The matrix also runs `just release-binary-smoke` before minimum-dependency freezing.
+Its independent `release_binary_smoke` selection combines path inputs with Cargo
+impact on the helper. Script-only selection starts the matrix without expanding
+empty Cargo scope into a workspace-wide check. The required-checks fan-in rejects
+a skipped or absent selected platform job.
 The `test-x64` matrix shares its Linux/Windows environment across coverage-instrumented tests,
 benchmark smoke tests and external-type checks. Test or upload failures do not suppress
 benchmark or external-type checks. Coverage reporting consumes successful measurement;
@@ -466,11 +476,11 @@ The workflow invokes `actionlint -color` directly, matching `just validate-workf
 installing Just solely to dispatch that command. Local full setup continues to install these
 same binaries. Keep the command and cache keys aligned when editing these entry points.
 
-The push-to-main and PR benchmark collection queues use GitHub's
+The release and benchmark collection queues use GitHub's
 [`queue: max` concurrency setting](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-queueing-multiple-pending-runs)
 so waiting commits and PRs are retained instead of replacing one another. The pinned actionlint does not
 recognize this key ([upstream issue](https://github.com/rhysd/actionlint/issues/657)).
-`.github/actionlint.yaml` excludes only that exact diagnostic for `bench-history.yml` and `pr-bench-history.yml`;
+`.github/actionlint.yaml` excludes only that exact diagnostic for their named workflow files;
 other concurrency diagnostics and other workflows remain checked.
 
 ## Merge queue validation
@@ -553,18 +563,28 @@ non-Windows validation. The override can be reassessed when
 [cargo-semver-checks issue #1725](https://github.com/obi1kenobi/cargo-semver-checks/issues/1725)
 shortens the generated paths upstream.
 
-## Release publication
+## Release action bootstrap check
 
-The shared development-tool cache retains the managed Windows `7za.exe` and its
-license alongside installed Cargo tools. Its source-revision key includes the
-archive installer and reconciles restored tool versions before use.
+`release-action-identity.yml` checks the source-installed application and separately
+asserts the called action's immutable revision using read-only permissions.
+Its path selection covers the application family, configuration and installation
+inputs. The check, self-revision assertion and production caller's identity probe
+use one tested action commit.
+
+This bootstrap canary accompanies the legacy publisher. The operational cutover
+replaces it with the standard shared check and removes the standalone canary.
+Neither source checking nor the self-revision assertion performs the OIDC probe
+or establishes published-package/archive availability.
+
+## Release publication
 
 `workflow_dispatch` accepts `verify-publishing-identity` for the separate
 exchange/revoke-only path. It calls the pinned reusable identity workflow from
 `release.yml`, preserving crates.io's registered caller filename. The normal
-publisher, tag/binary planning, build matrix and publication alert all explicitly
-exclude that input. The reusable workflow separates read-only installation from
-its OIDC job and transfers the verified executable by artifact identity.
+publication and publication-failure paths all exclude that input.
+The reusable workflow builds the controller in a job without `id-token: write`,
+so installation subprocesses cannot request OIDC credentials. It transfers the
+verified executable by artifact identity to the credential-only probe job.
 
 `release-plz` owns registry publication only. Its committed configuration disables Git
 tag and release creation, so a main-advance race in GitHub publication cannot turn a
@@ -592,33 +612,25 @@ the original diagnostic rather than replacing it.
 
 Missing binary releases use `gh release create --verify-tag` against the established
 reference. Asset planning resolves each tag to a commit and carries `source_sha` in
-each build batch's binary records. Source worktrees consume that immutable SHA; upload consumes the versioned
+each platform batch's binary records. Source worktrees consume that immutable SHA; upload consumes the versioned
 tag name. Existing references are not rewritten to match a newer preferred snapshot.
 See [Release-equivalent snapshots](design.md#release-equivalent-snapshots) for the
 identity contract and credential rationale.
 
 ### Release binary batches
 
-`ReleasePublication.psm1` supplies discovered package/bin identities, target restrictions,
+`ReleasePublication.psm1` supplies discovered package and binary target identities, target restrictions,
 the canonical runner table and resolved tag commits to the private `release-binaries`
 planner. The Rust controller owns asset completeness, grouping and compact JSON output.
-A matrix entry contains `triple`, `os`, `timeout_minutes` and a `binaries` array.
-Planning and in-job refresh share the predicate requiring both assets to be uploaded.
-
-The build job checks out the workflow event SHA with full history and without persistent
-credentials, runs shared setup once and builds the controller there. Exact source worktrees
-use their own toolchain and configuration but a shared absolute controller target directory.
-Cargo builds one package/bin at a time with the tagged lockfile. Native ZIP tools, `sha2`
-and `gh` provide archive, checksum and upload mechanics; `command-group` owns process-tree
-supervision instead of platform-specific release code.
+It emits one platform batch per native target. The build job prepares the controller
+from the invocation checkout without persistent credentials, then executes each
+batch against immutable source worktrees at the peeled package-tag commits.
+Missing source objects are fetched individually; the controller checkout needs no
+unrelated repository history.
 The [package implementation guide](../../packages/release-binaries/docs/implementation.md)
-owns the internal execution boundaries.
-
-`clippy-dev-docs` also runs `just release-binary-smoke` on Linux, macOS and Windows before
-minimum-dependency freezing. The explicit `release_binary_smoke` selection combines path
-inputs with Cargo impact on the helper. Script-only smoke selection starts the job without
-expanding empty Cargo scope into a workspace-wide check. The required-checks fan-in
-reconstructs this selection and rejects a skipped or absent selected platform job.
+owns the protocol, native execution and resource boundaries.
+[Standard validation](#standard-validation-structure) covers the nonpublishing
+source and archive path before release.
 
 ## Merge-blocking result
 

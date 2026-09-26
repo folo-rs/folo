@@ -44,7 +44,7 @@ outside this process.
 | --- | --- |
 | Author or authoring agent | Understand consumer promises and judge breaking, compatible feature and patch changes. |
 | `cargo-release-plan` | Collect release evidence, enforce version relationships, resolve and apply plans, and reconcile publication. |
-| External compatibility checker | Detect the supported Rust API changes it understands; it is evidence, not a complete behavioral assessment. |
+| API compatibility checker (`cargo-semver-checks`) | Detect supported Rust API changes; its result is evidence, not a complete behavioral assessment. |
 | `increment-versions` skill | Guide an agent through the tool's planning operations and explain its decisions. |
 | Reviewer and merge policy | Approve the source and version changes together and require appropriate checks. |
 | Cargo | Resolve dependencies when requested, construct and verify package archives, and order registry uploads. |

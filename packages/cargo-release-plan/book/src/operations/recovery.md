@@ -7,10 +7,10 @@ attempt outcomes while inspecting the failure.
 Successful registry uploads, established tags and complete asset pairs are not
 rolled back. A retry observes them and completes missing work.
 
-Retain phase receipts as separate `outcome.json` artifact subdirectories with
-their GitHub run/attempt metadata. An older successful binary receipt must not
-replace work requested by newer missing-asset observations, even if both batches
-have the same identity.
+Retain phase outcomes as separate `outcome.json` artifact subdirectories with
+their GitHub run/attempt metadata. Apply the
+[outcome freshness rules](../reference/artifacts.md#derived-batches-and-later-outcomes)
+when choosing evidence to reuse.
 
 ## Triage checklist
 
@@ -51,7 +51,7 @@ Workflow queuing does not serialize those merges. The publisher does not relabel
 Instead:
 
 - It skips this release's tag-dependent work.
-- Independent releases and valid native batches continue.
+- Independent releases and valid platform batches continue.
 - The reconciliation phase and workflow remain failed.
 - The failure issue identifies the package/version, exact missing tag, original
   publication source SHA, conflicting branch version when applicable, failure
@@ -69,6 +69,8 @@ report, verify repository identity, and confirm the source contains the requeste
 package/version and release inputs:
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 $Repository = "example/widgets"
 $Tag = "widget-cli-v2.0.1"
 $Source = "<full-original-publication-source-SHA>"
@@ -81,6 +83,8 @@ git ls-remote origin "refs/tags/$Tag" "refs/tags/$Tag^{}"
 Only when the tag is absent locally and remotely, create and push it:
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 git tag --annotate $Tag $Source --message "Release $Tag"
 git push origin "refs/tags/$Tag"
 gh run rerun $RunId --repo $Repository
@@ -92,7 +96,7 @@ unexpected source, stop and investigate its identity rather than replacing it.
 The retry recognizes the valid manually created tag through its existing-tag
 path. It does not repeat the moving-candidate selection used only for missing
 tags. It can create the missing GitHub release and generate the formerly blocked
-native batches, which build from the tag's actual peeled commit. Existing
+platform batches, which build from the tag's actual peeled commit. Existing
 registry versions and completed assets are retained.
 
 A new run against the latest branch tip is not a substitute for completing
@@ -101,7 +105,7 @@ A new run against the latest branch tip is not a substitute for completing
 ## Missing or expired artifacts
 
 A missing manifest or required batch is an error, not an empty release. Do not
-reconstruct a receipt from a later checkout or edit an outcome into success.
+reconstruct an outcome from a later checkout or edit an outcome into success.
 
 The final `publish report` operation still runs when the manifest is unavailable:
 omit `--publication`, retain the available outcomes and current job results, and
@@ -126,7 +130,7 @@ gh workflow run release.yml --repo $Repository --ref $ReleaseBranch --field "sou
 
 Use the caller's release branch for its workflow and controller, while the explicit
 source selects the historical publication snapshot. This does not repoint a tag
-or recreate an old receipt. A normal failed-job retry with intact artifacts remains
+or recreate an old outcome. A normal failed-job retry with intact artifacts remains
 the simpler path after manual tagging.
 
 If that source is unavailable or its artifacts require another schema/tool

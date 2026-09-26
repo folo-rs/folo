@@ -13,9 +13,10 @@ Confirm that the exact package and its promised native archives are published
 before adoption. Source-mode tests are not evidence of published availability,
 and a missing release is not a reason to substitute an older incompatible tool.
 
-The command examples use PowerShell 7.6 or later for native-command error
-handling. `Join-Path` keeps filesystem arguments native on Windows, Linux and
-macOS. Use one installation method:
+The command examples use PowerShell 7.6 or later. Multi-step procedures explicitly
+enable terminating native-command errors; the PowerShell version alone does not
+enable that behavior. `Join-Path` keeps filesystem arguments native on Windows,
+Linux and macOS. Use one installation method:
 
 ```powershell
 $CrpVersion = "0.4.1"
@@ -36,6 +37,8 @@ promised release archive exists.
 Verify the executable you will actually invoke:
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 cargo release-plan --version
 cargo release-plan --help
 ```
@@ -64,7 +67,7 @@ from the compiler needed to build the application. Source verification and tagge
 binary builds must also satisfy the source's own toolchain and native build
 requirements.
 
-The published action pins the application and external checker versions and
+The published action pins the application and API compatibility checker versions and
 prepares their installation separately from consumer builds. Binary sources
 continue to supply their own toolchain, Cargo configuration and lockfile.
 
@@ -78,6 +81,8 @@ version assessment and publication reporting do not require archive tools.
 Run from the Cargo workspace root with Git and Cargo available:
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 git status --short
 cargo metadata --no-deps --format-version 1
 cargo release-plan --version

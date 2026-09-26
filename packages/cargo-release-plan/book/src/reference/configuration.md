@@ -6,8 +6,10 @@ locations and attempt identities are invocation inputs, not persistent policy.
 ## Workspace publication configuration
 
 The default file is `.cargo/release_plan.toml` relative to the selected Cargo
-workspace. `--config` selects another workspace-relative file. A nested workspace
-uses its own root, not the shell's invocation directory.
+workspace. Relative `--config` overrides resolve from that workspace, not the
+shell's invocation directory. Absolute overrides are also accepted. Publication
+requires tracked configuration inside the source repository; it need not be
+inside a nested Cargo workspace.
 
 This is a complete example of the configuration format:
 
@@ -101,8 +103,10 @@ list allows no external exposure. See the
 
 ## Binary metadata and naming
 
-Each publishable binary package has one executable buildable with default
-features. Its Cargo `repository` matches the configured GitHub destination, and
+Each publishable binary package declares one executable whose required features
+are enabled by its default feature selection. The offline metadata check does not
+compile that executable; normal build validation establishes buildability.
+Its Cargo `repository` matches the configured GitHub destination, and
 its binstall metadata describes the standard ZIP layout:
 
 ```toml

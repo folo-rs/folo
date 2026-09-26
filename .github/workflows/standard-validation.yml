@@ -319,6 +319,7 @@ jobs:
 
   # Formatting, dev Clippy, documentation and minimum-dependency compilation share setup.
   # Documentation builds and doctests use the same platform coverage as compilation, including PRs.
+  # Independently selected release-binary smoke coverage can run with Cargo checks skipped.
   # Ref: .github/workflows/implementation.md#standard-validation-structure.
   clippy-dev-docs:
     needs: [prepare]

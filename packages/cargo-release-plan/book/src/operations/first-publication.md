@@ -36,7 +36,7 @@ to the actual new packages. The helper needs no registry account or publisher.
 The manual operation is ordinary Cargo publication, for example:
 
 ```powershell
-cargo publish --package widget_impl
+cargo publish --package widget_impl --registry crates-io
 ```
 
 It belongs to an authorized maintainer, not tests, the local skill or an
@@ -61,7 +61,7 @@ These observations do not verify Trusted Publisher registration. Complete that
 setup explicitly before resuming. The separate `check-publishing-identity`
 OIDC exchange/revocation probe tests the calling workflow identity without
 uploading; it does not establish every package's grant either. A package can lack
-a Git release anchor while its manually published bootstrap version already
+a package anchor while its manually published bootstrap version already
 exists in crates.io.
 
 ## Adopting an already-published workspace

@@ -1,12 +1,22 @@
 name: Release action identity
 
-# Proves the external workflow can resolve its own immutable action source using
-# only the caller run's read permissions, independently of the caller checkout.
-# Ref: packages/cargo-release-plan/docs/design.md#consumption-and-configuration.
+# Source-mode bootstrap checks while release.yml selects the legacy publisher.
+# The standard shared check replaces this canary at operational cutover.
+# Ref: .github/workflows/implementation.md#release-action-bootstrap-check.
 on:
   pull_request:
     paths:
       - .github/workflows/release-action-identity.yml
+      - .github/workflows/release.yml
+      - .github/actions/setup-environment/**
+      - .cargo/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - constants.env
+      - packages/cargo-release-plan/**
+      - packages/crp_*/**
+      - scripts/setup/**
   workflow_dispatch: {}
 
 permissions:
@@ -17,12 +27,12 @@ jobs:
   release-check:
     # Exercise the complete public read-only check graph against Folo source and configuration.
     # Ref: packages/cargo-release-plan/docs/design.md#consumption-and-configuration.
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@512ff6afc7e101f21243b15ed7dbedddc2ac052d
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@ee950a82d73004f5e83f297814e89abcbb0a9562
     with:
       install-method: path
       source-path: .
 
   identity:
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity.yml@512ff6afc7e101f21243b15ed7dbedddc2ac052d
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity.yml@ee950a82d73004f5e83f297814e89abcbb0a9562
     with:
-      expected-sha: 512ff6afc7e101f21243b15ed7dbedddc2ac052d
+      expected-sha: ee950a82d73004f5e83f297814e89abcbb0a9562

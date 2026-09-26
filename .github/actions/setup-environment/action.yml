@@ -194,16 +194,18 @@ runs:
         # runner. env-vars is additive on top of the rust-cache defaults.
         env-vars: ImageVersion
 
-    - name: Cache Cargo tools
-      # Save binary and source installs together with their registration metadata. Exclude
-      # rustup's cargo-* proxies: the runner/toolchain setup, not this cache, owns those.
+    - name: Cache development tools
+      # Save Cargo installs/registration and the managed Windows archive tool together.
+      # Exclude rustup's cargo-* proxies: the runner/toolchain setup owns those.
       # A same-image fallback restores older pins; installation reconciles them before saving.
       # The checkout commit covers every install input without a maintained file-hash list.
       # Workspace compilation remains in the independent Rust cache.
       # Ref: .github/workflows/implementation.md#development-tool-bootstrap-and-caching.
       uses: actions/cache@v6
       with:
-        # Cargo's .crates.* and binstall metadata record installed versions/revisions for reuse.
+        # Cargo metadata records installed versions/revisions. The Windows archive executable
+        # and license remain paired; setup verifies restored tools against their pins.
+        # Both use the source-revision key so installer changes invalidate their cached inputs.
         path: |
           ~/.cargo/bin/cargo-*
           !~/.cargo/bin/cargo-clippy*
