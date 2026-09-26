@@ -46,9 +46,9 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
         $mutantArgs += @('--output', $env:OUTPUT)
     }
 
-    # If the user has overridden `CARGO_TARGET_DIR`, we need to un-override it here because it is
-    # critical that different mutations be emitted into different target directories, otherwise
-    # the mutation test jobs will conflict with each other, running each others' binaries.
+    # Concurrent workers need separate target directories to avoid running each other's binaries.
+    # Successive mutants on one worker reuse that worker's target directory.
+    # Ref: docs/build-and-tooling.md, "Mutation build directories and reuse".
     if ($env:CARGO_TARGET_DIR) {
         $env:CARGO_TARGET_DIR = $null
 
@@ -76,8 +76,8 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
     # Mirror the `just test*` recipes: pre-build the `cargo-bench-history-faker` test-support
     # binary and hand its absolute path to the cargo-bench-history integration tests via
     # CBH_FAKER. Without this, those tests build the faker on demand inside every
-    # mutant's fresh target tree, and under the CPU contention of a full parallel mutation run
-    # that per-mutant build can push an otherwise-fast test past the `--timeout` ceiling and
+    # worker's initially empty target tree, and under the CPU contention of a parallel mutation run
+    # that helper build can push an otherwise-fast test past the `--timeout` ceiling and
     # report a spurious TIMEOUT (issue #349). The faker is excluded from mutation (see
     # Get-MutantsExcludeArgument), so a pre-built binary masks no mutant. Build it before
     # RUSTFLAGS gains `--cfg mutants` below so the artifact matches the one `just test`

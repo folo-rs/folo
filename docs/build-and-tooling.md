@@ -199,11 +199,45 @@ preserving the 1-based `N/M` shard argument. Unsharded runs select every mutant.
 The `mutants` Cargo profile omits debug data and enables incremental compilation.
 After helper preparation, the recipe clears the global `CARGO_INCREMENTAL`
 override supplied by CI so the mutation profile governs worker builds.
-Each worker reuses unchanged compiler work within its private source and target
-tree as single-site mutations are applied and reverted. This reduces repeated
-compilation without reusing test verdicts: the baseline and every selected mutant
-still run through the same build and test phases. Build-cost measurements do not
-replace complete selected-mutant accounting or prove a hosted job budget.
+
+#### Mutation build directories and reuse
+
+cargo-mutants creates one temporary source workspace **per parallel worker, not
+per mutant**. A worker takes successive mutants from the queue, applies one,
+builds and tests it, then reverts the source change before taking another. Its
+workspace and Cargo target directory persist throughout that sequence, so
+successive mutants on the same worker reuse incremental compiler state.
+Concurrent workers have separate target directories; there is no shared target
+directory across workers or with the original checkout.
+
+For the recipe's native builds, each worker uses these paths beneath its temporary
+workspace:
+
+| Purpose | Path |
+|---------|------|
+| Cargo target directory | `target` |
+| Compiled mutation-test artifacts | `target\mutants\deps` |
+| Incremental compiler state | `target\mutants\incremental` |
+
+The workspace itself is
+`<temporary root>\cargo-mutants-<checkout name>-<unique suffix>.tmp`.
+The recipe maps `MUTANTS_TEMP`, when set, to `TMP` for temporary-directory placement;
+otherwise cargo-mutants uses the system temporary location. It clears
+`CARGO_TARGET_DIR` to prevent an inherited shared output path from defeating worker
+isolation. The recipe's `OUTPUT` argument selects diagnostic files, not build outputs.
+
+The baseline runs in a temporary workspace that becomes one worker's workspace.
+Other workers receive independent source copies, excluding the original checkout's
+`target` directory. Temporary workspaces are removed when their workers finish;
+reuse is within a run, not a persistent cache across runs. The upstream
+[worker lifecycle](https://github.com/sourcefrog/cargo-mutants/blob/v27.1.0/src/lab.rs)
+and [workspace copying](https://github.com/sourcefrog/cargo-mutants/blob/v27.1.0/src/copy_tree.rs)
+define this behavior.
+
+Reusing compiler state does not reuse test verdicts: the baseline and every
+selected mutant still undergo the configured build and, when the build succeeds,
+test phases. Build-cost measurements do not replace complete selected-mutant
+accounting or prove a hosted job budget.
 
 ### Coverage status policy
 
