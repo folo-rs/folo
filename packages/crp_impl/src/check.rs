@@ -23,7 +23,7 @@ use crate::{quote_path, short_commit};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "The supported facade permits exhaustive matching on the application's output formats"
+    reason = "Application code and maintainer tests exhaustively match internal output formats"
 )]
 pub enum CheckFormat {
     /// Human-readable lines on stderr when the check fails.

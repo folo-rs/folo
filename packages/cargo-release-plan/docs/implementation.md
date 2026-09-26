@@ -5,12 +5,14 @@ describes the internal boundaries that keep that behavior consistent.
 
 ## Architecture
 
-The binary and library facade are intentionally thin. `main` parses Cargo's injected
-subcommand argument, then delegates to the library `run()` entry used by integration
-tests. The facade explicitly re-exports its supported API from
+The binary and its internal library target are intentionally thin. `main` parses
+Cargo's injected subcommand argument, then delegates to the library `run()` entry used by integration
+tests. The library target re-exports only the required application/test wiring from
 [`crp_impl`](../../crp_impl/docs/implementation.md), which owns the implementation,
 unit tests, implementation-boundary integrations and benchmarks. Both packages
 share an exact dependency and release version.
+Both library targets are marked `private-api = true` and disable library
+documentation; user-facing contracts are the CLI and documented artifacts.
 The selected command drives command-specific paths through shared components:
 
 ```text
@@ -280,7 +282,7 @@ The executable-connected `cargo-release-plan/tests/integration/` suite stays in
 the binary's package: Cargo supplies `CARGO_BIN_EXE_cargo-release-plan` only to that
 package's integration targets. This is the executable-ownership exception to the
 usual implementation-crate test layout, not a second implementation or nested
-build harness. The shell also checks its explicit re-export surface.
+build harness. The shell also checks its internal re-export boundary.
 
 Captured-input decisions use acquired metadata and a read-only per-directory case
 probe. Unit tests supply regular-file, missing-file and error observations, mixed

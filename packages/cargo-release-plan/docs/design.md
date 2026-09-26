@@ -19,6 +19,13 @@ not separately configured release tools. A reusable GitHub Action and workflows
 expose these operations to other repositories without requiring a Folo checkout
 or repository-local release scripts.
 
+The product is a command-line application, not a Rust library API. Its supported
+interfaces are the CLI and documented configuration and artifact formats.
+Library targets in `cargo-release-plan` and `crp_impl` exist only for executable
+wiring and maintainer tests. Changes to those internal Rust types do not by
+themselves require a breaking release; changes to the supported interfaces still
+receive their normal compatibility assessment.
+
 This document describes the behavior of the product and how its participants
 fit together. The public user guide teaches adoption and operation; the
 implementation guide describes internal construction.
@@ -177,6 +184,11 @@ library target presents no contract either way. That direction is chosen for its
 failure mode rather than its frequency: a package wrongly treated as public
 produces a finding a maintainer can act on, while one wrongly treated as private
 produces nothing at all. A malformed declaration is an error for the same reason.
+
+A CLI package whose library target exists only for application and maintainer-test
+wiring declares `private-api = true` as well. Its CLI and artifact contracts still
+receive the normal compatibility assessment; internal Rust visibility does not
+make those types a supported library interface.
 
 This declaration selects evidence for the external compatibility checker; it
 does not ask `cargo-release-plan` to infer whether an API changed.

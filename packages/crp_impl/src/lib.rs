@@ -4,21 +4,21 @@
 #![expect(
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
-    reason = "Maintainer integration tests exhaustively construct and match internal values; the supported facade owns the public API boundary."
+    reason = "Application code and maintainer tests exhaustively construct and match internal values; neither library target defines a supported Rust API."
 )]
 #![expect(
     clippy::module_name_repetitions,
-    reason = "Subject modules namespace implementation operations; only the supported facade provides a flat public API."
+    reason = "Subject modules namespace internal operations; the executable shell re-exports only its required wiring."
 )]
 #![allow(
     missing_docs,
-    reason = "Internal operations are exposed for maintainer integration tests, not as supported API contracts; the cargo-release-plan facade owns public documentation."
+    reason = "Rust operations are internal executable and maintainer-test wiring; supported contracts belong to the CLI and documented artifacts."
 )]
 
 //! Implementation of [`cargo-release-plan`](https://crates.io/crates/cargo-release-plan).
 //!
-//! Do not depend on this crate directly. Use the supported API re-exported by
-//! `cargo-release-plan`; all other items are workspace-internal implementation details.
+//! Do not depend on this crate directly. Use the `cargo-release-plan` command line.
+//! Both packages' Rust interfaces are internal application and maintainer-test wiring.
 
 pub use check::CheckFormat;
 pub use cli::{Cli, EarlyExit};
@@ -26,7 +26,7 @@ pub use errors::*;
 pub use run::{RunInput, RunOutcome, run};
 pub(crate) use text::{quote_path, short_commit};
 
-/// Internal benchmark drivers that do not belong to the supported facade.
+/// Internal benchmark drivers that are not executable entry points.
 #[cfg(any(test, feature = "private-test-util"))]
 #[doc(hidden)]
 pub mod __private {

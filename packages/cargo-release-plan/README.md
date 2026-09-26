@@ -4,6 +4,9 @@ A Cargo subcommand that classifies every publishable workspace package against i
 version **anchor**, reports changes to **released content**, and prepares a
 complete increment plan with its resolved dependency effects.
 
+Its supported interfaces are the command line and documented artifact formats,
+not a Rust library API.
+
 A package has unreleased changes when its released content differs between its
 version anchor and the work tree. Such a package is pending release once its
 declared version has been raised past the anchor, and needs an increment until

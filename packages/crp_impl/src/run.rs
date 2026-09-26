@@ -29,7 +29,7 @@ use crate::verbose::Verbose;
 #[derive(Debug)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "The supported facade permits exhaustive matching on the application's command inputs"
+    reason = "Application code and maintainer tests exhaustively match internal command inputs"
 )]
 pub enum RunInput {
     /// Check first-publication prerequisites without uploading or changing source.
@@ -246,7 +246,7 @@ pub enum RunInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "The supported facade permits exhaustive matching on the application's command outcomes"
+    reason = "Application code and maintainer tests exhaustively match internal command outcomes"
 )]
 pub enum RunOutcome {
     /// OIDC exchange and immediate revocation completed without publication.

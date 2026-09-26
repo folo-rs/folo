@@ -4,7 +4,7 @@ The application, GitHub integration and copied skill have related interfaces but
 different distribution lifecycles. Upgrade them as a tested combination rather
 than assuming equal version numbers.
 
-The walkthrough selects the `0.5.0` application interface and matching copied
+The walkthrough selects the `0.4.1` application interface and matching copied
 skill, with report/plan schema `4` and semantic-decision schema `1`.
 `ACTION_REVISION` in workflow examples must be replaced with the verified
 immutable commit of a tested published action release selecting that interface.

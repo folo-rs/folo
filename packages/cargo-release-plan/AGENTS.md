@@ -39,12 +39,13 @@ repositories and filesystem probes belong in `tests/integration/`, not `src/`.
 Implementation-boundary assertions belong in `crp_impl/tests/boundaries/`; its
 ordinary internal operations may be public within the implementation partition.
 Inject acquired observations into decision tests; do not recreate subprocesses
-behind a fake protocol or widen the supported `cargo-release-plan` facade.
+behind a fake protocol or widen the executable's internal re-export boundary.
 
 ## Modules own subjects, not categories
 
 Put implementation in `crp_impl`, in the module that owns its subject. Re-export
-only supported application API from the shell's `lib.rs`. Do not add a shared module for
+only items needed by the executable and maintainer tests from the shell's `lib.rs`.
+Do not add a shared module for
 "types", "constants", or "utilities"; there is deliberately none to add to.
 
 A subject-owned module keeps an item next to the code that gives it meaning, so
@@ -80,3 +81,7 @@ document it in the owning design, implementation guide and user book.
 Repository instructions and workflow callers select Folo policy rather than
 reimplementing that behavior. Keep the existing publisher operational until
 the unified tool and action pass their bootstrap and cutover gates.
+
+Keep both library targets marked `private-api = true` with library documentation
+disabled. Assess the CLI and artifact contracts defined in `docs/design.md`,
+not internal Rust construction or exhaustive matching, when choosing release levels.

@@ -28,7 +28,7 @@ azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.15", path = "packages/cargo-freeze-deps", default-features = false }
-cargo-release-plan = { version = "0.5.0", path = "packages/cargo-release-plan", default-features = false }
+cargo-release-plan = { version = "0.4.1", path = "packages/cargo-release-plan", default-features = false }
 cbh_analyze = { version = "=0.2.19", path = "packages/cbh_analyze", default-features = false }
 cbh_cli = { version = "=0.2.19", path = "packages/cbh_cli", default-features = false }
 cbh_codec = { version = "=0.2.19", path = "packages/cbh_codec", default-features = false }
@@ -49,7 +49,7 @@ command-group = { version = "5.0.1", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
 cpulist = { version = "1.1.10", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
-crp_impl = { version = "=0.5.0", path = "packages/crp_impl", default-features = false }
+crp_impl = { version = "=0.4.1", path = "packages/crp_impl", default-features = false }
 ctrlc = { version = "3.5.0", default-features = false }
 deranged = { version = "0.5.2", default-features = false }
 derive_more = { version = "2.0.0", default-features = false }

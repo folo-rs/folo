@@ -2,7 +2,7 @@
 name = "crp_impl"
 description = "Implementation crate for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.5.0"
+version = "0.4.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -44,11 +44,11 @@ allowed_external_types = [
 private-api = true
 
 [lib]
-# User-facing documentation is rendered through the cargo-release-plan facade.
+# User-facing documentation belongs to the command-line application's guide.
 doc = false
 
 [features]
-# Internal benchmark drivers; never forwarded by the public shell.
+# Internal benchmark drivers; never forwarded by the executable shell.
 private-test-util = []
 
 [dependencies]
@@ -69,7 +69,7 @@ tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
 
 [dev-dependencies]
-# Tests and doctests exercise the supported facade as a consumer would.
+# Maintainer tests exercise the application's internal command wiring.
 cargo-release-plan = { path = "../cargo-release-plan" }
 criterion = { workspace = true }
 mimalloc = { workspace = true }

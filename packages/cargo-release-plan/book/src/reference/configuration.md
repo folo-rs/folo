@@ -70,6 +70,10 @@ consumer API. It defaults to public when absent; binary-only packages have no
 library contract to compare. The declaration does not disable publication or
 dependency propagation.
 
+A CLI package with an internal library target must also declare `private-api = true`
+when it offers no supported Rust library API. This does not waive compatibility
+requirements for its command line or documented artifact formats.
+
 `release-targets` narrows the workspace's binary target selection. Omit it for
 the whole workspace selection. Invalid targets or an empty effective binary
 selection are errors.
