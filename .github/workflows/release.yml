@@ -33,7 +33,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     # This route never starts the publisher; credentials are exchanged and revoked only.
     # Ref: design.md#publication-identity-verification.
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@5d6e0ca5a279b3f84f59e91ba5c94365cef83688
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@97ee0b1902dc011bb230b056e38c3bf647ddc558
     with:
       install-method: path
       source-path: .
@@ -44,7 +44,7 @@ jobs:
 
   publish:
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/release.yml@5d6e0ca5a279b3f84f59e91ba5c94365cef83688
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/release.yml@97ee0b1902dc011bb230b056e38c3bf647ddc558
     with:
       install-method: path
       # Controller code always comes from the invocation checkout. Recovery selects

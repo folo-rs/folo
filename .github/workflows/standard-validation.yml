@@ -247,7 +247,7 @@ jobs:
   # skip_all. The shared read-only graph owns version, publication-input and API checks.
   # Ref: .github/workflows/implementation.md#release-validation.
   validate-versions:
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@5d6e0ca5a279b3f84f59e91ba5c94365cef83688
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@97ee0b1902dc011bb230b056e38c3bf647ddc558
     with:
       install-method: path
       source-path: .

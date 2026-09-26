@@ -61,7 +61,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Check package versions
-        uses: folo-rs/cargo-release-plan-action@5d6e0ca5a279b3f84f59e91ba5c94365cef83688
+        uses: folo-rs/cargo-release-plan-action@97ee0b1902dc011bb230b056e38c3bf647ddc558
         with:
           command: version-readiness
           base: ${{ github.event.merge_group.base_sha }}
