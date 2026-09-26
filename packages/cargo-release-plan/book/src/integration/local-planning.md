@@ -17,7 +17,7 @@ Read the copied skill's prerequisites and compare its command interface with
 `cargo release-plan --version` and `--help` **before allowing it to edit files**.
 Selecting a newer skill does not upgrade an older executable.
 
-The matching skill supports `cargo-release-plan` `0.4.1`, report/plan schema `4`
+The matching skill supports `cargo-release-plan` `0.5.0`, report/plan schema `4`
 and semantic-decision schema `1`. Git, the selected Cargo/Rust toolchain and
 `cargo-semver-checks` are prerequisites. Private release repositories also need
 GitHub CLI authentication. Installation or upgrades follow your repository's

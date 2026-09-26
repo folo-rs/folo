@@ -5,7 +5,7 @@ is understood. You do not need to clone the tool's source repository.
 
 ## Select a published version
 
-This walkthrough and its matching copied skill use the `0.4.1` tool interface.
+This walkthrough and its matching copied skill use the `0.5.0` tool interface.
 Choose a tested published action revision that pins that interface. Check the selected
 [action release](https://github.com/folo-rs/cargo-release-plan-action) and the
 [crate's published versions](https://crates.io/crates/cargo-release-plan).
@@ -18,14 +18,14 @@ handling. `Join-Path` keeps filesystem arguments native on Windows, Linux and
 macOS. Use one installation method:
 
 ```powershell
-$CrpVersion = "0.4.1"
+$CrpVersion = "0.5.0"
 cargo binstall "cargo-release-plan@$CrpVersion" --locked
 ```
 
 Or install the published source with its lockfile:
 
 ```powershell
-$CrpVersion = "0.4.1"
+$CrpVersion = "0.5.0"
 cargo install cargo-release-plan --version "=$CrpVersion" --locked
 ```
 

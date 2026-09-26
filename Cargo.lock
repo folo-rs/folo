@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crp_impl",
  "mimalloc",
@@ -1191,7 +1191,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crp_impl"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "cargo-release-plan",
  "clap",
@@ -3308,7 +3308,7 @@ dependencies = [
 
 [[package]]
 name = "release-binaries"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crp_impl",
  "mimalloc",
@@ -3320,7 +3320,7 @@ dependencies = [
 
 [[package]]
 name = "release-target-check"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crp_impl",
  "mimalloc",

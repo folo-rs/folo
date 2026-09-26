@@ -15,7 +15,7 @@ license. The [public user guide](https://folo-rs.github.io/folo/cargo-release-pl
 adoption; it is not required to execute the steps below. Repository-specific action pairing and
 communication rules belong to the caller's instructions, not a sibling skill dependency.
 
-The supported tool interface is `cargo-release-plan` 0.4.1, with version-plan/report schema 4
+The supported tool interface is `cargo-release-plan` 0.5.0, with version-plan/report schema 4
 and semantic-decision schema 1. Verify the executable before modifying source. Do not assume
 an arbitrary newer version preserves the copied skill's interface; update the skill together
 with the selected tool or use the supported version. A repository developing the tool may
