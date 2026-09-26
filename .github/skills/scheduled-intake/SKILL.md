@@ -187,17 +187,21 @@ For an assignment left by a completed agent repair, require all of the following
 * The published agent claim identifies the assigned account and old executor;
   native metadata establishes that executor is inactive. Reconcile its complete
   admitted scope before excluding it from capacity.
-* The complete issue discussion and assignment/reopen timeline establish that the
-  assignment belongs only to that completed attempt. No later claim, reassignment,
-  human ownership, unresolved gate or authorized continuation covers the current work.
+* The complete issue discussion and assignment/reopen timeline account for every
+  claim associated with the retained assignment as a completed attempt. No live
+  claim, unexplained reassignment, human ownership, unresolved gate or authorized
+  continuation covers the current work. Repeated completed attempts can share one
+  retained assignment without a new assignment event.
 
-Read the issue's complete GitHub timeline for assignment and closure transitions:
+Read the issue's complete GitHub timeline for assignment and closure transitions
+and all comments for ownership evidence and numeric comment IDs:
 
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-gh api --paginate "repos/{{REPOSITORY}}/issues/{{ISSUE_NUMBER}}/timeline?per_page=100" --jq '.[] | select(.event == "assigned" or .event == "unassigned" or .event == "closed" or .event == "reopened") | {event, created_at, actor: .actor.login, assignee: .assignee.login}'
+gh api --paginate "repos/{{REPOSITORY}}/issues/{{ISSUE_NUMBER}}/timeline?per_page=100" --jq '.[] | select(.event == "assigned" or .event == "unassigned" or .event == "closed" or .event == "reopened") | {id, event, created_at, actor: .actor.login, assignee: .assignee.login}'
+gh api --paginate "repos/{{REPOSITORY}}/issues/{{ISSUE_NUMBER}}/comments?per_page=100" --jq '.[] | {id, user: .user.login, created_at, body}'
 ```
 
 | Placeholder | Value |
@@ -212,16 +216,35 @@ assignment timing require an operator decision, not automatic release.
 
 With that evidence, intake may retire the completed agent claim without waking
 or restoring its executor. Immediately recheck state, discussion, assignment
-history and native activity. Reuse any existing release note for this same
-completed claim and recurrence; otherwise post a short explanation linking the
-merged PR and recurrence, stating that assignment removal is pending. Then remove
-only the verified obsolete assignee. A prior note with an assignee still present
-requires reconciliation and completion of the pending removal, not another note
-or an assumption of success. Preserve all other assignees, issue evidence and
-current claims. Verify the write and reread
-ownership before admission; reconcile ambiguous writes rather than retrying
-blindly. If ownership changes during reconciliation, stop and surface the collision,
-not an unverified release or an attempt to restore assignments automatically.
+history and native activity. Record the latest completed claim and why it does
+not cover the recurrence, linking that claim, its merged PR and the recurrence
+evidence. Account for any earlier claims sharing the retained assignment.
+**Do not remove assignees as part of this reconciliation.** The read and removal
+are not atomic; another executor can claim through the same account between them.
+Instead, disregard only an assignment whose associated claims are all proven
+completed when screening admission. Reconciled completed claims are not live
+claims. A retirement note covers the identified completed work, never a newer
+claim or reassignment, and does not authorize starting a worker.
+
+Begin the note with `[Copilot speaking]` and include the visible marker
+`scheduled-intake:completed-claim:{{CLAIM_COMMENT_ID}}:{{REOPEN_EVENT_ID}}`
+on its own line. Use the numeric GitHub ID of the latest completed ownership
+comment and the numeric timeline ID of the issue's latest reopening,
+respectively. Follow
+[completed-claim notifications](../../../docs/scheduled-validation.md#completed-claim-notifications):
+read every comment page immediately before posting, reuse a matching note, and
+block posting on incomplete reads. After a successful or ambiguous write, read
+all comments back before any retry; a matching note means no additional post.
+Concurrent duplicate notes describe the same completed claim and confer no
+ownership or admission priority. If an unmarked note already covers this exact
+claim and recurrence, reuse it without editing or duplicating it. A shared
+account does not establish which session authored an existing note.
+
+Reread current ownership before admission. Preserve all assignees, issue evidence
+and live claims. If ownership changes during reconciliation, stop admission and
+surface the collision rather than changing assignments. A pending-removal note
+does not authorize finishing that removal; reevaluate current evidence and use
+this non-destructive procedure.
 
 This is completion reconciliation, not takeover of unfinished work. Do not apply
 it to human claims, closed-unmerged PRs, unknown activity, a merged partial repair
@@ -329,9 +352,11 @@ If the count is **greater than or equal to `N`**, do not claim a new repair or
 create a repair session, including a replacement executor. New relationship
 coordination and recovery in existing sessions still run. If below `N`, prioritize
 an explicitly handed-off repair needing an executor; otherwise examine actionable,
-unassigned and unclaimed open findings oldest first, excluding `needs-human` and
+unclaimed open findings oldest first, excluding `needs-human` and
 competing work. Form a coherent group
 and apply the overlap screen below before choosing an admission.
+Candidates must be unassigned or have only retained assignments reconciled under
+Stage 3; any current or uncertain ownership still blocks admission.
 Repairs awaiting review permit more admissions only while below the limit.
 Start at most one new repair session per invocation, including replacements and stacked layers; stacking never
 bypasses capacity. This is pacing, not a financial cap.
@@ -340,8 +365,8 @@ bypasses capacity. This is pacing, not a financial cap.
 
 Follow the [grouping policy](../../../docs/scheduled-validation.md#grouping-related-findings).
 Use the oldest eligible finding as the primary issue and look across the open
-backlog, not just adjacent issues, for other actionable unassigned and unclaimed
-findings that belong in the same repair. Prefer one session, branch and PR for
+backlog, not just adjacent issues, for other actionable findings meeting the same
+ownership eligibility that belong in the same repair. Prefer one session, branch and PR for
 related work that shares meaningful investigation, implementation or regression
 coverage and can be reviewed and validated together. For example, different
 missed-mutant or mutation-timeout findings in the same package can share a repair
@@ -468,6 +493,8 @@ snapshot after claiming and before starting work. The earlier unreleased claim
 wins a collision; withdraw from that member without removing the winner's
 assignment. If a companion is no longer eligible, record its withdrawal, release
 only this admission's uncontested claim on it, and reassess the remaining group.
+For an assignment retained from completed work, withdrawal records only this
+admission's abandonment in discussion; it does not remove the retained assignee.
 Publish final membership on the remaining claims before startup. If the primary
 claim fails, membership is uncertain, or the remaining blockers, scope or parent
 snapshot no longer permit admission, do not start the worker. Preserve the
@@ -507,7 +534,8 @@ If evidence is insufficient, name the missing evidence and needed action. "Assig
 "inactive" or "deferred" alone is not an adequate status.
 
 Give the refreshed incomplete-session count (or its uncertainty) and limit,
-new admission, claim releases, relationship notifications and recovery requests.
+new admission, completed-claim reconciliations, any explicit claim releases,
+relationship notifications and recovery requests.
 Describe completed attempts as excluded from **session capacity**, not as finished
 open issues. Only mention an old PR when needed to explain current ownership or
 a changed capacity decision; do not routinely list historical merged PRs.

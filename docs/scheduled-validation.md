@@ -328,7 +328,7 @@ replacing an executor. `needs-human` blocks continuation until its stated requir
 satisfied or evidence or a human correction establishes that it was not a
 blocker. The owner corrects an unsupported blocker in the discussion and removes
 the mistaken label without dismissing separate unresolved human requirements.
-This does not waive checks. To explicitly release a claim, remove the responsible
+This does not waive checks. To explicitly release unfinished work, remove the responsible
 assignee and record the release or handoff in discussion without disturbing other
 workers. Issue closure needs no assignment cleanup; assignees on closed issues do
 not indicate ongoing work. Reopening requires the ownership reconciliation below,
@@ -345,14 +345,24 @@ the old executor.
 Intake can retire an obsolete **agent** claim when GitHub confirms that the
 applicable merged PR closed the issue before its documented recurrence and
 reopening, native metadata confirms the old executor is inactive, and the complete
-discussion and assignment history show no renewed claim, human ownership or
-outstanding authorization/gate for the current work. A shared account alone proves
-none of these facts. Explicit native archival establishes inactivity; a missing
+discussion and assignment history account for every claim associated with the
+retained assignment as completed, with no live claim, unexplained reassignment,
+human ownership or outstanding authorization/gate for the current work.
+Repeated completed attempts may share one assignment without new assignment
+events. A shared account alone proves none of these facts.
+Explicit native archival establishes inactivity; a missing
 executor record or failed lookup does not. Immediately before acting, intake
-refreshes the evidence, records the release with the fix/recurrence links and
-removes only that obsolete assignee. It reuses an existing release note if removal
-is still pending, verifies the resulting state and reconciles ambiguous writes or
-concurrent ownership changes without blindly replaying writes or duplicate notes.
+refreshes the evidence and documents the latest completed claim with its ownership
+comment, fix and recurrence links, accounting for earlier claims sharing the
+assignment. It does not remove assignees: separate GitHub
+reads and writes cannot protect a newer same-account claim from that removal.
+Instead, the proven obsolete assignment does not block admission. Every other
+assignment and any newer claim or reassignment still require reconciliation;
+the note never releases current work. Reconciled completed claims are not live
+claims. Intake rereads ownership before admission
+and stops on a collision without changing assignments.
+If a new admission later withdraws, it records its own abandonment in discussion
+without removing an assignee retained from completed work.
 
 This is not permission to take over unfinished work. Human claims, renewed claims,
 closed-unmerged PRs and uncertain ownership/activity need explicit disposition.
@@ -362,10 +372,33 @@ before its executor leaves capacity. No local work is deleted, no finished owner
 is woken and no housekeeping confirmation is required.
 
 The open recurrence returns to ordinary oldest-first admission and grouping,
-subject to capacity, blockers and package overlap. Releasing its obsolete claim
+subject to capacity, blockers and package overlap. Reconciling its completed claims
 does not authorize a new session outside those limits. Reconciliation runs even
 at capacity or with admissions paused, so completed ownership cannot permanently
 exclude new work.
+
+### Completed-claim notifications
+
+A completed-claim note begins with `[Copilot speaking]` and carries the visible
+marker `scheduled-intake:completed-claim:<claim-comment-id>:<reopen-event-id>` on
+its own line. The identifiers are the numeric GitHub ID of the latest completed attempt's
+ownership comment and the numeric timeline ID of the issue's latest reopening.
+The marker deduplicates the explanation for that claim and recurrence; it is not
+an ownership claim, lock or eligibility verdict. Current evidence, not the marker,
+determines whether a retained assignment is obsolete.
+
+Read all comment pages and reuse a matching note before posting, refreshing the
+complete discussion immediately before the write. Failed or incomplete reads block
+posting. Read all comments back after a successful or ambiguous write before any
+retry; do not repost when a matching note exists. Concurrent duplicate notes do
+not change ownership or admission priority. This is the collaboration convention
+in [the automation guidelines](automation.md#make-notifications-useful-and-repeatable),
+not an atomic create-if-absent guarantee.
+
+Reuse an unmarked explanation that already identifies the same claim and recurrence
+without editing or duplicating it; a shared account does not identify the authoring
+session. A note promising pending assignment removal does not
+authorize the deletion; reevaluate the evidence using non-destructive reconciliation.
 
 ### Open finding status and next action
 
@@ -487,7 +520,9 @@ Every member of a stacked group must fit the same verified prerequisite chain.
 If a companion is ineligible, leave it unclaimed and reassess the remaining group
 rather than bypassing its blocker or unnecessarily deferring independent work.
 
-Only actionable unassigned and unclaimed findings can join a new group. Respect
+Only actionable unclaimed findings can join a new group. They must be unassigned
+or have only retained assignments reconciled under
+[reopened finding ownership](#reopened-finding-ownership). Respect
 `needs-human`, retained claims and competing work. Preserve the agreed scope of
 explicit handoffs. Do not automatically append findings to existing owners or
 combine sessions, branches or PRs; scope changes need an explicit handoff.
