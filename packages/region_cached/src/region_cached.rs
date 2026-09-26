@@ -558,6 +558,7 @@ mod tests {
     use testing::{assert_panics, with_watchdog};
 
     use super::*;
+    use crate::{RegionCachedCopyExt, RegionCachedExt};
 
     assert_impl_all!(RegionCached<String>: UnwindSafe, RefUnwindSafe);
 
@@ -647,6 +648,50 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn static_set_global_propagates_to_all_regions() {
+        linked::thread_local_rc! {
+            static VALUE: RegionCached<i32> =
+                RegionCached::with_hardware(42, fake_hardware_3_regions());
+        }
+
+        with_watchdog(|| {
+            thread::spawn(|| {
+                // Acquire before fake pinning so this handle resolves the region on each access.
+                // The linked wrapper is the same one used by region_cached!, without host access.
+                let hardware = VALUE.with(|inner| {
+                    assert!(!inner.has_regional_state());
+                    inner.hardware.clone()
+                });
+
+                // Initialize separate caches before publication; leave another region untouched.
+                for processor_id in [0, 1] {
+                    pin_to_processor(&hardware, processor_id);
+                    assert_eq!(VALUE.get_cached(), 42);
+                }
+
+                pin_to_processor(&hardware, 0);
+                VALUE.set_global(43);
+
+                for processor_id in [0, 1, 9] {
+                    pin_to_processor(&hardware, processor_id);
+                    VALUE.with_cached(|value| assert_eq!(*value, 43));
+                    assert_eq!(VALUE.get_cached(), 43);
+                }
+
+                // A separately acquired, region-pinned handle observes the same publication.
+                thread::spawn(move || {
+                    pin_to_processor(&hardware, 0);
+                    assert_eq!(VALUE.get_cached(), 43);
+                })
+                .join()
+                .unwrap();
+            })
+            .join()
+            .unwrap();
+        });
     }
 
     #[test]
