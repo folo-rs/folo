@@ -25,9 +25,12 @@ function Get-ReleaseBinariesExecutable {
         $messages = @(cargo build --package release-binaries --locked --message-format=json-render-diagnostics)
         return Resolve-CargoExecutable -CargoMessage $messages -TargetName 'release-binaries'
     } finally {
-        Pop-Location
-        foreach ($name in $tokens.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $tokens[$name])
+        try {
+            foreach ($name in $tokens.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $tokens[$name])
+            }
+        } finally {
+            Pop-Location
         }
     }
 }
