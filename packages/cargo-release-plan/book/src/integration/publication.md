@@ -23,6 +23,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      source:
+        description: Optional original release-source commit for explicit recovery
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -40,6 +45,7 @@ jobs:
       install-method: binstall
       source-path: .
       publishing-environment: ''
+      source: ${{ inputs.source }}
 ```
 
 Replace `example/widgets` and the example `main` branch with the configuration
@@ -51,6 +57,13 @@ The inputs above show the defaults. Set `publishing-environment` to a protected
 GitHub environment when required, and register that same environment with
 crates.io. Released installation does not need tool source at `source-path`;
 that input matters only for explicit `install-method: path`.
+
+An empty `source` uses the invocation's commit. For explicit recovery, supply the
+full original source SHA; the tool still verifies its release-branch membership.
+This is a new invocation with new evidence, never an automatic fallback when an
+old artifact is missing. The source override selects the release snapshot only.
+In source-install mode, `source-path` continues to select the controller from the
+invocation checkout, so recovering old source does not rebuild an old controller.
 
 ## Establish publishing identity
 

@@ -114,6 +114,21 @@ This is a separate recovery invocation with new evidence and fresh remote
 validation, not a continuation of a missing artifact. Preparation still requires
 clean source and its committed configuration and lockfile.
 
+The [release caller example](../integration/publication.md#add-the-release-caller)
+exposes the optional `source` input for this recovery:
+
+```powershell
+$Repository = "example/widgets"
+$ReleaseBranch = "main"
+$Source = "<full-original-publication-source-SHA>"
+gh workflow run release.yml --repo $Repository --ref $ReleaseBranch --field "source=$Source"
+```
+
+Use the caller's release branch for its workflow and controller, while the explicit
+source selects the historical publication snapshot. This does not repoint a tag
+or recreate an old receipt. A normal failed-job retry with intact artifacts remains
+the simpler path after manual tagging.
+
 If that source is unavailable or its artifacts require another schema/tool
 version, restore the retained evidence or select the matching tool deliberately.
 Never fall back silently to the latest source.
