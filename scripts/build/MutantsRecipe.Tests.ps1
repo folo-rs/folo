@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Runs the real shared mutants recipe with a harmless cargo process and helper-call boundary.
@@ -61,7 +62,7 @@ import __RECIPE__
         $start.RedirectStandardOutput = $true
         $start.RedirectStandardError = $true
         foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
-        foreach ($key in @('CARGO_TARGET_DIR', 'MUTANTS_TEMP', 'RUSTFLAGS', 'RUST_TEST_THREADS',
+        foreach ($key in @('CARGO_INCREMENTAL', 'CARGO_TARGET_DIR', 'MUTANTS_TEMP', 'RUSTFLAGS', 'RUST_TEST_THREADS',
                 'MUTATION_TESTING', 'CBH_FAKER', 'DURE_TEST_HELPER')) {
             $null = $start.Environment.Remove($key)
         }
@@ -182,6 +183,17 @@ Describe 'Shared mutants recipe' {
         $result.cargo.environment.RUSTFLAGS | Should -Be '--cfg mutants'
         $argv = $result.cargo.arguments
         $argv[[array]::IndexOf($argv, '--jobs') + 1] | Should -Be ([string]([int][Math]::Floor($result.cargo.processor_count / 6) + 1))
+    }
+
+    It 'lets the mutation profile control incremental builds in <Mode> mode' -ForEach @(
+        @{ Mode = 'ordinary'; Careful = 'false' },
+        @{ Mode = 'careful'; Careful = 'true' }
+    ) {
+        $result = Invoke-MutationRecipeFixture -Arguments @('mutants', '', $Careful) `
+            -Environment @{ CARGO_INCREMENTAL = '0' }
+        $result.exit_code | Should -Be 0 -Because $result.diagnostic
+        $result.cargo.environment.CARGO_INCREMENTAL | Should -BeNullOrEmpty
+        foreach ($helper in $result.helpers) { $helper.incremental | Should -Be '0' }
     }
 
     It 'retains the mutants-careful convenience recipe and optional output default' {

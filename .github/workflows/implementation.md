@@ -653,6 +653,9 @@ continues after release Clippy fails, and ARM benchmark smoke tests continue aft
 upload failures. Always-upload steps
 preserve its readable summary and raw diagnostics even after failure. The thin
 capture wrapper records the exact Just command and preserves its exit status.
+Its result defaults to failure until capture returns a recipe exit code, so
+pipeline interruption cannot produce a successful final summary. A preserved
+summary does not establish completion when native outcomes remain unfinished.
 Generic process capture owns stream handling and child cleanup, not checker behavior.
 The result directory stays outside the source checkout so source-isolating tools cannot
 copy live diagnostic streams or generated artifacts. The wrapper rejects source-local
