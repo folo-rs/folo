@@ -7,5 +7,7 @@ an unpinned thread resolves its current region when accessing a value.
 
 Public constructors and static-variable macros obtain the current system hardware. The existing
 hardware-taking constructor lets in-process tests supply fake topology and pinning state without
-querying the host. Cargo integration tests exercise real constructors, macro expansion, and
-dynamic linked wrappers. Both test layers use the same regional storage implementation.
+querying the host. Static extension tests initialize the underlying linked static wrapper through
+that constructor, exercising publication within a region and isolation between regions. Cargo
+integration tests exercise real constructors, the region-local macro, and dynamic linked wrappers.
+Both test layers use the same regional storage implementation.

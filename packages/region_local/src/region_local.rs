@@ -463,6 +463,7 @@ mod tests {
     use testing::{assert_panics, with_watchdog};
 
     use super::*;
+    use crate::{RegionLocalCopyExt, RegionLocalExt};
 
     assert_impl_all!(RegionLocal<String>: UnwindSafe, RefUnwindSafe);
 
@@ -555,6 +556,50 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn static_set_local_preserves_region_isolation() {
+        linked::thread_local_rc! {
+            static VALUE: RegionLocal<i32> =
+                RegionLocal::with_hardware(|| 42, fake_hardware_3_regions());
+        }
+
+        with_watchdog(|| {
+            thread::spawn(|| {
+                // Acquire before fake pinning so this handle resolves the region on each access.
+                // The linked wrapper is the same one used by region_local!, without host access.
+                let hardware = VALUE.with(|inner| {
+                    assert!(!inner.has_regional_state());
+                    inner.hardware.clone()
+                });
+
+                pin_to_processor(&hardware, 0);
+                assert_eq!(VALUE.get_local(), 42);
+                VALUE.set_local(43);
+                VALUE.with_local(|value| assert_eq!(*value, 43));
+
+                pin_to_processor(&hardware, 1);
+                assert_eq!(VALUE.get_local(), 42);
+                VALUE.set_local(44);
+                VALUE.with_local(|value| assert_eq!(*value, 44));
+
+                pin_to_processor(&hardware, 0);
+                assert_eq!(VALUE.get_local(), 43);
+                pin_to_processor(&hardware, 9);
+                assert_eq!(VALUE.get_local(), 42);
+
+                // A separately acquired, region-pinned handle sees its region's published value.
+                thread::spawn(move || {
+                    pin_to_processor(&hardware, 1);
+                    assert_eq!(VALUE.get_local(), 44);
+                })
+                .join()
+                .unwrap();
+            })
+            .join()
+            .unwrap();
+        });
     }
 
     #[test]
