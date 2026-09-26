@@ -27,12 +27,12 @@ jobs:
   release-check:
     # Exercise the complete public read-only check graph against Folo source and configuration.
     # Ref: packages/cargo-release-plan/docs/design.md#consumption-and-configuration.
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@ee950a82d73004f5e83f297814e89abcbb0a9562
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@9fb24e1c96dfd96bc7af5f5afb71737012123038
     with:
       install-method: path
       source-path: .
 
   identity:
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity.yml@ee950a82d73004f5e83f297814e89abcbb0a9562
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity.yml@9fb24e1c96dfd96bc7af5f5afb71737012123038
     with:
-      expected-sha: ee950a82d73004f5e83f297814e89abcbb0a9562
+      expected-sha: 9fb24e1c96dfd96bc7af5f5afb71737012123038
