@@ -68,9 +68,10 @@ Use a single exact `=major.minor.patch` requirement. Partial exact versions,
 prerelease/build suffixes and compound exact requirements do not declare valid
 workspace groups.
 
-Every member shares the resolved version. The group includes `publish = false`
-members: their versions can move for alignment, but their source changes receive
-no semantic decision and they are never uploaded. The highest declared member
+Every member shares the resolved version. A **non-publishable version target**
+is a tracked workspace member with `publish = false`. Its version can move for
+group alignment, but its source changes receive
+no semantic decision and it is never uploaded. The highest declared member
 version participates in choosing the result, so alignment does not lower a member.
 
 The running example is:

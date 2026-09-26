@@ -11,13 +11,21 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["crp_impl::*"]
+allowed_external_types = ["crp_publication::*", "crp_workspace::*"]
 
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.release-plan]
+private-api = true
+
+[lib]
+doc = false
+
 [dependencies]
-crp_impl = { workspace = true }
+crp_diag = { workspace = true }
+crp_publication = { workspace = true }
+crp_workspace = { workspace = true }
 mimalloc = { workspace = true }
 
 [dev-dependencies]

@@ -28,7 +28,7 @@ fn builds_a_nested_workspace_without_controller_scripts() {
         fs::write(
             &batch,
             serde_json::to_vec(&json!({
-                "triple":fixture.triple,"os":"fixture","timeout_minutes":150,
+                "triple":fixture.triple,"os":"fixture","timeout_minutes":Fixture::batch_timeout(1),
                 "binaries":[fixture.binary("alpha")]
             }))
             .unwrap(),

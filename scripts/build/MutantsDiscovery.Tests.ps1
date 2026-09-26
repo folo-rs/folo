@@ -70,13 +70,15 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         $packages = @('cargo-bench-history-stress', 'cargo-release-plan', 'release-binaries', 'release-target-check')
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
-            # Release entry points share one implementation; their thin compatibility libraries
-            # intentionally contain no independent policy mutations.
-            $libraryPackage = if ($packageName -cin @('cargo-release-plan', 'release-binaries', 'release-target-check')) {
-                'crp_impl'
+            # Temporary compatibility executables retain their shared publication implementation.
+            $libraryPackage = if ($packageName -cin @('release-binaries', 'release-target-check')) {
+                'crp_publication'
             } else { $packageName }
             @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
             @($after | Where-Object { $_.package -eq $libraryPackage }).Count | Should -BeGreaterThan 0
+        }
+        foreach ($packageName in @('crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication')) {
+            @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
         }
     }
 

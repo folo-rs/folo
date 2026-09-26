@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use cargo_release_plan::{RunInput, RunOutcome, run};
-use crp_impl::publication::credentials::CredentialSession;
-use crp_impl::publication::github::PlatformBatch;
-use crp_impl::publication::identity::TrustedPublisher;
-use crp_impl::publication::manifest::PublicationManifest;
+use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
+use crp_publication::publication::credentials::CredentialSession;
+use crp_publication::publication::github::PlatformBatch;
+use crp_publication::publication::identity::TrustedPublisher;
+use crp_publication::publication::manifest::PublicationManifest;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -20,8 +20,168 @@ use crate::fixture::{Fixture, write_binary_package, write_package};
 #[test]
 #[cfg_attr(
     miri,
+    ignore = "Loads publication configuration and real Git/Cargo source"
+)]
+fn publication_configuration_is_explicit_and_does_not_replace_version_checks() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    // Match the fixture's release line; no binary targets are needed for this library-only case.
+    let configuration =
+        "schema-version = 1\nrepository = 'example/libs'\nrelease-branch = 'main'\ntargets = []";
+    fixture.write(".cargo/release_plan.toml", configuration);
+    fixture.commit("configure publication");
+    let base = fixture.sha("HEAD");
+    let input = |configured: bool| RunInput::Check {
+        base: Some(base.clone()),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        config: configured.then(|| PathBuf::from(".cargo/release_plan.toml")),
+        verbose: false,
+    };
+    assert!(matches!(
+        run(&input(true)).unwrap(),
+        RunOutcome::Check { passed: true, .. }
+    ));
+    fixture.write(".cargo/release_plan.toml", "not valid TOML");
+    run(&input(true)).unwrap_err();
+    assert!(matches!(
+        run(&input(false)).unwrap(),
+        RunOutcome::Check { passed: true, .. }
+    ));
+    fixture.write(".cargo/release_plan.toml", configuration);
+    fixture.write("packages/demo/src/lib.rs", "pub fn new_operation() {}\n");
+    assert!(matches!(
+        run(&input(true)).unwrap(),
+        RunOutcome::Check { passed: false, .. }
+    ));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Builds a real Cargo binary and compares publication discovery"
+)]
+fn configured_binary_check_matches_cargos_default_feature_selection() {
+    let fixture = Fixture::new("");
+    // Representative compatible versions keep dependency resolution unrelated to feature selection.
+    write_package(
+        &fixture,
+        "optional-core",
+        "0.1.0",
+        "[features]\nenhanced = []\n",
+    );
+    write_binary_package(
+        &fixture,
+        "tool",
+        "0.1.0",
+        r#"repository = "https://github.com/example/tools"
+[[bin]]
+name = "tool"
+path = "src/main.rs"
+required-features = ["optional-core"]
+[dependencies]
+optional-core = { path = "../optional-core", version = "0.1.0", optional = true }
+[features]
+default = ["optional-core/enhanced"]
+[package.metadata.release-plan]
+release-targets = ["x86_64-pc-windows-msvc"]
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+"#,
+    );
+    // The branch matches the fixture; the repository deliberately offers an unselected target.
+    fixture.write(
+        ".cargo/release_plan.toml",
+        "schema-version = 1\nrepository = 'example/tools'\nrelease-branch = 'main'\n\
+         targets = ['x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc']",
+    );
+    fixture.write(".gitignore", "/target\n");
+    // Cargo is the independent feature-selection oracle and also materializes the fixture lockfile.
+    let output = Command::new("cargo")
+        .args(["build", "--bins", "--offline"])
+        .current_dir(fixture.path())
+        .env("CARGO_TARGET_DIR", fixture.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fixture
+            .path()
+            .join("target")
+            .join("debug")
+            .join(format!("tool{EXE_SUFFIX}"))
+            .is_file()
+    );
+    fixture.commit("configured binary source");
+    assert!(matches!(
+        run(&RunInput::Check {
+            base: Some(fixture.sha("HEAD")),
+            manifest_path: fixture.manifest(),
+            format: CheckFormat::Text,
+            verify_packaging: false,
+            config: Some(PathBuf::from(".cargo/release_plan.toml")),
+            verbose: true,
+        })
+        .unwrap(),
+        RunOutcome::Check { passed: true, .. }
+    ));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Discovers an owned Cargo workspace")]
+fn publication_preflight_accepts_a_workspace_with_no_publishable_targets() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "private-helper", "1.0.0", "publish = false\n");
+    fixture.commit("private workspace");
+    let RunOutcome::Check {
+        passed,
+        message,
+        warnings,
+    } = run(&RunInput::CheckPublished {
+        manifest_path: fixture.manifest(),
+        plan: None,
+        verbose: true,
+    })
+    .unwrap()
+    else {
+        panic!("publication preflight must return a check verdict");
+    };
+    assert!(passed);
+    assert!(warnings.is_empty());
+    assert_eq!(
+        message,
+        "Every selected publishable package is established on crates.io."
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Attempts Cargo workspace acquisition from an absent manifest"
+)]
+fn publication_preflight_propagates_workspace_acquisition_failure() {
+    let directory = TempDir::new().unwrap();
+    _ = run(&RunInput::CheckPublished {
+        manifest_path: directory.path().join("absent").join("Cargo.toml"),
+        plan: None,
+        verbose: false,
+    })
+    .unwrap_err();
+}
+
+#[test]
+#[cfg_attr(
+    miri,
     ignore = "Builds and archives an immutable native source worktree"
 )]
+// Mirror publication::config::NativeTarget: this exercises supported native hosts, not cross-builds.
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     any(
@@ -31,7 +191,8 @@ use crate::fixture::{Fixture, write_binary_package, write_package};
     )
 ))]
 fn unified_binary_command_stages_a_frozen_batch_without_github() {
-    // Native toolchain and Cargo startup belong under a last-chance integration watchdog.
+    // As in native_binaries::SMOKE_WATCHDOG, allow orders of magnitude more than ordinary
+    // seconds-long toolchain/archive runs. This watchdog is not a test failure assertion.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let fixture = publication_source();
         write_binary_package(
@@ -233,7 +394,9 @@ fn prepares_frozen_requests_and_reuses_identical_output_without_changing_source(
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against a temporary workspace")]
-fn rejects_dirty_or_untracked_publication_inputs_without_writing_an_artifact() {
+fn rejects_dirty_tracked_publication_inputs_without_writing_an_artifact() {
+    // Real-Git untracked rejection is covered by crp_publication's candidate boundary test
+    // rejects_staged_and_untracked_inputs; this case verifies preparation leaves no artifact.
     let fixture = publication_source();
     let output = TempDir::new().unwrap();
     let path = output.path().join("publication.json");
@@ -432,15 +595,47 @@ fn reporter_completes_valid_delivery_and_rejects_ambiguous_receipts_and_destinat
     run(&preparation(&fixture, publication.clone())).unwrap();
     let intent: Value = serde_json::from_slice(&fs::read(&publication).unwrap()).unwrap();
     let outcomes = directory.path().join("outcomes");
-    for phase in ["registry", "github"] {
+    let captured = intent.get("publication").unwrap();
+    let packages = captured.get("packages").unwrap().as_array().unwrap();
+    let registry_packages: Vec<_> = packages
+        .iter()
+        .map(|package| {
+            json!({
+                "name":package.get("name").unwrap(),
+                "version":package.get("version").unwrap(),
+                "state":"already_present"
+            })
+        })
+        .collect();
+    let github_packages: Vec<_> = packages
+        .iter()
+        .map(|package| {
+            let name = package.get("name").unwrap().as_str().unwrap();
+            let version = package.get("version").unwrap().as_str().unwrap();
+            json!({
+                "name":name,"version":version,"tag":format!("{name}-v{version}"),
+                "state":"complete","source":captured.get("source").unwrap(),
+                "recovery_source":null,"observed_version":null
+            })
+        })
+        .collect();
+    let registry = json!({
+        "schema_version":1,"publication_id":intent.get("id").unwrap(),
+        "phase":"registry","complete":true,"dry_run":false,
+        "packages":registry_packages,"errors":[],"notes":[],
+        "github":{"run_id":123,"run_attempt":1}
+    });
+    let github = json!({
+        "schema_version":1,"publication_id":intent.get("id").unwrap(),
+        "phase":"github","complete":true,"dry_run":false,
+        "packages":github_packages,"batches":[],"planned_targets":[],"errors":[],
+        "github":{"run_id":123,"run_attempt":1}
+    });
+    for (phase, outcome) in [("registry", &registry), ("github", &github)] {
         fs::create_dir_all(outcomes.join(phase)).unwrap();
         fs::write(
             outcomes.join(phase).join("outcome.json"),
-            serde_json::to_vec(&json!({
-                "schema_version":1,"publication_id":intent.get("id").unwrap(),
-                "phase":phase,"complete":true,"github":{"run_id":123,"run_attempt":1}
-            }))
-            .unwrap(),
+            serde_json::to_vec(outcome).unwrap(),
         )
         .unwrap();
     }
@@ -503,13 +698,11 @@ fn reporter_completes_valid_delivery_and_rejects_ambiguous_receipts_and_destinat
 
     fs::create_dir_all(outcomes.join("duplicate")).unwrap();
     for schema in [1, 2] {
+        let mut duplicate = registry.clone();
+        *duplicate.get_mut("schema_version").unwrap() = json!(schema);
         fs::write(
             outcomes.join("duplicate/outcome.json"),
-            serde_json::to_vec(&json!({
-                "schema_version":schema,"publication_id":intent.get("id").unwrap(),
-                "phase":"registry","complete":true,"github":{"run_id":123,"run_attempt":1}
-            }))
-            .unwrap(),
+            serde_json::to_vec(&duplicate).unwrap(),
         )
         .unwrap();
         let output = directory.path().join(format!("invalid-{schema}.md"));
@@ -577,7 +770,15 @@ fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() 
             publication,
             directory.path().join("unused-source/Cargo.toml"),
             directory.path().join("target"),
-            TrustedPublisher::with_endpoint("http://127.0.0.1:0/unused").unwrap(),
+            TrustedPublisher::with_endpoint(
+                "http://127.0.0.1:0/unused",
+                crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    std::sync::Arc::new(crp_diag::Discard),
+                ),
+            )
+            .unwrap(),
         )
         .unwrap();
         let mut cargo = Command::new("cargo");

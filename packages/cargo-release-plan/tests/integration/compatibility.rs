@@ -18,6 +18,7 @@ use crate::harness::resolved_plan;
 #[cfg_attr(miri, ignore = "Reads real captured source and runs Cargo metadata")]
 fn unchanged_workspace_needs_no_checker_or_registry_and_keeps_fresh_report() {
     let fixture = Fixture::new("");
+    // The version is representative: this case exercises empty selection, not semver boundaries.
     write_package(&fixture, "library", "1.0.0", "");
     fixture.commit("unchanged source");
     let output = TempDir::new().unwrap();
@@ -127,6 +128,7 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
 #[cfg_attr(miri, ignore = "Prepares and validates a real Cargo/Git workspace")]
 fn prepared_compatibility_rejects_same_head_source_drift_before_comparison() {
     let fixture = Fixture::new("");
+    // The version is representative; captured-source rejection precedes any baseline comparison.
     write_package(&fixture, "library", "1.0.0", "");
     fixture.commit("prepared source");
     let output = TempDir::new().unwrap();
@@ -456,6 +458,9 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
                 );
             }
             if scenario == "source-drift" {
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(diagnostic.contains("identical-source canary"));
+                assert!(diagnostic.contains("source verification also failed"));
                 assert_ne!(fixture.read("packages/library/src/lib.rs"), original);
                 fixture.write("packages/library/src/lib.rs", &original);
             } else {

@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Real controller compilation/JSON boundary with the canonical target policy, without GitHub
@@ -13,6 +14,7 @@ Describe 'Native release planning boundary' {
             binaries = @()
             targets = @(Get-ReleaseTarget | ForEach-Object { @{ triple = $_.Triple; os = $_.Os } })
         }
+        # Preserve nested target records with a conservative margin for the private plan shape.
         $json = ConvertTo-Json -InputObject $plan -Depth 8 -Compress
         $result = Invoke-ReleaseBinariesHelper -Operation plan -InputJson $json -Repository 'fixture/no-releases'
         $result | Should -Be '[]'

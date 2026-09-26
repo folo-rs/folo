@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # GitHub publication boundary for release.yml, called through just_release.just after registry
 # publication succeeds. Rust owns release-equivalence decisions; this module owns Git worktree
@@ -318,8 +318,10 @@ function Get-ReleaseBinaryPlanJson {
         binaries = $requests
         targets = @(Get-ReleaseTarget | ForEach-Object { @{ triple = $_.Triple; os = $_.Os } })
     }
-    # Nested binary arrays require a deeper JSON boundary than the former scalar matrix rows.
-    $inputJson = ConvertTo-Json -InputObject $inputPlan -Depth 8 -Compress
+    # The private plan nests target/request records and release-target arrays. Keep a conservative
+    # depth margin beyond those containers so their leaves remain structured JSON.
+    $planJsonDepth = 8
+    $inputJson = ConvertTo-Json -InputObject $inputPlan -Depth $planJsonDepth -Compress
     return Invoke-ReleaseBinariesHelper -Operation plan -InputJson $inputJson -Repository $Repository
 }
 

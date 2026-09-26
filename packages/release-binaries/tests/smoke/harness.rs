@@ -112,6 +112,7 @@ fn main() {
         );
         run(path, "git", &["config", "user.name", "Release fixture"]);
         run(path, "git", &["config", "commit.gpgsign", "false"]);
+        run(path, "git", &["config", "gc.auto", "0"]);
         run(path, "git", &["config", "core.autocrlf", "false"]);
         run(path, "git", &["add", "."]);
         run(path, "git", &["commit", "--quiet", "-m", "Tagged fixture"]);
@@ -150,7 +151,7 @@ fn main() {
     pub(crate) fn batch_command(&self, binaries: &Value, output_name: &str) -> Command {
         let batch = json!({
             "triple": self.triple, "os": "fixture",
-            "timeout_minutes": 90_usize.saturating_add(60_usize.saturating_mul(binaries.as_array().unwrap().len())).min(360),
+            "timeout_minutes": Self::batch_timeout(binaries.as_array().unwrap().len()),
             "binaries": binaries,
         });
         let input = self.root.path().join("batch.json");
@@ -176,6 +177,13 @@ fn main() {
             command.env(name, "credential-filter-canary");
         }
         command
+    }
+
+    pub(crate) fn batch_timeout(items: usize) -> usize {
+        // Mirror crp_publication::legacy's private job-watchdog projection, including its hosted cap.
+        90_usize
+            .saturating_add(60_usize.saturating_mul(items))
+            .min(360)
     }
 
     pub(crate) fn commit_source(&mut self) {

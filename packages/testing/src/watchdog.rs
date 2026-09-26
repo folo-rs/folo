@@ -63,22 +63,29 @@ where
     with_watchdog_timeout(default_timeout(), test_fn)
 }
 
-/// Runs a test with a caller-selected last-chance watchdog budget.
+/// Runs a test with a caller-selected last-chance watchdog timeout.
 ///
 /// Use this for integration fixtures that compile programs or launch external tools and
-/// cannot fit the ordinary synchronization-test budget. The budget must comfortably exceed
-/// both successful and failing runs. Mutation testing disables the watchdog.
+/// cannot fit the ordinary synchronization-test timeout. The timeout must comfortably exceed
+/// the expected duration of successful runs and failure paths. Mutation testing disables timing.
+///
+/// A timeout does not cancel the closure. It may continue running after the caller unwinds.
 ///
 /// # Panics
 ///
-/// Panics on the calling thread if the test closure exceeds the timeout, or propagates
-/// a panic from that closure. Mutation testing disables the timeout.
+/// Panics if `timeout` is zero, if the test closure exceeds the timeout, or if the closure panics.
+/// Mutation testing disables timeout expiry, not argument validation.
 pub fn with_watchdog_timeout<F, R>(timeout: Duration, test_fn: F) -> R
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    validate_timeout(timeout);
     run_with_watchdog(timeout, test_fn, timeout_message)
+}
+
+fn validate_timeout(timeout: Duration) {
+    assert!(!timeout.is_zero());
 }
 
 /// Runs a test with a timeout that reports the last active phase.
@@ -181,14 +188,23 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     use super::*;
+    use crate::assert_panics;
 
     assert_impl_all!(WatchdogPhaseReporter: RefUnwindSafe, UnwindSafe);
 
     #[test]
     fn timeout_diagnostic_retains_subsecond_precision() {
+        // Ordinary representative magnitudes exercise subsecond and whole-second formatting.
         assert!(timeout_message(Duration::from_millis(500)).contains("500ms"));
         assert!(timeout_message(Duration::from_micros(250)).contains("250"));
         assert!(timeout_message(Duration::from_secs(5)).contains("5s"));
+    }
+
+    #[test]
+    fn zero_timeout_is_rejected_synchronously() {
+        assert_panics(|| validate_timeout(Duration::ZERO));
+        // Any nonzero duration is a valid argument; this pure check starts no timer or worker.
+        validate_timeout(Duration::from_secs(1));
     }
 
     #[test]

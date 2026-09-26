@@ -136,7 +136,7 @@ is verified around comparison; operational errors never become semantic passes.
 ```
 
 This example assumes those are the publishable packages. Every publishable
-member appears once, including unchanged ones; nonpublishable helpers do not.
+member appears once, including unchanged ones; non-publishable version targets do not.
 Cycle batches represent actual dependencies, not group alignment.
 
 `semver-targets` emits sorted package names, or `[]` when no public contract is
@@ -181,7 +181,7 @@ commit. Workspace, package and configuration paths are repository-relative.
 `name` is the executable name, not necessarily its package name.
 
 The package array includes every publishable exact version at that source,
-including unchanged packages, and excludes nonpublishable alignment targets.
+including unchanged packages, and excludes non-publishable version targets.
 The artifact records producer identity and schema independently of local-plan
 schemas.
 
@@ -218,6 +218,45 @@ The exact state spellings are:
 A dry run never sets `complete` to true. Use the outcome and command diagnostics
 together; unknown queries and partial failure are not reduced to successful
 skips. Each attempt writes a new outcome path.
+
+## GitHub outcome
+
+GitHub reconciliation outcomes use schema `1`:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Outcome format revision. |
+| `publication_id` | Original publication manifest identity. |
+| `phase` | `github`. |
+| `dry_run` | Whether the attempt only observed intended work. |
+| `complete` | Whether live GitHub reconciliation completed; binary delivery can still remain. |
+| `packages` | Package/version/tag identities with the state and source evidence described below. |
+| `batches` | Routing entries containing `target`, `path` and `batch_id` for separate platform-batch files. |
+| `planned_targets` | Native targets selected for potential binary work, not batch payloads or delivery evidence. |
+| `errors` | Reconciliation diagnostics. |
+| `github` | Optional `{run_id, run_attempt}` linkage captured in GitHub Actions. |
+
+Each package record contains `name`, `version`, `tag` and `state`, with these
+state spellings:
+
+| State | Interpretation |
+| --- | --- |
+| `pending` | This record does not establish completed reconciliation. |
+| `complete` | The required tag and, for a binary package, GitHub release were reconciled. |
+| `would_create_tag` | A dry run identified a missing tag. |
+| `would_create_release` | A dry run identified a missing GitHub release. |
+| `failed` | Reconciliation for the package failed. |
+
+The nullable `source` field retains an observed commit identity. A failure can
+retain an unverified observation; this field alone does not authorize a build.
+The nullable `recovery_source` is the original publication source retained for
+missing-tag recovery, while `observed_version` is the candidate version when
+available. Failures need not have missing-tag recovery evidence.
+
+A dry run never sets the outcome's `complete` field to true. A live complete
+GitHub outcome does not imply that its binary archives are uploaded.
+Each batch `path` is relative to the separately emitted batch directory; retain
+those files and the parent publication manifest alongside the outcome.
 
 ## Derived batches and later outcomes
 

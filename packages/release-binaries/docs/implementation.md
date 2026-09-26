@@ -1,59 +1,37 @@
-# Release binary batches
+# Bootstrap binary command adapter
 
-The release workflow builds this nonpublished compatibility executable from its
-event checkout. Its library delegates to `crp_impl::publication::binaries`, which
-owns native planning, execution and unit tests. The workflow's behavioral contract belongs to
-[release automation](../../../.github/workflows/design.md#publication-and-recovery).
-Historical source worktrees never supply the orchestration executable.
+This nonpublished executable supports the existing `ReleaseBinaries.psm1` caller
+until operational cutover. Its `plan` and `run` arguments, matrix JSON, item-array
+`outcomes.json` and step summary remain the private bootstrap workflow protocol.
+They are not unified publication manifests or a supported Rust library API.
 
-## Planning and execution
+The shell supplies process arguments, working directory, summary destination,
+diagnostic sink and its group-aligned version to `crp_publication::legacy`.
+That explicitly temporary adapter retains legacy parsing, runner/budget projection
+and receipt formatting. It reuses the publication-owned binary identity, asset
+completeness predicate, `Github`, `BinaryPublisher` and `execute_items`.
+Before an uploading run observes assets or builds, its supervised `gh` adapter
+resolves each exact tag and peels annotations to verify the frozen source commit.
+The private matrix fields and one-batch-per-target shape do not change that check.
 
-PowerShell supplies discovered binary packages, their immutable tag commits and
-the existing target-to-runner mapping. `plan` reads release assets, selects incomplete
-archive/checksum pairs and groups them by target. `run` consumes one frozen batch
-and refreshes completeness using the same predicate. Only uploaded assets count;
-failed queries never authorize a skip. The JSON is private workflow coordination,
-not a supported external CLI.
+`BinaryPublisher` composes `crp_native` for immutable source worktrees, compiler
+and artifact verification, archives, cancellation, deadlines and cleanup. Upload
+uses native's actual controller directory and item deadline. The adapter must
+not manufacture a new deadline, query current main in place of a frozen source,
+or supply credentials to build children.
 
-Each source commit has a separate temporary worktree. Cargo runs inside that
-worktree with its pinned compiler, configuration and locked dependencies. Separate
-package builds preserve feature selection. The absolute controller target directory
-is shared across source builds so the existing cache and Cargo's fingerprints
-govern reuse. The controller executable is built before these overrides apply.
-The selected Cargo workspace can be nested inside the Git repository. Source
-commands use that same repository-relative workspace, and rustup reads its tracked
-toolchain from within the source repository. No Folo source-toolchain script is
-required by the installed application.
+The no-upload option skips tag and release asset queries and uploads while retaining
+native source/build/archive behavior, including repository acquisition when a
+source object is missing. Successful, failed, unattempted and cleanup outcomes
+remain visible; a cleanup failure prevents a successful command exit even when
+an item uploaded successfully.
 
-Native `zip` or standalone 7-Zip (`7za`) packages each immediately staged executable.
-`just install-tools` installs and verifies these prerequisites on every platform. SHA-256 sidecars
-name the archive; `gh release upload --clobber` repairs both members of an incomplete
-pair. Only GitHub subprocesses receive the upload token. Worktree materialization
-retains checkout's no-LFS-download behavior.
+The executable-connected smoke suite retains the original bootstrap protocol
+coverage. Permanent native, publication and application tests stay with their
+owning packages. Do not copy their implementations into this shell.
+A native fake `gh` executable exercises tag and asset process boundaries without
+contacting GitHub; in-process tests cover parsing and deterministic decisions.
 
-Independent item failures do not suppress remaining items, but any failed item
-fails the batch. Worktree cleanup failures are retained alongside operation errors
-for items in that source group, not releases already complete during refresh.
-If Git removal and directory cleanup both fail, the outcome retains both diagnostics.
-The item deadline bounds source preparation, compilation and publication together.
-The command adapter terminates an owned process tree before returning a deadline
-failure. Signal handling marks the batch cancelled, terminates active child groups and
-prevents later uploads. Cleanup retains its own bounded deadline. The workflow owns the
-overall job deadline.
-
-`--no-upload` stages the exact requested items without querying release completeness
-or writing to GitHub. It retains all source/build/archive checks and needs no upload
-credential. Integration fixtures and the three-platform validation smoke exercise this
-path. A native fake GitHub client also exercises query/upload arguments, credential
-isolation, partial-publication recovery and summary reporting without network access.
-No test creates or modifies a production release.
-
-## Tests
-
-Pure protocol validation, grouping, completeness, artifact selection and batch
-transitions are unit tests in `crp_impl`. Git, Cargo, process and archive interactions
-are integration tests. Native adapters have narrow mutation exclusions; the
-decisions they execute remain covered in process.
-Source fixtures include exact-object fetching through a local transport whose tip has advanced,
-mixed source commits and native-host rejection. Cleanup failure coverage preserves
-successful publication outcomes while retaining the cleanup diagnostic and failing the job.
+The cutover removes this package and `crp_publication::legacy` only after all old
+publisher callers have been replaced. Removing the module also changes the
+published implementation package's content and needs release reassessment.

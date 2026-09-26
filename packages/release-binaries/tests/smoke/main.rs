@@ -17,6 +17,7 @@ mod cancellation;
 mod github;
 mod harness;
 mod packaging;
+mod protocol;
 mod sources;
 
 ::testing::set_allocator!();

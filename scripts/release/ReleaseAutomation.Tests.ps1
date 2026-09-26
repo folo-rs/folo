@@ -296,7 +296,7 @@ Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
         @(Get-DeclaredReleaseTarget -Package ([pscustomobject]@{ name = 'crafted' })).Count | Should -Be 0
     }
 
-    It 'returns nothing for a package whose metadata has no folo section' {
+    It 'returns nothing for a package whose metadata has no release-plan section' {
         $pkg = [pscustomobject]@{
             name     = 'crafted'
             metadata = [pscustomobject]@{ binstall = [pscustomobject]@{ 'pkg-fmt' = 'zip' } }
@@ -304,7 +304,7 @@ Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
         @(Get-DeclaredReleaseTarget -Package $pkg).Count | Should -Be 0
     }
 
-    It 'returns nothing for a folo section that declares no release targets' {
+    It 'returns nothing for a release-plan section that declares no release targets' {
         $pkg = [pscustomobject]@{
             name     = 'crafted'
             metadata = [pscustomobject]@{ 'release-plan' = [pscustomobject]@{ 'something-else' = 'value' } }

@@ -1,6 +1,6 @@
-#requires -Version 7
+#requires -Version 7.6
 
-# Native ZIP prerequisites for release-binaries and its no-upload integration smoke. Called by
+# Native ZIP prerequisites for the release binary smoke test and publication. Called by
 # just install-tools on developers' machines and every setup-environment job. PowerShell owns
 # this bootstrap boundary because Rust tooling is itself installed by the enclosing recipe.
 # Ref: docs/build-and-tooling.md#release-archive-tools.
@@ -10,11 +10,23 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
 
-# Official ip7z/7zip release asset digest. The extra package contains standalone 7za.exe;
-# Windows ARM64 uses its x64 executable under emulation, like the ShellCheck installer.
+# Select the official stable ip7z/7zip extra archive containing standalone native executables.
+# Update the version, asset and digests together from the official GitHub release asset metadata.
+# Payload digests are derived by extracting that archive only after its published SHA-256 matches.
+# Ref: https://github.com/ip7z/7zip/releases and docs/build-and-tooling.md#release-archive-tools.
 $script:SevenZipVersion = '26.03'
 $script:SevenZipAsset = '7z2603-extra.7z'
 $script:SevenZipHash = '191894e6acb3647ffb69ce630479ff318523b2e2b9890aa7f05c1127c2e59b8f'
+$script:SevenZipPayload = @{
+    X64 = @{
+        Directory = 'x64'
+        Hash = 'edbee35370e14030e4c785cf88200f42dc651c1eb4217c1e3963c38a12f099b0'
+    }
+    Arm64 = @{
+        Directory = 'arm64'
+        Hash = 'c26764813a01b9714687f29c94412401f2041852634e291c59d48484432e834b'
+    }
+}
 
 function Get-ArchivePlatform {
     [CmdletBinding()]
@@ -49,10 +61,17 @@ function Invoke-ArchivePackageInstall {
 
 function Install-StandaloneSevenZip {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string] $Destination)
+    param(
+        [Parameter(Mandatory)][string] $Destination,
+        [Runtime.InteropServices.Architecture] $Architecture =
+            [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+    )
 
+    $payload = $script:SevenZipPayload[$Architecture.ToString()]
+    if ($null -eq $payload) { throw "Standalone 7-Zip does not support process architecture '$Architecture'." }
     $installed = Join-Path $Destination '7za.exe'
-    if ((Test-Path -LiteralPath $installed) -and (Test-StandaloneSevenZip -Path $installed)) {
+    if ((Test-Path -LiteralPath $installed -PathType Leaf) -and
+        (Test-StandaloneSevenZip -Path $installed -ExpectedHash $payload.Hash)) {
         Write-Host "Standalone 7-Zip $script:SevenZipVersion is available."
         return
     }
@@ -65,6 +84,8 @@ function Install-StandaloneSevenZip {
     try {
         $archive = Join-Path $work $script:SevenZipAsset
         $url = "https://github.com/ip7z/7zip/releases/download/$script:SevenZipVersion/$script:SevenZipAsset"
+        # Use the short capped release-host backoff policy. A checksum mismatch retries a fresh
+        # download but never authorizes execution; extraction and installation are not retried.
         Invoke-WithRetry -Attempt 4 -DelaySeconds 3 -BackoffMultiplier 2 -MaxDelaySeconds 30 -Action {
             Invoke-WebRequest -Uri $url -OutFile $archive
             if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $script:SevenZipHash) {
@@ -73,7 +94,7 @@ function Install-StandaloneSevenZip {
         }
         & $tar.Source -xf $archive -C $work
         $null = New-Item -ItemType Directory -Path $Destination -Force
-        Copy-Item -LiteralPath (Join-Path $work 'x64' '7za.exe') -Destination (Join-Path $Destination '7za.exe') -Force
+        Copy-Item -LiteralPath (Join-Path $work $payload.Directory '7za.exe') -Destination $installed -Force
         Copy-Item -LiteralPath (Join-Path $work 'License.txt') -Destination (Join-Path $Destination 'release-7zip-license.txt') -Force
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force
@@ -81,12 +102,19 @@ function Install-StandaloneSevenZip {
 }
 
 function Test-StandaloneSevenZip {
-    # A cached executable is only usable when the native version probe succeeds.
-    # Nonzero exits and loader failures need replacement, not another failed setup attempt.
+    # Check restored bytes against the selected native payload before executing even a probe.
+    # A matching version banner alone cannot reconcile stale or changed same-version assets.
     [CmdletBinding()]
     [OutputType([bool])]
-    param([Parameter(Mandatory)][string] $Path)
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $ExpectedHash
+    )
 
+    if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedHash) {
+        Write-Verbose 'Replacing the cached archive tool because its bytes differ from the pinned native payload.' -Verbose
+        return $false
+    }
     $previousPreference = $PSNativeCommandUseErrorActionPreference
     try {
         $PSNativeCommandUseErrorActionPreference = $false
@@ -112,13 +140,14 @@ function Install-ReleaseArchiveTool {
     $platform = Get-ArchivePlatform
     if ($platform -eq 'windows') {
         Install-StandaloneSevenZip -Destination $Destination
-        # Make the managed executable authoritative in this setup process and later Actions steps.
+        # Make the bootstrap-installed standalone executable authoritative here and in later steps.
         # The Cargo bin directory is the repository's normal local tool PATH prerequisite.
         $env:PATH = $Destination + [IO.Path]::PathSeparator + $env:PATH
         if ($env:GITHUB_PATH) {
             Add-Content -LiteralPath $env:GITHUB_PATH -Value $Destination -Encoding utf8NoBOM
         }
         $tool = Get-Command 7za -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        # Retain the identifying banner while omitting the tool's verbose capability inventory.
         & $tool.Source i | Select-Object -First 3 | Out-Host
         return
     }
@@ -131,6 +160,7 @@ function Install-ReleaseArchiveTool {
     }
     foreach ($tool in @('zip', 'unzip')) {
         $application = Get-Command $tool -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        # Unix tools lead with their identifying version/banner before detailed build information.
         & $application.Source -v | Select-Object -First 2 | Out-Host
     }
 }

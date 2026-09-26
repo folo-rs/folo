@@ -1,13 +1,14 @@
-# Release validation and version-planning entry points for developers, the increment-versions
-# skill and CI. scripts/release/ReleasePlan.psm1 owns plan orchestration, with release policy
-# in cargo-release-plan. CI publication and binary reconciliation use
-# scripts/release/ReleaseAutomation.psm1 through the `gh-` recipes below.
+# Release validation for developers and CI, plus CI-only publication and binary reconciliation.
+# scripts/release/ReleasePlan.psm1 connects the version and compatibility gates to their tools.
+# Version planning uses the self-contained increment-versions skill or the cargo-release-plan
+# CLI documented in packages/cargo-release-plan/book/src/integration/local-planning.md.
+# The `gh-` recipes retain the release workflow's PowerShell publication entry points.
 
 [group('release')]
 audit:
     cargo audit
 
-# Canary for the `increment-versions` skill and CI compatibility validation: proves that
+# Canary for local tool checks and CI compatibility validation: proves that
 # `cargo semver-checks` can actually run on this machine before either trusts its output. When the
 # tool fails to *run* - most commonly because the installed cargo-semver-checks is too old for the
 # current toolchain's rustdoc JSON format (e.g. "unsupported rustdoc format v57 ... supported
@@ -79,9 +80,8 @@ verify-lockfile:
 # perform a crate's first-ever publish (it can only be configured on a crate that already
 # exists), so a brand-new crate's first release must be done by hand (cargo publish), after
 # which Trusted Publishing is configured and subsequent releases flow through the workflow.
-# Run as a preflight by the `increment-versions` skill, so the warning surfaces while the
-# increment is being prepared instead of failing the CI publish job later. Best-effort, never a
-# gate: a transient
+# Run locally as an advisory preflight, so the warning surfaces before the CI publish job.
+# Best-effort, never a gate: a transient
 # crates.io failure degrades to a warning and continues. See docs/release-automation.md.
 [group('release')]
 [script]
@@ -129,131 +129,6 @@ semver-checks:
 
     Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
     Invoke-SemverCheck -Package "{{ package }}"
-
-# The recipes below are the guided increment workflow, in the order the increment-versions skill
-# runs them: prepare resolution and evidence, determine analysis order, create the plan, preview
-# its resolved effects, confirm the publishable targets are published, and apply the captured
-# state. Rust owns mechanical release resolution and artifact validation; the skill supplies
-# semantic judgments, and the module owns process and evidence orchestration.
-# Ref: docs/build-and-tooling.md#automation-language-and-boundaries.
-
-# Resolves the intended offline workspace lockfile refresh before collecting evidence. This is
-# explicit preparation, not part of read-only release-report or validate-versions.
-#
-# Prepares the release report and semantic evidence under DIR.
-[group('release')]
-[script]
-release-prepare DIR:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Invoke-PrepareReleasePlan -OutDir "{{ DIR }}"
-
-# Target selection matches the CI SemVer job exactly, so local evidence and hosted validation
-# cannot disagree about which packages have a supported consumer contract. Rust validates and
-# selects targets; the module owns compatibility execution and exit handling.
-#
-# Writes the release-plan report, per-package diffs, and cargo-semver-checks evidence under DIR.
-[group('release')]
-[script]
-release-report DIR:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Invoke-ReleaseReport -OutDir "{{ DIR }}"
-
-# Analyzing a package after the packages it depends on is what lets a dependency decision inform
-# its dependents. Mutually dependent packages share a batch and are analyzed to a fixed point.
-# The increment-versions skill redirects the output to a working file and documents the fields.
-#
-# Prints the dependency-first analysis batch records from report REPORT as a JSON array.
-[group('release')]
-[script]
-release-analysis-order REPORT:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Get-ReleasePlanAnalysisBatchJson -ReportPath "{{ REPORT }}"
-
-# Also realigns any version group whose declarations differ and which the decisions leave unnamed,
-# including alignment-only helpers and groups covered by a consistency exemption. Expansion is
-# plan-driven, so a drifted group that no entry reaches would otherwise stay drifted.
-#
-# Converts the decided change levels in DECISIONS into the proposed plan PLAN, using report REPORT.
-[group('release')]
-[script]
-create-release-plan REPORT DECISIONS PLAN:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    New-ReleasePlanFile -ReportPath "{{ REPORT }}" -DecisionPath "{{ DECISIONS }}" -PlanPath "{{ PLAN }}"
-
-# Structural expansion is available for inspecting version groups. It does not resolve
-# dependencies; use preview-release-plan to create the complete resolved artifact.
-#
-# Expands the proposed plan PLAN into EXPANDED, naming every publishable or alignment-only version
-# target it reaches.
-[group('release')]
-[script]
-expand-release-plan PLAN EXPANDED:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Invoke-ExpandReleasePlan -PlanPath "{{ PLAN }}" -ExpandedPath "{{ EXPANDED }}"
-
-# Resolves prospective version and requirement edits against PREPARED until the release set
-# settles. DIR receives the complete resolved plan.json and its prospective report and diffs.
-[group('release')]
-[script]
-preview-release-plan PREPARED PLAN DIR:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Invoke-PreviewReleasePlan -PreparedPath "{{ PREPARED }}" -PlanPath "{{ PLAN }}" -OutDir "{{ DIR }}"
-
-# Rust validates the expanded plan and resolves every target against current Git-tracked workspace
-# membership. Applying cannot create a crate on crates.io, so a never-published publishable
-# package has to be published by hand first; alignment-only helpers do not require a registry
-# lookup.
-#
-# Fails unless every publishable target in EXPANDED is already published on crates.io.
-[group('release')]
-[script]
-check-increment-published EXPANDED:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Assert-IncrementPackagePublished -ExpandedPath "{{ EXPANDED }}"
-
-# Takes the expanded plan rather than the proposed one, because it is the complete resolved set of
-# version targets and the publication gate above validates its publishable subset. The file is an
-# uncommitted working-tree artifact; the version check verifies manifest state, not intent. A
-# failure part way through leaves the work tree partly edited.
-#
-# Applies the resolved plan EXPANDED: captured versions, requirement rewrites, and resolved lockfile.
-[group('release')]
-[script]
-apply-release-plan EXPANDED:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-
-    Import-Module "{{ justfile_directory() }}/scripts/release/ReleasePlan.psm1" -Force
-    Invoke-ApplyReleasePlan -ExpandedPath "{{ EXPANDED }}"
 
 # CI-only publication and binary-reconciliation entry points for .github/workflows/release.yml.
 # scripts/release/ReleaseAutomation.psm1 owns crate derivation, config injection, publication
@@ -308,7 +183,8 @@ gh-plan-release-binaries:
     Invoke-ReleaseBinaryPlan -Repository $env:GH_REPO -Verbose
 
 # Runs the frozen matrix batch supplied through RELEASE_BINARY_BATCH, rebuilding only incomplete
-# asset pairs. The controller stays at the workflow SHA while Rust owns pinned source worktrees.
+# asset pairs. The invocation checkout supplies the controller; Rust owns immutable source
+# worktrees at the peeled package-tag commits.
 [group('automation')]
 [script]
 gh-build-release-binaries:
@@ -325,3 +201,4 @@ gh-build-release-binaries:
 [group('release')]
 release-binary-smoke:
     cargo test --locked --package release-binaries --test smoke -- --nocapture
+    cargo test --locked --package cargo-release-plan --package crp_publication --package crp_native --tests native_binaries:: -- --nocapture

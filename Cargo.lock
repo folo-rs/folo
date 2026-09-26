@@ -640,10 +640,19 @@ dependencies = [
 name = "cargo-release-plan"
 version = "0.4.1"
 dependencies = [
- "crp_impl",
+ "clap",
+ "crp_diag",
+ "crp_publication",
+ "crp_versioning",
+ "crp_workspace",
  "mimalloc",
+ "mutants",
  "ohno",
+ "semver",
+ "serde",
  "serde_json",
+ "sha2",
+ "static_assertions",
  "tempfile",
  "testing",
 ]
@@ -1190,18 +1199,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
-name = "crp_impl"
+name = "crp_diag"
 version = "0.4.1"
 dependencies = [
- "cargo-release-plan",
- "clap",
+ "mutants",
+ "static_assertions",
+ "testing",
+]
+
+[[package]]
+name = "crp_native"
+version = "0.4.1"
+dependencies = [
  "command-group",
- "criterion",
+ "crp_diag",
+ "crp_workspace",
  "ctrlc",
  "dunce",
+ "mutants",
+ "ohno",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "static_assertions",
+ "tempfile",
+ "testing",
+]
+
+[[package]]
+name = "crp_publication"
+version = "0.4.1"
+dependencies = [
+ "crp_diag",
+ "crp_native",
+ "crp_versioning",
+ "crp_workspace",
+ "dunce",
  "flate2",
- "ignore",
- "mimalloc",
  "mutants",
  "ohno",
  "reqwest",
@@ -1214,6 +1249,47 @@ dependencies = [
  "tempfile",
  "testing",
  "tiny_http",
+ "toml_edit",
+]
+
+[[package]]
+name = "crp_versioning"
+version = "0.4.1"
+dependencies = [
+ "criterion",
+ "crp_diag",
+ "crp_workspace",
+ "mimalloc",
+ "mutants",
+ "ohno",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "static_assertions",
+ "tempfile",
+ "testing",
+ "toml_edit",
+]
+
+[[package]]
+name = "crp_workspace"
+version = "0.4.1"
+dependencies = [
+ "criterion",
+ "crp_diag",
+ "crp_workspace",
+ "dunce",
+ "ignore",
+ "mimalloc",
+ "mutants",
+ "ohno",
+ "semver",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "tempfile",
+ "testing",
  "toml_edit",
 ]
 
@@ -3310,8 +3386,10 @@ dependencies = [
 name = "release-binaries"
 version = "0.4.1"
 dependencies = [
- "crp_impl",
+ "crp_diag",
+ "crp_publication",
  "mimalloc",
+ "ohno",
  "serde_json",
  "sha2",
  "tempfile",
@@ -3322,7 +3400,9 @@ dependencies = [
 name = "release-target-check"
 version = "0.4.1"
 dependencies = [
- "crp_impl",
+ "crp_diag",
+ "crp_publication",
+ "crp_workspace",
  "mimalloc",
  "ohno",
  "serde_json",

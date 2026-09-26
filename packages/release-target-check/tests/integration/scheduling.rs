@@ -7,7 +7,7 @@ use std::time::Duration;
 use testing::with_watchdog_timeout;
 
 // All I/O cases live in this binary. Nextest supplies process-level isolation through its group;
-// libtest needs this in-process slot. See docs/implementation.md, "Verification boundary tests".
+// libtest needs this in-process slot. See docs/implementation.md, "Bootstrap candidate command adapter".
 #[cfg(windows)]
 static IO_TEST: Mutex<()> = Mutex::new(());
 

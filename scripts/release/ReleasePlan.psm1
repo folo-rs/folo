@@ -1,34 +1,25 @@
-#requires -Version 7
+#requires -Version 7.6
 
-# Process boundaries for the increment-versions skill and justfiles/just_release.just.
-# Rust owns release policy and artifact validation. PowerShell coordinates Cargo, compatibility
-# evidence, CI outputs and crates.io probes. Ref: docs/build-and-tooling.md,
-# "Automation language and boundaries", and .github/workflows/implementation.md.
+# Version-readiness and compatibility gates called by justfiles/just_release.just from local
+# validation, Standard validation and merge-queue validation. Rust owns release decisions and
+# target selection; this module invokes Cargo, emits CI targets and checks compatibility exits.
+# Version planning uses the self-contained increment-versions skill or the documented CLI.
+# Ref: docs/build-and-tooling.md, "Automation language and boundaries", and
+# .github/workflows/implementation.md.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
-# cargo-semver-checks documents both outcomes as completed comparisons.
-$script:SemverCheckNoFindingsExitCode = 0
-$script:SemverCheckDenyFindingsExitCode = 100
-
-# Bound transient crates.io read uncertainty without retrying confirmed publication states.
-$script:PublishStatusRetryAttempt = 3
-$script:PublishStatusRetryDelaySeconds = 1
-Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
-
 function Get-ReleasePlanCargoArgument {
-    # Only explicit preparation can refresh an inconsistent lockfile while building the helper.
+    # Validation builds the helper without changing the reviewed lockfile.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
         [Parameter(Mandatory)][string[]] $Command,
-        [string] $Base,
-        [switch] $OfflineResolution
+        [string] $Base
     )
 
-    $lockArgument = if ($OfflineResolution) { '--offline' } else { '--locked' }
-    $argument = @('run', '-p', 'cargo-release-plan', $lockArgument, '--') + $Command
+    $argument = @('run', '-p', 'cargo-release-plan', '--locked', '--') + $Command
     if (-not [string]::IsNullOrWhiteSpace($Base)) {
         $argument += @('--base', $Base)
     }
@@ -41,12 +32,10 @@ function Invoke-ReleasePlanCargo {
     param(
         [Parameter(Mandatory)][string[]] $Command,
         [Parameter(Mandatory)][scriptblock] $Cargo,
-        [string] $Base,
-        [switch] $OfflineResolution
+        [string] $Base
     )
 
-    $argument = Get-ReleasePlanCargoArgument -Command $Command -Base $Base `
-        -OfflineResolution:$OfflineResolution
+    $argument = Get-ReleasePlanCargoArgument -Command $Command -Base $Base
     $output = & $Cargo $argument
     if ($LASTEXITCODE -ne 0) {
         throw "cargo-release-plan $($Command[0]) failed with exit code $LASTEXITCODE."
@@ -89,46 +78,12 @@ function Get-AffectedSemverCheckTarget {
         -Command @('semver-targets', '--report', $ReportPath, '--verbose') -Cargo $Cargo)
 }
 
-function Get-ReleasePlanAnalysisBatchJson {
-    # Preserve Rust's stdout verbatim; the skill consumes its ordered batch-record array.
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)][string] $ReportPath,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    Invoke-ReleasePlanCargo `
-        -Command @('analysis-order', '--report', $ReportPath, '--verbose') -Cargo $Cargo
-}
-
-function New-ReleasePlanFile {
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [Parameter(Mandatory)][string] $ReportPath,
-        [Parameter(Mandatory)][string] $DecisionPath,
-        [Parameter(Mandatory)][string] $PlanPath,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    if ($PSCmdlet.ShouldProcess($PlanPath, 'write generated cargo-release-plan input')) {
-        Invoke-ReleasePlanCargo -Command @(
-            'propose', '--report', $ReportPath, '--decisions', $DecisionPath,
-            '--out', $PlanPath, '--verbose'
-        ) -Cargo $Cargo
-    }
-}
-
 function Get-SemverCheckCargoArgument {
     param(
-        [Parameter(Mandatory)][string[]] $Package,
-        [string] $ManifestPath
+        [Parameter(Mandatory)][string[]] $Package
     )
 
     $argument = @('semver-checks', '--all-features')
-    if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
-        $argument += @('--manifest-path', $ManifestPath)
-    }
     foreach ($name in $Package) {
         $argument += @('-p', $name)
     }
@@ -234,110 +189,6 @@ function Invoke-VerifySemverCheck {
     }
 }
 
-function Assert-SemverCheckExitCode {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][int] $ExitCode,
-        [Parameter(Mandatory)][string] $LogPath
-    )
-
-    if ($ExitCode -ne $script:SemverCheckNoFindingsExitCode -and
-        $ExitCode -ne $script:SemverCheckDenyFindingsExitCode) {
-        throw "cargo-semver-checks failed with exit code $ExitCode; log: '$LogPath'."
-    }
-    Write-Host "cargo-semver-checks completed with exit code $ExitCode; log: '$LogPath'."
-}
-
-function Invoke-PrepareReleasePlan {
-    # Invalidate incomplete preparation so later stages cannot consume stale evidence.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $OutDir,
-        [string] $Base = $env:RELEASE_PLAN_BASE,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
-    $preparedPath = Join-Path $OutDir 'prepared.json'
-    Remove-Item -LiteralPath $preparedPath -Force -ErrorAction SilentlyContinue
-    Write-ReleasePlanBaseVerbose -Base $Base
-    $completed = $false
-    try {
-        Invoke-ReleasePlanCargo -Command @('prepare', '--output', $OutDir) `
-            -Base $Base -OfflineResolution -Cargo $Cargo
-        if (-not (Test-Path -LiteralPath $preparedPath -PathType Leaf)) {
-            throw "cargo-release-plan prepare did not produce '$preparedPath'."
-        }
-        Write-ReleaseSemverEvidence -OutDir $OutDir -Cargo $Cargo
-        $completed = $true
-    } finally {
-        if (-not $completed) {
-            Remove-Item -LiteralPath $preparedPath -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-function Invoke-ReleaseReport {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $OutDir,
-        [string] $Base = $env:RELEASE_PLAN_BASE,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
-    Write-ReleasePlanBaseVerbose -Base $Base
-    Invoke-ReleasePlanCargo -Command @('report', '--out-dir', $OutDir) -Base $Base -Cargo $Cargo
-    Write-ReleaseSemverEvidence -OutDir $OutDir -Cargo $Cargo
-}
-
-function Write-ReleaseSemverEvidence {
-    # Rust selects targets; this boundary retains logs for successful comparisons and findings.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $OutDir,
-        [Parameter(Mandatory)][scriptblock] $Cargo,
-        [string] $ManifestPath
-    )
-
-    $OutDir = [IO.Path]::GetFullPath($OutDir)
-    if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
-        $ManifestPath = [IO.Path]::GetFullPath($ManifestPath)
-    }
-    $targets = Get-AffectedSemverCheckTarget -ReportPath (Join-Path $OutDir 'report.json') `
-        -Cargo $Cargo
-    $logPath = Join-Path $OutDir 'semver-checks.log'
-    if ($targets.Count -eq 0) {
-        'No consumer-contract package requires a cargo-semver-checks comparison.' |
-            Set-Content -LiteralPath $logPath -Encoding utf8
-        Write-Host "No cargo-semver-checks target was selected; log: '$logPath'."
-        return
-    }
-
-    $argument = Get-SemverCheckCargoArgument -Package $targets -ManifestPath $ManifestPath
-    Write-Verbose "Running cargo $($argument -join ' '); output captured at '$logPath'." -Verbose
-    $previousPreference = $PSNativeCommandUseErrorActionPreference
-    # Findings are a documented nonzero exit, so capture and classify them explicitly.
-    $PSNativeCommandUseErrorActionPreference = $false
-    $locationChanged = $false
-    try {
-        if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
-            # Cargo discovers configuration from the working directory, not --manifest-path.
-            Push-Location (Split-Path -Parent $ManifestPath)
-            $locationChanged = $true
-        }
-        Invoke-SemverCheckCargo -Argument $argument -Cargo $Cargo 2>&1 |
-            Tee-Object -FilePath $logPath
-        $exitCode = $LASTEXITCODE
-    } finally {
-        if ($locationChanged) {
-            Pop-Location
-        }
-        $PSNativeCommandUseErrorActionPreference = $previousPreference
-    }
-    Assert-SemverCheckExitCode -ExitCode $exitCode -LogPath $logPath
-}
-
 function Invoke-SemverCheck {
     [CmdletBinding()]
     param(
@@ -354,79 +205,6 @@ function Invoke-SemverCheck {
     if ($LASTEXITCODE -ne 0) {
         throw "cargo-semver-checks failed with exit code $LASTEXITCODE."
     }
-}
-
-function Invoke-ExpandReleasePlan {
-    # Rust owns final-path alias validation and staged promotion.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $PlanPath,
-        [Parameter(Mandatory)][string] $ExpandedPath,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    Invoke-ReleasePlanCargo -Command @(
-        'expand', '--plan', $PlanPath, '--out', $ExpandedPath, '--preserve-input'
-    ) -Cargo $Cargo
-}
-
-function Invoke-PreviewReleasePlan {
-    # Only evidence assessed against the captured prospective workspace may retain a plan.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $PreparedPath,
-        [Parameter(Mandatory)][string] $PlanPath,
-        [Parameter(Mandatory)][string] $OutDir,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    $expandedPath = Join-Path $OutDir 'plan.json'
-    # Rust validates filesystem aliases before creating directories or invalidating a marker.
-    # Only a successful preview grants this wrapper ownership for later evidence cleanup.
-    $produced = $false
-    $completed = $false
-    try {
-        Invoke-ReleasePlanCargo -Command @(
-            'preview', '--prepared', $PreparedPath, '--plan', $PlanPath, '--output', $OutDir
-        ) -Cargo $Cargo
-        $produced = $true
-        $inspection = Get-ReleasePlanJson -Command @(
-            'inspect-plan', '--plan', $expandedPath, '--require-resolved'
-        ) -Cargo $Cargo
-        $manifestPath = [string] $inspection.evidence_manifest_path
-        if (-not [IO.Path]::IsPathFullyQualified($manifestPath) -or
-            -not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-            throw "Prospective evidence manifest is unavailable: '$manifestPath'."
-        }
-        $capturedPlan = [IO.File]::ReadAllText([IO.Path]::GetFullPath($expandedPath))
-        Write-ReleaseSemverEvidence -OutDir $OutDir -ManifestPath $manifestPath -Cargo $Cargo
-        if ([IO.File]::ReadAllText([IO.Path]::GetFullPath($expandedPath)) -cne $capturedPlan) {
-            throw 'Compatibility evidence collection changed the captured release plan.'
-        }
-        Invoke-ReleasePlanCargo -Command @(
-            'verify-preview', '--plan', $expandedPath, '--manifest-path', $manifestPath
-        ) -Cargo $Cargo
-        $completed = $true
-    } finally {
-        if ($produced -and -not $completed -and (Test-Path -LiteralPath $expandedPath)) {
-            Remove-Item -LiteralPath $expandedPath -Force
-        }
-    }
-}
-
-function Invoke-ApplyReleasePlan {
-    # The Just boundary requires captured resolution; the general Rust apply command also
-    # supports proposed manifest-only edits, which must not bypass the publication gate.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $ExpandedPath,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
-    )
-
-    $null = Get-ReleasePlanJson -Command @(
-        'inspect-plan', '--plan', $ExpandedPath, '--require-resolved'
-    ) -Cargo $Cargo
-    Invoke-ReleasePlanCargo -Command @('apply', '--plan', $ExpandedPath) -Cargo $Cargo
 }
 
 function Invoke-ValidateVersions {
@@ -464,87 +242,4 @@ function Invoke-ValidateVersions {
     Invoke-ReleasePlanCargo -Command @('check', '--format', 'github') -Base $Base -Cargo $Cargo
 }
 
-function Get-PublishStatusWithUnknownRetry {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'GetPublishStatus',
-        Justification = 'Consumed by the Invoke-WithRetry action closure.')]
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][scriptblock] $GetPublishStatus,
-        [ValidateRange(1, [int]::MaxValue)][int] $Attempt,
-        [ValidateRange(0, [int]::MaxValue)][int] $DelaySeconds
-    )
-
-    $unknownStatusMessage = "crates.io publication status for '$Name' was Unknown"
-    try {
-        return Invoke-WithRetry -Attempt $Attempt -DelaySeconds $DelaySeconds -Action {
-            $status = [string] (& $GetPublishStatus $Name)
-            switch -CaseSensitive ($status) {
-                'Published' { return 'Published' }
-                'NeverPublished' { return 'NeverPublished' }
-                default { throw $unknownStatusMessage }
-            }
-        } -RetryOn {
-            param($ErrorRecord)
-            return $ErrorRecord.Exception.Message -eq $unknownStatusMessage
-        }
-    } catch {
-        if ($_.Exception.Message -eq $unknownStatusMessage) {
-            return 'Unknown'
-        }
-        throw
-    }
-}
-
-function Assert-IncrementPackagePublished {
-    # Rust validates expanded targets and publication eligibility before any registry access.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $ExpandedPath,
-        [string] $ManifestPath,
-        [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument },
-        [scriptblock] $GetPublishStatus = {
-            param([string] $Name)
-            Get-CratePublishStatus -Name $Name
-        },
-        [ValidateRange(1, [int]::MaxValue)][int] $PublishStatusRetryAttempt =
-            $script:PublishStatusRetryAttempt,
-        [ValidateRange(0, [int]::MaxValue)][int] $PublishStatusRetryDelaySeconds =
-            $script:PublishStatusRetryDelaySeconds
-    )
-
-    Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
-    $command = @('inspect-plan', '--plan', $ExpandedPath)
-    if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
-        $command += @('--manifest-path', $ManifestPath)
-    }
-    $inspection = Get-ReleasePlanJson -Command $command -Cargo $Cargo
-    $neverPublished = [System.Collections.Generic.List[string]]::new()
-    $unknown = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in $inspection.publication_targets) {
-        $status = Get-PublishStatusWithUnknownRetry -Name $name `
-            -GetPublishStatus $GetPublishStatus -Attempt $PublishStatusRetryAttempt `
-            -DelaySeconds $PublishStatusRetryDelaySeconds
-        switch -CaseSensitive ($status) {
-            'Published' { }
-            'NeverPublished' { $neverPublished.Add($name) }
-            default { $unknown.Add($name) }
-        }
-    }
-    if ($neverPublished.Count -gt 0) {
-        throw (
-            "The increment reaches never-published packages: $($neverPublished -join ', '). " +
-            'Publish these packages manually first, then configure Trusted Publishing.'
-        )
-    }
-    if ($unknown.Count -gt 0) {
-        throw "Could not determine crates.io publication status for: $($unknown -join ', ')."
-    }
-}
-
-Export-ModuleMember -Function `
-    Invoke-ValidateVersions, Invoke-VerifySemverCheck, Invoke-ReleaseReport, `
-    Invoke-PrepareReleasePlan, Invoke-SemverCheck, Get-ReleasePlanAnalysisBatchJson, `
-    Assert-IncrementPackagePublished, New-ReleasePlanFile, Invoke-ExpandReleasePlan, `
-    Invoke-PreviewReleasePlan, Invoke-ApplyReleasePlan
+Export-ModuleMember -Function Invoke-ValidateVersions, Invoke-VerifySemverCheck, Invoke-SemverCheck

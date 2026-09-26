@@ -1,6 +1,8 @@
-//! Compatibility entry point for the shared cargo-release-plan native binary engine.
+//! Temporary executable wiring for the bootstrap publisher's binary commands.
 
-pub use crp_impl::publication::binaries::run;
+pub use run::run;
+
+mod run;
 
 #[cfg(test)]
 ::testing::set_allocator!();

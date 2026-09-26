@@ -21,7 +21,7 @@ or repository-local release scripts.
 
 The product is a command-line application, not a Rust library API. Its supported
 interfaces are the CLI and documented configuration and artifact formats.
-Library targets in `cargo-release-plan` and `crp_impl` exist only for executable
+Library targets in the application and its implementation packages exist only for executable
 wiring and maintainer tests. Changes to those internal Rust types do not by
 themselves require a breaking release; changes to the supported interfaces still
 receive their normal compatibility assessment.
@@ -51,6 +51,12 @@ A **semantic decision** judges the significance of the changed consumer contract
 into package versions, including required group and dependency effects. The
 resulting resolved plan fixes the manifest and lockfile edits to apply.
 
+Every tracked workspace member is a **version target**. A **non-publishable version
+target** declares `publish = false`: it participates in version-group alignment
+without registry publication or a semantic decision about its source. A
+publishable private-API package is different; it still has released content and
+publication obligations.
+
 The process connects these concepts as follows:
 
 1. Prepare the intended dependency resolution and collect an assessment against
@@ -78,7 +84,7 @@ publication delivers those declared versions without reconsidering the decision.
 | --- | --- |
 | Maintainer or authoring agent | Understand the package's promises, judge behavioral and semantic compatibility, and explain the chosen levels. |
 | `cargo-release-plan` | Collect released-content evidence; validate version rules; compute and apply mechanical plan effects; validate publication inputs; reconcile and publish the chosen versions. |
-| External compatibility checker | Supply evidence about the API changes it can detect. `cargo-semver-checks` checks supported Rust library contracts; it does not cover every behavioral, CLI or data-format promise. |
+| API compatibility checker (`cargo-semver-checks`) | Supply evidence about supported Rust library contracts; it does not cover every behavioral, CLI or data-format promise. |
 | `increment-versions` skill | Guide the authoring agent through evidence collection, semantic decisions, preview, application and verification. It uses the tool's operations rather than implementing another version resolver. |
 | Reviewer and repository merge policy | Approve the complete contribution and require its automated checks. Completing the skill is not approval to merge or publish. |
 | GitHub Action and reusable workflows | Install the selected tools, select event-specific inputs, provide jobs and permissions, transport artifacts and expose outcomes. They do not independently choose package versions or release policy. |
@@ -86,7 +92,7 @@ publication delivers those declared versions without reconsidering the decision.
 
 Thus "the tool does not infer API compatibility" describes the semantic boundary,
 not an absence of compatibility support. Selecting packages to compare, invoking
-an external checker in an explicit compatibility operation, and enforcing effects
+the API compatibility checker in an explicit operation, and enforcing effects
 of an already-known breaking version are mechanical operations. Deciding whether
 an undocumented behavior change breaks a promise remains the author's task.
 
@@ -190,7 +196,7 @@ wiring declares `private-api = true` as well. Its CLI and artifact contracts sti
 receive the normal compatibility assessment; internal Rust visibility does not
 make those types a supported library interface.
 
-This declaration selects evidence for the external compatibility checker; it
+This declaration selects evidence for the API compatibility checker; it
 does not ask `cargo-release-plan` to infer whether an API changed.
 `semver-targets` reads the report's consumer-contract flags and chooses the public
 library contracts that need comparison. Assessing an implementation partition directly would
@@ -203,7 +209,7 @@ For example, if `widget_impl` and `widget` share a version group and only
 `widget` for library API comparison. Both packages still participate in
 released-content assessment and version alignment. The author separately judges
 behavioral effects; a package with no library target can still have a breaking CLI
-change that a Rust API checker cannot detect.
+change that the API compatibility checker cannot detect.
 
 ### Public dependencies
 
@@ -396,7 +402,7 @@ its additional evidence can require a fresh semantic decision.
 
 `check-compatibility` consumes prepared inputs or a resolved plan's retained
 prospective workspace, or collects fresh read-only report evidence. It uses the report-selected consumer contracts and runs
-the supported external API checker. The operation records comparison inputs,
+the supported API compatibility checker. The operation records comparison inputs,
 checker identity, findings and diagnostics; it does not replace the author's
 semantic decisions.
 
@@ -421,8 +427,8 @@ the skill uses it as a floor while assessing the complete contract.
 
 `check-published` is an explicit registry-read operation, separate from offline
 plan inspection. For a resolved plan, it validates the complete target set and
-checks whether its publishable packages are established on crates.io. Alignment-only
-helpers require no registry observation. Never-published packages and indeterminate
+checks whether its publishable packages are established on crates.io. Non-publishable
+version targets require no registry observation. Never-published packages and indeterminate
 queries block this pre-application gate; neither is silently treated as published.
 
 Workspace-wide discovery provides an early advisory handoff before a plan exists.
@@ -458,7 +464,7 @@ behavior without giving up the general command's supported in-place expansion.
 
 `inspect-plan` validates an expansion against the selected workspace and provides
 publication-eligible target names and any retained compatibility manifest.
-Non-publishable alignment targets remain part of validation but not publication.
+Non-publishable version targets remain part of validation but not publication.
 Requiring resolved evidence applies the same captured-state checks as a dry-run
 application. Inspection performs no writes or registry queries; external callers
 can use it independently of the publication commands' availability checks.
@@ -599,10 +605,12 @@ increment before edits are committed. Publication instead requires a clean,
 pinned release snapshot. Its **publication source** identifies the merged files
 whose declared versions are to be delivered. A **tag target** identifies the
 immutable commit a package tag actually names and from which its binaries build.
-The tag target can be a later release-equivalent commit; neither identity replaces
-the baseline used to assess the author's changes.
+The tag target can be a later **release-equivalent commit**: an eligible
+first-parent descendant of the publication source retaining the requested package
+version and released content. Neither identity replaces the baseline used to
+assess the author's changes.
 
-The external API checker's comparison baseline is a separate input, commonly the
+The API compatibility checker's comparison baseline is a separate input, commonly the
 latest published crate version. That comparison detects supported API changes.
 The release baseline described here selects Git history for version validity;
 using the word "baseline" in both tools does not make those inputs interchangeable.
@@ -788,8 +796,8 @@ error. A well-formed exact requirement whose version is stale still forms its
 group: `check` reports the stale requirement and `apply` can repair it.
 
 If one publishable member needs an increment, the plan expands to every version
-target in its group. A plan may also target a non-publishable member directly,
-and helper-only groups can be aligned without publishing anything. The target
+target in its group. A plan may also target a non-publishable version target directly,
+and groups containing only such targets can be aligned without publication. The target
 starts from the highest declared member version, including non-publishable and
 new members, and applies the highest chosen increment level. Entries that expand
 to the same group must all use increment levels or all use one matching exact
@@ -877,7 +885,7 @@ resolved expanded version plan
 The proposal can name a group once; the expanded artifact names every version
 target. If preview exposes a binary's changed dependency closure, that package
 also appears in the resolved effects and receives semantic assessment before
-application. A nonpublishable group member appears for alignment, not upload.
+application. A non-publishable version target appears for alignment, not upload.
 
 `prepared.json` binds the original inputs. `report.json` explains their released
 changes. The author's decisions are the semantic input to `propose`.
@@ -896,7 +904,8 @@ for a different purpose.
 
 Publication configuration is a committed `.cargo/release_plan.toml` in the
 selected Cargo workspace. A `--config` path selects another file; relative paths
-resolve from that workspace. Configuration declares the intended GitHub repository,
+resolve from that workspace and absolute overrides are accepted. Publication
+requires tracked configuration inside the source repository. Configuration declares the intended GitHub repository,
 release branch and binary target selection. Invocation-specific source identities
 and output locations are command inputs, not persistent configuration.
 
@@ -908,6 +917,14 @@ them, and package restrictions narrow that selection. Invalid targets and binary
 packages with no selected supported target are configuration errors. Multiple
 installable binaries are rejected, not silently reduced to one. Runner provisioning
 belongs to the workflow, not to package-version assessment.
+
+One default-feature executable is the canonical package artifact. Asset names
+identify the package, version and native target, without a separate binary or
+feature dimension, and the ZIP contains that executable at its root. This keeps
+selection consistent with the package's `cargo-binstall` metadata and the shared
+workflow. Supporting another executable or configurable feature selection requires
+a corresponding unambiguous artifact identity and installation contract, not
+merely relaxed metadata validation.
 
 `prepare-publish` pins a clean source commit on the configured release branch's
 first-parent history. It verifies the tracked Cargo inputs, package identities,
@@ -927,7 +944,7 @@ process preserves that correspondence.
 
 Every publishable workspace package at that snapshot contributes its exact
 name/version request, including packages assessed as unchanged. Nonpublishable
-version-alignment targets contribute no upload request. Preparation can read
+version targets contribute no upload request. Preparation can read
 remote availability, but neither existing tags nor the report's pending-release
 subset substitutes for checking crates.io.
 
@@ -935,7 +952,7 @@ subset substitutes for checking crates.io.
 
 `prepare-publish` creates the publication manifest once from the validated merged
 source and its committed configuration. It discovers the workspace packages,
-excludes nonpublishable members, and captures every remaining exact version
+excludes non-publishable version targets, and captures every remaining exact version
 request. It also captures binary names, target selection and release-relevant
 source identity needed to validate subsequent operations.
 
@@ -961,7 +978,7 @@ GitHub reconciliation, possibly after the release branch has advanced.
 Every frozen batch also has a content identity for its exact requested work.
 Hosted outcomes record their workflow run and attempt independently of that
 identity. Reporting selects the latest applicable outcomes while preserving older
-receipts; an older successful batch cannot satisfy a later reconciliation that
+outcomes; an older successful batch cannot satisfy a later reconciliation that
 observed those assets missing, even when the requested work is identical.
 
 Neither manifests nor batches contain credentials or runner-specific absolute
@@ -1167,6 +1184,11 @@ failures do not suppress the remaining work, but any required failure makes the
 run fail. Cancellation stops further work and publication while retaining
 diagnostics for operations already attempted.
 
+The archive and checksum are one integrity unit. A rebuild may produce different
+bytes even from release-equivalent source, so a newly generated checksum must
+not be paired with an unverified surviving remote archive. Repair replaces both
+members using the locally generated pair.
+
 The nonpublishing binary mode consumes an existing frozen batch and builds and
 stages its requested archives without querying or writing GitHub releases. It
 retains source and archive verification and requires no upload credential. It
@@ -1192,12 +1214,12 @@ Publication artifacts are handoff records, not a permanent release database.
 The shared workflow preserves intent and per-attempt outcomes for its documented
 artifact-retention period, including on failure. A failed-job rerun retrieves the
 original manifest and any existing batch rather than rediscovering requests from
-today's branch. After manual tagging, GitHub reconciliation can emit the previously
+the current release-branch tip. After manual tagging, GitHub reconciliation can emit the previously
 blocked batch from that original manifest. If required evidence is unavailable,
 the rerun stops; an explicit recovery invocation
 can prepare new evidence for a chosen retained source commit. That recovery
 revalidates the source and remote state and is not a continuation of a missing
-receipt. A removed source commit or incompatible artifact schema requires an
+outcome. A removed source commit or incompatible artifact schema requires an
 explicit diagnostic, never fallback to the latest source.
 
 Registry publication and all GitHub phases execute within the same workflow run.
@@ -1207,27 +1229,24 @@ compensate for failed cleanup or reporting.
 
 ## Reusable GitHub integration
 
-The integration follows the distribution and invocation conventions of
-[`cargo-bench-history`'s reusable action](../../cargo-bench-history/docs/reusable-action.md).
-The common patterns are a dedicated action repository, a command-selecting
-composite, reusable workflows, committed configuration, exact tool pins and
-source dogfooding. They do not require copying benchmark-specific report
-semantics or splitting release functionality into a companion executable.
+The integration exposes a command-selecting composite action and reusable
+workflows over the same application. Consumers select committed configuration
+and an immutable action revision. **Source installation** builds the controller
+from an explicitly selected checkout; it tests application changes without
+claiming that the corresponding package or archives are published.
+The [implementation guide](implementation.md#reusable-action-boundary) owns the
+action repository and bootstrap boundaries.
 
 ### Consumption and configuration
 
-The public `folo-rs/cargo-release-plan-action` repository contains a root
-`action.yml`, reusable workflows and their installation bootstrap. Rust behavior
-ships in the monorepo's `cargo-release-plan` package. The Marketplace-listed
-composite and reusable workflows share one action release and tag stream.
+The composite and reusable workflows in `folo-rs/cargo-release-plan-action`
+share one action release and tag stream.
 
 The composite's required `command` selects version checking, compatibility
 checking, preparation, registry publication, GitHub reconciliation, binary
 publication or failure reporting.
 Inputs that do not apply to that command are rejected. Substantive selection,
-validation, reconciliation and report composition belong to the installed application;
-PowerShell only bootstraps installation, and YAML supplies orchestration and
-input/artifact wiring.
+validation, reconciliation and report composition belong to the installed application.
 
 Reusable workflows provide the standard read-only merge check and release flow.
 The check workflow resolves the configured release baseline for the tested event,
@@ -1303,7 +1322,7 @@ Reporting does not require caller-created labels or message templates.
 ### Installation and version selection
 
 The action's release manifest records its own version, the exact
-`cargo-release-plan` version it selects, and the supported external compatibility
+`cargo-release-plan` version it selects, and the supported API compatibility
 checker pin. Action and package versions are independent.
 Consumers select a tested action revision, not a separately overridden tool version.
 All phases of a released workflow use that selection.
@@ -1322,9 +1341,8 @@ The shared installation input names and behavior match the benchmark action:
 | `install` | Install the exact crates.io version from its published source with its lockfile. |
 | `path` | Build the application from the Folo checkout selected by `source-path`, using that checkout's lockfile. |
 
-Released installed-binary caches distinguish tool version, runner OS and
-architecture. `path` does not restore a released executable in place of the
-selected source. Each operation installs only the application and external tools
+`path` does not substitute a released executable for the selected source.
+Each operation installs only the application and external tools
 it actually needs; publication-only jobs do not install compatibility checkers.
 No separately configured publication helper is required. Installed execution has no dependency
 on repository-root Folo scripts; its runtime prerequisites are supplied by the
@@ -1337,12 +1355,9 @@ Source publication and binary builds use their documented source-toolchain
 contract. Unsupported combinations fail in preflight rather than first being
 discovered after a registry upload.
 
-Folo consumes the same shared workflow with `install-method: path`. The invocation
-checkout supplies automation while separate pinned worktrees supply release
-sources. This also lets the application publish its own package without installing
-the version being published first. The chosen action revision and source checkout
-are validated together; source dogfooding does not establish published-installation
-availability.
+Source installation can publish the application's own package without first
+installing the version being published. It validates the chosen action revision
+and source checkout together, not published-installation availability.
 
 ### Releasing the action
 
@@ -1353,25 +1368,17 @@ The action's release manifest is the authority for its tool selection.
 
 Tool changes that move a pinned version have a paired action change carrying the
 new exact pin and an independently chosen action version. Tool publication
-precedes action publication. The action's required installation gate installs
-the actual pinned crates.io package and every promised prebuilt target in isolated
-roots, bypassing installed-binary caches and disabling source fallback when
-checking archives. It verifies executable identity and the command contracts used
-by the action, not merely that some installation succeeded. The external
-compatibility checker has a separate installation and identity check; it is not
-an application archive produced by this project's release pipeline.
+precedes action publication. The required installation gate verifies the exact
+published application, promised archives and API compatibility checker.
+It requires the executable identity and command contracts used by that action,
+not merely a successful installation.
 
-Missing package versions or archives block the action release. Source dogfooding
-and a successful registry-only publication cannot substitute for the gate.
-Publication in the tool repository does not itself rerun a failed action check;
-the paired change follows availability and reruns that check. The final action
-release rechecks availability before publishing tags, and retries preserve
-existing immutable version tags without moving the major reference backward.
-
-The action README provides adoption examples; the application's user
-documentation owns the command and automation reference. Maintainer setup covers
-Trusted Publishing, branch protection, action-release checks and Marketplace
-registration without introducing stored cross-repository credentials.
+Missing package versions or archives block the action release. Source-mode tests,
+cached executables and source fallback do not establish archive availability.
+Retries preserve immutable version tags and never move the major reference
+backward. The [implementation boundary](implementation.md#reusable-action-boundary)
+describes distribution mechanics; the public guide owns consumer adoption and
+upgrade instructions.
 
 ## User guide and reusable skill
 

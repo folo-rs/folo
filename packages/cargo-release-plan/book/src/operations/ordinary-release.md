@@ -29,8 +29,8 @@ resolved expansion and current evidence, not a list of directly edited files:
 | `widget`, `widget_impl`, `widget-fixtures` | `1.4.0` | `1.5.0` | Compatible public operation in `widget`; supporting implementation in `widget_impl`; helper moves for alignment only and is not published. |
 | `widget-cli` | `2.0.0` | `2.0.1` | Assessed dependency update without a stronger CLI change; sufficient pending patch increment retained. |
 
-Show previous versions at each publishable package's anchor. For a nonpublishable
-helper, use its declared alignment starting point. If members start at different
+Show previous versions at each publishable package's anchor. For a non-publishable
+version target, use its declared alignment starting point. If members start at different
 versions, show each movement rather than hiding it in one group value.
 
 Include:

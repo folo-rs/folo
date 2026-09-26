@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Thin native-helper boundary shared by release planning and the platform build job.
 # Rust owns grouping, asset completeness and batch execution; PowerShell owns controller

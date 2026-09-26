@@ -315,8 +315,10 @@ validation retain full scope. See
 `just install-tools` installs and verifies the ZIP tools used by `release-binaries`
 and `just release-binary-smoke`; runner images are not assumed to provide them.
 Windows receives the checksum-verified standalone `7za` executable from the pinned
-official 7-Zip extra archive in the Cargo bin directory. Windows ARM64 uses the x64
-executable under emulation. The installer uses Windows' bundled `tar` to extract it.
+official 7-Zip extra archive in the Cargo bin directory. Setup selects the x64 or
+ARM64 payload matching the PowerShell process architecture and verifies its digest
+before running either a restored or newly extracted executable. The installer uses
+Windows' bundled `tar` to extract it.
 Linux uses the distribution's `zip` and `unzip` packages through APT; macOS installs
 missing tools through Homebrew. Package-manager failures are setup failures.
 Already available Unix tools are verified rather than reinstalled.

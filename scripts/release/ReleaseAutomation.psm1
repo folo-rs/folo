@@ -1,16 +1,16 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml)
 # and the local `just check-never-published` recipe.
 #
-# The workflow steps and release recipes are thin `just` wrappers (in justfiles/just_release.just)
-# that import this module and call its functions, so the
-# non-trivial logic lives here where it can be exercised by the Pester suite
-# (ReleaseAutomation.Tests.ps1) against fixtures rather than only by pushing to `main`.
+# The workflow steps and release recipes import this module for package discovery, runner
+# selection and registry publication. ReleasePublication.psm1 owns GitHub reconciliation;
+# ReleaseBinaries.psm1 connects native batch planning/execution to the Rust controller.
+# Pester exercises the PowerShell responsibilities against fixtures.
 #
 # The functions run real external tools where that is safe on fixtures (`cargo metadata`, file
 # I/O) and isolate the ones that would touch crates.io / GitHub for real (`release-plz`, `gh`)
-# behind small seams the tests mock.
+# behind explicit boundaries the tests mock.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

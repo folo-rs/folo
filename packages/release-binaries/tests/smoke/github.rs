@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 
 use crate::{Fixture, SMOKE_WATCHDOG, assert_success, command, compile_tool, write};
 
-/// A native fake `gh` executable keeps process arguments, credentials and release transitions
-/// observable while exercising the production controller without GitHub access.
+/// Models GitHub release state through a native fake `gh` executable.
+///
+/// Process arguments, credentials and release transitions remain observable without GitHub access.
 struct GithubFixture {
     directory: PathBuf,
 }
@@ -18,6 +19,13 @@ impl GithubFixture {
     fn new(fixture: &Fixture) -> Self {
         let directory = fixture.root.path().join("github-fixture");
         fs::create_dir_all(&directory).unwrap();
+        for name in ["alpha", "beta"] {
+            fs::write(
+                directory.join(format!("{name}-v1.0.0.source")),
+                &fixture.source,
+            )
+            .unwrap();
+        }
         compile_tool(
             &directory,
             "gh",
@@ -29,15 +37,46 @@ use std::path::PathBuf;
 
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
-    assert_eq!(args[0], "release");
     assert_eq!(env::var("GH_TOKEN").unwrap(), "credential-filter-canary");
     for name in ["GITHUB_TOKEN", "GIT_TOKEN", "INPUT_TOKEN", "DEFAULT_GITHUB_TOKEN"] {
         assert!(env::var_os(name).is_none());
     }
-    assert_eq!(&args[args.len() - 2..], ["--repo", "fixture/does-not-exist"]);
     let directory = PathBuf::from(env::var_os("RELEASE_FIXTURE_GITHUB").unwrap());
-    let tag = &args[2];
     let mut log = OpenOptions::new().create(true).append(true).open(directory.join("calls")).unwrap();
+    if args[0] == "api" {
+        let path = args[1].strip_prefix("repos/fixture/does-not-exist/git/").unwrap();
+        if let Some(tag) = path.strip_prefix("matching-refs/tags/") {
+            writeln!(log, "tag {tag}").unwrap();
+            match fs::read_to_string(directory.join(format!("{tag}.source"))) {
+                Ok(source) => {
+                    let annotated = fs::read_to_string(directory.join("annotated")).ok().as_deref() == Some(tag);
+                    // A synthetic full object identity distinguishes the annotation from its commit.
+                    let object = if annotated { "a".repeat(40) } else { source };
+                    let kind = if annotated { "tag" } else { "commit" };
+                    let tag = if directory.join("prefix-only").is_file() { format!("{tag}-other") } else { tag.to_owned() };
+                    let reference = format!("{{\"ref\":\"refs/tags/{tag}\",\"object\":{{\"type\":\"{kind}\",\"sha\":\"{object}\"}}}}");
+                    if directory.join("duplicate").is_file() {
+                        println!("[{reference},{reference}]");
+                    } else {
+                        println!("[{reference}]");
+                    }
+                }
+                Err(_) => println!("[]"),
+            }
+        } else if let Some(object) = path.strip_prefix("tags/") {
+            assert_eq!(object, "a".repeat(40));
+            writeln!(log, "peel {object}").unwrap();
+            let tag = fs::read_to_string(directory.join("annotated")).unwrap();
+            let source = fs::read_to_string(directory.join(format!("{tag}.source"))).unwrap();
+            println!("{{\"object\":{{\"type\":\"commit\",\"sha\":\"{source}\"}}}}");
+        } else {
+            panic!("unexpected API request");
+        }
+        return;
+    }
+    assert_eq!(args[0], "release");
+    assert_eq!(&args[args.len() - 2..], ["--repo", "fixture/does-not-exist"]);
+    let tag = &args[2];
     writeln!(log, "{} {tag}", args[1]).unwrap();
     let base = format!("{tag}-{}", env::var("RELEASE_FIXTURE_TRIPLE").unwrap());
     let state = directory.join(tag);
@@ -90,6 +129,7 @@ fn verifies_uploaded_assets_and_retries_only_incomplete_releases() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
         let fixture = Fixture::new();
         let github = GithubFixture::new(&fixture);
+        fs::write(github.directory.join("annotated"), "alpha-v1.0.0").unwrap();
         let binaries = json!([fixture.binary("alpha"), fixture.binary("beta")]);
         let summary = fixture.root.path().join("summary.md");
         let mut first = fixture.batch_command(&binaries, "out");
@@ -156,6 +196,50 @@ fn verifies_uploaded_assets_and_retries_only_incomplete_releases() {
                 .count(),
             2
         );
+        assert!(log.lines().any(|line| line.starts_with("peel ")));
+    });
+}
+
+#[test]
+fn invalid_tag_bindings_fail_before_assets_or_source_work() {
+    testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
+        let fixture = Fixture::new();
+        let github = GithubFixture::new(&fixture);
+        for state in ["changed", "missing", "duplicate", "prefix"] {
+            let source = github.directory.join("alpha-v1.0.0.source");
+            fs::write(&source, &fixture.source).unwrap();
+            match state {
+                "changed" => fs::write(&source, "b".repeat(40)).unwrap(),
+                "missing" => fs::remove_file(&source).unwrap(),
+                "duplicate" => fs::write(github.directory.join("duplicate"), "").unwrap(),
+                "prefix" => fs::write(github.directory.join("prefix-only"), "").unwrap(),
+                _ => panic!(),
+            }
+            let output = format!("out/{state}");
+            let mut command = fixture.batch_command(&json!([fixture.binary("alpha")]), &output);
+            github.configure(&fixture, &mut command);
+            assert!(!command.output().unwrap().status.success());
+            assert!(!fixture.root.path().join(output).exists());
+            if state == "duplicate" {
+                fs::remove_file(github.directory.join("duplicate")).unwrap();
+            }
+        }
+        let log = fs::read_to_string(github.directory.join("calls")).unwrap();
+        assert!(log.lines().all(|line| line == "tag alpha-v1.0.0"));
+    });
+}
+
+#[test]
+fn no_upload_never_queries_frozen_tags_or_release_assets() {
+    testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
+        let fixture = Fixture::new();
+        let github = GithubFixture::new(&fixture);
+        fs::remove_file(github.directory.join("alpha-v1.0.0.source")).unwrap();
+        let mut command = fixture.batch_command(&json!([fixture.binary("alpha")]), "out");
+        command.arg("--no-upload");
+        github.configure(&fixture, &mut command);
+        assert_success(&command.output().unwrap());
+        assert!(!github.directory.join("calls").exists());
     });
 }
 

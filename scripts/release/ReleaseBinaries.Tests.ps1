@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # In-process controller boundary: upload credentials must be absent during compilation and

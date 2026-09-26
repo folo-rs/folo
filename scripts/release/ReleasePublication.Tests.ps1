@@ -355,9 +355,11 @@ Describe 'Immutable binary build planning' {
         }
         Mock Invoke-ReleaseBinariesHelper -ModuleName ReleasePublication {
             $inputPlan = ConvertFrom-Json -InputObject $InputJson
+            # Retain the batch, nested binary records and their release-target arrays.
             ConvertTo-Json -InputObject @(@{
                 triple = 'x86_64-unknown-linux-gnu'
                 os = 'ubuntu-latest'
+                # The private native planner's one-binary job-watchdog projection.
                 timeout_minutes = 150
                 binaries = @($inputPlan.binaries)
             }) -Depth 8 -Compress

@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Fan-in classification for the Standard and Merge queue validation `required-checks` jobs.
 #
@@ -113,6 +113,8 @@ function Get-RequiredCheckFailure {
         if ($needs.prepare.outputs.release_binary_smoke -cne $expectedSmoke) {
             throw 'The release binary smoke selection does not match the plan and Cargo delta.'
         }
+        # This platform matrix owns the selected release binary smoke step.
+        # Ref: .github/workflows/implementation.md#release-binary-batches.
         if ($smoke) { $selection['clippy-dev-docs'] = $true }
         foreach ($name in $selection.Keys) {
             if ($name -cnotin $needs.PSObject.Properties.Name) { $failure.Add("$name=absent") }

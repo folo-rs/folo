@@ -92,7 +92,7 @@ Establish:
 
 - Which branch actually releases, and whether full first-parent history exists.
 - Which tracked members are publishable, private implementation packages or
-  nonpublishable helpers.
+  non-publishable version targets.
 - Which exact dependencies intentionally form version groups.
 - Which packages contain an installable binary and what each executable is named.
 - Whether the committed lockfile and toolchain describe a reproducible source

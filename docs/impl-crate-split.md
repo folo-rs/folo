@@ -520,12 +520,14 @@ Concrete files to study:
 - `Cargo.toml` (workspace) — the exact `many_cpus_impl` entry in
   `[workspace.dependencies]` derives the pair's version group.
 
-### `cargo-release-plan` / `crp_impl`
+### `cargo-release-plan` and its private components
 
-The application shell owns the CLI executable, the supported library facade, and
-the executable-connected integration suite. `crp_impl` owns the implementation,
-direct boundary integration tests, and algorithm benchmarks. The exact dependency
-keeps both packages in one version group.
+The application owns CLI parsing, dispatch, compatibility execution and
+executable-connected integration tests; it offers no supported Rust library API.
+The `crp_*` family partitions diagnostics, workspace observations, versioning,
+publication and native execution without a re-export facade. Each component owns
+its boundary tests and algorithm benchmarks, with exact dependencies declaring
+the application's version group.
 
 See [the application implementation guide](../packages/cargo-release-plan/docs/implementation.md)
 for the ownership boundaries and the split between pure unit tests and real-system

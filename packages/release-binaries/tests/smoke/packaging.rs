@@ -80,6 +80,7 @@ try {
         let entries: Value = serde_json::from_slice(&inspection.stdout).unwrap();
         assert_eq!(entries.as_array().unwrap().len(), 1);
         assert_eq!(entries[0]["name"], binary);
+        // ZIP stores Unix mode in the upper half of external attributes; retain an execute bit.
         #[cfg(unix)]
         assert_ne!(
             (entries[0]["attributes"].as_i64().unwrap() >> 16) & 0o111,

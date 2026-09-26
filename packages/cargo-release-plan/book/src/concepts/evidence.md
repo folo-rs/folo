@@ -75,7 +75,7 @@ is no `check-compatibility --report` mode. The report/plan schema remains `4`.
 For additional external analysis, use the recorded
 `resolved.evidence_manifest_path` and follow it with `verify-preview`.
 
-The expanded target set includes nonpublishable alignment members. Dependents
+The expanded target set includes non-publishable version targets. Dependents
 whose requirements are rewritten without receiving another version are reflected
 in the captured edits, not added as fictitious version movements.
 
