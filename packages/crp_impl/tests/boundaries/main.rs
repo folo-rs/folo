@@ -1,5 +1,7 @@
 //! Real Git, Cargo and filesystem boundaries of `crp_impl`.
 
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 mod apply;
 mod artifact_path;
 mod candidate;
