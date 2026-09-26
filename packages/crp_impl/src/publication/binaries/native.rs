@@ -528,6 +528,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn github_debug_retains_context_without_credential_material() {
+        let github = Github::with_executable(
+            "A/B".to_owned(),
+            PathBuf::from("X"),
+            Some(OsString::from("SECRET")),
+        );
+        let rendered = format!("{github:?}");
+        assert!(rendered.contains("A/B"));
+        assert!(rendered.contains("\"X\""));
+        assert!(!rendered.contains("SECRET"));
+    }
+
+    #[test]
     fn cleanup_retains_each_failure_and_the_original_source() {
         finish_cleanup(Ok(String::new()), Ok(())).unwrap();
         let operation = || AppError::from(InvalidPlan::new("operation canary".to_owned()));

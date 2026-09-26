@@ -121,6 +121,19 @@ impl Fixture {
             github,
         )
         .unwrap();
+        let diagnostic = format!("{native:?}");
+        assert!(
+            diagnostic.contains(
+                self.repository
+                    .path()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            )
+        );
+        assert!(diagnostic.contains(&self.target));
+        assert!(!diagnostic.contains("credential-filter-canary"));
         execute_items(&self.target, &self.binaries(), false, &mut native).unwrap()
     }
 }

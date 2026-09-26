@@ -262,6 +262,8 @@ Git index, history and tracked-input semantics and real Cargo verification.
 Windows candidate cases share a nextest group and an in-process libtest slot
 before starting their watchdog, so queued cases do not consume that budget.
 Other platforms retain normal parallelism.
+The candidate watchdog is a last-chance native-process guard, accommodating
+instrumented Git/Cargo startup without making elapsed time a test assertion.
 
 Registry-publication boundary tests invoke real Cargo against an isolated sparse
 registry. The fixture retains uploaded archives and immediately exposes their
