@@ -212,6 +212,8 @@ runs:
           ~/.cargo/bin/just*
           ~/.cargo/bin/release-plz*
           ~/.cargo/bin/gungraun-runner*
+          ~/.cargo/bin/7za.exe
+          ~/.cargo/bin/release-7zip-license.txt
           ~/.cargo/.crates.toml
           ~/.cargo/.crates2.json
           ~/.cargo/binstall

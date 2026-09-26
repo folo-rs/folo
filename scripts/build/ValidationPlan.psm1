@@ -137,7 +137,7 @@ function Get-ValidationPlan {
             $null = $domains.Add('release')
             Write-Verbose "'$path' supplies the release workflow or its native executable boundary; selecting release tests."
         }
-        if ($path -cin @('.github/workflows/release.yml', 'justfiles/just_release.just') -or
+        if ($path -cin @('.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just') -or
             $path -cmatch '^scripts/release/(ReleaseBinaries|ReleasePublication|ReleaseAutomation)(\.Tests)?\.ps(m1|1)$' -or
             $path -cmatch '^scripts/build/CargoExecutable\.(psm1|Tests\.ps1)$' -or
             $path -cmatch '^\.cargo/config(\.toml)?$') {

@@ -78,9 +78,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    run_with_watchdog(timeout, test_fn, |timeout| {
-        format!("Test exceeded {}-second timeout", timeout.as_secs())
-    })
+    run_with_watchdog(timeout, test_fn, timeout_message)
 }
 
 /// Runs a test with a timeout that reports the last active phase.
@@ -114,10 +112,11 @@ fn phased_timeout_message(
     timeout: Duration,
 ) -> String {
     let phase = phase_rx.try_iter().last().unwrap_or(initial_phase);
-    format!(
-        "Test exceeded {}-second timeout during phase: {phase}",
-        timeout.as_secs()
-    )
+    format!("{} during phase: {phase}", timeout_message(timeout))
+}
+
+fn timeout_message(timeout: Duration) -> String {
+    format!("Test exceeded {timeout:?} timeout")
 }
 
 fn default_timeout() -> Duration {
@@ -184,6 +183,13 @@ mod tests {
     use super::*;
 
     assert_impl_all!(WatchdogPhaseReporter: RefUnwindSafe, UnwindSafe);
+
+    #[test]
+    fn timeout_diagnostic_retains_subsecond_precision() {
+        assert!(timeout_message(Duration::from_millis(500)).contains("500ms"));
+        assert!(timeout_message(Duration::from_micros(250)).contains("250"));
+        assert!(timeout_message(Duration::from_secs(5)).contains("5s"));
+    }
 
     #[test]
     fn watchdog_allows_fast_tests() {

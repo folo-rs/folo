@@ -229,7 +229,7 @@ Describe 'Cargo helper integration selection' {
 
 Describe 'Release binary smoke selection' {
     It 'selects the native smoke for release adapter and shared setup inputs' -ForEach @(
-        '.github/workflows/release.yml', 'justfiles/just_release.just',
+        '.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just',
         'scripts/release/ReleaseBinaries.psm1',
         'scripts/setup/ReleaseArchiveTools.psm1', 'scripts/build/RequiredChecks.psm1',
         '.cargo/config.toml'

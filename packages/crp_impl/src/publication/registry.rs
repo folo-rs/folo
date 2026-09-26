@@ -407,15 +407,11 @@ fn execute(
     let upload = upload.map_err(RegistryUploadError::caused_by)?;
     eprint!("{}", String::from_utf8_lossy(&upload.stderr));
     eprint!("{}", String::from_utf8_lossy(&upload.stdout));
-    for package in &mut outcome.packages {
-        if missing.contains(&package.name) {
-            package.state = if client.contains(&package.name, &package.version)? {
-                RegistryState::Published
-            } else {
-                RegistryState::Missing
-            };
-        }
-    }
+    observe_uploads(
+        &mut outcome.packages,
+        |name, version| client.contains(name, version),
+        thread::sleep,
+    )?;
     repository.ensure_clean_head()?;
     cleanup?;
     build_cleanup.map_err(RegistryUploadError::caused_by)?;
@@ -435,6 +431,42 @@ fn execute(
         return Err(RegistryUploadFailed::new(upload.status.to_string()).into());
     }
     Ok(())
+}
+
+fn observe_uploads(
+    packages: &mut [RegistryPackage],
+    mut contains: impl FnMut(&str, &str) -> Result<bool, AppError>,
+    mut wait: impl FnMut(Duration),
+) -> Result<(), AppError> {
+    // Cargo already waits on its own index view. A short shared reconciliation window
+    // allows the reader's index view to catch up without waiting separately per package.
+    const ATTEMPTS: usize = 6;
+    const DELAY: Duration = Duration::from_secs(5);
+    for attempt in 1..=ATTEMPTS {
+        let mut missing = false;
+        for package in packages
+            .iter_mut()
+            .filter(|package| package.state == RegistryState::Missing)
+        {
+            let available = match contains(&package.name, &package.version) {
+                Ok(available) => available,
+                Err(error) => {
+                    package.state = RegistryState::Unknown;
+                    return Err(error);
+                }
+            };
+            if available {
+                package.state = RegistryState::Published;
+            } else {
+                missing = true;
+            }
+        }
+        if !missing || attempt == ATTEMPTS {
+            return Ok(());
+        }
+        wait(DELAY);
+    }
+    unreachable!("the last index-observation attempt returns")
 }
 
 pub(crate) fn verify_source(
@@ -539,6 +571,57 @@ struct RegistryUploadFailed {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_observation_waits_for_missing_versions_without_requerying_completed_work() {
+        let mut packages = vec![
+            RegistryPackage {
+                name: "existing".to_owned(),
+                version: "1.0.0".to_owned(),
+                state: RegistryState::AlreadyPresent,
+            },
+            RegistryPackage {
+                name: "new".to_owned(),
+                version: "1.0.0".to_owned(),
+                state: RegistryState::Missing,
+            },
+        ];
+        let mut queries = 0;
+        let mut waits = 0;
+        observe_uploads(
+            &mut packages,
+            |name, _| {
+                assert_eq!(name, "new");
+                queries += 1;
+                Ok(queries == 3)
+            },
+            |_| waits += 1,
+        )
+        .unwrap();
+        assert_eq!(queries, 3);
+        assert_eq!(waits, 2);
+        assert_eq!(packages.last().unwrap().state, RegistryState::Published);
+        packages.last_mut().unwrap().state = RegistryState::Missing;
+        let mut attempts = 0;
+        observe_uploads(
+            &mut packages,
+            |_, _| {
+                attempts += 1;
+                Ok(false)
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(attempts, 6);
+        assert_eq!(packages.last().unwrap().state, RegistryState::Missing);
+        observe_uploads(
+            &mut packages,
+            |_, _| Err(RegistryQueryError::new().into()),
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(packages.last().unwrap().state, RegistryState::Unknown);
+    }
 
     #[test]
     fn registry_metadata_retries_only_transient_failures_with_a_fixed_budget() {

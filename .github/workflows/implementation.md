@@ -555,6 +555,10 @@ shortens the generated paths upstream.
 
 ## Release publication
 
+The shared development-tool cache retains the managed Windows `7za.exe` and its
+license alongside installed Cargo tools. Its source-revision key includes the
+archive installer and reconciles restored tool versions before use.
+
 `workflow_dispatch` accepts `verify-publishing-identity` for the separate
 exchange/revoke-only path. It calls the pinned reusable identity workflow from
 `release.yml`, preserving crates.io's registered caller filename. The normal
