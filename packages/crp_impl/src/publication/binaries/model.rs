@@ -4,6 +4,8 @@ use ohno::AppError;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::publication::manifest::immutable_commit;
+
 /// Controller-discovered release requests and the repository's canonical target table.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,7 +17,7 @@ pub(crate) struct Plan {
 /// An immutable release identity, independent of the platform that builds it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Binary {
+pub struct Binary {
     pub(crate) name: String,
     pub(crate) bin: String,
     pub(crate) version: String,
@@ -110,11 +112,7 @@ impl Binary {
             || !identifier(&self.bin)
             || version.to_string() != self.version
             || self.tag != format!("{}-v{}", self.name, self.version)
-            || self.source_sha.len() != 40
-            || !self
-                .source_sha
-                .bytes()
-                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            || !immutable_commit(&self.source_sha)
         {
             return Err(InvalidPlan::new(format!("Invalid release identity: {self:?}")).into());
         }

@@ -58,8 +58,9 @@ API exposes types from it. An incompatible release of that dependency changes th
 those types for consumers: code holding the older dependency can no longer hand its values
 across, so the exposure itself becomes incompatible even when the dependency's breaking change
 touched nothing this package re-exports. Read the flag rather than judging the exposure from
-source; it is derived from the `allowed_external_types` allow-list that `check-external-types`
-verifies, and `just validate-versions` rejects a tree where a public dependency breaks alone.
+source; it is derived from the `allowed_external_types` allow-list that the repository's
+external-type check verifies, and `cargo release-plan check` rejects a tree where a public
+dependency breaks alone.
 
 The flag follows re-exports, so a package exposing an implementation crate's types carries the
 flag on the public crate it actually depends on — the one whose version moves with the
@@ -121,7 +122,7 @@ own released changes and choose no increment when it has none. Do not assess sou
 A publishable package in `report.json.packages` that has no anchor has no Git release baseline
 for this assessment. Do not assign a change level merely because it is new to the release
 branch, and do not infer that it has never reached crates.io. Follow the first-publication path
-in [`RELEASING.md`](../../../RELEASING.md#first-publish-of-a-new-crate): a maintainer manually
+in the skill's first-publication handoff: a maintainer manually
 publishes its bootstrap version before the first merge and configures Trusted Publishing.
 The first merge must carry a higher version for the second publication, the first automated
 one. Record that bootstrap and intended automated-release version separately from Git anchors;

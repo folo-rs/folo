@@ -307,7 +307,7 @@ Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
     It 'returns nothing for a folo section that declares no release targets' {
         $pkg = [pscustomobject]@{
             name     = 'crafted'
-            metadata = [pscustomobject]@{ folo = [pscustomobject]@{ 'something-else' = 'value' } }
+            metadata = [pscustomobject]@{ 'release-plan' = [pscustomobject]@{ 'something-else' = 'value' } }
         }
         @(Get-DeclaredReleaseTarget -Package $pkg).Count | Should -Be 0
     }
@@ -316,7 +316,7 @@ Describe 'Get-DeclaredReleaseTarget (crafted package objects)' {
         $pkg = [pscustomobject]@{
             name     = 'crafted'
             metadata = [pscustomobject]@{
-                folo = [pscustomobject]@{ 'release-targets' = @('x86_64-pc-windows-msvc') }
+                'release-plan' = [pscustomobject]@{ 'release-targets' = @('x86_64-pc-windows-msvc') }
             }
         }
         $declared = @(Get-DeclaredReleaseTarget -Package $pkg)

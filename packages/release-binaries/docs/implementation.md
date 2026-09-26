@@ -1,7 +1,8 @@
 # Release binary batches
 
-The release workflow builds this nonpublished controller utility from its event
-checkout. The workflow's behavioral contract belongs to
+The release workflow builds this nonpublished compatibility executable from its
+event checkout. Its library delegates to `crp_impl::publication::binaries`, which
+owns native planning, execution and unit tests. The workflow's behavioral contract belongs to
 [release automation](../../../.github/workflows/design.md#publication-and-recovery).
 Historical source worktrees never supply the orchestration executable.
 
@@ -19,6 +20,10 @@ worktree with its pinned compiler, configuration and locked dependencies. Separa
 package builds preserve feature selection. The absolute controller target directory
 is shared across source builds so the existing cache and Cargo's fingerprints
 govern reuse. The controller executable is built before these overrides apply.
+The selected Cargo workspace can be nested inside the Git repository. Source
+commands use that same repository-relative workspace, and rustup reads its tracked
+toolchain from within the source repository. No Folo source-toolchain script is
+required by the installed application.
 
 Native `zip` or standalone 7-Zip (`7za`) packages each immediately staged executable.
 `just install-tools` installs and verifies these prerequisites on every platform. SHA-256 sidecars
@@ -46,7 +51,7 @@ No test creates or modifies a production release.
 ## Tests
 
 Pure protocol validation, grouping, completeness, artifact selection and batch
-transitions are library unit tests. Git, Cargo, process and archive interactions
+transitions are unit tests in `crp_impl`. Git, Cargo, process and archive interactions
 are integration tests. Native adapters have narrow mutation exclusions; the
 decisions they execute remain covered in process.
 Source fixtures include exact-object fetching from a local origin whose tip has advanced,

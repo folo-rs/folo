@@ -26,6 +26,8 @@ fn absence_is_distinct_from_query_failure_or_mismatched_identity() {
     assert!(!client.contains("present", "1.0.1").unwrap());
     assert!(!client.contains("missing", "1.0.0").unwrap());
     for name in ["failed", "wrong", "broken"] {
-        client.contains(name, "1.0.0").unwrap_err();
+        client
+            .contains_with_wait(name, "1.0.0", |_| {})
+            .unwrap_err();
     }
 }

@@ -88,7 +88,7 @@ function Test-BinstallMetadata {
 }
 
 function Test-ReleaseTargetMetadata {
-    # Validates a single `cargo metadata` package's optional `[package.metadata.folo]
+    # Validates a single `cargo metadata` package's optional `[package.metadata.release-plan]
     # release-targets` against the workflow's target table. A crate may restrict its prebuilt
     # binaries to the targets it functions on; declaring nothing is the norm and means every
     # target. Returns the list of human-readable problems for the package; an empty list means

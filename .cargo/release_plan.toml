@@ -1,0 +1,11 @@
+# Folo selects the repository and native targets; cargo-release-plan owns release policy.
+schema-version = 1
+repository = "folo-rs/folo"
+release-branch = "main"
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]

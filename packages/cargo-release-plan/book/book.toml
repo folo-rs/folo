@@ -1,0 +1,20 @@
+[book]
+title = "cargo-release-plan"
+description = "Choose reviewable Cargo package versions and deliver complete crates.io and native binary releases."
+authors = ["Folo contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+# The shared Pages publisher discovers this book by its package directory name.
+site-url = "/folo/cargo-release-plan/"
+git-repository-url = "https://github.com/folo-rs/folo"
+edit-url-template = "https://github.com/folo-rs/folo/edit/main/packages/cargo-release-plan/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[output.html.playground]
+runnable = false
+
+# The shared book-build recipe generates these ignored JavaScript assets.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

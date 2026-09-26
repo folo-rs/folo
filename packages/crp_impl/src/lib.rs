@@ -42,6 +42,7 @@ mod check;
 pub mod classify;
 mod cli;
 pub mod command;
+mod compatibility;
 mod diff;
 mod errors;
 pub mod expand;

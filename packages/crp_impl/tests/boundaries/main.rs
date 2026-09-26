@@ -22,6 +22,7 @@ mod prospective;
 mod publication;
 mod publication_config;
 mod publication_credentials;
+mod publication_github;
 mod publication_identity;
 mod publication_registry;
 mod resolved;

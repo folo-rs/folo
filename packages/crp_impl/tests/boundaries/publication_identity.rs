@@ -48,6 +48,30 @@ fn rejected_exchange_does_not_echo_identity_response_bodies() {
     );
 }
 
+#[test]
+#[cfg_attr(miri, ignore = "Uses a loopback HTTP service")]
+fn malformed_success_responses_cannot_echo_credential_values() {
+    for malformed_identity in [false, true] {
+        let service = HttpService::new(move |_, request| {
+            let body = if request.method() == &Method::Get && !malformed_identity {
+                r#"{"value":"jwt-credential-canary"}"#
+            } else {
+                r#""credential-canary""#
+            };
+            request.respond(Response::from_string(body)).unwrap();
+        });
+        let identity: ActionsIdentity = serde_json::from_value(json!({
+            "request_url":format!("{}/identity",service.url()),
+            "request_token":"identity-credential-canary"
+        }))
+        .unwrap();
+        let publisher =
+            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url())).unwrap();
+        let error = publisher.exchange(&identity).unwrap_err();
+        assert!(!error.to_string().contains("credential-canary"));
+    }
+}
+
 /// A disposable identity endpoint; stopping it wakes a blocked receiver without a timer.
 pub(crate) struct IdentityService {
     http: HttpService,

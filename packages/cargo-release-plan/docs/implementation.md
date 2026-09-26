@@ -85,6 +85,29 @@ groups. Together these enforce strictly increasing members without a redundant s
 comparison. Shape tests keep package references reciprocal while independently varying
 group size, canonical naming, ordering and uniqueness.
 
+## External compatibility evidence
+
+Compatibility is a separate explicit operation, not part of offline classification.
+Prepared inputs and resolved previews already carry source identity, so the checker
+consumes those artifacts rather than extending report schema solely to make an
+unbound report executable. Fresh checks capture inputs around their own read-only
+report and verify them again after external comparison. Preview checks use the
+retained prospective manifest and existing resolved-state verification.
+
+The checker receives all features and one explicit published baseline version per
+consumer contract. A small identical-source library canary validates its ability
+to run. A short workspace-identity-keyed target directory avoids generated Windows path
+length problems while retaining compatible compiler artifacts across assessment
+passes, without affecting other Cargo commands. Checker findings and
+execution errors remain distinct; a completed comparison supplies a semantic
+floor, not the author's compatibility judgment. Empty target sets do not invoke
+external tooling or query registry versions.
+
+Registry preflight reuses exact registry observations and resolved-plan inspection.
+The plan-scoped form fails closed for unavailable or never-published targets;
+workspace discovery remains an explicit advisory. Neither form performs package
+administration.
+
 ## Registry publication boundaries
 
 Registry observations distinguish an absent exact version from an unavailable
@@ -117,6 +140,66 @@ and credential values have no diagnostic representation. Revocation and temporar
 directory failures remain failed outcomes even when uploads succeeded. The
 registry build directory is independently owned, so packaging cannot dirty a
 source checkout merely because that repository has no target-directory ignore.
+
+## Native binary execution
+
+`publication::binaries` owns the native batch engine used by both unified
+publication and the compatibility `release-binaries` executable. The latter is a
+thin entry point with executable-connected smoke tests, not another implementation.
+Batch decisions and source/artifact validation stay in the implementation
+partition's unit tests.
+
+The controller repository supplies Git objects and the shared target directory,
+while each release tag selects a disposable immutable source worktree.
+The controller workspace's repository-relative location is retained for nested
+Cargo projects. Build commands execute there and rustup selects a tracked
+toolchain within that source repository; the engine needs no repository-local
+PowerShell toolchain adapter. Source preparation verifies the compiler's actual
+native host before installing its target.
+
+Owned process groups implement cancellation and deadlines. Build environments
+exclude upload credentials and controller toolchain overrides. Independent
+packages retain separate Cargo invocations, while compatible target artifacts
+are shared. The batch retains source cleanup diagnostics alongside publication
+outcomes, including both Git-worktree and directory cleanup failures.
+
+## GitHub reconciliation and reporting
+
+GitHub reconciliation checks the complete registry prerequisite before writing
+tags. The source-candidate classification is shared across missing-tag requests
+and compares the fetched first-parent descendant against the original publication
+source's version anchors. Per-package eligibility requires unchanged released
+content and the exact requested version. Bounded creation retries refresh that
+candidate; a version superseded before tagging produces the explicit operator
+handoff rather than another version or broader credentials.
+
+Existing tags retain their commit identity and bypass candidate selection.
+Historical package identity is checked without imposing today's configuration or
+group policy on an old tag. Binary releases name the established tag explicitly,
+and paginated asset inventories determine which native pairs remain incomplete.
+Tag failures retain per-package diagnostics and do not discard valid batches for
+other releases. Batch identity hashes the complete native request set, including
+tag source commits, independently of a workflow attempt.
+
+The REST client owns structured tag/release/issue operations; the native engine
+retains GitHub CLI asset upload so it can use its existing process supervision and
+archive-file interface. Both use the invocation's repository token. Git supplies
+source objects independently of either forge API boundary.
+
+Outcome artifacts add optional GitHub run/attempt attribution; publication intent
+does not. The final reporter selects the latest applicable phase receipt for the
+current publication/run, then matches binary receipts to the batches named by that
+GitHub outcome. A binary receipt cannot precede the reconciliation attempt that
+observed the missing assets, even if the batch identity happens to match.
+Platform job failures and cancellation remain authoritative over old receipts.
+Missing manifests or receipts produce an incomplete report and operator issue,
+never reconstructed intent from the current branch.
+
+`release-context` gives both local planning and shared workflows the same
+configured baseline and concurrency identity. It is read-only apart from fetching
+Git history and does not require clean source. The separate identity-setup probe
+exchanges and immediately revokes OIDC credentials without publishing, allowing
+caller/workflow registration to be verified before a live release.
 
 ## Subprocess boundaries
 

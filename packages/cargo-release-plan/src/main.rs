@@ -45,6 +45,7 @@ fn main() -> ExitCode {
                 }
             }
             RunOutcome::ArtifactQuery { message }
+            | RunOutcome::IdentityCheck { message }
             | RunOutcome::Propose { message }
             | RunOutcome::Prepare { message }
             | RunOutcome::Preview { message }

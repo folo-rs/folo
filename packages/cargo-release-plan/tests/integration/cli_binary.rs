@@ -46,6 +46,24 @@ fn version_reports_the_installed_application_without_a_workspace() {
     }
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "Spawns the application with missing hosted identity inputs"
+)]
+#[test]
+fn publishing_identity_check_does_not_select_a_local_credential_fallback() {
+    let directory = TempDir::new().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+        .arg("check-publishing-identity")
+        .current_dir(directory.path())
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stdout(&output).is_empty());
+}
+
 #[cfg_attr(miri, ignore = "Spawns the application, Cargo and Git")]
 #[test]
 fn publication_configuration_is_explicit_and_does_not_replace_version_checks() {

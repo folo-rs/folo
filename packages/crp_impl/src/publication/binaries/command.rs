@@ -24,6 +24,9 @@ pub(crate) const TOKEN_VARIABLES: &[&str] = &[
     "GIT_TOKEN",
     "INPUT_TOKEN",
     "DEFAULT_GITHUB_TOKEN",
+    "CARGO_REGISTRY_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
 ];
 
 // Polling only supervises real child processes; unit decisions do not depend on wall-clock time.

@@ -25,7 +25,7 @@ fn targets_output(
         .expect("package names are JSON-compatible strings"))
 }
 
-fn semver_targets(report: &ReportFile, verbose: Verbose) -> BTreeSet<String> {
+pub(crate) fn semver_targets(report: &ReportFile, verbose: Verbose) -> BTreeSet<String> {
     let packages: BTreeMap<_, _> = report
         .packages
         .iter()

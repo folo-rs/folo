@@ -5,16 +5,19 @@ use std::{env, fs, io, thread};
 
 use ohno::AppError;
 use tempfile::TempDir;
+use toml_edit::DocumentMut;
 
-use crate::archive::Staging;
-use crate::batch::Executor;
-use crate::command::{cancelled, capture, capture_cleanup};
-use crate::model::{Asset, Binary, ITEM_MINUTES, InvalidPlan, Release};
-use crate::source::{Metadata, executable};
+use crate::git::GitRepo;
+use crate::publication::binaries::archive::Staging;
+use crate::publication::binaries::batch::Executor;
+use crate::publication::binaries::command::{cancelled, capture, capture_cleanup};
+use crate::publication::binaries::model::{Asset, Binary, ITEM_MINUTES, InvalidPlan, Release};
+use crate::publication::binaries::source::{Metadata, executable};
 
 /// Native state belongs to the controller; source worktrees supply only build inputs.
 pub(crate) struct Native {
     controller: PathBuf,
+    workspace: PathBuf,
     output: PathBuf,
     target: PathBuf,
     triple: String,
@@ -144,8 +147,12 @@ impl Native {
                 InvalidPlan::new("Cargo target directory must be absolute".to_owned()).into(),
             );
         }
+        let git = GitRepo::discover(&controller)?;
+        let workspace = PathBuf::from(git.prefix());
+        let controller = dunce::canonicalize(git.root())?;
         Ok(Self {
             controller,
+            workspace,
             output,
             target,
             triple,
@@ -166,7 +173,8 @@ impl Native {
             .as_ref()
             .ok_or_else(|| InvalidPlan::new("No source worktree is prepared".to_owned()))?
             .path()
-            .join("source");
+            .join("source")
+            .join(&self.workspace);
         capture(
             OsStr::new(program),
             arguments,
@@ -243,28 +251,37 @@ impl Executor for Native {
         }
         self.source_command(
             "git",
-            &strings(&[
-                "ls-files",
-                "--error-unmatch",
-                "Cargo.lock",
-                "rust-toolchain.toml",
-            ]),
+            &strings(&["ls-files", "--error-unmatch", "Cargo.lock"]),
         )?;
-        let adapter = self
-            .controller
-            .join("scripts")
-            .join("release")
-            .join("Install-ReleaseSourceToolchain.ps1");
+        let source_workspace = path.join(&self.workspace);
+        let source_toolchain = source_workspace
+            .ancestors()
+            .take_while(|directory| directory.starts_with(&path))
+            .map(|directory| directory.join("rust-toolchain.toml"))
+            .find(|candidate| candidate.is_file())
+            .ok_or_else(|| InvalidPlan::new(
+                "The source workspace requires a tracked rust-toolchain.toml within its repository".to_owned()
+            ))?;
         self.source_command(
-            "pwsh",
+            "git",
             &[
-                "-NoLogo".into(),
-                "-NoProfile".into(),
-                "-File".into(),
-                adapter.into_os_string(),
-                "-Target".into(),
-                self.triple.clone().into(),
+                "ls-files".into(),
+                "--error-unmatch".into(),
+                "--".into(),
+                source_toolchain.as_os_str().to_owned(),
             ],
+        )?;
+        let source_pin: DocumentMut = fs::read_to_string(source_toolchain)?.parse()?;
+        let channel = source_pin
+            .get("toolchain")
+            .and_then(|toolchain| toolchain.get("channel"))
+            .and_then(toml_edit::Item::as_str)
+            .ok_or_else(|| InvalidPlan::new("Source toolchain requires a channel".to_owned()))?;
+        // Rustup reads the tracked source manifest, including its component selection.
+        // No controller-repository script is needed by an installed release tool.
+        self.source_command(
+            "rustup",
+            &strings(&["toolchain", "install", "--profile", "minimal"]),
         )?;
         let compiler = self.source_command("rustc", &strings(&["--version", "--verbose"]))?;
         let host = compiler
@@ -277,6 +294,10 @@ impl Executor for Native {
             ))
             .into());
         }
+        self.source_command(
+            "rustup",
+            &strings(&["target", "add", &self.triple, "--toolchain", channel]),
+        )?;
         let metadata = self.source_command(
             "cargo",
             &strings(&["metadata", "--locked", "--no-deps", "--format-version", "1"]),

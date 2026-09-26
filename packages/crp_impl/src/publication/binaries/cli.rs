@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use ohno::AppError;
 
-use crate::model::InvalidPlan;
+use crate::publication::binaries::model::{InvalidPlan, identifier};
 
 /// Only workflow-owned plan and execution operations are accepted.
 #[derive(Debug)]
@@ -60,7 +60,7 @@ impl Cli {
         if parts.len() != 2
             || !parts
                 .iter()
-                .all(|p| crate::model::identifier(p) || valid_repository_part(p))
+                .all(|p| identifier(p) || valid_repository_part(p))
         {
             return Err(InvalidPlan::new("Repository must be owner/name".to_owned()).into());
         }

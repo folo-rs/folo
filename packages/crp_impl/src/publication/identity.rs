@@ -11,6 +11,22 @@ use reqwest::redirect::Policy;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
+use crate::verbose::Verbose;
+
+/// Verifies caller identity setup without constructing or uploading a package.
+pub(crate) fn check_publishing_identity(verbose: Verbose) -> Result<String, AppError> {
+    verbose.note(|| {
+        "Checking the caller workflow's GitHub OIDC identity against crates.io; \
+        this exchanges and immediately revokes a temporary credential without publishing."
+            .to_owned()
+    });
+    let identity = ActionsIdentity::from_environment()?;
+    let publisher = TrustedPublisher::new()?;
+    let token = publisher.exchange(&identity)?;
+    publisher.revoke(&token)?;
+    Ok("GitHub OIDC exchange and revocation succeeded. Package-specific publication grants are checked when uploading.".to_owned())
+}
+
 /// Ambient GitHub identity, retained only in private invocation-owned credential state.
 #[derive(Deserialize, Serialize)]
 pub struct ActionsIdentity {
@@ -37,9 +53,10 @@ impl ActionsIdentity {
                 IdentityTransport::caused_by("GitHub OIDC request", error.without_url())
             })?;
         let response = successful(response, "GitHub OIDC request")?;
-        let token: OidcResponse = response.json().map_err(|error| {
-            IdentityTransport::caused_by("GitHub OIDC response", error.without_url())
-        })?;
+        // Deserializer diagnostics can echo malformed values from a credential-bearing body.
+        let token: OidcResponse = response
+            .json()
+            .map_err(|_sensitive_body| MalformedIdentityResponse::new("GitHub OIDC response"))?;
         if token.value.is_empty() {
             return Err(EmptyCredential::new("GitHub OIDC response").into());
         }
@@ -94,8 +111,8 @@ impl TrustedPublisher {
                 IdentityTransport::caused_by("Trusted Publishing exchange", error.without_url())
             })?;
         let response = successful(response, "Trusted Publishing exchange")?;
-        let token: ExchangeResponse = response.json().map_err(|error| {
-            IdentityTransport::caused_by("Trusted Publishing response", error.without_url())
+        let token: ExchangeResponse = response.json().map_err(|_sensitive_body| {
+            MalformedIdentityResponse::new("Trusted Publishing response")
         })?;
         if token.token.is_empty() {
             return Err(EmptyCredential::new("Trusted Publishing response").into());
@@ -199,6 +216,12 @@ struct IdentityRejected {
 #[ohno::error]
 #[display("{operation} returned an empty credential")]
 struct EmptyCredential {
+    operation: &'static str,
+}
+
+#[ohno::error]
+#[display("{operation} returned an invalid credential response")]
+struct MalformedIdentityResponse {
     operation: &'static str,
 }
 

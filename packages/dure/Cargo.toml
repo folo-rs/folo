@@ -2,7 +2,7 @@
 name = "dure"
 description = "Detachable Windows console sessions that outlive the terminal"
 publish = true
-version = "0.2.12"
+version = "0.2.13"
 
 authors.workspace = true
 edition.workspace = true
@@ -30,7 +30,7 @@ pkg-fmt = "zip"
 # A non-Windows build compiles to a stub that only reports the unsupported platform
 # (docs/implementation.md, "Platform gate"), so a prebuilt archive for any other target would
 # install a binary that can never run. Ref: docs/release-automation.md, "Per-crate targets".
-[package.metadata.folo]
+[package.metadata.release-plan]
 release-targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 
 # The Windows integration tests are gated behind `private-test-util`, so a default-feature build

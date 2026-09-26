@@ -138,7 +138,7 @@ function Get-ValidationPlan {
             Write-Verbose "'$path' supplies the release workflow or its native executable boundary; selecting release tests."
         }
         if ($path -cin @('.github/workflows/release.yml', 'justfiles/just_release.just') -or
-            $path -cmatch '^scripts/release/(ReleaseBinaries|ReleasePublication|ReleaseAutomation|Install-ReleaseSourceToolchain)(\.Tests)?\.ps(m1|1)$' -or
+            $path -cmatch '^scripts/release/(ReleaseBinaries|ReleasePublication|ReleaseAutomation)(\.Tests)?\.ps(m1|1)$' -or
             $path -cmatch '^scripts/build/CargoExecutable\.(psm1|Tests\.ps1)$' -or
             $path -cmatch '^\.cargo/config(\.toml)?$') {
             $releaseBinarySmoke = $true
@@ -241,7 +241,7 @@ function Test-ReleaseBinarySmokeSelected {
 
     $plan = Read-ValidationPlan -Json $PlanJson
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
-    return $plan.release_binary_smoke -or 'release-binaries' -cin $packages
+    return $plan.release_binary_smoke -or 'release-binaries' -cin $packages -or 'crp_impl' -cin $packages
 }
 
 function Read-ValidationAffectedPackage {

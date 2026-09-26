@@ -40,7 +40,7 @@ function Get-ReleaseTarget {
 
 function Get-DeclaredReleaseTarget {
     # The target triples a crate restricts its prebuilt binaries to, read from its manifest's
-    # `[package.metadata.folo] release-targets`. Returns an empty array when the crate declares
+    # `[package.metadata.release-plan] release-targets`. Returns an empty array when the crate declares
     # nothing, which means every target in Get-ReleaseTarget - the default, and what a portable
     # crate wants. A crate that only functions on some platforms names that subset so the workflow
     # does not publish archives whose binary could never run. Takes a `cargo metadata` package
@@ -53,13 +53,13 @@ function Get-DeclaredReleaseTarget {
 
     if ($Package.PSObject.Properties.Name -notcontains 'metadata') { return @() }
     if ($null -eq $Package.metadata) { return @() }
-    if ($Package.metadata.PSObject.Properties.Name -notcontains 'folo') { return @() }
+    if ($Package.metadata.PSObject.Properties.Name -notcontains 'release-plan') { return @() }
 
-    $folo = $Package.metadata.folo
-    if ($null -eq $folo) { return @() }
-    if ($folo.PSObject.Properties.Name -notcontains 'release-targets') { return @() }
+    $releasePlan = $Package.metadata.'release-plan'
+    if ($null -eq $releasePlan) { return @() }
+    if ($releasePlan.PSObject.Properties.Name -notcontains 'release-targets') { return @() }
 
-    @($folo.'release-targets')
+    @($releasePlan.'release-targets')
 }
 
 function Get-BinaryTarget {

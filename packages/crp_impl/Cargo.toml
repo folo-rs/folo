@@ -53,6 +53,9 @@ private-test-util = []
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+command-group = { workspace = true }
+ctrlc = { workspace = true, features = ["termination"] }
+dunce = { workspace = true }
 flate2 = { workspace = true, features = ["rust_backend"] }
 ignore = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }

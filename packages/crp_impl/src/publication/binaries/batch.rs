@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use ohno::AppError;
 use serde::Serialize;
 
-use crate::model::{Asset, Batch, Binary};
+use crate::publication::binaries::model::{Asset, Batch, Binary, InvalidPlan};
 
 /// Native operations used by the in-process batch sequence.
 pub(crate) trait Executor {
@@ -32,16 +32,26 @@ pub(crate) fn execute(
     executor: &mut impl Executor,
 ) -> Result<Vec<Outcome>, AppError> {
     batch.validate()?;
+    execute_items(&batch.triple, &batch.binaries, no_upload, executor)
+}
+
+pub(crate) fn execute_items(
+    target: &str,
+    binaries: &[Binary],
+    no_upload: bool,
+    executor: &mut impl Executor,
+) -> Result<Vec<Outcome>, AppError> {
     let mut outcomes = Vec::new();
     let mut sources = BTreeMap::<&str, Vec<&Binary>>::new();
-    for binary in &batch.binaries {
+    for binary in binaries {
+        binary.validate()?;
         if executor.cancelled() {
             outcomes.push(outcome(binary, "unattempted", "cancelled", None));
             continue;
         }
         if !no_upload {
             match executor.assets(binary) {
-                Ok(assets) if binary.complete(&batch.triple, &assets) => {
+                Ok(assets) if binary.complete(target, &assets) => {
                     outcomes.push(outcome(binary, "skipped-complete", "refresh", None));
                     continue;
                 }
@@ -126,7 +136,7 @@ fn check_cancellation(executor: &impl Executor) -> Result<(), (&'static str, App
     if executor.cancelled() {
         return Err((
             "cancelled",
-            crate::model::InvalidPlan::new("Release batch cancelled".to_owned()).into(),
+            InvalidPlan::new("Release batch cancelled".to_owned()).into(),
         ));
     }
     Ok(())
@@ -163,8 +173,8 @@ fn outcome(
 )]
 mod tests {
     use super::*;
-    use crate::model::tests::binary;
-    use crate::model::{InvalidPlan, timeout_minutes};
+    use crate::publication::binaries::model::tests::binary;
+    use crate::publication::binaries::model::{InvalidPlan, timeout_minutes};
 
     /// Records ordered native operations and injects selected stage failures.
     #[derive(Default)]

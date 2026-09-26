@@ -1,83 +1,52 @@
-# Guide to releasing a new version
+# Releasing Folo packages
 
-Publishing to crates.io and shipping `cargo-binstall` prebuilt binaries is automated
-by `.github/workflows/release.yml` on every push to `main`. Pull requests that change
-released content carry the version increments; merge publishes those versions.
-The `increment-versions` skill decides and applies the plan without a separate
-approval request. Human review of the complete PR, including its current
-**Version/release plan** section, is the approval step; see
-[docs/git-workflow.md](docs/git-workflow.md#versionrelease-plan-section).
-See [docs/release-versioning.md](docs/release-versioning.md) for how versions are
-decided and [docs/release-automation.md](docs/release-automation.md) for the publish
-design.
+Folo releases reviewed version changes on merge to `main`. Use the self-contained
+`increment-versions` skill and keep the PR's
+[Version/release plan](docs/git-workflow.md#versionrelease-plan-section) current.
+Human review of the complete contribution is the approval step.
 
-`main` is behind a merge queue whose only required status check is `required-checks`.
-See [Required GitHub configuration](#required-github-configuration) below.
+The public [release-process book](https://folo-rs.github.io/folo/cargo-release-plan/)
+explains concepts, local planning, workflow integration and operation.
+[Folo versioning](docs/release-versioning.md) and
+[Folo automation](docs/release-automation.md) select this repository's policy.
 
-1. Validate everything via `just validate` on Windows (will automatically invoke Linux validation).
-1. If you feel like it, also perform extra validation via `just validate-extra`.
-1. On merge to `main`, `release.yml` publishes any version crates.io does not yet have
-   (via crates.io Trusted Publishing — no stored token) and uploads prebuilt binaries
-   for the binary crates. If anything fails it opens a `ci-failure` issue for that run.
+## Ordinary releases
+
+Validate the affected contribution under [the build policy](docs/build-and-tooling.md).
+After authorized merge, `.github/workflows/release.yml` publishes and reconciles
+the declared versions. Use the book's
+[ordinary release walkthrough](https://folo-rs.github.io/folo/cargo-release-plan/operations/ordinary-release.html)
+and [verification procedure](https://folo-rs.github.io/folo/cargo-release-plan/operations/verification.html).
+Do not run `just gh-release` manually; it is a CI-only publishing entry point.
 
 ## First publish of a new crate
 
-crates.io does not allow Trusted Publishing for a crate that has never been published,
-so a brand-new crate's first version must be published manually **before its first
-merge**. The maintainer publishes from the feature branch containing the new crate,
-not from `main`, in dependency order:
+Follow the [first-publication guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html):
+maintainer bootstrap happens from the feature branch before its first merge,
+in dependency order. Configure Trusted Publishing for owner `folo-rs`, repository
+`folo`, workflow `release.yml`. The first merge must carry a higher version for the
+second publication, which is the first automated release.
 
-1. Publish the initial bootstrap version with `cargo publish -p <crate>`.
-1. Configure Trusted Publishing for the crate on crates.io (owner `folo-rs`, repo
-   `folo`, workflow `release.yml`).
-1. Prepare a version strictly higher than the bootstrap version for the first merge,
-   including any version-group alignment and dependency requirement updates. Refresh
-   the pull request's version/release plan against that intended automated release.
-1. Merge the pull request. `release.yml` performs the crate's **second publication**,
-   its first automated release. For a binary crate, the workflow also creates its
-   GitHub release and uploads prebuilt binaries.
+The generic skill reports this handoff but does not perform it. Its
+`check-published` workspace scan is advisory; its resolved-plan check fails closed
+for missing or unavailable registry prerequisites. A package without a Git anchor
+may already have a manually published bootstrap version.
 
-Do not merge the bootstrap version unchanged or rerun a `main` release workflow to
-publish source that exists only on the feature branch. If the automated release needs
-a retry after merge, rerun `release.yml` for the merged version. Package tags and
-binary assets are reconciled against verified release-equivalent main snapshots;
-existing tags are never moved.
+## Recovery and emergency operation
 
-The `increment-versions` skill runs `just check-never-published` as an early,
-workspace-wide advisory. Before applying a resolved plan,
-`just check-increment-published` fails unless every **publishable** package the
-plan reaches has already reached crates.io. Version-alignment targets with
-publication disabled do not require a first-publication handoff. The gate cannot
-verify Trusted Publisher configuration, so complete that setup explicitly before
-retrying the increment. The automated release follows the first merge.
-The skill only reports this pre-merge maintainer handoff; it does not perform a manual
-first publication or an emergency publish. A package can lack a Git release anchor
-while its bootstrap version already exists on crates.io.
-
-The skill prepares offline dependency resolution and previews prospective version
-and requirement rewrites before application. The resolved plan includes the complete
-release set and resolved lockfile. Application uses those captured files without
-a late update; changed inputs require fresh preparation. Library-only lockfile
-changes do not require releases, but their version rewrites still require a
-consistent lockfile.
-
-## Emergency manual publish
-
-If the CI publish path is broken, publish by hand with `cargo publish -p <crate>` (in
-dependency order). For a binary crate, re-run `release.yml` (or push a version bump)
-afterwards so the prebuilt binaries are produced.
+Use [the recovery guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html)
+and the original failure issue. Manual tag recovery uses the exact source commit
+recorded there, followed by retry of the original failed workflow. Existing tags
+never move. Emergency registry publication requires explicit maintainer authority;
+it is not an action performed by the version-planning skill.
 
 ## Required GitHub configuration
 
-Branch protection, the merge queue, and the required-status-check ruleset are GitHub
-settings rather than files in this repository, so they are configured once by a
-repository admin and are prerequisites of the process above:
+`main` is protected and uses the merge queue. The ruleset requires only the check
+named `required-checks`; individual conditionally selected matrix jobs are not
+ruleset requirements.
 
-* `main` is protected.
-* The merge queue is enabled on `main`.
-* The ruleset requires only the status check named `required-checks`.
-* Individual Standard validation matrix job names are not required — a skipped leg never
-  posts a check and would block the queue forever.
-
-`cargo-release-plan` also needs a one-time first `cargo publish` (and Trusted
-Publishing configured afterwards) before later versions can go through `release.yml`.
+Each publishable crate has its Trusted Publisher registration for the caller
+`release.yml`, with any selected protected environment matching that registration.
+The action's separate required installation gate verifies actual published tool
+versions and archives before an action release.

@@ -8,6 +8,59 @@ use serde_json::{Value, json};
 use crate::{Fixture, SMOKE_WATCHDOG, assert_success, command, run, write};
 
 #[test]
+fn builds_a_nested_workspace_without_controller_scripts() {
+    testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
+        let mut fixture = Fixture::new();
+        let nested = fixture.root.path().join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        for item in [
+            "Cargo.toml",
+            "Cargo.lock",
+            ".cargo",
+            "alpha",
+            "beta",
+            "shared",
+        ] {
+            fs::rename(fixture.root.path().join(item), nested.join(item)).unwrap();
+        }
+        fixture.commit_source();
+        let batch = fixture.root.path().join("nested-batch.json");
+        fs::write(
+            &batch,
+            serde_json::to_vec(&json!({
+                "triple":fixture.triple,"os":"fixture","timeout_minutes":150,
+                "binaries":[fixture.binary("alpha")]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output = fixture.root.path().join("out/nested");
+        let result = command(fixture.root.path(), env!("CARGO_BIN_EXE_release-binaries"))
+            .args(["run", "--repository", "fixture/does-not-exist", "--input"])
+            .arg(batch)
+            .arg("--controller")
+            .arg(&nested)
+            .arg("--output")
+            .arg(&output)
+            .arg("--no-upload")
+            .env("CARGO_TARGET_DIR", fixture.root.path().join("target"))
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .output()
+            .unwrap();
+        assert_success(&result);
+        assert!(
+            output
+                .join(format!(
+                    "alpha-v1.0.0-{}/alpha-bin{}",
+                    fixture.triple, EXE_SUFFIX
+                ))
+                .is_file()
+        );
+        assert!(!fixture.root.path().join("scripts").exists());
+    });
+}
+
+#[test]
 fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
         let fixture = Fixture::new();
@@ -92,13 +145,7 @@ fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
 fn rejects_a_foreign_compiler_host_and_cleans_the_prepared_source() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
         let mut fixture = Fixture::new();
-        // Keep this negative scenario offline: successful installation is not evidence
-        // that rustc's actual host matches the requested native target.
-        write(
-            fixture.root.path(),
-            "scripts/release/Install-ReleaseSourceToolchain.ps1",
-            "param([string] $Target)\n",
-        );
+        // The actual compiler host is checked before installing a foreign target.
         assert_success(&fixture.execute(&json!([fixture.binary("alpha")]), "out/native-host"));
         fixture.triple = if cfg!(windows) {
             "x86_64-unknown-linux-gnu"

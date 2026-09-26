@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ohno::AppError;
 
-use crate::model::{
+use crate::publication::binaries::model::{
     Asset, Batch, Binary, InvalidPlan, Plan, identifier, runner_label, timeout_minutes,
 };
 
@@ -35,7 +35,7 @@ pub(crate) fn plan(
         for triple in &request.release_targets {
             if !targets.contains_key(triple) {
                 return Err(InvalidPlan::new(format!(
-                    "{} declares unsupported target {triple}; update Get-ReleaseTarget or the package's folo.release-targets metadata",
+                    "{} declares unsupported target {triple}; update the supported target selection or the package's release-plan.release-targets metadata",
                     request.binary.name
                 )).into());
             }
@@ -93,8 +93,8 @@ pub(crate) fn plan(
 )]
 mod tests {
     use super::*;
-    use crate::model::tests::binary;
-    use crate::model::{Request, Target};
+    use crate::publication::binaries::model::tests::binary;
+    use crate::publication::binaries::model::{Request, Target};
 
     fn input() -> Plan {
         Plan {

@@ -29,17 +29,11 @@ impl Fixture {
             .unwrap()
             .parent()
             .unwrap();
-        for relative in [
-            "rust-toolchain.toml",
-            "scripts/release/Install-ReleaseSourceToolchain.ps1",
-            "scripts/setup/RustToolchain.psm1",
-            "scripts/utility/Constants.psm1",
-            "scripts/utility/Retry.psm1",
-        ] {
-            let destination = path.join(relative);
-            fs::create_dir_all(destination.parent().unwrap()).unwrap();
-            fs::copy(repository.join(relative), destination).unwrap();
-        }
+        fs::copy(
+            repository.join("rust-toolchain.toml"),
+            path.join("rust-toolchain.toml"),
+        )
+        .unwrap();
         write(
             path,
             "Cargo.toml",

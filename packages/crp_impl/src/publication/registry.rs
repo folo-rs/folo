@@ -3,11 +3,11 @@
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use std::{env, fs};
+use std::{env, fs, thread};
 
 use ohno::AppError;
 use reqwest::StatusCode;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, Response};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tempfile::{Builder, NamedTempFile};
@@ -16,6 +16,7 @@ use crate::WriteFileError;
 use crate::command::run_capture;
 use crate::publication::candidate::{Repository, package_identifier};
 use crate::publication::config::Configuration;
+use crate::publication::context::WorkflowRun;
 use crate::publication::credentials::CredentialSession;
 use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
 use crate::publication::manifest::{InvalidManifest, PublicationManifest};
@@ -35,6 +36,8 @@ pub struct RegistryOutcome {
     pub packages: Vec<RegistryPackage>,
     pub errors: Vec<String>,
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<WorkflowRun>,
 }
 
 impl RegistryOutcome {
@@ -103,31 +106,113 @@ impl RegistryClient {
 
     /// A yanked version still occupies its identity; Cargo decides dependency usability.
     pub fn contains(&self, name: &str, version: &str) -> Result<bool, AppError> {
-        let response = self
-            .client
-            .get(format!("{}/{}", self.endpoint, index_path(name)?))
-            .send()
-            .map_err(RegistryQueryError::caused_by)?;
+        self.contains_with_wait(name, version, thread::sleep)
+    }
+
+    /// Uses the same retry decisions with a caller-owned delay boundary.
+    pub fn contains_with_wait(
+        &self,
+        name: &str,
+        version: &str,
+        wait: impl FnMut(Duration),
+    ) -> Result<bool, AppError> {
+        Ok(self
+            .versions(name, wait)?
+            .iter()
+            .any(|entry| entry.version == version))
+    }
+
+    pub(crate) fn exists(&self, name: &str) -> Result<bool, AppError> {
+        Ok(!self.versions(name, thread::sleep)?.is_empty())
+    }
+
+    /// Selects a fixed API-comparison version, preferring the highest non-yanked stable release.
+    pub(crate) fn latest(&self, name: &str) -> Result<Option<Version>, AppError> {
+        let entries = self.versions(name, thread::sleep)?;
+        let mut versions = Vec::new();
+        for entry in entries {
+            if !entry.yanked {
+                versions.push(Version::parse(&entry.version)?);
+            }
+        }
+        let stable = versions
+            .iter()
+            .filter(|version| version.pre.is_empty())
+            .max()
+            .cloned();
+        Ok(stable.or_else(|| versions.into_iter().max()))
+    }
+
+    fn versions(
+        &self,
+        name: &str,
+        wait: impl FnMut(Duration),
+    ) -> Result<Vec<RegistryVersion>, AppError> {
+        let url = format!("{}/{}", self.endpoint, index_path(name)?);
+        let response = query_with_retry(
+            || {
+                self.client
+                    .get(&url)
+                    .send()
+                    .map_err(RegistryQueryError::caused_by)
+                    .map_err(Into::into)
+            },
+            Response::status,
+            wait,
+        )?;
         if response.status() == StatusCode::NOT_FOUND {
-            return Ok(false);
+            return Ok(Vec::new());
         }
         let response = response
             .error_for_status()
             .map_err(RegistryQueryError::caused_by)?;
         let contents = response.text().map_err(RegistryQueryError::caused_by)?;
-        let mut found = false;
+        let mut entries = Vec::new();
         for line in contents.lines().filter(|line| !line.is_empty()) {
             let entry: RegistryVersion =
                 serde_json::from_str(line).map_err(RegistryQueryError::caused_by)?;
             if entry.name != name {
-                return Err(
-                    RegistryVersionMismatch::new(name.to_owned(), version.to_owned()).into(),
-                );
+                return Err(RegistryVersionMismatch::new(
+                    name.to_owned(),
+                    "index entry".to_owned(),
+                )
+                .into());
             }
-            found |= entry.version == version;
+            entries.push(entry);
         }
-        Ok(found)
+        Ok(entries)
     }
+}
+
+fn query_with_retry<T>(
+    mut query: impl FnMut() -> Result<T, AppError>,
+    status: impl Fn(&T) -> StatusCode,
+    mut wait: impl FnMut(Duration),
+) -> Result<T, AppError> {
+    // Metadata endpoints occasionally return rate-limit or transient server failures.
+    // Bound retries independently of a long Cargo upload and do not retry deterministic 4xx.
+    const ATTEMPTS: usize = 3;
+    const RETRY_DELAY: Duration = Duration::from_secs(5);
+    for attempt in 1..=ATTEMPTS {
+        let result = query();
+        let retry = match &result {
+            Ok(response) => {
+                status(response) == StatusCode::TOO_MANY_REQUESTS
+                    || status(response).is_server_error()
+            }
+            Err(_) => true,
+        };
+        if !retry || attempt == ATTEMPTS {
+            return result;
+        }
+        if let Err(error) = &result {
+            eprintln!("Registry query attempt {attempt} failed: {error}");
+        } else {
+            eprintln!("Registry query attempt {attempt} returned a transient status; retrying.");
+        }
+        wait(RETRY_DELAY);
+    }
+    unreachable!("the last registry-query attempt returns")
 }
 
 /// Cargo-index evidence; REST visibility alone does not establish dependency availability.
@@ -136,6 +221,8 @@ struct RegistryVersion {
     name: String,
     #[serde(rename = "vers")]
     version: String,
+    #[serde(default)]
+    yanked: bool,
 }
 
 fn index_path(name: &str) -> Result<String, AppError> {
@@ -205,6 +292,7 @@ pub(crate) fn publish(
             .collect(),
         errors: Vec::new(),
         notes: Vec::new(),
+        github: WorkflowRun::capture()?,
     };
     let result = execute(&publication, manifest_path, &client, &mut outcome, verbose);
     if let Err(error) = result {
@@ -349,7 +437,7 @@ fn execute(
     Ok(())
 }
 
-fn verify_source(
+pub(crate) fn verify_source(
     publication: &PublicationManifest,
     manifest: &Path,
 ) -> Result<Repository, AppError> {
@@ -388,7 +476,7 @@ fn verify_source(
     Ok(repository)
 }
 
-fn write_outcome(path: &Path, outcome: &RegistryOutcome) -> Result<(), AppError> {
+pub(crate) fn write_outcome(path: &Path, outcome: &impl Serialize) -> Result<(), AppError> {
     if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(|error| WriteFileError::caused_by(path, error))?;
     }
@@ -453,6 +541,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registry_metadata_retries_only_transient_failures_with_a_fixed_budget() {
+        let mut responses = [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::OK,
+        ]
+        .into_iter();
+        let mut waits = 0;
+        let result = query_with_retry(
+            || Ok(responses.next().unwrap()),
+            |status| *status,
+            |_| waits += 1,
+        )
+        .unwrap();
+        assert_eq!(result, StatusCode::OK);
+        assert_eq!(waits, 2);
+        query_with_retry(
+            || Ok(StatusCode::FORBIDDEN),
+            |status| *status,
+            |_| panic!("deterministic status must not retry"),
+        )
+        .unwrap();
+        let mut attempts = 0;
+        let result = query_with_retry(
+            || {
+                attempts += 1;
+                Ok(StatusCode::SERVICE_UNAVAILABLE)
+            },
+            |status| *status,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(result, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
     fn registry_index_paths_follow_cargos_package_sharding() {
         for (name, expected) in [
             ("a", "1/a"),
@@ -498,6 +623,7 @@ mod tests {
                     }],
                     errors: Vec::new(),
                     notes: Vec::new(),
+                    github: None,
                 };
                 assert_eq!(
                     outcome.passed(),

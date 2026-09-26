@@ -127,7 +127,7 @@ fn tracked_relative(repository: &Repository, path: &Path) -> Result<String, AppE
         .ok_or_else(|| InvalidManifest::new("publication paths must be UTF-8".to_owned()).into())
 }
 
-fn fetch_release_line(root: &Path, config: &Configuration) -> Result<String, AppError> {
+pub(crate) fn fetch_release_line(root: &Path, config: &Configuration) -> Result<String, AppError> {
     // This per-command helper uses the caller's GitHub authentication without modifying
     // global Git configuration or putting a credential into an argument.
     run_capture(

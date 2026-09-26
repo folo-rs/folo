@@ -230,7 +230,7 @@ Describe 'Cargo helper integration selection' {
 Describe 'Release binary smoke selection' {
     It 'selects the native smoke for release adapter and shared setup inputs' -ForEach @(
         '.github/workflows/release.yml', 'justfiles/just_release.just',
-        'scripts/release/ReleaseBinaries.psm1', 'scripts/release/Install-ReleaseSourceToolchain.ps1',
+        'scripts/release/ReleaseBinaries.psm1',
         'scripts/setup/ReleaseArchiveTools.psm1', 'scripts/build/RequiredChecks.psm1',
         '.cargo/config.toml'
     ) {
@@ -241,6 +241,7 @@ Describe 'Release binary smoke selection' {
     It 'selects helper dependency impact without unrelated Cargo impact' {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('Cargo.lock'))
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["release-binaries"]' | Should -BeTrue
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["crp_impl"]' | Should -BeTrue
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["events_once"]' | Should -BeFalse
     }
 

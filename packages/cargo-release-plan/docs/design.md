@@ -382,14 +382,15 @@ its additional evidence can require a fresh semantic decision.
 
 ### Collect external compatibility evidence
 
-`check-compatibility` consumes either report evidence or a resolved plan's retained
-prospective workspace. It uses the report-selected consumer contracts and runs
+`check-compatibility` consumes prepared inputs or a resolved plan's retained
+prospective workspace, or collects fresh read-only report evidence. It uses the report-selected consumer contracts and runs
 the supported external API checker. The operation records comparison inputs,
 checker identity, findings and diagnostics; it does not replace the author's
 semantic decisions.
 
-Report-based execution explicitly selects a workspace and requires evidence bound
-to that workspace's assessed source, baseline and resolution. A matching HEAD
+Prepared execution explicitly selects a workspace and verifies its captured
+source, baseline and resolution. Fresh execution captures those inputs around
+its own report generation. A matching HEAD
 alone is insufficient for a dirty work tree. The tool verifies those inputs before
 and after the comparison, as it does for a retained preview. Artifact-only target
 selection does not by itself establish that the selected checkout matches a report.
@@ -944,6 +945,12 @@ the actual tag targets. Each batch binds its parent manifest, package versions,
 executables, target, release tags and peeled tag commits. The tag commits are
 not backfilled into the original manifest: they are observations made during
 GitHub reconciliation, possibly after the release branch has advanced.
+
+Every frozen batch also has a content identity for its exact requested work.
+Hosted outcomes record their workflow run and attempt independently of that
+identity. Reporting selects the latest applicable outcomes while preserving older
+receipts; an older successful batch cannot satisfy a later reconciliation that
+observed those assets missing, even when the requested work is identical.
 
 Neither manifests nor batches contain credentials or runner-specific absolute
 source paths. They remain transportable between jobs with different checkout

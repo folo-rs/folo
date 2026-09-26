@@ -10,5 +10,5 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 # Names a target the release workflow does not build, which would silently yield no archive.
-[package.metadata.folo]
+[package.metadata.release-plan]
 release-targets = ["x86_64-pc-windows-msvc", "s390x-unknown-linux-gnu"]

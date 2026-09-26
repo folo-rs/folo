@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 use sha2::{Digest, Sha256};
 
-use crate::model::{Binary, InvalidPlan};
+use crate::publication::binaries::model::{Binary, InvalidPlan};
 
 /// Fresh per-item staging keeps shared target artifacts separate from release asset contents.
 pub(crate) struct Staging {

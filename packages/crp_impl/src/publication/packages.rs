@@ -21,6 +21,25 @@ pub struct PublicationWorkspace {
 }
 
 impl PublicationWorkspace {
+    /// Checks a historical tag's package identity without imposing current publication policy.
+    pub(crate) fn contains_release(&self, name: &str, version: &str, binary: Option<&str>) -> bool {
+        self.packages
+            .iter()
+            .filter(|package| {
+                package.name == name
+                    && package.version == version
+                    && self.workspace_members.contains(&package.id)
+                    && !package.publish.as_ref().is_some_and(Vec::is_empty)
+                    && binary.is_none_or(|binary| {
+                        package.targets.iter().any(|target| {
+                            target.name == binary && target.kind.iter().any(|kind| kind == "bin")
+                        })
+                    })
+            })
+            .count()
+            == 1
+    }
+
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.workspace_root
@@ -61,6 +80,17 @@ impl PublicationWorkspace {
                 [] => None,
                 [target] => {
                     validate_binary(package, target, config)?;
+                    if package
+                        .metadata
+                        .get("release-plan")
+                        .is_some_and(|value| !value.is_object())
+                    {
+                        return Err(PackageConfigurationError::new(
+                            &package.name,
+                            "metadata.release-plan must be a table".to_owned(),
+                        )
+                        .into());
+                    }
                     let restriction = package
                         .metadata
                         .get("release-plan")
@@ -340,6 +370,9 @@ mod tests {
             package["metadata"]["release-plan"] = json!({"release-targets": targets});
             cases.push(package);
         }
+        let mut malformed = package();
+        malformed["metadata"]["release-plan"] = json!(true);
+        cases.push(malformed);
         let mut gated = package();
         gated["targets"] = json!([{"name":"gated","kind":["bin"],"required-features":["cli"]}]);
         cases.push(gated);

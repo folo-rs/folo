@@ -10,6 +10,9 @@ declared version has been raised past the anchor, and needs an increment until
 then. The anchor is the most recent commit on the release baseline's first-parent
 line in which the package's parsed `version` changed.
 
+The [user guide](https://folo-rs.github.io/folo/cargo-release-plan/) explains the
+release model, repository adoption and publication recovery.
+
 ## Usage
 
 Install with [`cargo binstall cargo-release-plan`](https://github.com/cargo-bins/cargo-binstall)
@@ -39,6 +42,17 @@ cargo release-plan prepare-publish --source <commit> --output <publication.json>
     [--manifest-path <path>] [--config <path>] [--verbose]
 cargo release-plan publish registry --publication <publication.json> --output <outcome.json>
     [--manifest-path <path>] [--dry-run] [--verbose]
+cargo release-plan release-context [--manifest-path <path>] [--config <path>] [--base <rev>] [--verbose]
+cargo release-plan check-publishing-identity [--verbose]
+cargo release-plan check-compatibility --output <new-directory> [--manifest-path <path>]
+    [--prepared <prepared.json> | --plan <resolved-plan.json> | --base <rev>] [--deny-findings] [--verbose]
+cargo release-plan check-published [--manifest-path <path>] [--plan <resolved-plan.json>] [--verbose]
+cargo release-plan publish github --publication <publication.json> --output <outcome.json>
+    --batches <new-directory> [--manifest-path <path>] [--dry-run] [--verbose]
+cargo release-plan publish binaries --publication <publication.json> --batch <batch.json>
+    --output <outcome.json> --artifacts <new-directory> [--manifest-path <path>] [--no-upload]
+cargo release-plan publish report --repository <owner/repo> --outcomes <download-directory>
+    --jobs <jobs.json> --output <report.md> [--publication <publication.json>] [--no-issue]
 ```
 
 `--version` identifies the installed application, not the packages in a workspace.
@@ -151,6 +165,90 @@ Query failure does not establish absence.
 identity, per-package observations, completion state and diagnostics. Existing
 versions and completed uploads remain in place after failure; retry using the
 original publication manifest and another outcome destination.
+
+### Release context and publishing identity
+
+`release-context` prints configured repository/branch, the resolved release
+baseline, source HEAD, repository-relative input locations and a stable
+workspace-scoped concurrency-group name. It fetches the configured release branch
+unless `--base` supplies an explicit tested baseline, such as a merge-queue base.
+It does not require clean source and does not prepare publication.
+
+`check-publishing-identity` verifies the calling GitHub Actions workflow's OIDC
+exchange with crates.io and immediately revokes the temporary token. It uploads
+nothing. Success establishes the caller registration path, not that every package
+has a matching Trusted Publisher grant.
+
+### Portable compatibility and first-publication checks
+
+`check-compatibility` collects external `cargo-semver-checks` evidence without
+choosing semantic levels. Use `--prepared` for the original prepared inputs,
+`--plan` for a resolved preview's retained workspace, or neither to collect a
+fresh read-only report against `--base`. Captured source is verified before and
+after the checker; a report alone is not proof that its checkout is still current.
+The ordinary plan/report schema is unchanged.
+
+The command writes `compatibility.json` and `semver-checks.log` beneath a new
+output directory. It records checker identity, exact published comparison versions,
+completed comparisons and `breaking`/`nonbreaking` floors. An identical-source
+canary checks the external tool before it is relied upon. Operational failures
+are not compatible results. With `--deny-findings`, an insufficient increment also
+fails the command; without it, completed findings remain evidence for the planner.
+An empty contract selection needs neither the checker nor a registry query.
+
+`check-published --plan` validates resolved-plan targets and fails if a publishable
+target is not established on crates.io or cannot be checked. Alignment-only helpers
+are excluded. Without a plan, workspace-wide discovery is advisory and reports
+missing/unknown packages explicitly. Neither mode publishes first versions or
+checks a crate's Trusted Publisher administration.
+
+### GitHub reconciliation and native binaries
+
+`publish github` checks registry availability for the complete publication
+manifest, reconciles immutable package tags and binary releases, and writes
+frozen native batches under `--batches`. Its outcome lists each batch's relative
+path, target and `batch_id`; the batch also binds its parent publication identity
+and exact tag commits. Workflow runner selection is outside the binary batch.
+
+Missing tags use a verified release-equivalent release-branch snapshot. If that
+is unavailable, the affected release fails while independent releases continue.
+The outcome names the missing tag and original publication source for operator
+recovery. Create only that missing tag at the recorded commit with sufficient
+operator rights, then retry the original failed run; an existing tag is not
+subject to selection of a new current-branch candidate.
+
+`publish binaries` consumes a batch and its original manifest. It rechecks tag
+identities and existing assets, then builds each requested executable separately
+from its tagged source. ZIP/checksum pairs are independently recoverable.
+`--no-upload` instead stages the frozen batch without querying or writing GitHub.
+Outcomes and staged files use separate new destinations for each attempt.
+
+### Final publication report
+
+`publish report` reconciles downloaded `outcome.json` files in their retained
+artifact subdirectories against the original manifest and current platform job
+results. Its `--jobs` input contains the result strings supplied by GitHub:
+
+```json
+{
+  "prepare": "success",
+  "registry": "success",
+  "github": "failure",
+  "binaries": "skipped"
+}
+```
+
+In GitHub Actions, outcomes carry `github.run_id` and `github.run_attempt`.
+The reporter selects the latest applicable receipt per phase and expected batch,
+without allowing an older success to hide a failed job or newly observed missing
+assets. Binary receipts must match the selected batch and be at least as new as
+the GitHub reconciliation that requested it.
+
+The command writes its Markdown report even when publication is incomplete,
+exits nonzero for incomplete delivery, and creates or updates a run-qualified
+failure issue with manual recovery instructions. `--no-issue` disables GitHub
+writes for report inspection. Omit `--publication` only when its artifact is
+unavailable; this is always reported as incomplete, not a successful empty release.
 
 ### `prepare`
 

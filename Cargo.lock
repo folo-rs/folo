@@ -1195,7 +1195,10 @@ version = "0.4.1"
 dependencies = [
  "cargo-release-plan",
  "clap",
+ "command-group",
  "criterion",
+ "ctrlc",
+ "dunce",
  "flate2",
  "ignore",
  "mimalloc",
@@ -1357,7 +1360,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dure"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "clap",
  "dure-test-helper",
@@ -3305,19 +3308,12 @@ dependencies = [
 
 [[package]]
 name = "release-binaries"
-version = "0.0.0"
+version = "0.4.1"
 dependencies = [
- "command-group",
- "ctrlc",
- "dunce",
+ "crp_impl",
  "mimalloc",
- "mutants",
- "ohno",
- "semver",
- "serde",
  "serde_json",
  "sha2",
- "static_assertions",
  "tempfile",
  "testing",
 ]

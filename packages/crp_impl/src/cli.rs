@@ -62,6 +62,64 @@ impl Cli {
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
+            Command::CheckPublished(args) => RunInput::CheckPublished {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                plan: args.plan,
+                verbose: args.verbose,
+            },
+            Command::CheckCompatibility(args) => RunInput::CheckCompatibility {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                prepared: args.prepared,
+                plan: args.plan,
+                base: args.base,
+                output: args.output,
+                deny_findings: args.deny_findings,
+                verbose: args.verbose,
+            },
+            Command::Publish(PublishCommand::Report(args)) => RunInput::PublicationReport {
+                repository: args.repository,
+                publication: args.publication,
+                outcomes: args.outcomes,
+                jobs: args.jobs,
+                output: args.output,
+                no_issue: args.no_issue,
+            },
+            Command::ReleaseContext(args) => RunInput::ReleaseContext {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                config: args.config,
+                base: args.base,
+                verbose: args.verbose,
+            },
+            Command::CheckPublishingIdentity(args) => RunInput::CheckPublishingIdentity {
+                verbose: args.verbose,
+            },
+            Command::Publish(PublishCommand::Binaries(args)) => RunInput::PublishBinaries {
+                publication: args.publication,
+                batch: args.batch,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                output: args.output,
+                artifacts: args.artifacts,
+                no_upload: args.no_upload,
+            },
+            Command::Publish(PublishCommand::Github(args)) => RunInput::PublishGithub {
+                publication: args.registry.publication,
+                manifest_path: args
+                    .registry
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                output: args.registry.output,
+                batches: args.batches,
+                dry_run: args.registry.dry_run,
+                verbose: args.registry.verbose,
+            },
             Command::Publish(PublishCommand::Registry(args)) => RunInput::PublishRegistry {
                 publication: args.publication,
                 manifest_path: args
@@ -199,6 +257,14 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Check first-publication prerequisites; a resolved plan selects a fail-closed gate.
+    CheckPublished(PublishedArgs),
+    /// Collect supported external API comparisons without choosing semantic change levels.
+    CheckCompatibility(CompatibilityArgs),
+    /// Resolve configured release-branch history and a workspace-scoped concurrency identity.
+    ReleaseContext(ContextArgs),
+    /// Exchange and immediately revoke a GitHub OIDC credential without publishing.
+    CheckPublishingIdentity(IdentityArgs),
     /// Deliver the versions captured in an immutable publication manifest.
     #[command(subcommand)]
     Publish(PublishCommand),
@@ -236,11 +302,117 @@ enum Command {
     Apply(ApplyArgs),
 }
 
+/// Context resolution does not require a clean or already-merged source checkout.
+#[derive(Debug, Parser)]
+struct ContextArgs {
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Explicit tested baseline (for example a merge-queue base); otherwise fetch the release branch.
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Setup verification needs only ambient GitHub identity, not workspace source.
+#[derive(Debug, Parser)]
+struct IdentityArgs {
+    #[arg(long)]
+    verbose: bool,
+}
+
 /// Publication phases share immutable intent, not a mutable version plan.
 #[derive(Debug, Subcommand)]
 enum PublishCommand {
+    /// Report final completeness and create an operator failure issue when required.
+    Report(PublicationReportArgs),
+    /// Build and publish a frozen native batch from actual tag commits.
+    Binaries(BinaryArgs),
     /// Reconcile crates.io and upload missing versions using Cargo.
     Registry(RegistryArgs),
+    /// Reconcile package tags and releases, then emit missing native binary batches.
+    Github(GithubArgs),
+}
+
+/// An optional resolved plan narrows and strengthens the registry prerequisite check.
+#[derive(Debug, Parser)]
+struct PublishedArgs {
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long)]
+    plan: Option<PathBuf>,
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Captured evidence or fresh read-only classification supplies the comparison inputs.
+#[derive(Debug, Parser)]
+struct CompatibilityArgs {
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long,conflicts_with_all=["plan","base"])]
+    prepared: Option<PathBuf>,
+    #[arg(long,conflicts_with_all=["prepared","base"])]
+    plan: Option<PathBuf>,
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long)]
+    output: PathBuf,
+    /// Fail the command when completed comparisons find an insufficient version increment.
+    #[arg(long)]
+    deny_findings: bool,
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Failure reporting can proceed even when preparation supplied no usable manifest.
+#[derive(Debug, Parser)]
+struct PublicationReportArgs {
+    #[arg(long)]
+    repository: String,
+    #[arg(long)]
+    publication: Option<PathBuf>,
+    /// Directory of downloaded attempt artifacts, retaining their subdirectories.
+    #[arg(long)]
+    outcomes: PathBuf,
+    /// JSON prepare/registry/github/binaries platform result facts.
+    #[arg(long)]
+    jobs: PathBuf,
+    #[arg(long)]
+    output: PathBuf,
+    /// Write the report without creating or updating a GitHub issue.
+    #[arg(long)]
+    no_issue: bool,
+}
+
+/// Binary execution keeps frozen input, outcome and staged files separate.
+#[derive(Debug, Parser)]
+struct BinaryArgs {
+    #[arg(long)]
+    publication: PathBuf,
+    #[arg(long)]
+    batch: PathBuf,
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long)]
+    output: PathBuf,
+    #[arg(long)]
+    artifacts: PathBuf,
+    /// Build and stage archives without GitHub queries or uploads.
+    #[arg(long)]
+    no_upload: bool,
+}
+
+/// GitHub reconciliation adds an independently transportable batch directory.
+#[derive(Debug, Parser)]
+struct GithubArgs {
+    #[command(flatten)]
+    registry: RegistryArgs,
+    /// Directory for frozen per-target batch artifacts; must not already exist.
+    #[arg(long)]
+    batches: PathBuf,
 }
 
 /// Registry source selection, output and nonpublishing observation mode.

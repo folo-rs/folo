@@ -208,8 +208,8 @@ Describe 'Planned tooling results' {
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
-    It 'rejects a lost native-helper smoke selection' {
-        $needs.prepare.outputs.packages_json = '["release-binaries"]'
+    It 'rejects a lost native-helper smoke selection for <_>' -ForEach @('release-binaries', 'crp_impl') {
+        $needs.prepare.outputs.packages_json = ConvertTo-Json -InputObject @($_) -Compress
         $needs.prepare.outputs.script_domains = '["release"]'
         $needs['test-scripts'].result = 'success'
         { Assert-PlannedResult } | Should -Throw

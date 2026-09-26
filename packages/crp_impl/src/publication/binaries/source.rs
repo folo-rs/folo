@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use ohno::AppError;
 use serde::Deserialize;
 
-use crate::model::{Binary, InvalidPlan};
+use crate::publication::binaries::model::{Binary, InvalidPlan};
 
 /// Only Cargo fields needed to check the frozen package identity are decoded.
 #[derive(Debug, Deserialize)]
@@ -96,7 +96,7 @@ pub(crate) fn executable(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::model::tests::binary;
+    use crate::publication::binaries::model::tests::binary;
 
     #[test]
     fn metadata_requires_workspace_version_and_binary_target() {

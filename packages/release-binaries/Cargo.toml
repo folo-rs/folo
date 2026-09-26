@@ -2,7 +2,7 @@
 name = "release-binaries"
 description = "Plans and executes platform-grouped binary release batches"
 publish = false
-version = "0.0.0"
+version = "0.4.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -11,26 +11,19 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = []
+allowed_external_types = ["crp_impl::*"]
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
-command-group = { workspace = true }
-ctrlc = { workspace = true, features = ["termination"] }
-dunce = { workspace = true }
+crp_impl = { workspace = true }
 mimalloc = { workspace = true }
-ohno = { workspace = true, features = ["app-err"] }
-semver = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
-
-[dev-dependencies]
-mutants = { workspace = true }
-static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
 [lints]

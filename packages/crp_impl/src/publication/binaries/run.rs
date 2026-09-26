@@ -5,12 +5,12 @@ use std::process::ExitCode;
 
 use ohno::AppError;
 
-use crate::batch::execute;
-use crate::cli::Cli;
-use crate::command::install_cancellation_handler;
-use crate::model::{Batch, InvalidPlan, Plan};
-use crate::native::{Github, Native};
-use crate::plan::plan;
+use crate::publication::binaries::batch::execute;
+use crate::publication::binaries::cli::Cli;
+use crate::publication::binaries::command::install_cancellation_handler;
+use crate::publication::binaries::model::{Batch, InvalidPlan, Plan};
+use crate::publication::binaries::native::{Github, Native};
+use crate::publication::binaries::plan::plan;
 
 /// Runs the private workflow controller and reports a failing exit for incomplete batches.
 // This is the executable's environment/filesystem shell; pure decisions live in their modules.
