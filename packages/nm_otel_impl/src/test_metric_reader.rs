@@ -27,6 +27,9 @@ impl TestMetricReader {
 }
 
 impl MetricReader for TestMetricReader {
+    // SDK pipeline wiring is observed by the integration tests' exported-metric assertions.
+    // A live Pipeline has no public constructor apart from the SDK provider.
+    #[cfg_attr(test, mutants::skip)]
     fn register_pipeline(&self, pipeline: Weak<Pipeline>) {
         self.inner.register_pipeline(pipeline);
     }
@@ -52,6 +55,9 @@ impl MetricReader for TestMetricReader {
 }
 
 /// Creates a meter provider and its explicitly driven test reader.
+// Provider construction runs SDK resource detection. Integration tests verify the returned
+// reader collects this provider's metrics; keep real SDK services outside library unit tests.
+#[cfg_attr(test, mutants::skip)]
 #[must_use]
 pub fn create_test_provider() -> (SdkMeterProvider, TestMetricReader) {
     let reader = TestMetricReader::default();
@@ -80,4 +86,18 @@ pub fn find_u64_sum(metrics: &ResourceMetrics, name: &str) -> Option<(bool, u64)
             assert!(data_points.next().is_none());
             (sum.is_monotonic(), value)
         })
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn collect_rejects_unregistered_reader() {
+        // An unregistered reader fails entirely in memory, without SDK resource detection
+        // or a collection clock. Failed collection must not masquerade as an empty snapshot.
+        _ = TestMetricReader::default().collect();
+    }
 }
