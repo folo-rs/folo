@@ -1,21 +1,26 @@
-//! Schedules external-I/O cases for both libtest and nextest without changing their watchdogs.
+//! Schedules native-I/O cases before starting their last-chance watchdogs.
 
 #[cfg(any(windows, test))]
 use std::sync::Mutex;
+use std::time::Duration;
 
-use testing::with_watchdog;
+use testing::with_watchdog_timeout;
 
 // All I/O cases live in this binary. Nextest supplies process-level isolation through its group;
 // libtest needs this in-process slot. See docs/implementation.md, "Verification boundary tests".
 #[cfg(windows)]
 static IO_TEST: Mutex<()> = Mutex::new(());
 
+// Native process startup and filesystem work can be slow during instrumented, concurrent runs.
+// This is the same conservative hang guard used by other native integration fixtures.
+const IO_WATCHDOG: Duration = Duration::from_mins(5);
+
 pub(crate) fn with_io_test(test: impl FnOnce() + Send + 'static) {
     #[cfg(windows)]
-    with_slot(&IO_TEST, || with_watchdog(test));
+    with_slot(&IO_TEST, || with_watchdog_timeout(IO_WATCHDOG, test));
 
     #[cfg(not(windows))]
-    with_watchdog(test);
+    with_watchdog_timeout(IO_WATCHDOG, test);
 }
 
 #[cfg(any(windows, test))]
@@ -34,7 +39,7 @@ fn with_slot(slot: &Mutex<()>, run: impl FnOnce()) {
 mod tests {
     use std::cell::{Cell, RefCell};
 
-    use testing::assert_panics;
+    use testing::{assert_panics, with_watchdog};
 
     use super::*;
 

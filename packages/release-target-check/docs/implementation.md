@@ -103,8 +103,10 @@ nextest. A panic poisons the slot and prevents subsequent cases from starting I/
 a watchdog timeout can leave its worker running even after the caller fails.
 Failing queued cases avoids both overlap with that worker and an indefinite wait
 for a hung worker to release an owned permit. A queued case has not started
-executing and does not consume its watchdog budget. Running cases retain the
-unchanged shared watchdog and no retries.
+executing and does not consume its watchdog budget. Native cases use the
+conservative integration-process hang budget, including under coverage
+instrumentation; pure scheduling tests retain the ordinary in-process watchdog.
+The shared watchdog still disables itself during mutation testing. There are no retries.
 
 Benchmark smoke uses `cargo test --benches`, which also executes library tests
 through libtest. The library contains only in-process tests, so this selection

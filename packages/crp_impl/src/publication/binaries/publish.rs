@@ -210,6 +210,21 @@ mod tests {
     }
 
     #[test]
+    fn valid_binary_identities_must_name_a_requested_package_version() {
+        let publication = publication();
+        for (name, version) in [("another", "1.0.0"), ("tool", "2.0.0")] {
+            let mut invalid = batch(&publication);
+            let binary = invalid.binaries.first_mut().unwrap();
+            binary.name = name.to_owned();
+            binary.version = version.to_owned();
+            binary.tag = format!("{name}-v{version}");
+            binary.validate().unwrap();
+            let error = validate(&publication, &invalid.seal().unwrap()).unwrap_err();
+            assert!(error.find_source::<InvalidManifest>().is_some());
+        }
+    }
+
+    #[test]
     fn only_mode_appropriate_complete_items_pass_the_attempt() {
         let publication = publication();
         let binary = batch(&publication).binaries.into_iter().next().unwrap();
