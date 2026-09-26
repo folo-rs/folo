@@ -194,7 +194,7 @@ Describe 'Caller integration selection' {
 
 Describe 'Cargo helper integration selection' {
     It 'adds release tests for affected helper <_>' -ForEach @(
-        'cargo-release-plan', 'crp_impl'
+        'cargo-release-plan', 'crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication'
     ) {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('scripts/book/BookSite.psm1'))
         $packages = ConvertTo-Json -InputObject @($_) -Compress
@@ -242,7 +242,7 @@ Describe 'Release binary smoke selection' {
     It 'selects helper dependency impact without unrelated Cargo impact' {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('Cargo.lock'))
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["cargo-release-plan"]' | Should -BeTrue
-        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["crp_impl"]' | Should -BeTrue
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["crp_native"]' | Should -BeTrue
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["events_once"]' | Should -BeFalse
     }
 

@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use crp_impl::publication::config::Configuration;
-use crp_impl::publication::github::PlatformBatch;
-use crp_impl::publication::manifest::{Binary, Package, Publication, PublicationManifest};
-use crp_impl::publication::packages::PublicationWorkspace;
+use crp_publication::publication::config::Configuration;
+use crp_publication::publication::github::PlatformBatch;
+use crp_publication::publication::manifest::{Binary, Package, Publication, PublicationManifest};
+use crp_publication::publication::packages::PublicationWorkspace;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

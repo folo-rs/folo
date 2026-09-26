@@ -5,14 +5,34 @@ describes the internal boundaries that keep that behavior consistent.
 
 ## Architecture
 
-The binary and its internal library target are intentionally thin. `main` parses
-Cargo's injected subcommand argument, then delegates to the library `run()` entry used by integration
-tests. The library target re-exports only the required application/test wiring from
-[`crp_impl`](../../crp_impl/docs/implementation.md), which owns the implementation,
-unit tests, implementation-boundary integrations and benchmarks. Both packages
-share an exact dependency and release version.
-Both library targets are marked `private-api = true` and disable library
-documentation; user-facing contracts are the CLI and documented artifacts.
+The application owns argument parsing, command values, dispatch, external
+compatibility execution and the process entry point. Its library target connects
+the binary and maintainer tests; it is not a supported Rust library API.
+Purpose-specific private packages own the capabilities it coordinates:
+
+* [`crp_workspace`](../../crp_workspace/docs/implementation.md) owns Git/Cargo
+  observations, manifest and dependency graphs, tracked contents and source/path identity.
+* [`crp_versioning`](../../crp_versioning/docs/implementation.md) owns classification,
+  reports, version groups and the complete preparation, planning and application pipeline.
+* [`crp_publication`](../../crp_publication/docs/implementation.md) owns publication
+  policy, immutable intent, registry/OIDC and GitHub delivery, receipts and operator recovery.
+* [`crp_native`](../../crp_native/docs/implementation.md) owns native build execution,
+  source worktrees, process supervision, archives and their cleanup.
+* [`crp_diag`](../../crp_diag/docs/implementation.md) owns diagnostic reporting and
+  deterministic presentation, independently of a process stream.
+
+Dependencies follow responsibility: versioning depends on workspace; publication
+depends on versioning, native and workspace; native depends on workspace.
+Diagnostics is a dependency-light leaf. The application also uses workspace's
+artifact-file mechanics for its compatibility evidence. Components never depend
+on application command values or the executable package, including through
+development dependencies.
+
+Every library target is marked `private-api = true` and disables library
+documentation. Exact normal dependencies declare the application's version group;
+user-facing contracts are the CLI and documented artifacts.
+The [implementation package release prerequisites](package-bootstrap.md) describe
+publication ordering and the verification obligations for this family.
 The selected command drives command-specific paths through shared components:
 
 ```text
@@ -40,8 +60,8 @@ history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
 Executable identity is handled by CLI parsing before workspace acquisition.
-The implementation partition's compiled package version identifies the application
-because their exact dependency keeps the release versions equal. Installation
+The application supplies its compiled version to publication producer and HTTP
+adapter wiring, independently of component bootstrap versions. Installation
 checks do not need to inspect a consumer repository to identify the executable.
 
 The publication subject validates committed policy independently of remote state.
@@ -57,7 +77,11 @@ Publication preparation composes that policy with the candidate verifier under
 input containment, first-parent membership and candidate-relative version
 validation. Its typed request comes from publication preparation, not another
 executable or argument parser. Real candidate-boundary tests and the in-process
-verification sequence belong to `crp_impl`.
+verification sequence belong to `crp_publication`; source facts are acquired by `crp_workspace`.
+
+Candidate verification calls versioning's typed check operation, not application
+dispatch. Workspace observations contain exact dependency edges; versioning derives
+groups and their verdicts from those facts without an upward workspace dependency.
 
 The preparation boundary fetches the configured GitHub branch through a
 per-invocation Git credential helper and captures its resolved commit. It does not
@@ -144,10 +168,11 @@ source checkout merely because that repository has no target-directory ignore.
 
 ## Native binary execution
 
-`publication::binaries` owns the native batch engine behind `publish binaries`.
+`crp_publication` owns binary batch coordination behind `publish binaries`.
 Frozen manifest-linked batches are its only job protocol; runner assignments
-and workflow timeouts belong to the shared action. Batch decisions and
-source/artifact validation stay in the implementation partition's unit tests.
+and workflow timeouts belong to the shared action. It supplies validated, non-wire
+build requests to `crp_native`. Batch/delivery decisions stay in publication;
+source/artifact execution validation stays in native's unit tests.
 
 The controller repository supplies Git objects and the shared target directory,
 while each release tag selects a disposable immutable source worktree.
@@ -192,8 +217,8 @@ Tag failures retain per-package diagnostics and do not discard valid batches for
 other releases. Batch identity hashes the complete native request set, including
 tag source commits, independently of a workflow attempt.
 
-The REST client owns structured tag/release/issue operations; the native engine
-retains GitHub CLI asset upload so it can use its existing process supervision and
+The REST client owns structured tag/release/issue operations; publication's asset
+adapter retains GitHub CLI upload through native process supervision and the
 archive-file interface. Both use the invocation's repository token. Git supplies
 source objects independently of either forge API boundary.
 
@@ -252,14 +277,16 @@ executable with publication manifests and sealed batches. It covers historical
 and nested sources, exact missing-source acquisition, independent package
 failures and feature selection, shared build output, native archive permissions
 and checksums, rejected artifact paths, and process-tree cancellation. The native
-GitHub upload boundary runs in `crp_impl/tests/boundaries/native_binaries.rs`,
+GitHub upload boundary runs in `crp_publication/tests/boundaries/native_binaries.rs`,
 including incomplete uploads, retries and source cleanup failure.
-`just release-binary-smoke` selects both owners on the native platform.
-Ordinary test and coverage selection includes both targets.
+`crp_native/tests/boundaries/` independently exercises supervised process capture.
+`just release-binary-smoke` selects these owners on the native platform.
+Ordinary test and coverage selection includes their integration targets.
 
-Candidate-boundary tests in `crp_impl/tests/boundaries/candidate/` cover actual
+Candidate-boundary tests in `crp_publication/tests/boundaries/candidate/` cover actual
 Git index, history and tracked-input semantics and real Cargo verification.
-Windows candidate cases share a nextest group and an in-process libtest slot
+Workspace snapshot acquisition has its own boundary tests. Windows snapshot and
+candidate cases share a nextest group and each process uses a libtest slot
 before starting their watchdog, so queued cases do not consume that budget.
 Other platforms retain normal parallelism.
 The candidate watchdog is a last-chance native-process guard, accommodating
@@ -292,16 +319,17 @@ a real Git history small does not make an acquisition test a unit test. Tests of
 real Git, Cargo and filesystem adapters belong in Cargo integration targets;
 decision tests supply acquired values without calling those adapters.
 
-`crp_impl/tests/boundaries/` preserves direct assertions on acquisition, files,
-repository state and private error conditions. Its Git fixture cannot be imported
-by library unit tests. The unit-only Git helpers construct inert handles and
+Component `tests/boundaries/` targets preserve direct assertions on acquisition,
+files, repository state and foreign error causes. Exact private conditions are
+asserted by the owning unit tests, not exposed as a test taxonomy.
+The real Git fixture is for integration tests only. Pure Git helpers construct inert handles and
 tree entries without observing the host.
 
 The executable-connected `cargo-release-plan/tests/integration/` suite stays in
 the binary's package: Cargo supplies `CARGO_BIN_EXE_cargo-release-plan` only to that
 package's integration targets. This is the executable-ownership exception to the
 usual implementation-crate test layout, not a second implementation or nested
-build harness. The shell also checks its internal re-export boundary.
+build harness. The shell also checks its internal command wiring.
 
 Captured-input decisions use acquired metadata and a read-only per-directory case
 probe. Unit tests supply regular-file, missing-file and error observations, mixed
@@ -864,8 +892,10 @@ scale with workspace size:
 Criterion tracks wall-clock behavior without subprocess or filesystem noise.
 Callgrind is not used because both measured paths allocate variable-sized output
 or parse state, and its fixed allocator model would omit a material part of their
-cost. The benchmark-only surface is available in `crp_impl` unit-test builds and through
-its `private-test-util` feature, but does not participate in normal builds. Small unit tests
+cost. Benchmark-only drivers belong to `crp_versioning` and `crp_workspace`, enabled
+in unit-test builds or through their `private-test-util` features, not normal builds.
+Criterion workload identifiers stay application-scoped across package ownership.
+Small unit tests
 exercise the adapters' byte and line statistics, root selection and repeated-walk
 totals without running a benchmark harness. Both adapters and their underlying
 algorithms participate in library-only mutation testing; benchmark smoke runs

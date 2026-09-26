@@ -27,7 +27,12 @@ filter = 'package(dure) & binary(windows)'
 test-group = 'dure-windows-conpty'
 
 [[profile.default.overrides]]
-filter = 'package(crp_impl) & binary(boundaries) & test(candidate::)'
+filter = 'package(crp_publication) & binary(boundaries) & test(candidate::)'
+platform = 'cfg(windows)'
+test-group = 'release-candidate-windows'
+
+[[profile.default.overrides]]
+filter = 'package(crp_workspace) & binary(boundaries) & test(snapshot)'
 platform = 'cfg(windows)'
 test-group = 'release-candidate-windows'
 

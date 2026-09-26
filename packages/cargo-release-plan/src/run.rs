@@ -1,0 +1,657 @@
+use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use crp_diag::Verbose;
+use crp_publication::PublicationOutput;
+use crp_publication::publication::binaries::publish::publish as publish_binaries;
+use crp_publication::publication::context::release_context;
+use crp_publication::publication::credentials::provide;
+use crp_publication::publication::github::publish as publish_github;
+use crp_publication::publication::identity::check_publishing_identity;
+use crp_publication::publication::packages::check_publication;
+use crp_publication::publication::preflight::check as check_published;
+use crp_publication::publication::prepare::prepare as prepare_publication;
+use crp_publication::publication::registry::publish as publish_registry;
+use crp_publication::publication::report::report as report_publication;
+use crp_versioning::analysis_order::run_analysis_order;
+use crp_versioning::apply::run_apply;
+use crp_versioning::expand::run_expand;
+use crp_versioning::inspect_plan::run_inspect_plan;
+use crp_versioning::preview::{run_prepare, run_preview};
+use crp_versioning::propose::run_propose;
+use crp_versioning::report::run_report;
+use crp_versioning::resolved::run_verify_preview;
+use crp_versioning::semver_targets::run_semver_targets;
+use crp_versioning::{CheckFormat, CheckRequest, check};
+use ohno::AppError;
+
+use crate::compatibility::check as check_compatibility;
+
+/// Input parameters for [`run`].
+#[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "Application code and maintainer tests exhaustively match internal command inputs"
+)]
+pub enum RunInput {
+    /// Check first-publication prerequisites without uploading or changing source.
+    CheckPublished {
+        manifest_path: PathBuf,
+        plan: Option<PathBuf>,
+        verbose: bool,
+    },
+    /// Collect external API compatibility evidence from captured or fresh source.
+    CheckCompatibility {
+        manifest_path: PathBuf,
+        prepared: Option<PathBuf>,
+        plan: Option<PathBuf>,
+        base: Option<String>,
+        output: PathBuf,
+        deny_findings: bool,
+        verbose: bool,
+    },
+    /// Report publication completeness from current platform job facts and retained receipts.
+    PublicationReport {
+        repository: String,
+        publication: Option<PathBuf>,
+        outcomes: PathBuf,
+        jobs: PathBuf,
+        output: PathBuf,
+        no_issue: bool,
+    },
+    /// Resolve configured release history and workflow scope without preparing publication.
+    ReleaseContext {
+        manifest_path: PathBuf,
+        config: Option<PathBuf>,
+        base: Option<String>,
+        verbose: bool,
+    },
+    /// Verify the GitHub caller's Trusted Publishing identity without uploading.
+    CheckPublishingIdentity { verbose: bool },
+    /// Build and publish one frozen native batch.
+    PublishBinaries {
+        publication: PathBuf,
+        batch: PathBuf,
+        manifest_path: PathBuf,
+        output: PathBuf,
+        artifacts: PathBuf,
+        no_upload: bool,
+    },
+    /// Reconcile GitHub tags/releases and emit native binary batches.
+    PublishGithub {
+        publication: PathBuf,
+        manifest_path: PathBuf,
+        output: PathBuf,
+        batches: PathBuf,
+        dry_run: bool,
+        verbose: bool,
+    },
+    /// Reconcile exact crate versions and publish only those missing from crates.io.
+    PublishRegistry {
+        /// Immutable publication manifest.
+        publication: PathBuf,
+        /// Cargo manifest in the original source checkout.
+        manifest_path: PathBuf,
+        /// Structured phase outcome destination.
+        output: PathBuf,
+        /// Observe and describe missing versions without credentials or uploads.
+        dry_run: bool,
+        /// Explain reconciliation inputs and decisions.
+        verbose: bool,
+    },
+    /// Serve Cargo's internal per-upload credential protocol.
+    CredentialProvider,
+    /// Capture immutable publication intent from a clean merged source snapshot.
+    PreparePublish {
+        /// Source checkout's Cargo manifest.
+        manifest_path: PathBuf,
+        /// Workspace-relative publication configuration; omitted selects the conventional file.
+        config: Option<PathBuf>,
+        /// Immutable source commit that must match the checkout.
+        source: String,
+        /// Publication manifest destination.
+        output: PathBuf,
+        /// Explain captured release inputs.
+        verbose: bool,
+    },
+    /// Inspect validated expanded-plan facts for external tooling.
+    InspectPlan {
+        /// Expanded plan artifact.
+        plan: PathBuf,
+        /// Require a captured preview valid for application.
+        require_resolved: bool,
+        /// Workspace supplying tracked membership and publication eligibility.
+        manifest_path: PathBuf,
+        /// Print explanatory validation decisions.
+        verbose: bool,
+    },
+    /// Order report packages for semantic assessment.
+    AnalysisOrder {
+        /// Report file or its containing directory.
+        report: PathBuf,
+        /// Print explanatory ordering decisions.
+        verbose: bool,
+    },
+    /// Select consumer-contract packages for compatibility assessment.
+    SemverTargets {
+        /// Report file or its containing directory.
+        report: PathBuf,
+        /// Print explanatory target decisions.
+        verbose: bool,
+    },
+    /// Complete caller-supplied semantic decisions using captured report evidence.
+    Propose {
+        /// Report file or its containing directory.
+        report: PathBuf,
+        /// Caller-supplied change decisions.
+        decisions: PathBuf,
+        /// Destination for the proposed plan.
+        out: PathBuf,
+        /// Print explanatory version-resolution decisions.
+        verbose: bool,
+    },
+    /// Refresh the live workspace lockfile offline before semantic grading.
+    Prepare {
+        /// Directory receiving report evidence and prepared.json.
+        output: PathBuf,
+        /// Release baseline; defaults to the remote default branch.
+        base: Option<String>,
+        /// Workspace manifest to prepare.
+        manifest_path: PathBuf,
+        /// Print explanatory resolver decisions.
+        verbose: bool,
+    },
+    /// Resolve a proposed plan to a complete, captured state for application.
+    Preview {
+        /// Semantic release proposal.
+        plan: PathBuf,
+        /// Prepared artifact whose report supplied semantic grading evidence.
+        prepared: PathBuf,
+        /// Directory receiving the final report, plan, and compatibility workspace.
+        output: PathBuf,
+        /// Workspace manifest whose inputs must match preparation.
+        manifest_path: PathBuf,
+        /// Print explanatory expansion and resolver decisions.
+        verbose: bool,
+    },
+    /// Check that compatibility evidence uses the captured final workspace unchanged.
+    VerifyPreview {
+        /// Resolved plan whose captured state must match.
+        plan: PathBuf,
+        /// Required retained candidate manifest; the original workspace is not accepted.
+        manifest_path: PathBuf,
+        /// Print explanatory verification notes.
+        verbose: bool,
+    },
+    /// `report` — write `report.json` and per-package diffs.
+    Report {
+        /// Directory that receives `report.json` and `diffs/`.
+        out_dir: PathBuf,
+        /// Release baseline whose first-parent line supplies anchors.
+        ///
+        /// `None` defers to the default branch of the `origin` remote.
+        base: Option<String>,
+        /// Workspace manifest to classify. Used verbatim.
+        manifest_path: PathBuf,
+        /// When set, print explanatory decision notes to stderr.
+        verbose: bool,
+    },
+    /// `check` — fail on a release the workspace's manifests cannot support.
+    ///
+    /// Covers a package needing an increment, a version group disagreeing with
+    /// itself, a requirement not naming the version its target declares, malformed
+    /// exact workspace requirements, and a package that exposes a public dependency
+    /// releasing a breaking change without one of its own.
+    Check {
+        /// Release baseline whose first-parent line supplies anchors.
+        ///
+        /// `None` defers to the default branch of the `origin` remote.
+        base: Option<String>,
+        /// Workspace manifest to classify. Used verbatim.
+        manifest_path: PathBuf,
+        /// How to render diagnostics.
+        format: CheckFormat,
+        /// When set, warn on divergence from `cargo package --list` without failing.
+        verify_packaging: bool,
+        /// Optional publication configuration, relative to the selected workspace.
+        config: Option<PathBuf>,
+        /// When set, print explanatory decision notes to stderr.
+        verbose: bool,
+    },
+    /// `expand` — resolve version groups into an explicit per-package plan.
+    Expand {
+        /// Path to the plan JSON file to expand.
+        plan: PathBuf,
+        /// Path that receives the expanded plan JSON.
+        out: PathBuf,
+        /// Workspace manifest supplying members and dependency-derived groups. Used verbatim.
+        manifest_path: PathBuf,
+        /// Protect input aliases and stage output before replacing the destination.
+        preserve_input: bool,
+        /// When set, print explanatory decision notes to stderr.
+        verbose: bool,
+    },
+    /// `apply` — install captured files or perform proposed manifest-only edits.
+    Apply {
+        /// Path to the plan JSON file.
+        plan: PathBuf,
+        /// When set, validate and describe planned writes without changing files.
+        dry_run: bool,
+        /// Workspace manifest to edit. Used verbatim.
+        manifest_path: PathBuf,
+        /// When set, print explanatory decision notes to stderr.
+        verbose: bool,
+    },
+}
+
+/// The successful outcome of a run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "Application code and maintainer tests exhaustively match internal command outcomes"
+)]
+pub enum RunOutcome {
+    /// OIDC exchange and immediate revocation completed without publication.
+    IdentityCheck { message: String },
+    /// Publication completed its attempt and persisted the phase outcome.
+    Publication {
+        /// Whether the requested operation succeeded; dry runs do not establish delivery.
+        passed: bool,
+        /// Human-readable disposition and outcome location.
+        message: String,
+    },
+    /// A JSON-producing query completed.
+    ArtifactQuery {
+        /// JSON document for stdout.
+        message: String,
+    },
+    /// A proposed release plan was written.
+    Propose {
+        /// Human-readable summary.
+        message: String,
+    },
+    /// Preparation completed and wrote frozen evidence.
+    Prepare {
+        /// Human-readable summary.
+        message: String,
+    },
+    /// Preview completed and wrote the resolved release artifact.
+    Preview {
+        /// Human-readable summary.
+        message: String,
+    },
+    /// The retained compatibility workspace matches the resolved plan.
+    VerifyPreview {
+        /// Human-readable summary.
+        message: String,
+    },
+    /// `report` finished and wrote its artifacts.
+    Report {
+        /// Human-readable summary for stdout. Empty when there is nothing to say.
+        message: String,
+    },
+    /// `check` finished. `passed` is the process-level verdict.
+    Check {
+        /// Whether every release and workspace-version check passed.
+        passed: bool,
+        /// Rendered gating diagnostics or a success summary.
+        message: String,
+        /// Non-gating advisory lines for stderr.
+        warnings: String,
+    },
+    /// `expand` finished and wrote the expanded plan.
+    Expand {
+        /// Human-readable summary for stdout.
+        message: String,
+    },
+    /// `apply` finished (including `--dry-run`).
+    Apply {
+        /// Human-readable summary for stdout.
+        message: String,
+    },
+}
+
+/// Executes one requested operation and reports its outcome.
+///
+/// Selects the command named by `input` and returns its summary or the check
+/// verdict and diagnostics.
+///
+/// # Errors
+///
+/// Returns an application error when the requested operation cannot be
+/// completed. A failing check is a [`RunOutcome::Check`] with
+/// `passed: false`, not an error.
+pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
+    match input {
+        RunInput::CheckPublished {
+            manifest_path,
+            plan,
+            verbose,
+        } => {
+            let (passed, message) = check_published(
+                manifest_path,
+                plan.as_deref(),
+                &publication_output(*verbose),
+            )?;
+            Ok(RunOutcome::Check {
+                passed,
+                message,
+                warnings: String::new(),
+            })
+        }
+        RunInput::CheckCompatibility {
+            manifest_path,
+            prepared,
+            plan,
+            base,
+            output,
+            deny_findings,
+            verbose,
+        } => {
+            let (passed, message) = check_compatibility(
+                manifest_path,
+                prepared.as_deref(),
+                plan.as_deref(),
+                base.as_deref(),
+                output,
+                *deny_findings,
+                &publication_output(*verbose),
+            )?;
+            Ok(RunOutcome::Check {
+                passed,
+                message,
+                warnings: String::new(),
+            })
+        }
+        RunInput::PublicationReport {
+            repository,
+            publication,
+            outcomes,
+            jobs,
+            output,
+            no_issue,
+        } => {
+            let (passed, message) = report_publication(
+                repository,
+                publication.as_deref(),
+                outcomes,
+                jobs,
+                output,
+                *no_issue,
+                &publication_output(false),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::ReleaseContext {
+            manifest_path,
+            config,
+            base,
+            verbose,
+        } => {
+            let message = release_context(
+                manifest_path,
+                config.as_deref(),
+                base.as_deref(),
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::ArtifactQuery { message })
+        }
+        RunInput::CheckPublishingIdentity { verbose } => {
+            let message = check_publishing_identity(&publication_output(*verbose))?;
+            Ok(RunOutcome::IdentityCheck { message })
+        }
+        RunInput::PublishBinaries {
+            publication,
+            batch,
+            manifest_path,
+            output,
+            artifacts,
+            no_upload,
+        } => {
+            let (passed, message) = publish_binaries(
+                publication,
+                batch,
+                manifest_path,
+                output,
+                artifacts,
+                *no_upload,
+                &publication_output(false),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::PublishGithub {
+            publication,
+            manifest_path,
+            output,
+            batches,
+            dry_run,
+            verbose,
+        } => {
+            let (passed, message) = publish_github(
+                publication,
+                manifest_path,
+                output,
+                batches,
+                *dry_run,
+                &publication_output(*verbose),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::PublishRegistry {
+            publication,
+            manifest_path,
+            output,
+            dry_run,
+            verbose,
+        } => {
+            let (passed, message) = publish_registry(
+                publication,
+                manifest_path,
+                output,
+                *dry_run,
+                &publication_output(*verbose),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::CredentialProvider => {
+            provide(
+                &mut io::stdin().lock(),
+                &mut io::stdout().lock(),
+                &publication_output(false),
+            )?;
+            Ok(RunOutcome::ArtifactQuery {
+                message: String::new(),
+            })
+        }
+        RunInput::PreparePublish {
+            manifest_path,
+            config,
+            source,
+            output,
+            verbose,
+        } => {
+            let message = prepare_publication(
+                manifest_path,
+                config.as_deref(),
+                source,
+                output,
+                &publication_output(*verbose),
+            )?;
+            Ok(RunOutcome::Prepare { message })
+        }
+        RunInput::InspectPlan {
+            plan,
+            require_resolved,
+            manifest_path,
+            verbose,
+        } => {
+            let message = run_inspect_plan(
+                plan,
+                *require_resolved,
+                manifest_path,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::ArtifactQuery { message })
+        }
+        RunInput::AnalysisOrder { report, verbose } => {
+            let message = run_analysis_order(report, Verbose::new(*verbose, &crp_diag::Stderr))?;
+            Ok(RunOutcome::ArtifactQuery { message })
+        }
+        RunInput::SemverTargets { report, verbose } => {
+            let message = run_semver_targets(report, Verbose::new(*verbose, &crp_diag::Stderr))?;
+            Ok(RunOutcome::ArtifactQuery { message })
+        }
+        RunInput::Propose {
+            report,
+            decisions,
+            out,
+            verbose,
+        } => {
+            let message = run_propose(
+                report,
+                decisions,
+                out,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Propose { message })
+        }
+        RunInput::VerifyPreview {
+            plan,
+            manifest_path,
+            verbose,
+        } => {
+            let message = run_verify_preview(
+                plan,
+                manifest_path,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::VerifyPreview { message })
+        }
+        RunInput::Prepare {
+            output,
+            base,
+            manifest_path,
+            verbose,
+        } => {
+            let message = run_prepare(
+                output,
+                base.as_deref(),
+                manifest_path,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Prepare { message })
+        }
+        RunInput::Preview {
+            plan,
+            prepared,
+            output,
+            manifest_path,
+            verbose,
+        } => {
+            let message = run_preview(
+                plan,
+                prepared,
+                output,
+                manifest_path,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Preview { message })
+        }
+        RunInput::Report {
+            out_dir,
+            base,
+            manifest_path,
+            verbose,
+        } => {
+            let message = run_report(
+                out_dir,
+                base.as_deref(),
+                manifest_path,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Report { message })
+        }
+        RunInput::Check {
+            base,
+            manifest_path,
+            format,
+            verify_packaging,
+            config,
+            verbose,
+        } => {
+            if let Some(config) = config {
+                check_publication(
+                    manifest_path,
+                    config,
+                    Verbose::new(*verbose, &crp_diag::Stderr),
+                )?;
+            }
+            let outcome = check(
+                &CheckRequest {
+                    base: base.as_deref(),
+                    manifest_path,
+                    format: *format,
+                    verify_packaging: *verify_packaging,
+                },
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Check {
+                passed: outcome.passed,
+                message: outcome.message,
+                warnings: outcome.warnings,
+            })
+        }
+        RunInput::Expand {
+            plan,
+            out,
+            manifest_path,
+            preserve_input,
+            verbose,
+        } => {
+            let message = run_expand(
+                plan,
+                out,
+                manifest_path,
+                *preserve_input,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Expand { message })
+        }
+        RunInput::Apply {
+            plan,
+            dry_run,
+            manifest_path,
+            verbose,
+        } => {
+            let message = run_apply(
+                plan,
+                *dry_run,
+                manifest_path,
+                Verbose::new(*verbose, &crp_diag::Stderr),
+            )?;
+            Ok(RunOutcome::Apply { message })
+        }
+    }
+}
+
+fn publication_output(verbose: bool) -> PublicationOutput {
+    PublicationOutput::new(
+        env!("CARGO_PKG_VERSION"),
+        verbose,
+        Arc::new(crp_diag::Stderr),
+    )
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use static_assertions::assert_impl_all;
+
+    use super::*;
+
+    assert_impl_all!(RunInput: UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(RunOutcome: UnwindSafe, RefUnwindSafe);
+}

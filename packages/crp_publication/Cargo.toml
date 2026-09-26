@@ -1,0 +1,58 @@
+[package]
+name = "crp_publication"
+description = "Publication implementation for cargo-release-plan - do not reference directly"
+publish = true
+version = "0.4.1"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.release-plan]
+private-api = true
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "crp_diag::*",
+    "crp_native::*",
+    "ohno::app::error::AppError",
+    "semver::Version",
+    "serde_core::de::Deserialize",
+    "serde_core::ser::Serialize",
+]
+
+[lib]
+doc = false
+
+[dependencies]
+crp_diag = { workspace = true }
+crp_native = { workspace = true }
+crp_versioning = { workspace = true }
+crp_workspace = { workspace = true }
+dunce = { workspace = true }
+flate2 = { workspace = true, features = ["rust_backend"] }
+ohno = { workspace = true, features = ["app-err"] }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls"] }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
+
+[dev-dependencies]
+crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
+crp_workspace = { path = "../crp_workspace", features = ["private-test-util"] }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+tiny_http = { workspace = true }
+
+[lints]
+workspace = true

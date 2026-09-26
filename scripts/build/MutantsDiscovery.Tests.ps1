@@ -70,12 +70,11 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         $packages = @('cargo-bench-history-stress', 'cargo-release-plan')
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
-            # The release application's supported facade delegates to its implementation partition.
-            $libraryPackage = if ($packageName -ceq 'cargo-release-plan') {
-                'crp_impl'
-            } else { $packageName }
             @($binaryMutants | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
-            @($after | Where-Object { $_.package -eq $libraryPackage }).Count | Should -BeGreaterThan 0
+            @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
+        }
+        foreach ($packageName in @('crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication')) {
+            @($after | Where-Object { $_.package -eq $packageName }).Count | Should -BeGreaterThan 0
         }
     }
 
