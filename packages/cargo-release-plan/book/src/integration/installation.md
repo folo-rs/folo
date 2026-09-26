@@ -13,13 +13,13 @@ Confirm that the exact package and its promised native archives are published
 before adoption. Source-mode tests are not evidence of published availability,
 and a missing release is not a reason to substitute an older incompatible tool.
 
-The command examples use PowerShell 7.4 or later for native-command error
+The command examples use PowerShell 7.6 or later for native-command error
 handling. `Join-Path` keeps filesystem arguments native on Windows, Linux and
 macOS. Use one installation method:
 
 ```powershell
 $CrpVersion = "0.4.1"
-cargo binstall "cargo-release-plan@$CrpVersion"
+cargo binstall "cargo-release-plan@$CrpVersion" --locked
 ```
 
 Or install the published source with its lockfile:
@@ -54,6 +54,10 @@ application release. Your consumer repository may use a different compiler.
 Select the installation toolchain explicitly when a local `rust-toolchain.toml`
 would otherwise select an older one.
 
+Source installation also needs a native C/C++ build toolchain and CMake for the
+application's dependencies. Installing a matching prebuilt binary avoids that
+compilation requirement.
+
 Registry upload operations require **Cargo 1.95 or later** for the workspace
 publication behavior used by the tool. This runtime requirement is distinct
 from the compiler needed to build the application. Source verification and tagged
@@ -63,6 +67,11 @@ requirements.
 The published action pins the application and external checker versions and
 prepares their installation separately from consumer builds. Binary sources
 continue to supply their own toolchain, Cargo configuration and lockfile.
+
+Native binary publication uses Git, Cargo, rustup and the GitHub CLI, plus
+`zip`/`unzip` on Unix or standalone `7za.exe` on Windows. The reusable workflow
+prepares those archive tools before builds. Direct CLI users must provide them;
+version assessment and publication reporting do not require archive tools.
 
 ## Inspect your workspace before editing it
 
