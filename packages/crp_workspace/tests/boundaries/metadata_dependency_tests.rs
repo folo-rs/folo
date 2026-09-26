@@ -32,6 +32,55 @@ fn package(name: &str, root: &Path) -> MetadataPackage {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "Reads actual Cargo metadata and canonical filesystem paths"
+)]
+fn canonical_manifest_preserves_workspace_dependency_graph() {
+    let fixture = Repository::new();
+    fixture.write(
+        "Cargo.toml",
+        b"[workspace]\nmembers=['consumer','dependency']\nresolver='3'\n",
+    );
+    for name in ["consumer", "dependency"] {
+        fixture.write(
+            &format!("{name}/Cargo.toml"),
+            format!("[package]\nname='{name}'\nversion='1.0.0'\nedition='2021'\n").as_bytes(),
+        );
+        fixture.write(&format!("{name}/src/lib.rs"), b"pub fn f() {}\n");
+    }
+    fixture.write(
+        "consumer/Cargo.toml",
+        b"[package]\nname='consumer'\nversion='1.0.0'\nedition='2021'\n\
+          [package.metadata.cargo_check_external_types]\nallowed_external_types=['dependency::*']\n\
+          [dependencies]\ndependency={path='../dependency',version='=1.0.0'}\n",
+    );
+    fixture.command(&["add", "."]);
+    let manifest = fixture.path().join("Cargo.toml");
+    let (ordinary, _) = load_tracked_work_tree(&manifest).unwrap();
+    let (canonical, _) = load_tracked_work_tree(&manifest.canonicalize().unwrap()).unwrap();
+    let consumer = |tree: &WorkTree| {
+        tree.packages
+            .iter()
+            .find(|package| package.manifest.name == "consumer")
+            .unwrap()
+            .dependencies
+            .clone()
+    };
+    let expected = consumer(&ordinary);
+    assert_eq!(expected.len(), 1);
+    let edge = expected.first().unwrap();
+    assert_eq!(edge.name, "dependency");
+    assert!(edge.exact_pin);
+    assert!(edge.public);
+    assert_eq!(consumer(&canonical), expected);
+    assert_eq!(
+        dependents_of(&canonical.packages, "dependency"),
+        ["consumer"]
+    );
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "reads real manifests and a Git index")]
 fn workspace_projections_distinguish_version_targets_and_rewrite_members() {
     let fixture = Repository::new();

@@ -12,7 +12,9 @@ belong to callers. Workspace observations retain validated exact dependency edge
 versioning derives their groups.
 
 Path handling probes actual filesystem alias behavior rather than assuming case
-sensitivity from the operating system. Shared artifact-file operations own path
+sensitivity from the operating system. Dependency membership uses the lexical member
+index first, then filesystem-resolved member identity, so caller path spelling does
+not remove dependency edges. Shared artifact-file operations own path
 resolution and atomic promotion, while callers own serialization and overwrite policy.
 Repository-controlled display strings use the diagnostic component's presentation helpers.
 
