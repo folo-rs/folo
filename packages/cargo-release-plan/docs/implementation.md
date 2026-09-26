@@ -5,14 +5,32 @@ describes the internal boundaries that keep that behavior consistent.
 
 ## Architecture
 
-The binary and its internal library target are intentionally thin. `main` parses
-Cargo's injected subcommand argument, then delegates to the library `run()` entry used by integration
-tests. The library target re-exports only the required application/test wiring from
-[`crp_impl`](../../crp_impl/docs/implementation.md), which owns the implementation,
-unit tests, implementation-boundary integrations and benchmarks. Both packages
-share an exact dependency and release version.
-Both library targets are marked `private-api = true` and disable library
-documentation; user-facing contracts are the CLI and documented artifacts.
+The application owns argument parsing, command values, dispatch, external
+compatibility execution and the process entry point. Its library target connects
+the binary and maintainer tests; it is not a supported Rust library API.
+Purpose-specific private packages own the capabilities it coordinates:
+
+* [`crp_workspace`](../../crp_workspace/docs/implementation.md) owns Git/Cargo
+  observations, manifest and dependency graphs, tracked contents and source/path identity.
+* [`crp_versioning`](../../crp_versioning/docs/implementation.md) owns classification,
+  reports, version groups and the complete preparation, planning and application pipeline.
+* [`crp_publication`](../../crp_publication/docs/implementation.md) owns publication
+  policy, immutable intent, registry/OIDC and GitHub delivery, receipts and operator recovery.
+* [`crp_native`](../../crp_native/docs/implementation.md) owns native build execution,
+  source worktrees, process supervision, archives and their cleanup.
+* [`crp_diag`](../../crp_diag/docs/implementation.md) owns diagnostic reporting and
+  deterministic presentation, independently of a process stream.
+
+Dependencies follow responsibility: versioning depends on workspace; publication
+depends on versioning, native and workspace; native depends on workspace.
+Diagnostics is a dependency-light leaf. The application also uses workspace's
+artifact-file mechanics for its compatibility evidence. Components never depend
+on application command values or the executable package, including through
+development dependencies.
+
+Every library target is marked `private-api = true` and disables library
+documentation. Exact normal dependencies declare the application's version group;
+user-facing contracts are the CLI and documented artifacts.
 The selected command drives command-specific paths through shared components:
 
 ```text
@@ -40,8 +58,8 @@ history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
 Executable identity is handled by CLI parsing before workspace acquisition.
-The implementation partition's compiled package version identifies the application
-because their exact dependency keeps the release versions equal. Installation
+The application supplies its compiled version to publication producer and HTTP
+adapter wiring, independently of component bootstrap versions. Installation
 checks do not need to inspect a consumer repository to identify the executable.
 
 The publication subject validates committed policy independently of remote state.
@@ -58,6 +76,10 @@ input containment, first-parent membership and candidate-relative version
 validation. Its typed request comes from publication preparation, not another
 executable or argument parser. Real candidate-boundary tests and the in-process
 verification sequence belong to `crp_impl`.
+
+Candidate verification calls versioning's typed check operation, not application
+dispatch. Workspace observations contain exact dependency edges; versioning derives
+groups and their verdicts from those facts without an upward workspace dependency.
 
 The preparation boundary fetches the configured GitHub branch through a
 per-invocation Git credential helper and captures its resolved commit. It does not

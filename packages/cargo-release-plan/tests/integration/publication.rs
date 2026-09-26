@@ -8,10 +8,10 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use cargo_release_plan::{RunInput, RunOutcome, run};
-use crp_impl::publication::credentials::CredentialSession;
-use crp_impl::publication::github::PlatformBatch;
-use crp_impl::publication::identity::TrustedPublisher;
-use crp_impl::publication::manifest::PublicationManifest;
+use crp_publication::publication::credentials::CredentialSession;
+use crp_publication::publication::github::PlatformBatch;
+use crp_publication::publication::identity::TrustedPublisher;
+use crp_publication::publication::manifest::PublicationManifest;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

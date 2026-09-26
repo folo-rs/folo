@@ -1,0 +1,74 @@
+[package]
+name = "crp_workspace"
+description = "Workspace implementation for cargo-release-plan - do not reference directly"
+publish = true
+version = "0.4.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# Cargo retains the explicit benchmark target in the packaged manifest.
+include = ["src/**", "benches/crp_workspace.rs"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.release-plan]
+private-api = true
+
+[package.metadata.cargo-udeps.ignore]
+development = ["criterion"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "crp_diag::*",
+    "ignore::gitignore::Gitignore",
+    "ignore::overrides::Override",
+    "ohno::app::error::AppError",
+    "ohno::enrichable::Enrichable",
+    "ohno::error_ext::ErrorExt",
+    "semver::Version",
+    "semver::VersionReq",
+    "serde_core::de::Deserialize",
+    "serde_core::ser::Serialize",
+    "serde_json::value::Value",
+    "tempfile::file::NamedTempFile",
+    "toml_edit::document::DocumentMut",
+    "toml_edit::table::TableLike",
+]
+
+[lib]
+doc = false
+
+[features]
+private-test-util = []
+
+[dependencies]
+crp_diag = { workspace = true }
+dunce = { workspace = true }
+ignore = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
+# Integration targets use the same opt-in fixture as other component tests.
+crp_workspace = { path = ".", features = ["private-test-util"] }
+mimalloc = { workspace = true }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+
+[[bench]]
+name = "crp_workspace"
+harness = false
+required-features = ["private-test-util"]
+
+[lints]
+workspace = true

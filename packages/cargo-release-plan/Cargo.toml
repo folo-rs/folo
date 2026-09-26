@@ -16,10 +16,17 @@ include.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
-# Keep the internal executable/test boundary limited to the implementation crate.
+# Acknowledge only the internal wiring and actual third-party types exposed by the shell.
 # Ref: docs/external-types.md.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = ["crp_impl::*"]
+allowed_external_types = [
+    "clap_builder::derive::Args",
+    "clap_builder::derive::CommandFactory",
+    "clap_builder::derive::FromArgMatches",
+    "clap_builder::derive::Parser",
+    "crp_versioning::*",
+    "ohno::app::error::AppError",
+]
 
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml, and these
@@ -40,14 +47,23 @@ private-api = true
 doc = false
 
 [dependencies]
-crp_impl = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+crp_diag = { workspace = true }
+crp_publication = { workspace = true }
+crp_versioning = { workspace = true }
+crp_workspace = { workspace = true }
 mimalloc = { workspace = true }
-
-[dev-dependencies]
 ohno = { workspace = true, features = ["app-err"] }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+
+[dev-dependencies]
+crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
+mutants = { workspace = true }
+static_assertions = { workspace = true }
 testing = { path = "../testing" }
 
 [lints]

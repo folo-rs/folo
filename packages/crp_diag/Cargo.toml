@@ -1,0 +1,34 @@
+[package]
+name = "crp_diag"
+description = "Diagnostic implementation for cargo-release-plan - do not reference directly"
+publish = true
+version = "0.4.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[package.metadata.release-plan]
+private-api = true
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = []
+
+[lib]
+doc = false
+
+[features]
+private-test-util = []
+
+[dev-dependencies]
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+testing = { path = "../testing" }
+
+[lints]
+workspace = true

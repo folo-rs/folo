@@ -21,7 +21,7 @@ or repository-local release scripts.
 
 The product is a command-line application, not a Rust library API. Its supported
 interfaces are the CLI and documented configuration and artifact formats.
-Library targets in `cargo-release-plan` and `crp_impl` exist only for executable
+Library targets in the application and its implementation packages exist only for executable
 wiring and maintainer tests. Changes to those internal Rust types do not by
 themselves require a breaking release; changes to the supported interfaces still
 receive their normal compatibility assessment.
