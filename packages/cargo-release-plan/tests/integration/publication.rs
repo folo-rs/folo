@@ -51,14 +51,12 @@ fn publication_preflight_accepts_a_workspace_with_no_publishable_targets() {
 )]
 fn publication_preflight_propagates_workspace_acquisition_failure() {
     let directory = TempDir::new().unwrap();
-    assert!(
-        run(&RunInput::CheckPublished {
-            manifest_path: directory.path().join("absent").join("Cargo.toml"),
-            plan: None,
-            verbose: false,
-        })
-        .is_err()
-    );
+    _ = run(&RunInput::CheckPublished {
+        manifest_path: directory.path().join("absent").join("Cargo.toml"),
+        plan: None,
+        verbose: false,
+    })
+    .unwrap_err();
 }
 
 #[test]

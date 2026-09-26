@@ -1200,7 +1200,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crp_diag"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "crp_native"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "command-group",
  "crp_diag",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "crp_publication"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "crp_diag",
  "crp_native",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "crp_versioning"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "crp_workspace"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "criterion",
  "crp_diag",

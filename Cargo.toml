@@ -49,11 +49,11 @@ command-group = { version = "5.0.1", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
 cpulist = { version = "1.1.10", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
-crp_diag = { version = "=0.4.0", path = "packages/crp_diag", default-features = false }
-crp_native = { version = "=0.4.0", path = "packages/crp_native", default-features = false }
-crp_publication = { version = "=0.4.0", path = "packages/crp_publication", default-features = false }
-crp_versioning = { version = "=0.4.0", path = "packages/crp_versioning", default-features = false }
-crp_workspace = { version = "=0.4.0", path = "packages/crp_workspace", default-features = false }
+crp_diag = { version = "=0.4.1", path = "packages/crp_diag", default-features = false }
+crp_native = { version = "=0.4.1", path = "packages/crp_native", default-features = false }
+crp_publication = { version = "=0.4.1", path = "packages/crp_publication", default-features = false }
+crp_versioning = { version = "=0.4.1", path = "packages/crp_versioning", default-features = false }
+crp_workspace = { version = "=0.4.1", path = "packages/crp_workspace", default-features = false }
 ctrlc = { version = "3.5.0", default-features = false }
 deranged = { version = "0.5.2", default-features = false }
 derive_more = { version = "2.0.0", default-features = false }

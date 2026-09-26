@@ -31,8 +31,8 @@ development dependencies.
 Every library target is marked `private-api = true` and disables library
 documentation. Exact normal dependencies declare the application's version group;
 user-facing contracts are the CLI and documented artifacts.
-The [package bootstrap handoff](package-bootstrap.md) records the prerequisite
-for introducing the publishable implementation family.
+The [implementation package release prerequisites](package-bootstrap.md) describe
+publication ordering and the verification obligations for this family.
 The selected command drives command-specific paths through shared components:
 
 ```text
