@@ -328,7 +328,7 @@ fn empty_registry_work_needs_no_identity_and_never_overwrites_intent() {
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes the reporter with isolated workflow identity")]
-fn reporter_writes_an_operator_handoff_when_publication_artifacts_are_missing() {
+fn reporter_preserves_job_failures_when_publication_artifacts_are_missing_or_invalid() {
     let directory = TempDir::new().unwrap();
     let jobs = directory.path().join("jobs.json");
     fs::write(
@@ -336,33 +336,41 @@ fn reporter_writes_an_operator_handoff_when_publication_artifacts_are_missing() 
         br#"{"prepare":"success","registry":"failure","github":"skipped","binaries":"skipped"}"#,
     )
     .unwrap();
-    let output = directory.path().join("report.md");
-    let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
-        .args([
-            "publish",
-            "report",
-            "--repository",
-            "example/tool",
-            "--outcomes",
-        ])
-        .arg(directory.path().join("missing-outcomes"))
-        .arg("--publication")
-        .arg(directory.path().join("missing-publication.json"))
-        .arg("--jobs")
-        .arg(jobs)
-        .arg("--output")
-        .arg(&output)
-        .arg("--no-issue")
-        .env("GITHUB_ACTIONS", "true")
-        .env("GITHUB_RUN_ID", "123")
-        .env("GITHUB_RUN_ATTEMPT", "2")
-        .output()
-        .unwrap();
-    assert!(!result.status.success());
-    let body = fs::read_to_string(output).unwrap();
-    assert!(body.contains("https://github.com/example/tool/actions/runs/123"));
-    assert!(body.contains("unavailable"));
-    assert!(body.contains("original failed workflow"));
+    let missing = directory.path().join("missing-outcomes");
+    let invalid = directory.path().join("invalid-outcomes");
+    fs::create_dir_all(&invalid).unwrap();
+    fs::write(invalid.join("outcome.json"), b"{").unwrap();
+    for outcomes in [missing, invalid] {
+        let output = outcomes.with_extension("md");
+        let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args([
+                "publish",
+                "report",
+                "--repository",
+                "example/tool",
+                "--outcomes",
+            ])
+            .arg(outcomes)
+            .arg("--publication")
+            .arg(directory.path().join("missing-publication.json"))
+            .arg("--jobs")
+            .arg(&jobs)
+            .arg("--output")
+            .arg(&output)
+            .arg("--no-issue")
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_RUN_ID", "123")
+            .env("GITHUB_RUN_ATTEMPT", "2")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let body = fs::read_to_string(output).unwrap();
+        assert!(body.contains("https://github.com/example/tool/actions/runs/123"));
+        assert!(body.contains("unavailable"));
+        assert!(body.contains("original failed workflow"));
+        assert!(body.contains("registry job"));
+        assert!(body.contains("github job"));
+    }
 }
 
 fn preparation(fixture: &Fixture, output: PathBuf) -> RunInput {

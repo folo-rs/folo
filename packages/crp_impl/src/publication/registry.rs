@@ -172,11 +172,7 @@ impl RegistryClient {
             let entry: RegistryVersion =
                 serde_json::from_str(line).map_err(RegistryQueryError::caused_by)?;
             if entry.name != name {
-                return Err(RegistryVersionMismatch::new(
-                    name.to_owned(),
-                    "index entry".to_owned(),
-                )
-                .into());
+                return Err(RegistryPackageMismatch::new(name.to_owned()).into());
             }
             entries.push(entry);
         }
@@ -551,10 +547,9 @@ struct UnsupportedCargo {
 struct RegistryQueryError;
 
 #[ohno::error]
-#[display("registry response does not identify requested {package}@{version}")]
-struct RegistryVersionMismatch {
+#[display("registry index response does not identify requested package {package}")]
+struct RegistryPackageMismatch {
     package: String,
-    version: String,
 }
 
 #[ohno::error]

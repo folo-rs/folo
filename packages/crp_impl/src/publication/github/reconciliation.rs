@@ -155,7 +155,7 @@ pub fn reconcile_with(
             }
             record.state = GithubState::Failed;
             record.source = existing.ok().flatten();
-            outcome.errors.push(format!("Existing tag {} does not identify the requested package release; operator inspection is required.",record.tag));
+            outcome.errors.push(format!("Could not verify existing tag {} for the requested package release; inspect command diagnostics before retrying.",record.tag));
             outcome.packages.push(record);
             continue;
         }
@@ -216,6 +216,7 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
             None => {
                 record.recovery_source = Some(self.publication.publication.source.clone());
                 let Some(source) = self.create_tag(package, record)? else {
+                    record.recovery_source = None;
                     record.state = GithubState::WouldCreateTag;
                     return Ok(());
                 };

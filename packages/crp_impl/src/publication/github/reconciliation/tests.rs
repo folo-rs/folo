@@ -274,6 +274,7 @@ fn dry_run_never_creates_missing_tags_or_releases() {
                 .any(|call| call.starts_with("create:"))
         );
         assert!(work.batches.is_empty());
+        assert!(result.recovery_source.is_none());
     }
 }
 

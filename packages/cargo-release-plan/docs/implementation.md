@@ -201,7 +201,8 @@ GitHub outcome. A binary receipt cannot precede the reconciliation attempt that
 observed the missing assets, even if the batch identity happens to match.
 Platform job failures and cancellation remain authoritative over old receipts.
 Missing manifests or receipts produce an incomplete report and operator issue,
-never reconstructed intent from the current branch.
+never reconstructed intent from the current branch. Invalid or ambiguous receipt
+evidence does not discard the independently acquired platform job failures.
 
 `release-context` gives both local planning and shared workflows the same
 configured baseline and concurrency identity. It is read-only apart from fetching

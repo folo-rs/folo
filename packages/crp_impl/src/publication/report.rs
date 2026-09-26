@@ -105,7 +105,15 @@ pub(crate) fn report(
         Ok(assessment) => assessment,
         Err(error) => {
             eprintln!("{error}");
-            Assessment {complete:false,details:vec!["Publication evidence is invalid or unavailable; inspect the reporter diagnostics.".to_owned()]}
+            let mut details = job_failures(&jobs);
+            details.push(
+                "Publication evidence is invalid or unavailable; inspect the reporter diagnostics."
+                    .to_owned(),
+            );
+            Assessment {
+                complete: false,
+                details,
+            }
         }
     };
     if !evidence_errors.is_empty() {
@@ -182,12 +190,7 @@ fn load_receipts(root: &Path) -> Result<Vec<Receipt>, AppError> {
     Ok(receipts)
 }
 
-fn assess(
-    publication: Option<&PublicationManifest>,
-    receipts: &[Receipt],
-    jobs: &JobResults,
-    context: WorkflowRun,
-) -> Result<Assessment, AppError> {
+fn job_failures(jobs: &JobResults) -> Vec<String> {
     let mut details = Vec::new();
     for (phase, result) in [
         ("prepare", jobs.prepare),
@@ -203,6 +206,16 @@ fn assess(
             ));
         }
     }
+    details
+}
+
+fn assess(
+    publication: Option<&PublicationManifest>,
+    receipts: &[Receipt],
+    jobs: &JobResults,
+    context: WorkflowRun,
+) -> Result<Assessment, AppError> {
+    let mut details = job_failures(jobs);
     let Some(publication) = publication else {
         details.push("The original immutable publication manifest is unavailable.".to_owned());
         return Ok(Assessment {
