@@ -159,7 +159,7 @@ pub fn reconcile_with(
             outcome.packages.push(record);
             continue;
         }
-        if let Err(error) = work.package(package, &mut record) {
+        if let Err(error) = work.package(package, existing?, &mut record) {
             eprintln!("{}: {error}", record.tag);
             let tag = &record.tag;
             outcome.errors.push(match &record.recovery_source {
@@ -203,8 +203,15 @@ struct Reconciliation<'a, F, C> {
 }
 
 impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, C> {
-    fn package(&mut self, package: &Package, record: &mut GithubPackage) -> Result<(), AppError> {
-        let source = match self.github.tag(&record.tag)? {
+    fn package(
+        &mut self,
+        package: &Package,
+        verified_source: Option<String>,
+        record: &mut GithubPackage,
+    ) -> Result<(), AppError> {
+        // Keep the identity already verified by the caller; another lookup could substitute
+        // an unverified source if the ref changes before release or batch creation.
+        let source = match verified_source {
             Some(source) => source,
             None => {
                 record.recovery_source = Some(self.publication.publication.source.clone());

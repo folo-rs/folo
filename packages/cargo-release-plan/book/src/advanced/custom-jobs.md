@@ -102,7 +102,8 @@ A custom graph must preserve these boundaries:
   tag identities.
 - Continue independent valid releases after a per-release failure while keeping
   the aggregate run failed.
-- Keep credentials phase-local and out of source-build subprocesses.
+- Keep credentials phase-local and out of native source-build subprocesses.
+  Registry verification shares the trusted publication job's identity.
 - Retain input artifacts and attempt-specific diagnostics on failure.
 - Treat missing artifacts as errors and retry original intent.
 

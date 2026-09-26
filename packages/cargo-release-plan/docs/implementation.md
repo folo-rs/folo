@@ -178,7 +178,9 @@ handoff rather than another version or broader credentials.
 
 Existing tags retain their commit identity and bypass candidate selection.
 Historical package identity is checked without imposing today's configuration or
-group policy on an old tag. Binary releases name the established tag explicitly,
+group policy on an old tag. Reconciliation carries that verified commit into
+release requests and batches without replacing it with another tag observation.
+Binary releases name the established tag explicitly,
 and creation requests retain its observed commit instead of an implicit branch
 target. A competing ref created at a different commit is preserved but does not
 authorize this attempt's release or binary work.

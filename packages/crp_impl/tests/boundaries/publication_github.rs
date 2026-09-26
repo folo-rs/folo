@@ -220,14 +220,24 @@ pkg-fmt="zip"
             "binary":{"name":"tool-command","targets":["x86_64-pc-windows-msvc","x86_64-unknown-linux-gnu"]}}]
     })).unwrap()).unwrap();
     let created = Arc::new(Mutex::new(false));
+    let tag_reads = Arc::new(Mutex::new(0));
     let service = HttpService::new({
         let created = Arc::clone(&created);
+        let tag_reads = Arc::clone(&tag_reads);
         let source = source.clone();
         move |_, mut request| {
             let (status, body) = match request.url() {
                 "/index/to/ol/tool" => (200, json!({"name":"tool","vers":"1.0.0"})),
                 "/repos/example/releases" => (200, json!({"full_name":"example/releases"})),
                 "/repos/example/releases/git/ref/tags/tool-v1.0.0" => {
+                    let mut reads = tag_reads.lock().unwrap();
+                    // A second lookup observes a moved ref rather than the verified commit.
+                    let source = if *reads == 0 {
+                        source.clone()
+                    } else {
+                        "c".repeat(40)
+                    };
+                    *reads += 1;
                     (200, json!({"object":{"type":"commit","sha":source}}))
                 }
                 "/repos/example/releases/releases/tags/tool-v1.0.0"
@@ -301,8 +311,10 @@ pkg-fmt="zip"
         dry.packages.first().unwrap().state,
         GithubState::WouldCreateRelease
     );
+    assert_eq!(dry.packages.first().unwrap().source.as_ref(), Some(&source));
     assert!(!*created.lock().unwrap());
     assert!(!output.path().join("dry").exists());
+    *tag_reads.lock().unwrap() = 0;
     let mut result = outcome(&publication);
     reconcile_with(
         &publication,

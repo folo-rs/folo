@@ -1,6 +1,7 @@
 //! In-process reconciliation decisions over acquired forge and source observations.
 
 use std::cell::{Cell, RefCell};
+use std::slice;
 
 use serde_json::json;
 
@@ -15,6 +16,7 @@ use crate::publication::github::outcome::tests::record;
 struct FakeForge {
     tags: RefCell<BTreeMap<String, String>>,
     calls: RefCell<Vec<String>>,
+    release_sources: RefCell<Vec<String>>,
     failures: Cell<usize>,
     release_exists: bool,
     created_source: Option<String>,
@@ -48,10 +50,7 @@ impl Forge for FakeForge {
         dry_run: bool,
     ) -> Result<Option<Release>, AppError> {
         self.calls.borrow_mut().push(format!("release:{tag}"));
-        assert_eq!(
-            self.tags.borrow().get(tag).map(String::as_str),
-            Some(source)
-        );
+        self.release_sources.borrow_mut().push(source.to_owned());
         if dry_run && !self.release_exists {
             return Ok(None);
         }
@@ -90,6 +89,7 @@ fn competing_tag_creation_does_not_authorize_release_or_binary_publication() {
     let mut result = record(GithubState::Pending);
     work.package(
         publication.publication.packages.first().unwrap(),
+        forge.tag(&result.tag).unwrap(),
         &mut result,
     )
     .unwrap_err();
@@ -138,6 +138,7 @@ fn missing_tag_uses_equivalent_candidate_and_emits_linked_binary_work() {
     let mut result = record(GithubState::Pending);
     work.package(
         publication.publication.packages.first().unwrap(),
+        forge.tag(&result.tag).unwrap(),
         &mut result,
     )
     .unwrap();
@@ -183,6 +184,7 @@ fn existing_tag_bypasses_current_candidate_and_records_only_consulted_evidence()
     let mut result = record(GithubState::Pending);
     work.package(
         publication.publication.packages.first().unwrap(),
+        forge.tag(&result.tag).unwrap(),
         &mut result,
     )
     .unwrap();
@@ -217,6 +219,7 @@ fn incompatible_candidate_retains_manual_recovery_without_writes() {
         let mut result = record(GithubState::Pending);
         work.package(
             publication.publication.packages.first().unwrap(),
+            forge.tag(&result.tag).unwrap(),
             &mut result,
         )
         .unwrap_err();
@@ -251,6 +254,7 @@ fn dry_run_never_creates_missing_tags_or_releases() {
         let mut result = record(GithubState::Pending);
         work.package(
             publication.publication.packages.first().unwrap(),
+            forge.tag(&result.tag).unwrap(),
             &mut result,
         )
         .unwrap();
@@ -298,9 +302,48 @@ fn tag_retries_refresh_source_and_stop_at_the_bounded_attempt_count() {
         let mut result = record(GithubState::Pending);
         let attempted = work.package(
             publication.publication.packages.first().unwrap(),
+            forge.tag(&result.tag).unwrap(),
             &mut result,
         );
         assert_eq!(attempted.is_ok(), failures == 1);
         assert_eq!(loads.get(), if failures == 1 { 2 } else { 3 });
     }
+}
+
+#[test]
+fn moved_tag_does_not_replace_verified_release_or_batch_source() {
+    let publication = publication();
+    let forge = FakeForge::default();
+    // The caller verified one commit before the externally owned ref moved.
+    let verified_source = "a".repeat(40);
+    forge
+        .tags
+        .borrow_mut()
+        .insert("tool-v1.0.0".to_owned(), "c".repeat(40));
+    let mut work = Reconciliation {
+        github: &forge,
+        publication: &publication,
+        load_candidate: || -> Result<Candidate, AppError> {
+            panic!("verified existing tags do not select a candidate")
+        },
+        retry_pause: |_| {},
+        candidate: None,
+        batches: BTreeMap::new(),
+        dry_run: false,
+        verbose: Verbose::new(false),
+    };
+    let mut result = record(GithubState::Pending);
+    work.package(
+        publication.publication.packages.first().unwrap(),
+        Some(verified_source.clone()),
+        &mut result,
+    )
+    .unwrap();
+    assert_eq!(result.source.as_ref(), Some(&verified_source));
+    assert_eq!(
+        forge.release_sources.borrow().as_slice(),
+        slice::from_ref(&verified_source)
+    );
+    let batch = work.batches.values().next().unwrap();
+    assert_eq!(batch.binaries.first().unwrap().source_sha, verified_source);
 }

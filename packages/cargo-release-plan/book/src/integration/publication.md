@@ -90,7 +90,10 @@ artifact transport and action-revision identification.
 
 Do not provision a registry PAT or stored-token fallback. The application acquires
 short-lived upload credentials through OIDC after verification and handles their
-lifecycle. Do not pass publishing credentials into consumer build scripts.
+lifecycle. Package verification shares the publication job's trust boundary,
+including its job-level OIDC identity. Run only reviewed repository code and
+trusted build dependencies in that job; credential handling is not a sandbox
+against code running under the same account.
 
 ### Verify identity without publishing
 
