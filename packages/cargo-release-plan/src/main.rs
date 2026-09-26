@@ -35,7 +35,17 @@ fn main() -> ExitCode {
 
     match run(&cli.into_input()) {
         Ok(outcome) => match outcome {
+            RunOutcome::Publication { passed, message } => {
+                if passed {
+                    println!("{message}");
+                    ExitCode::SUCCESS
+                } else {
+                    eprintln!("{message}");
+                    ExitCode::FAILURE
+                }
+            }
             RunOutcome::ArtifactQuery { message }
+            | RunOutcome::IdentityCheck { message }
             | RunOutcome::Propose { message }
             | RunOutcome::Prepare { message }
             | RunOutcome::Preview { message }

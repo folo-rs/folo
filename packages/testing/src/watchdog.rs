@@ -60,9 +60,25 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    run_with_watchdog(test_fn, |timeout| {
-        format!("Test exceeded {}-second timeout", timeout.as_secs())
-    })
+    with_watchdog_timeout(default_timeout(), test_fn)
+}
+
+/// Runs a test with a caller-selected last-chance watchdog budget.
+///
+/// Use this for integration fixtures that compile programs or launch external tools and
+/// cannot fit the ordinary synchronization-test budget. The budget must comfortably exceed
+/// both successful and failing runs. Mutation testing disables the watchdog.
+///
+/// # Panics
+///
+/// Panics on the calling thread if the test closure exceeds the timeout, or propagates
+/// a panic from that closure. Mutation testing disables the timeout.
+pub fn with_watchdog_timeout<F, R>(timeout: Duration, test_fn: F) -> R
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    run_with_watchdog(timeout, test_fn, timeout_message)
 }
 
 /// Runs a test with a timeout that reports the last active phase.
@@ -84,6 +100,7 @@ where
 {
     let (phase_tx, phase_rx) = mpsc::channel();
     run_with_watchdog(
+        default_timeout(),
         move || test_fn(WatchdogPhaseReporter { phase_tx }),
         move |timeout| phased_timeout_message(initial_phase, &phase_rx, timeout),
     )
@@ -95,13 +112,27 @@ fn phased_timeout_message(
     timeout: Duration,
 ) -> String {
     let phase = phase_rx.try_iter().last().unwrap_or(initial_phase);
-    format!(
-        "Test exceeded {}-second timeout during phase: {phase}",
-        timeout.as_secs()
-    )
+    format!("{} during phase: {phase}", timeout_message(timeout))
 }
 
-fn run_with_watchdog<F, R>(test_fn: F, timeout_message: impl FnOnce(Duration) -> String) -> R
+fn timeout_message(timeout: Duration) -> String {
+    format!("Test exceeded {timeout:?} timeout")
+}
+
+fn default_timeout() -> Duration {
+    // Miri is dramatically slower for synchronization than native execution.
+    if cfg!(miri) {
+        Duration::from_mins(1)
+    } else {
+        Duration::from_secs(10)
+    }
+}
+
+fn run_with_watchdog<F, R>(
+    timeout: Duration,
+    test_fn: F,
+    timeout_message: impl FnOnce(Duration) -> String,
+) -> R
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
@@ -120,14 +151,6 @@ where
         // Send the result back - if this fails, the receiver has timed out
         drop(tx.send(result));
     });
-
-    // Miri is dramatically slower for thread synchronization, so we use a
-    // longer timeout to avoid false positives while still catching real hangs.
-    let timeout = if cfg!(miri) {
-        Duration::from_mins(1)
-    } else {
-        Duration::from_secs(10)
-    };
 
     // Wait for either the test to complete or timeout.
     match rx.recv_timeout(timeout) {
@@ -160,6 +183,13 @@ mod tests {
     use super::*;
 
     assert_impl_all!(WatchdogPhaseReporter: RefUnwindSafe, UnwindSafe);
+
+    #[test]
+    fn timeout_diagnostic_retains_subsecond_precision() {
+        assert!(timeout_message(Duration::from_millis(500)).contains("500ms"));
+        assert!(timeout_message(Duration::from_micros(250)).contains("250"));
+        assert!(timeout_message(Duration::from_secs(5)).contains("5s"));
+    }
 
     #[test]
     fn watchdog_allows_fast_tests() {

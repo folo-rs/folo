@@ -10,15 +10,18 @@ name: Release
 # depend on token-authored tags triggering another workflow.
 # Ref: .github/workflows/design.md#publication-and-recovery.
 #
-# The non-trivial logic lives in PowerShell `just` recipes (justfiles/just_release.just)
-# so it can be run and tested locally; the steps here are thin `just` calls.
+# Native helpers own structured release decisions; PowerShell/Just provide process boundaries.
+# The steps here remain thin local entry points.
 on:
   push:
     branches: [main]
-  # A bare manual re-trigger (no inputs). publish is a no-op when nothing changed, and
-  # plan-binaries reconciles + heals any missing prebuilt binaries. See the
-  # `plan-binaries` job and docs/release-automation.md ("Robust publishing").
-  workflow_dispatch: {}
+  # Default dispatch reconciles publication; the explicit probe only verifies caller identity.
+  workflow_dispatch:
+    inputs:
+      verify-publishing-identity:
+        description: Exchange and revoke an OIDC credential without publishing
+        type: boolean
+        default: false
 
 # Never cancel a publish mid-flight: releasing is not safe to interrupt. Keyed on the
 # ref so a later push to main queues behind the in-flight release rather than killing it.
@@ -27,13 +30,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-publishing-identity:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity && github.repository == 'folo-rs/folo'
+    # Keep the registered caller filename while checking the reusable workflow's OIDC identity.
+    # Controller installation runs separately without OIDC. No package upload is performed.
+    # Ref: design.md#publication-identity-verification.
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@e4d98d54c913f41866774670a3e27236ddc1d5dd
+    with:
+      install-method: path
+      source-path: .
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+
   publish:
     # crates.io Trusted Publishing federates only this repository's identity; a fork
     # cannot mint a matching OIDC token, so gate to the canonical repo (a fork's push
     # skips cleanly instead of failing at the token exchange). The `main` gate matters
     # only for `workflow_dispatch`, which can target any ref: the `push` trigger is
     # already main-only, so this stops a dispatch on a feature branch from publishing.
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
     runs-on: ubuntu-latest
     # Generous ceiling: covers up to 3 publish attempts (release-plz publish_timeout is
     # 45m) with 15-minute waits between retries (~165m), plus up to 90 min for a cold-cache
@@ -91,7 +108,7 @@ jobs:
     # re-run or a bare workflow_dispatch reconciles the actual published state against the
     # uploaded assets and rebuilds only what is missing - no manual crate list.
     needs: publish
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
     runs-on: ubuntu-latest
     # Fast reconcile work plus up to 90 min for a cold-cache setup-environment - which itself
     # timed out the previous 30-minute cap on a cache miss.
@@ -148,61 +165,59 @@ jobs:
           just gh-plan-release-binaries
 
   build-binaries:
+    name: build-binaries (${{ matrix.triple }})
     needs: [publish, plan-binaries]
-    if: needs.plan-binaries.outputs.has_binaries == 'true'
+    if: needs.plan-binaries.outputs.has_binaries == 'true' && !inputs.verify-publishing-identity
     strategy:
       # One target's failure must not abandon the others' archives. The reconciliation
       # in plan-binaries means the next run rebuilds only whatever is still missing.
       fail-fast: false
       matrix:
-        # One entry per incomplete (crate, target) pair:
-        # {name, bin, version, tag, source_sha, triple, os}.
+        # One entry per target: {triple, os, timeout_minutes, binaries: [{name, bin,
+        # version, tag, source_sha}]}. Items build separately but reuse one Cargo cache.
+        # Ref: .github/workflows/implementation.md#release-binary-batches.
         include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    # Release build/package/upload budget plus up to 90 min for a cold-cache setup-environment.
-    timeout-minutes: 150
+    # The planner budgets cold setup plus each item, capped at the hosted runner ceiling.
+    timeout-minutes: ${{ matrix.timeout_minutes }}
 
     permissions:
       # Upload the archive + checksum as assets on the crate's release.
       contents: write
 
     steps:
-      - name: Checkout immutable released source
+      - name: Checkout release controller
         uses: actions/checkout@v7
-        # Source identity is frozen separately from the versioned release used for upload.
-        # Ref: .github/workflows/design.md#publication-and-recovery.
+        # Automation comes from the triggering commit; the helper creates distinct tag-pinned
+        # source worktrees, including for historical tags that predate this controller.
         with:
-          ref: ${{ matrix.source_sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
         with:
           save-build-cache: "true"
 
-      - name: Build, package, checksum and upload
-        uses: taiki-e/upload-rust-binary-action@v1
-        with:
-          bin: ${{ matrix.bin }}
-          package: ${{ matrix.name }}
-          target: ${{ matrix.triple }}
-          # `$target` is expanded by the action. Archives are `.zip` on every platform
-          # (tar: none, zip: all) so each crate's [package.metadata.binstall] block needs
-          # no per-OS override; the binary sits at the archive root.
-          archive: ${{ matrix.name }}-v${{ matrix.version }}-$target
-          tar: none
-          zip: all
-          checksum: sha256
-          locked: true
-          # Upload to the crate's release (its own tag), not github.ref (the branch).
-          ref: refs/tags/${{ matrix.tag }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish platform batch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_BINARY_BATCH: ${{ toJSON(matrix) }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          just gh-build-release-binaries
 
   alert:
     # File a GitHub issue unique to this run whenever any job above fails, so every failed
     # release is tracked individually (not folded into a rolling issue). `failure()` fires
     # only on a real failure - a skipped build-binaries (nothing to build) does not count.
     needs: [publish, plan-binaries, build-binaries]
-    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

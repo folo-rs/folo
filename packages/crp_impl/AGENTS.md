@@ -4,8 +4,10 @@ Follow the [cargo-release-plan guidance](../cargo-release-plan/AGENTS.md) for Gi
 configuration, error behavior and in-process unit tests.
 
 Keep implementation-boundary integrations and benchmarks in this package. The
-`cargo-release-plan` package owns its supported facade and executable-connected
-end-to-end suite. Do not forward implementation-only items through that facade.
+`cargo-release-plan` package owns its executable wiring and executable-connected
+end-to-end suite. Do not forward implementation-only items through that boundary.
+Keep both packages' library targets private to the application and maintainer tests;
+follow the owning package's CLI-only release-contract guidance.
 
 Run `cargo test -p crp_impl -p cargo-release-plan --tests` for the combined
 test surface. Mutation testing selects only library unit tests; real external

@@ -16,6 +16,11 @@ install-tools:
 
     Import-Module "{{ justfile_directory() }}/scripts/setup/RustToolchain.psm1" -Force
     Import-Module "{{ justfile_directory() }}/scripts/setup/CargoTools.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/setup/ReleaseArchiveTools.psm1" -Force
+
+    # Local verification and release CI use the same explicit native ZIP prerequisites.
+    # Ref: docs/build-and-tooling.md#release-archive-tools.
+    Install-ReleaseArchiveTool
 
     # This is the single source of truth for which tools - and which versions - get installed. CI
     # runs this same recipe on nearly every job via the setup-environment composite action, so

@@ -22,7 +22,7 @@ Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
 
 function Get-ReleaseTarget {
     # The single source of truth for the triple -> runner mapping. The workflow's build matrix
-    # is derived from this (via Get-MissingBinaryMatrix), so a target is added in exactly one
+    # is derived from this (via release-binaries), so a target is added in exactly one
     # place. Native runners, one per target, no cross-compilation. GitHub offers `-latest` only
     # for x64 Linux/Windows and macOS (macos-latest is arm64); ARM Linux/Windows have no
     # `-latest` alias, so they are pinned by version. Intel macOS is intentionally absent.
@@ -40,7 +40,7 @@ function Get-ReleaseTarget {
 
 function Get-DeclaredReleaseTarget {
     # The target triples a crate restricts its prebuilt binaries to, read from its manifest's
-    # `[package.metadata.folo] release-targets`. Returns an empty array when the crate declares
+    # `[package.metadata.release-plan] release-targets`. Returns an empty array when the crate declares
     # nothing, which means every target in Get-ReleaseTarget - the default, and what a portable
     # crate wants. A crate that only functions on some platforms names that subset so the workflow
     # does not publish archives whose binary could never run. Takes a `cargo metadata` package
@@ -53,13 +53,13 @@ function Get-DeclaredReleaseTarget {
 
     if ($Package.PSObject.Properties.Name -notcontains 'metadata') { return @() }
     if ($null -eq $Package.metadata) { return @() }
-    if ($Package.metadata.PSObject.Properties.Name -notcontains 'folo') { return @() }
+    if ($Package.metadata.PSObject.Properties.Name -notcontains 'release-plan') { return @() }
 
-    $folo = $Package.metadata.folo
-    if ($null -eq $folo) { return @() }
-    if ($folo.PSObject.Properties.Name -notcontains 'release-targets') { return @() }
+    $releasePlan = $Package.metadata.'release-plan'
+    if ($null -eq $releasePlan) { return @() }
+    if ($releasePlan.PSObject.Properties.Name -notcontains 'release-targets') { return @() }
 
-    @($folo.'release-targets')
+    @($releasePlan.'release-targets')
 }
 
 function Get-BinaryTarget {
@@ -401,134 +401,6 @@ function Get-BinaryReleaseAsset {
     , @($parsed.assets.name)
 }
 
-function Get-MissingBinaryMatrix {
-    # Reconciles desired vs. actual binary assets. For each crate it computes the expected tag
-    # `{Name}-v{Version}` and the per-target archive/checksum pair
-    # `{Name}-v{Version}-{triple}.zip` / `{Name}-v{Version}-{triple}.sha256`; every incomplete pair
-    # becomes a matrix row
-    # {name, bin, version, tag, triple, os}. This is what makes the workflow self-healing: a
-    # re-run rebuilds only what is still missing, from the actual published state, with no
-    # hand-maintained crate list. A crate that carries a release-target restriction (a
-    # `ReleaseTargets` list, as Get-PublishableBinaryCrate projects it) is reconciled against only
-    # those targets.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][object[]] $Crate,
-        [object[]] $Target = (Get-ReleaseTarget),
-        [string] $Repository
-    )
-
-    # Verbose emits the full decision history - every crate, its expected tag, whether the
-    # release exists, and the per-target present/missing verdict - so a CI run's log explains
-    # exactly how the plan (and its emptiness or non-emptiness) was derived, not just the total.
-    Write-Verbose "Reconciling desired vs. uploaded binary asset pairs. Crates: $($Crate.Name -join ', '). Target triples: $(($Target.Triple) -join ', ')."
-
-    # The loop variables must not differ from the collection parameters ($Crate, $Target) by
-    # case alone: PowerShell variable names are case-insensitive, so `foreach ($target in $Target)`
-    # would make `$target` and `$Target` the same variable and leave `$Target` holding only its
-    # last element after the loop - so every crate after the first would reconcile against a single
-    # leftover target (the last one) instead of the full set. Hence $crateInfo / $releaseTarget.
-    $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($crateInfo in $Crate) {
-        $tag = "$($crateInfo.Name)-v$($crateInfo.Version)"
-        Write-Verbose "Crate '$($crateInfo.Name)' v$($crateInfo.Version): expected release tag '$tag'."
-
-        # A crate may restrict itself to the targets it functions on (Get-DeclaredReleaseTarget);
-        # declaring nothing means the whole table. StrictMode makes the absent property throw, so
-        # the projection is guarded - callers may pass objects with only the required
-        # {Name, Binary, Version} fields.
-        $declaredTargets = @()
-        if (($crateInfo.PSObject.Properties.Name -contains 'ReleaseTargets') -and ($null -ne $crateInfo.ReleaseTargets)) {
-            $declaredTargets = @($crateInfo.ReleaseTargets)
-        }
-
-        $crateTargets = $Target
-        if ($declaredTargets.Count -gt 0) {
-            # A triple the table does not contain would silently build nothing for that target,
-            # leaving the crate short of archives with no failure anywhere. Fail loudly instead.
-            $unknown = @($declaredTargets | Where-Object { $_ -notin $Target.Triple })
-            if ($unknown.Count -gt 0) {
-                $noun = if ($unknown.Count -eq 1) { 'release target' } else { 'release targets' }
-                throw "Crate '$($crateInfo.Name)' declares $noun '$($unknown -join ", ")' that the release target table does not offer. Either add the target to Get-ReleaseTarget or correct the crate's [package.metadata.folo] release-targets."
-            }
-
-            $crateTargets = @($Target | Where-Object { $_.Triple -in $declaredTargets })
-            $skipped = @($Target.Triple | Where-Object { $_ -notin $declaredTargets })
-            $skippedText = if ($skipped.Count -gt 0) { $skipped -join ', ' } else { '(none)' }
-            Write-Verbose "  Crate restricts its release targets to: $($declaredTargets -join ', ') (declared in [package.metadata.folo] release-targets), so these targets are not built for it: $skippedText."
-        }
-
-        $assets = Get-BinaryReleaseAsset -Tag $tag -Repository $Repository
-        if ($null -eq $assets) {
-            throw (
-                "GitHub release '$tag' is missing. Run the missing-release reconciliation " +
-                'before planning binary assets.'
-            )
-        }
-
-        $uploaded = if ($assets.Count -gt 0) { $assets -join ', ' } else { '(none)' }
-        Write-Verbose "  Release '$tag' found; already-uploaded assets: $uploaded."
-
-        foreach ($releaseTarget in $crateTargets) {
-            $archiveBase =
-                "$($crateInfo.Name)-v$($crateInfo.Version)-$($releaseTarget.Triple)"
-            $archive = "$archiveBase.zip"
-            $checksum = "$archiveBase.sha256"
-            $archivePresent = $assets -contains $archive
-            $checksumPresent = $assets -contains $checksum
-            if ($archivePresent -and $checksumPresent) {
-                Write-Verbose (
-                    "  Target $($releaseTarget.Triple): '$archive' and '$checksum' already " +
-                    'uploaded - skipping.'
-                )
-                continue
-            }
-
-            $missingAssets = @()
-            if (-not $archivePresent) { $missingAssets += $archive }
-            if (-not $checksumPresent) { $missingAssets += $checksum }
-            Write-Verbose (
-                "  Target $($releaseTarget.Triple): missing $($missingAssets -join ', ') - " +
-                "queuing a build on runner '$($releaseTarget.Os)'."
-            )
-            if ($crateInfo.PSObject.Properties.Name -notcontains 'Binary' -or
-                [string]::IsNullOrWhiteSpace([string] $crateInfo.Binary)) {
-                throw "Binary release candidate '$($crateInfo.Name)' has no binary target name."
-            }
-            $rows.Add([pscustomobject]@{
-                    name    = $crateInfo.Name
-                    bin     = [string] $crateInfo.Binary
-                    version = $crateInfo.Version
-                    tag     = $tag
-                    triple  = $releaseTarget.Triple
-                    os      = $releaseTarget.Os
-                })
-        }
-    }
-
-    $noun = if ($rows.Count -eq 1) { 'asset pair' } else { 'asset pairs' }
-    Write-Verbose "Reconciliation complete: $($rows.Count) incomplete (crate, target) $noun queued to build."
-
-    $rows.ToArray()
-}
-
-function ConvertTo-MatrixJson {
-    # Renders matrix rows as the compact JSON array that `fromJSON` in the workflow consumes.
-    # ConvertTo-Json unwraps a single-element array to a bare object, so a one-row result is
-    # re-wrapped; an empty result is the literal `[]`.
-    [CmdletBinding()]
-    param(
-        [object[]] $Row
-    )
-
-    if (-not $Row -or $Row.Count -eq 0) { return '[]' }
-
-    # The matrix contract is a top-level array of row objects with scalar workflow fields.
-    $matrixJsonDepth = 5
-    $json = ConvertTo-Json -InputObject @($Row) -Compress -Depth $matrixJsonDepth
-    if ($json.TrimStart().StartsWith('[')) { $json } else { "[$json]" }
-}
-
 function Invoke-ReleasePublish {
     # Publishes changed crates to crates.io via `release-plz release` using the registry-only
     # config, with bounded retries. release-plz is idempotent (it skips already-published
@@ -672,7 +544,5 @@ Export-ModuleMember -Function `
     Get-CratePublishStatus, `
     Test-NeverPublishedCrate, `
     Get-BinaryReleaseAsset, `
-    Get-MissingBinaryMatrix, `
-    ConvertTo-MatrixJson, `
     Invoke-ReleasePublish, `
     Set-GitHubOutput

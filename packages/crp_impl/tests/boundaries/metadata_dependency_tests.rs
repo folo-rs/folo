@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crp_impl::manifest::PathCase;
 use crp_impl::metadata::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::git_fixture::Repository;
@@ -189,4 +189,67 @@ fn canonical_member_index_retains_only_resolvable_member_identities() {
         resolved_member(directory.path(), "absent", &members, &canonical),
         None
     );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Resolves member path aliases against real directories and manifests"
+)]
+fn released_dependency_edges_resolve_member_path_aliases() {
+    let fixture = Repository::new();
+    fixture.write("Cargo.toml", b"[workspace]\n");
+    fixture.write(
+        "consumer/Cargo.toml",
+        b"[package]\nname='consumer'\nversion='1.2.3'\n\
+          [dependencies]\nmember={path='../member',version='1.2.3'}\n\
+          [package.metadata.cargo_check_external_types]\nallowed_external_types=['member::*']\n",
+    );
+    fixture.write(
+        "member/Cargo.toml",
+        b"[package]\nname='member'\nversion='1.2.3'\n",
+    );
+    fixture.command(&["add", "."]);
+    fs::create_dir_all(fixture.path().join("via")).unwrap();
+    let mut consumer = package("consumer", fixture.path());
+    consumer.metadata = json!({
+        "cargo_check_external_types": {"allowed_external_types": ["member::*"]}
+    });
+    consumer.dependencies.push(MetadataDep {
+        source: None,
+        name: "member".to_owned(),
+        req: "1.2.3".to_owned(),
+        rename: None,
+        path: Some(
+            fixture
+                .path()
+                .join("via/../member")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        kind: None,
+    });
+    let metadata = MetadataJson {
+        packages: vec![consumer, package("member", fixture.path())],
+        workspace_members: vec!["consumer".to_owned(), "member".to_owned()],
+        workspace_root: fixture.path().to_string_lossy().into_owned(),
+        metadata: Value::Null,
+    };
+    let git = fixture.repo();
+    let tracked = TrackedMetadata {
+        git: &git,
+        workspace_root: fixture.path(),
+        paths: git.ls_files("").unwrap(),
+        case: PathCase::Sensitive,
+    };
+    let tree = work_tree_from_metadata(&metadata, &tracked).unwrap();
+    let consumer = tree
+        .packages
+        .iter()
+        .find(|package| package.manifest.name == "consumer")
+        .unwrap();
+    assert_eq!(consumer.dependencies.len(), 1);
+    let dependency = consumer.dependencies.first().unwrap();
+    assert_eq!(dependency.name, "member");
+    assert!(dependency.public);
 }

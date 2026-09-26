@@ -11,6 +11,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 $VerbosePreference = 'Continue'
 
 Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReleaseBinaries.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot '..' 'build' 'CargoExecutable.psm1') -Force
 
 function Get-ReleaseMainCommit {
@@ -286,28 +287,40 @@ function Invoke-ReleaseReconciliation {
     }
 }
 
-function Get-ReleaseBinaryMatrix {
-    # Carry source identity separately from the release label. Checkout uses the immutable commit;
-    # upload still uses the versioned release even when its tag is a later equivalent snapshot.
+function Get-ReleaseBinaryPlanJson {
+    # Freeze identities at immutable tag commits. The native helper alone owns asset selection
+    # and grouping, sharing its completeness predicate with in-job recovery.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string] $Repository)
 
     $crates = @(Get-PublishableBinaryCrate)
     if ($crates.Count -eq 0) {
         Write-Verbose 'The publication source contains no publishable binary packages.'
-        return
+        return '[]'
     }
-    $rows = @(Get-MissingBinaryMatrix -Crate $crates -Repository $Repository)
-    if ($rows.Count -eq 0) { return }
     $tags = Get-ReleaseTagMap
-    foreach ($row in $rows) {
-        if (-not $tags.ContainsKey($row.tag)) {
-            throw "Binary build for '$($row.tag)' has no remote source tag."
+    $requests = @(foreach ($crate in $crates) {
+        $tag = "$($crate.Name)-v$($crate.Version)"
+        if (-not $tags.ContainsKey($tag)) {
+            throw "Binary build for '$tag' has no remote source tag."
         }
-        $row | Add-Member -NotePropertyName source_sha -NotePropertyValue $tags[$row.tag]
-        Write-Verbose "Binary release '$($row.tag)' will build immutable commit '$($row.source_sha)'."
-        $row
+        Write-Verbose "Binary release '$tag' will build immutable commit '$($tags[$tag])'."
+        @{
+            name = $crate.Name
+            bin = $crate.Binary
+            version = $crate.Version
+            tag = $tag
+            source_sha = $tags[$tag]
+            release_targets = @($crate.ReleaseTargets)
+        }
+    })
+    $inputPlan = @{
+        binaries = $requests
+        targets = @(Get-ReleaseTarget | ForEach-Object { @{ triple = $_.Triple; os = $_.Os } })
     }
+    # Nested binary arrays require a deeper JSON boundary than the former scalar matrix rows.
+    $inputJson = ConvertTo-Json -InputObject $inputPlan -Depth 8 -Compress
+    return Invoke-ReleaseBinariesHelper -Operation plan -InputJson $inputJson -Repository $Repository
 }
 
 function Invoke-ReleaseBinaryPlan {
@@ -315,9 +328,11 @@ function Invoke-ReleaseBinaryPlan {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string] $Repository)
 
-    $rows = @(Get-ReleaseBinaryMatrix -Repository $Repository)
-    Write-Host "Incomplete (crate, target) asset pairs: $($rows.Count)"
-    Set-GitHubOutput -Name matrix -Value (ConvertTo-MatrixJson -Row $rows)
+    $json = Get-ReleaseBinaryPlanJson -Repository $Repository
+    $rows = ConvertFrom-Json -InputObject $json -NoEnumerate
+    if ($rows -isnot [array]) { throw 'Binary plan must be an explicit array of platform batches.' }
+    Write-Host "Platform batches with incomplete assets: $($rows.Count)"
+    Set-GitHubOutput -Name matrix -Value $json
     Set-GitHubOutput -Name has_binaries -Value $(if ($rows.Count -gt 0) { 'true' } else { 'false' })
 }
 

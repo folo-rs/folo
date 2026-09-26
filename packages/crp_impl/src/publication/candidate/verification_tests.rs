@@ -1,20 +1,18 @@
-#![cfg_attr(coverage_nightly, coverage(off))]
-
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use cargo_release_plan::{CheckFormat, RunInput, RunOutcome};
 use ohno::AppError;
 use semver::Version;
 use serde_json::json;
 
-use crate::Metadata;
-use crate::cli::Cli;
-use crate::repository::VerificationError;
-use crate::verification_repository::VerificationRepository;
-use crate::verify::verify_using;
+use crate::publication::candidate::Metadata;
+use crate::publication::candidate::cli::Cli;
+use crate::publication::candidate::repository::VerificationError;
+use crate::publication::candidate::verification_repository::VerificationRepository;
+use crate::publication::candidate::verify::verify_using;
+use crate::{CheckFormat, RunInput, RunOutcome};
 
 // Each external operation is bracketed by clean-head checks, even when it fails.
 const SEQUENCE: &[&str] = &[
@@ -112,6 +110,7 @@ impl VerificationRepository for Evidence<'_> {
             manifest_path,
             format,
             verify_packaging,
+            config,
             verbose,
         } = input
         else {
@@ -121,6 +120,7 @@ impl VerificationRepository for Evidence<'_> {
         assert_eq!(*manifest_path, canonical_manifest());
         assert!(matches!(format, CheckFormat::Text));
         assert!(!verify_packaging);
+        assert!(config.is_none());
         assert_eq!(*verbose, self.cli.verbose);
         self.step("checker")?;
         Ok(self.outcome.clone())
@@ -194,11 +194,14 @@ fn verifies_the_complete_sequence_before_emitting_success() {
             "Verified release target candidate: alpha@2.0.0, widget@1.2.3."
         );
         if verbose {
-            let [identity, baseline, warning, verdict] = diagnostics.as_slice() else {
+            let [identity, alpha, widget, baseline, warning, verdict] = diagnostics.as_slice()
+            else {
                 panic!();
             };
             assert!(identity.contains("candidate"));
             assert!(identity.contains("later-main"));
+            assert!(alpha.contains("alpha@2.0.0"));
+            assert!(widget.contains("widget@1.2.3"));
             assert!(baseline.contains("candidate"));
             assert!(baseline.contains("later-main"));
             assert_eq!(warning, "checker warning canary");

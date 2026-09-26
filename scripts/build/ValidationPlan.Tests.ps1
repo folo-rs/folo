@@ -193,7 +193,7 @@ Describe 'Caller integration selection' {
 
 Describe 'Cargo helper integration selection' {
     It 'adds release tests for affected helper <_>' -ForEach @(
-        'cargo-release-plan', 'crp_impl', 'release-target-check'
+        'cargo-release-plan', 'crp_impl', 'release-target-check', 'release-binaries'
     ) {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('scripts/book/BookSite.psm1'))
         $packages = ConvertTo-Json -InputObject @($_) -Compress
@@ -224,6 +224,30 @@ Describe 'Cargo helper integration selection' {
         '{"workflows":false,"script_analysis":false,"script_domains":["unknown"]}'
     ) {
         { Read-ValidationPlan -Json $_ } | Should -Throw
+    }
+}
+
+Describe 'Release binary smoke selection' {
+    It 'selects the native smoke for release adapter and shared setup inputs' -ForEach @(
+        '.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just',
+        'scripts/release/ReleaseBinaries.psm1',
+        'scripts/setup/ReleaseArchiveTools.psm1', 'scripts/build/RequiredChecks.psm1',
+        '.cargo/config.toml'
+    ) {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @($_))
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '[]' | Should -BeTrue
+    }
+
+    It 'selects helper dependency impact without unrelated Cargo impact' {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('Cargo.lock'))
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["release-binaries"]' | Should -BeTrue
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["crp_impl"]' | Should -BeTrue
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["events_once"]' | Should -BeFalse
+    }
+
+    It 'rejects malformed helper dependency impact' -ForEach @('null', '{}', '[1]') {
+        $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @())
+        { Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson $_ } | Should -Throw
     }
 }
 

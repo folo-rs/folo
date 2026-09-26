@@ -34,6 +34,7 @@ function Get-ValidationPlan {
     $workflows = $Full.IsPresent
     $analysis = $Full.IsPresent
     $bicep = $Full.IsPresent
+    $releaseBinarySmoke = $Full.IsPresent
     $canary = $Full.IsPresent
     if ($Full) { $domains.UnionWith([string[]] $script:ScriptDomains) }
 
@@ -48,6 +49,7 @@ function Get-ValidationPlan {
             $workflows = $true
             $analysis = $true
             $bicep = $true
+            $releaseBinarySmoke = $true
             $canary = $true
             $domains.UnionWith([string[]] $script:ScriptDomains)
             Write-Verbose "'$path' changes shared validation machinery; selecting all tooling checks."
@@ -135,6 +137,13 @@ function Get-ValidationPlan {
             $null = $domains.Add('release')
             Write-Verbose "'$path' supplies the release workflow or its native executable boundary; selecting release tests."
         }
+        if ($path -cin @('.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just') -or
+            $path -cmatch '^scripts/release/(ReleaseBinaries|ReleasePublication|ReleaseAutomation)(\.Tests)?\.ps(m1|1)$' -or
+            $path -cmatch '^scripts/build/CargoExecutable\.(psm1|Tests\.ps1)$' -or
+            $path -cmatch '^\.cargo/config(\.toml)?$') {
+            $releaseBinarySmoke = $true
+            Write-Verbose "'$path' affects native binary staging; selecting the no-upload platform smoke."
+        }
         if ($path -cmatch '^\.cargo/config(\.toml)?$') {
             # Cargo fixture tests and real helper builds consume workspace Cargo configuration.
             $domains.UnionWith([string[]] @('release', 'scheduled'))
@@ -158,6 +167,7 @@ function Get-ValidationPlan {
         workflows = $workflows
         script_analysis = $analysis
         bicep = $bicep
+        release_binary_smoke = $releaseBinarySmoke
         benchmark_canary = $canary
         benchmark_canary_trusted = $CanaryTrusted
         script_domains = @($domains | Sort-Object)
@@ -172,6 +182,7 @@ function Read-ValidationPlan {
     $plan = ConvertFrom-Json -InputObject $Json -AsHashtable
     if ($plan -isnot [hashtable] -or $plan.workflows -isnot [bool] -or
         $plan.script_analysis -isnot [bool] -or $plan.bicep -isnot [bool] -or
+        $plan.release_binary_smoke -isnot [bool] -or
         $plan.benchmark_canary -isnot [bool] -or $plan.benchmark_canary_trusted -isnot [bool]) {
         throw 'Validation plan must contain explicit tooling and canary scope/trust decisions.'
     }
@@ -207,7 +218,7 @@ function Get-ValidationScriptDomain {
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -cin @('cargo-release-plan', 'crp_impl', 'release-target-check')) {
+        if ($package -cin @('cargo-release-plan', 'crp_impl', 'release-target-check', 'release-binaries')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
@@ -216,6 +227,21 @@ function Get-ValidationScriptDomain {
         $domains += 'bench-history'
     }
     return @($domains | Sort-Object -Unique)
+}
+
+function Test-ReleaseBinarySmokeSelected {
+    # Path selection covers the native adapters; Cargo delta covers helper dependency changes.
+    # Both prepare and the required-checks fan-in use this same union.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $PlanJson,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $AffectedPackageJson
+    )
+
+    $plan = Read-ValidationPlan -Json $PlanJson
+    $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
+    return $plan.release_binary_smoke -or 'release-binaries' -cin $packages -or 'crp_impl' -cin $packages
 }
 
 function Read-ValidationAffectedPackage {
@@ -354,4 +380,5 @@ function Get-ValidationWorkflowPlan {
 }
 
 Export-ModuleMember -Function Get-ValidationPlan, Read-ValidationPlan, Read-ScriptDomain,
-    Get-ValidationScriptDomain, Get-ValidationCanarySelection, Get-ScriptTestPath, Get-ValidationWorkflowPlan
+    Get-ValidationScriptDomain, Get-ScriptTestPath, Get-ValidationWorkflowPlan,
+    Test-ReleaseBinarySmokeSelected, Get-ValidationCanarySelection

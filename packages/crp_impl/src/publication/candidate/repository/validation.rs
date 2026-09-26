@@ -4,7 +4,7 @@ use std::path::Path;
 
 use ohno::AppError;
 
-use crate::repository::VerificationError;
+use crate::publication::candidate::repository::VerificationError;
 
 pub(crate) fn validate_commit(actual: &str, expected: &str) -> Result<(), AppError> {
     if actual.trim() != expected {

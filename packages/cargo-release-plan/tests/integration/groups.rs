@@ -93,6 +93,7 @@ fn a_non_publishable_group_member_is_a_version_target() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     })
     .unwrap();
@@ -245,6 +246,7 @@ fn malformed_exact_requirements_fail_all_commands_before_writes() {
             manifest_path: fixture.manifest(),
             format: CheckFormat::Text,
             verify_packaging: false,
+            config: None,
             verbose: false,
         },
         RunInput::Report {
@@ -293,6 +295,7 @@ fn current_legacy_group_metadata_is_rejected() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     })
     .unwrap_err();

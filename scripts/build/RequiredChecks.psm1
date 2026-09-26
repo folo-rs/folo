@@ -107,6 +107,13 @@ function Get-RequiredCheckFailure {
             'validate-workflows' = $plan.workflows
             'benchmark-canary' = $canary.run_hosted
         }
+        $smoke = Test-ReleaseBinarySmokeSelected -PlanJson $planJson `
+            -AffectedPackageJson $needs.prepare.outputs.packages_json
+        $expectedSmoke = if ($smoke) { 'true' } else { 'false' }
+        if ($needs.prepare.outputs.release_binary_smoke -cne $expectedSmoke) {
+            throw 'The release binary smoke selection does not match the plan and Cargo delta.'
+        }
+        if ($smoke) { $selection['clippy-dev-docs'] = $true }
         foreach ($name in $selection.Keys) {
             if ($name -cnotin $needs.PSObject.Properties.Name) { $failure.Add("$name=absent") }
             if ($selection[$name]) { $null = $mustSucceed.Add($name) }

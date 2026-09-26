@@ -7,7 +7,9 @@
 use std::fs;
 use std::process::{Command, Output};
 
-use crate::fixture::{Fixture, write_package};
+use tempfile::TempDir;
+
+use crate::fixture::{Fixture, write_binary_package, write_package};
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary; Miri cannot emulate that.
 #[test]
@@ -23,6 +25,138 @@ fn cargo_injected_subcommand_is_stripped() {
     let output = release_plan(&["release-plan", "--help"], None);
     assert!(output.status.success());
     assert!(stdout(&output).contains("Usage"));
+}
+
+#[cfg_attr(miri, ignore = "Spawns the compiled application in an empty directory")]
+#[test]
+fn version_reports_the_installed_application_without_a_workspace() {
+    let directory = TempDir::new().unwrap();
+    for args in [&["--version"][..], &["release-plan", "--version"][..]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args(args)
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).is_empty());
+        assert_eq!(
+            stdout(&output).trim(),
+            format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
+
+#[cfg_attr(
+    miri,
+    ignore = "Spawns the application with missing hosted identity inputs"
+)]
+#[test]
+fn publishing_identity_check_does_not_select_a_local_credential_fallback() {
+    let directory = TempDir::new().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+        .arg("check-publishing-identity")
+        .current_dir(directory.path())
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stdout(&output).is_empty());
+}
+
+#[cfg_attr(miri, ignore = "Spawns the application, Cargo and Git")]
+#[test]
+fn publication_configuration_is_explicit_and_does_not_replace_version_checks() {
+    let fixture = seeded_package();
+    fixture.write(
+        ".cargo/release_plan.toml",
+        "schema-version = 1\nrepository = 'example/libs'\nrelease-branch = 'main'\ntargets = []",
+    );
+    fixture.commit("configure publication");
+    let base = fixture.sha("HEAD");
+    let args = [
+        "check",
+        "--base",
+        &base,
+        "--config",
+        ".cargo/release_plan.toml",
+    ];
+    assert!(release_plan(&args, Some(&fixture)).status.success());
+    fixture.write(".cargo/release_plan.toml", "not valid TOML");
+    assert!(!release_plan(&args, Some(&fixture)).status.success());
+    assert!(
+        release_plan(&["check", "--base", &base], Some(&fixture))
+            .status
+            .success()
+    );
+    fixture.write(
+        ".cargo/release_plan.toml",
+        "schema-version = 1\nrepository = 'example/libs'\nrelease-branch = 'main'\ntargets = []",
+    );
+    fixture.write("packages/demo/src/lib.rs", "pub fn new_operation() {}\n");
+    assert!(!release_plan(&args, Some(&fixture)).status.success());
+}
+
+#[cfg_attr(miri, ignore = "Spawns Cargo, Git and the compiled application")]
+#[test]
+fn configured_binary_check_matches_cargos_default_feature_selection() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "optional-core",
+        "0.1.0",
+        "[features]\nenhanced = []\n",
+    );
+    write_binary_package(
+        &fixture,
+        "tool",
+        "0.1.0",
+        r#"repository = "https://github.com/example/tools"
+[[bin]]
+name = "tool"
+path = "src/main.rs"
+required-features = ["optional-core"]
+[dependencies]
+optional-core = { path = "../optional-core", version = "0.1.0", optional = true }
+[features]
+default = ["optional-core/enhanced"]
+[package.metadata.release-plan]
+release-targets = ["x86_64-pc-windows-msvc"]
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+"#,
+    );
+    fixture.write(
+        ".cargo/release_plan.toml",
+        "schema-version = 1\nrepository = 'example/tools'\nrelease-branch = 'main'\n\
+         targets = ['x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc']",
+    );
+    fixture.write(".gitignore", "/target\n");
+    let output = Command::new("cargo")
+        .args(["build", "--bins", "--offline"])
+        .current_dir(fixture.path())
+        .env("CARGO_TARGET_DIR", fixture.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(fixture.path().join("target/debug").is_dir());
+    fixture.commit("configured binary source");
+    let base = fixture.sha("HEAD");
+    let output = release_plan(
+        &[
+            "check",
+            "--base",
+            &base,
+            "--config",
+            ".cargo/release_plan.toml",
+            "--verbose",
+        ],
+        Some(&fixture),
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("x86_64-pc-windows-msvc"));
 }
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary; Miri cannot emulate that.

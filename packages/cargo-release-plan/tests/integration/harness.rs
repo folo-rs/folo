@@ -57,6 +57,7 @@ pub(crate) fn check_result(fixture: &Fixture, base: &str) -> Result<(bool, Strin
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     }) {
         Ok(RunOutcome::Check {
@@ -73,6 +74,7 @@ pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: true,
     }) {
         Ok(RunOutcome::Check {
@@ -89,6 +91,7 @@ pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, Stri
         manifest_path,
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     }) {
         Ok(RunOutcome::Check {
@@ -106,6 +109,7 @@ pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String)
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: true,
     }) {
         Ok(RunOutcome::Check {
@@ -122,6 +126,7 @@ pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool,
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: true,
+        config: None,
         verbose: false,
     }) {
         Ok(RunOutcome::Check {

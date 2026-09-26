@@ -5,10 +5,21 @@ use ohno::AppError;
 use crate::analysis_order::run_analysis_order;
 use crate::apply::run_apply;
 use crate::check::{CheckFormat, run_check};
+use crate::compatibility::check as check_compatibility;
 use crate::expand::run_expand;
 use crate::inspect_plan::run_inspect_plan;
 use crate::preview::{run_prepare, run_preview};
 use crate::propose::run_propose;
+use crate::publication::binaries::publish::publish as publish_binaries;
+use crate::publication::context::release_context;
+use crate::publication::credentials::provide;
+use crate::publication::github::publish as publish_github;
+use crate::publication::identity::check_publishing_identity;
+use crate::publication::packages::check_publication;
+use crate::publication::preflight::check as check_published;
+use crate::publication::prepare::prepare as prepare_publication;
+use crate::publication::registry::publish as publish_registry;
+use crate::publication::report::report as report_publication;
 use crate::report::run_report;
 use crate::resolved::run_verify_preview;
 use crate::semver_targets::run_semver_targets;
@@ -18,9 +29,89 @@ use crate::verbose::Verbose;
 #[derive(Debug)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "The supported facade permits exhaustive matching on the application's command inputs"
+    reason = "Application code and maintainer tests exhaustively match internal command inputs"
 )]
 pub enum RunInput {
+    /// Check first-publication prerequisites without uploading or changing source.
+    CheckPublished {
+        manifest_path: PathBuf,
+        plan: Option<PathBuf>,
+        verbose: bool,
+    },
+    /// Collect external API compatibility evidence from captured or fresh source.
+    CheckCompatibility {
+        manifest_path: PathBuf,
+        prepared: Option<PathBuf>,
+        plan: Option<PathBuf>,
+        base: Option<String>,
+        output: PathBuf,
+        deny_findings: bool,
+        verbose: bool,
+    },
+    /// Report publication completeness from current platform job facts and retained receipts.
+    PublicationReport {
+        repository: String,
+        publication: Option<PathBuf>,
+        outcomes: PathBuf,
+        jobs: PathBuf,
+        output: PathBuf,
+        no_issue: bool,
+    },
+    /// Resolve configured release history and workflow scope without preparing publication.
+    ReleaseContext {
+        manifest_path: PathBuf,
+        config: Option<PathBuf>,
+        base: Option<String>,
+        verbose: bool,
+    },
+    /// Verify the GitHub caller's Trusted Publishing identity without uploading.
+    CheckPublishingIdentity { verbose: bool },
+    /// Build and publish one frozen native batch.
+    PublishBinaries {
+        publication: PathBuf,
+        batch: PathBuf,
+        manifest_path: PathBuf,
+        output: PathBuf,
+        artifacts: PathBuf,
+        no_upload: bool,
+    },
+    /// Reconcile GitHub tags/releases and emit native binary batches.
+    PublishGithub {
+        publication: PathBuf,
+        manifest_path: PathBuf,
+        output: PathBuf,
+        batches: PathBuf,
+        dry_run: bool,
+        verbose: bool,
+    },
+    /// Reconcile exact crate versions and publish only those missing from crates.io.
+    PublishRegistry {
+        /// Immutable publication manifest.
+        publication: PathBuf,
+        /// Cargo manifest in the original source checkout.
+        manifest_path: PathBuf,
+        /// Structured phase outcome destination.
+        output: PathBuf,
+        /// Observe and describe missing versions without credentials or uploads.
+        dry_run: bool,
+        /// Explain reconciliation inputs and decisions.
+        verbose: bool,
+    },
+    /// Serve Cargo's internal per-upload credential protocol.
+    CredentialProvider,
+    /// Capture immutable publication intent from a clean merged source snapshot.
+    PreparePublish {
+        /// Source checkout's Cargo manifest.
+        manifest_path: PathBuf,
+        /// Workspace-relative publication configuration; omitted selects the conventional file.
+        config: Option<PathBuf>,
+        /// Immutable source commit that must match the checkout.
+        source: String,
+        /// Publication manifest destination.
+        output: PathBuf,
+        /// Explain captured release inputs.
+        verbose: bool,
+    },
     /// Inspect validated expanded-plan facts for external tooling.
     InspectPlan {
         /// Expanded plan artifact.
@@ -120,6 +211,8 @@ pub enum RunInput {
         format: CheckFormat,
         /// When set, warn on divergence from `cargo package --list` without failing.
         verify_packaging: bool,
+        /// Optional publication configuration, relative to the selected workspace.
+        config: Option<PathBuf>,
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
     },
@@ -153,9 +246,18 @@ pub enum RunInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "The supported facade permits exhaustive matching on the application's command outcomes"
+    reason = "Application code and maintainer tests exhaustively match internal command outcomes"
 )]
 pub enum RunOutcome {
+    /// OIDC exchange and immediate revocation completed without publication.
+    IdentityCheck { message: String },
+    /// Publication completed its attempt and persisted the phase outcome.
+    Publication {
+        /// Whether the requested operation succeeded; dry runs do not establish delivery.
+        passed: bool,
+        /// Human-readable disposition and outcome location.
+        message: String,
+    },
     /// A JSON-producing query completed.
     ArtifactQuery {
         /// JSON document for stdout.
@@ -219,6 +321,153 @@ pub enum RunOutcome {
 /// `passed: false`, not an error.
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     match input {
+        RunInput::CheckPublished {
+            manifest_path,
+            plan,
+            verbose,
+        } => {
+            let (passed, message) =
+                check_published(manifest_path, plan.as_deref(), Verbose::new(*verbose))?;
+            Ok(RunOutcome::Check {
+                passed,
+                message,
+                warnings: String::new(),
+            })
+        }
+        RunInput::CheckCompatibility {
+            manifest_path,
+            prepared,
+            plan,
+            base,
+            output,
+            deny_findings,
+            verbose,
+        } => {
+            let (passed, message) = check_compatibility(
+                manifest_path,
+                prepared.as_deref(),
+                plan.as_deref(),
+                base.as_deref(),
+                output,
+                *deny_findings,
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::Check {
+                passed,
+                message,
+                warnings: String::new(),
+            })
+        }
+        RunInput::PublicationReport {
+            repository,
+            publication,
+            outcomes,
+            jobs,
+            output,
+            no_issue,
+        } => {
+            let (passed, message) = report_publication(
+                repository,
+                publication.as_deref(),
+                outcomes,
+                jobs,
+                output,
+                *no_issue,
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::ReleaseContext {
+            manifest_path,
+            config,
+            base,
+            verbose,
+        } => {
+            let message = release_context(
+                manifest_path,
+                config.as_deref(),
+                base.as_deref(),
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::ArtifactQuery { message })
+        }
+        RunInput::CheckPublishingIdentity { verbose } => {
+            let message = check_publishing_identity(Verbose::new(*verbose))?;
+            Ok(RunOutcome::IdentityCheck { message })
+        }
+        RunInput::PublishBinaries {
+            publication,
+            batch,
+            manifest_path,
+            output,
+            artifacts,
+            no_upload,
+        } => {
+            let (passed, message) = publish_binaries(
+                publication,
+                batch,
+                manifest_path,
+                output,
+                artifacts,
+                *no_upload,
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::PublishGithub {
+            publication,
+            manifest_path,
+            output,
+            batches,
+            dry_run,
+            verbose,
+        } => {
+            let (passed, message) = publish_github(
+                publication,
+                manifest_path,
+                output,
+                batches,
+                *dry_run,
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::PublishRegistry {
+            publication,
+            manifest_path,
+            output,
+            dry_run,
+            verbose,
+        } => {
+            let (passed, message) = publish_registry(
+                publication,
+                manifest_path,
+                output,
+                *dry_run,
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::Publication { passed, message })
+        }
+        RunInput::CredentialProvider => {
+            provide()?;
+            Ok(RunOutcome::ArtifactQuery {
+                message: String::new(),
+            })
+        }
+        RunInput::PreparePublish {
+            manifest_path,
+            config,
+            source,
+            output,
+            verbose,
+        } => {
+            let message = prepare_publication(
+                manifest_path,
+                config.as_deref(),
+                source,
+                output,
+                Verbose::new(*verbose),
+            )?;
+            Ok(RunOutcome::Prepare { message })
+        }
         RunInput::InspectPlan {
             plan,
             require_resolved,
@@ -307,8 +556,12 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             manifest_path,
             format,
             verify_packaging,
+            config,
             verbose,
         } => {
+            if let Some(config) = config {
+                check_publication(manifest_path, config, Verbose::new(*verbose))?;
+            }
             let (passed, message, warnings) = run_check(
                 base.as_deref(),
                 manifest_path,

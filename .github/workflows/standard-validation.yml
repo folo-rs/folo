@@ -53,6 +53,7 @@ jobs:
       packages_json: ${{ steps.compute.outputs.packages_json }}
       skip_all: ${{ steps.compute.outputs.skip_all }}
       script_domains: ${{ steps.scripts.outputs.domains }}
+      release_binary_smoke: ${{ steps.scripts.outputs.release_binary_smoke }}
       benchmark_canary: ${{ steps.scripts.outputs.benchmark_canary }}
     steps:
       - uses: actions/checkout@v7
@@ -116,6 +117,9 @@ jobs:
           Import-Module ./scripts/build/ValidationPlan.psm1 -Force
           $domains = @(Get-ValidationScriptDomain -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose)
           "domains=$(ConvertTo-Json -InputObject $domains -Compress)" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          $smoke = Test-ReleaseBinarySmokeSelected -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES
+          "release_binary_smoke=$($smoke.ToString().ToLowerInvariant())" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
           $canary = Get-ValidationCanarySelection -PlanJson $env:CHANGE_PLAN -AffectedPackageJson $env:AFFECTED_PACKAGES -Verbose
           "check_fixture=$(ConvertTo-Json -InputObject $canary.check_fixture -Compress)" |
@@ -318,7 +322,7 @@ jobs:
   # Ref: .github/workflows/implementation.md#standard-validation-structure.
   clippy-dev-docs:
     needs: [prepare]
-    if: needs.prepare.outputs.skip_all != 'true'
+    if: needs.prepare.outputs.skip_all != 'true' || needs.prepare.outputs.release_binary_smoke == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -338,7 +342,7 @@ jobs:
 
       # Formatting is platform-independent; the Ubuntu leg performs the workspace-wide check.
       - name: Run format-check
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.platform == 'ubuntu-latest' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' && matrix.platform == 'ubuntu-latest' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -347,7 +351,7 @@ jobs:
           just format-check
 
       - name: Run clippy dev on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -356,7 +360,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" clippy dev
 
       - name: Run docs on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -365,7 +369,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" docs
 
       - name: Run docs-default-features on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -374,7 +378,7 @@ jobs:
           just package="${{ needs.prepare.outputs.packages }}" docs-default-features
 
       - name: Run test-docs on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
@@ -382,10 +386,22 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just package="${{ needs.prepare.outputs.packages }}" test-docs
 
+      # Covers native ZIP layout/permissions on macOS as well as Linux and Windows without
+      # publishing. Script-only selection must not expand the Cargo package checks above.
+      # Ref: .github/workflows/implementation.md#release-binary-batches.
+      - name: Smoke release binary packaging
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.release_binary_smoke == 'true' }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          just release-binary-smoke
+
       # Freezing rewrites manifests and the lockfile, so nothing using the original inputs follows.
       # Ref: .github/workflows/implementation.md#standard-validation-structure.
       - name: Run check-frozen on ${{ matrix.platform }}
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.prepare.outputs.skip_all != 'true' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest

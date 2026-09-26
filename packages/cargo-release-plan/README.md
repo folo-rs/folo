@@ -4,11 +4,17 @@ A Cargo subcommand that classifies every publishable workspace package against i
 version **anchor**, reports changes to **released content**, and prepares a
 complete increment plan with its resolved dependency effects.
 
+Its supported interfaces are the command line and documented artifact formats,
+not a Rust library API.
+
 A package has unreleased changes when its released content differs between its
 version anchor and the work tree. Such a package is pending release once its
 declared version has been raised past the anchor, and needs an increment until
 then. The anchor is the most recent commit on the release baseline's first-parent
 line in which the package's parsed `version` changed.
+
+The [user guide](https://folo-rs.github.io/folo/cargo-release-plan/) explains the
+release model, repository adoption and publication recovery.
 
 ## Usage
 
@@ -17,8 +23,10 @@ to fetch a prebuilt binary on supported targets (transparently building from sou
 elsewhere), or `cargo install cargo-release-plan` to always build from source. Then:
 
 ```text
+cargo release-plan --version
 cargo release-plan report --out-dir <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
-cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|github] [--verify-packaging] [--verbose]
+cargo release-plan check [--base <rev>] [--manifest-path <path>] [--config <path>]
+    [--format text|github] [--verify-packaging] [--verbose]
 cargo release-plan prepare --output <dir> [--base <rev>] [--manifest-path <path>] [--verbose]
 cargo release-plan analysis-order --report <file-or-dir> [--verbose]
 cargo release-plan semver-targets --report <file-or-dir> [--verbose]
@@ -33,7 +41,25 @@ cargo release-plan expand --plan <plan.json> --out <expanded.json>
 cargo release-plan inspect-plan --plan <expanded.json> [--require-resolved]
     [--manifest-path <path>] [--verbose]
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
+cargo release-plan prepare-publish --source <commit> --output <publication.json>
+    [--manifest-path <path>] [--config <path>] [--verbose]
+cargo release-plan publish registry --publication <publication.json> --output <outcome.json>
+    [--manifest-path <path>] [--dry-run] [--verbose]
+cargo release-plan release-context [--manifest-path <path>] [--config <path>] [--base <rev>] [--verbose]
+cargo release-plan check-publishing-identity [--verbose]
+cargo release-plan check-compatibility --output <new-directory> [--manifest-path <path>]
+    [--prepared <prepared.json> | --plan <resolved-plan.json> | --base <rev>] [--deny-findings] [--verbose]
+cargo release-plan check-published [--manifest-path <path>] [--plan <resolved-plan.json>] [--verbose]
+cargo release-plan publish github --publication <publication.json> --output <outcome.json>
+    --batches <new-directory> [--manifest-path <path>] [--dry-run] [--verbose]
+cargo release-plan publish binaries --publication <publication.json> --batch <batch.json>
+    --output <outcome.json> --artifacts <new-directory> [--manifest-path <path>] [--no-upload]
+cargo release-plan publish report --repository <owner/repo> --outcomes <download-directory>
+    --jobs <jobs.json> --output <report.md> [--publication <publication.json>] [--no-issue]
 ```
+
+`--version` identifies the installed application, not the packages in a workspace.
+It works without a Cargo workspace or Git repository.
 
 `--base` names the **release baseline**: the tip of the branch releases are made
 from, which is not necessarily the branch a pull request targets. CI should pass
@@ -72,6 +98,25 @@ layer.
 
 `--format github` also emits GitHub Actions workflow annotations.
 
+`--config` additionally validates publication configuration and binary archive
+inputs without contacting a registry or resolving dependencies. The path is
+relative to the selected Cargo workspace, not the invocation directory:
+
+```toml
+schema-version = 1
+repository = "example/widgets"
+release-branch = "main"
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+```
+
+Store this as `.cargo/release_plan.toml` and pass
+`--config .cargo/release_plan.toml`. Binary packages must declare the matching
+GitHub repository and binstall ZIP layout, contain one executable buildable with
+default features, and retain a selected target after optional
+`[package.metadata.release-plan] release-targets` restrictions.
+Library-only workspaces may use `targets = []`.
+Omitting `--config` retains ordinary offline version checking.
+
 `--verify-packaging` cross-checks this tool's released-content rules against
 `cargo package --list`. Divergences are printed as warnings and do not fail the
 check. The probe allows dirty trees, so an untracked input can legitimately
@@ -79,6 +124,134 @@ appear only in Cargo's list. It also resolves the dependency graph and performs
 Cargo's package-preparation work, so gating on it would give up the normal
 offline, no-resolve path. A divergence on a clean tree is evidence that the
 rules need fixing.
+
+### `prepare-publish`
+
+Captures publication intent from a clean checkout whose HEAD matches the full
+`--source` commit ID. It reads the selected workspace's committed
+`.cargo/release_plan.toml` unless `--config` selects another file, fetches the
+configured release branch, and verifies first-parent membership, tracked
+manifests/configuration/lockfile, version readiness and locked dependency
+consistency. This operation requires Git and Cargo; private GitHub repositories
+also require GitHub CLI authentication.
+
+The output records every publishable package's declared version, source commit,
+repository-relative input paths and effective configuration, including binary
+names and native targets. It includes unchanged packages because version
+readiness does not establish whether their publication completed. The manifest
+is immutable: repeating identical preparation can reuse it, but different intent
+requires another output path. Keep the file outside tracked source or in an
+ignored artifact directory.
+
+Preparation does not upload packages, create tags, choose versions or repair a
+lockfile. Its publication manifest is distinct from the pre-merge version plan.
+
+### `publish registry`
+
+Reconciles every exact version in a publication manifest with crates.io, then
+uses Cargo to verify and upload only missing versions. Run against the same clean
+source snapshot used for preparation. Source configuration and the complete package
+request set must match the captured intent.
+
+Automatic uploads require GitHub Actions OIDC and the packages' Trusted Publisher
+registration for the calling workflow. There is no stored-token fallback.
+Cargo 1.95 or later is required when uploads are needed. Cargo owns dependency
+ordering and verification; the application checks that packaged binary dependencies
+do not introduce identities outside the assessed locked closure.
+
+`--dry-run` reads registry availability without acquiring publication credentials
+or uploading. The outcome explicitly distinguishes this plan from a completed
+publication. A yanked version still occupies its identity and is not republished.
+Query failure does not establish absence.
+
+`--output` must name a new outcome file for this attempt. It records the publication
+identity, per-package observations, completion state and diagnostics. Existing
+versions and completed uploads remain in place after failure; retry using the
+original publication manifest and another outcome destination.
+
+### Release context and publishing identity
+
+`release-context` prints configured repository/branch, the resolved release
+baseline, source HEAD, repository-relative input locations and a stable
+workspace-scoped concurrency-group name. It fetches the configured release branch
+unless `--base` supplies an explicit tested baseline, such as a merge-queue base.
+It does not require clean source and does not prepare publication.
+
+`check-publishing-identity` verifies the calling GitHub Actions workflow's OIDC
+exchange with crates.io and immediately revokes the temporary token. It uploads
+nothing. Success establishes the caller registration path, not that every package
+has a matching Trusted Publisher grant.
+
+### Portable compatibility and first-publication checks
+
+`check-compatibility` collects external `cargo-semver-checks` evidence without
+choosing semantic levels. Use `--prepared` for the original prepared inputs,
+`--plan` for a resolved preview's retained workspace, or neither to collect a
+fresh read-only report against `--base`. Captured source is verified before and
+after the checker; a report alone is not proof that its checkout is still current.
+The ordinary plan/report schema is unchanged.
+
+The command writes `compatibility.json` and `semver-checks.log` beneath a new
+output directory. It records checker identity, exact published comparison versions,
+completed comparisons and `breaking`/`nonbreaking` floors. An identical-source
+canary checks the external tool before it is relied upon. Operational failures
+are not compatible results. With `--deny-findings`, an insufficient increment also
+fails the command; without it, completed findings remain evidence for the planner.
+An empty contract selection needs neither the checker nor a registry query.
+
+`check-published --plan` validates resolved-plan targets and fails if a publishable
+target is not established on crates.io or cannot be checked. Alignment-only helpers
+are excluded. Without a plan, workspace-wide discovery is advisory and reports
+missing/unknown packages explicitly. Neither mode publishes first versions or
+checks a crate's Trusted Publisher administration.
+
+### GitHub reconciliation and native binaries
+
+`publish github` checks registry availability for the complete publication
+manifest, reconciles immutable package tags and binary releases, and writes
+frozen native batches under `--batches`. Its outcome lists each batch's relative
+path, target and `batch_id`; the batch also binds its parent publication identity
+and exact tag commits. Workflow runner selection is outside the binary batch.
+
+Missing tags use a verified release-equivalent release-branch snapshot. If that
+is unavailable, the affected release fails while independent releases continue.
+The outcome names the missing tag and original publication source for operator
+recovery. Create only that missing tag at the recorded commit with sufficient
+operator rights, then retry the original failed run; an existing tag is not
+subject to selection of a new current-branch candidate.
+
+`publish binaries` consumes a batch and its original manifest. It rechecks tag
+identities and existing assets, then builds each requested executable separately
+from its tagged source. ZIP/checksum pairs are independently recoverable.
+`--no-upload` instead stages the frozen batch without querying or writing GitHub.
+Outcomes and staged files use separate new destinations for each attempt.
+
+### Final publication report
+
+`publish report` reconciles downloaded `outcome.json` files in their retained
+artifact subdirectories against the original manifest and current platform job
+results. Its `--jobs` input contains the result strings supplied by GitHub:
+
+```json
+{
+  "prepare": "success",
+  "registry": "success",
+  "github": "failure",
+  "binaries": "skipped"
+}
+```
+
+In GitHub Actions, outcomes carry `github.run_id` and `github.run_attempt`.
+The reporter selects the latest applicable receipt per phase and expected batch,
+without allowing an older success to hide a failed job or newly observed missing
+assets. Binary receipts must match the selected batch and be at least as new as
+the GitHub reconciliation that requested it.
+
+The command writes its Markdown report even when publication is incomplete,
+exits nonzero for incomplete delivery, and creates or updates a run-qualified
+failure issue with manual recovery instructions. `--no-issue` disables GitHub
+writes for report inspection. Omit `--publication` only when its artifact is
+unavailable; this is always reported as incomplete, not a successful empty release.
 
 ### `prepare`
 

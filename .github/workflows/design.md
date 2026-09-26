@@ -801,6 +801,19 @@ unattended recovery depend on a permission the workflow does not possess. Select
 verified current-main snapshot preserves package identity without adding credentials or
 blocking unrelated merges.
 
+### Publication identity verification
+
+A manual `verify-publishing-identity` dispatch on `release.yml` verifies the
+registered caller through the reusable release action. The controller is built
+without OIDC permission and transferred to a separate identity-probe job, which
+exchanges and immediately revokes a temporary crates.io credential. It performs
+no package upload, tag/release write or binary publication.
+
+The probe and normal publication paths are mutually exclusive. Every mutating
+publication job explicitly excludes probe dispatches, including on `main`.
+The caller filename remains the one in the existing Trusted Publisher registration.
+Success validates that identity path, not every package-specific publisher grant.
+
 ### Publication and recovery
 
 Registry publication and GitHub publication have separate owners. Release-plz publishes
@@ -826,6 +839,19 @@ is attached to its existing tag, without asking GitHub to choose another target.
 Binary build jobs receive the tag's resolved commit ID separately from the release name,
 so source checkout remains pinned while assets are uploaded to the correct versioned release.
 Partial successes survive a retry; reconciliation creates only what remains missing.
+
+### Platform-grouped binary builds
+
+A platform has one batch job containing its incomplete binary releases. It shares
+environment preparation and compatible Cargo artifacts while preserving separate
+package builds and separate release assets. Each binary retains its own version,
+tag and immutable source commit; batching never combines package feature selection
+or changes which source a release represents.
+
+Recovery refreshes each frozen item's archive/checksum completeness before doing
+build work. Independent failures do not suppress remaining work, and any failed
+required item fails the job. A nonpublishing mode retains source and archive
+verification without release queries or writes.
 
 ## Cache warmup
 

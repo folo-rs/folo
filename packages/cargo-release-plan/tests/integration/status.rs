@@ -369,6 +369,7 @@ fn declared_version_below_the_anchor_is_an_error() {
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
+        config: None,
         verbose: false,
     });
     assert!(

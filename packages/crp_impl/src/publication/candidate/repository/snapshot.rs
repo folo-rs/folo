@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 
-use crate::repository::validation::{
+use crate::publication::candidate::repository::validation::{
     relative_input, validate_around, validate_commit, validate_history, validate_index,
     validate_status,
 };
-use crate::{capture, git};
+use crate::publication::candidate::{capture, git};
 
 /// Binds all verification reads to the caller's immutable candidate checkout.
 #[derive(Debug)]

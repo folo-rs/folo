@@ -398,6 +398,12 @@ pub(crate) fn load_tracked_work_tree(
 }
 
 fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
+    let metadata = capture_metadata(manifest_path)?;
+    Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+}
+
+/// Acquires Cargo's unresolved workspace description for subject-specific projections.
+pub(crate) fn capture_metadata(manifest_path: &Path) -> Result<String, AppError> {
     // Named registries come from the selected workspace's Cargo configuration,
     // not an unrelated directory from which this tool happens to be invoked.
     // Make the argument absolute before changing Cargo's working directory.
@@ -412,7 +418,7 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
     // can still be classified; no registry packages are consulted.
     // The requested schema version is pinned because the `Metadata*`
     // projections in this module deserialize exactly that documented contract.
-    let metadata = run_capture(
+    run_capture(
         "cargo",
         &[
             "metadata",
@@ -423,8 +429,7 @@ fn query_metadata(manifest_path: &Path) -> Result<MetadataJson, AppError> {
             &manifest_path.to_string_lossy(),
         ],
         cwd,
-    )?;
-    Ok(serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?)
+    )
 }
 
 /// Uses Cargo's required manifest basename without changing the selected file.
@@ -589,7 +594,17 @@ pub fn work_tree_from_metadata(
             .filter(|dep| {
                 is_intra_workspace_released(
                     dep,
-                    &tracked_members_by_dir,
+                    |path| {
+                        // Cargo can spell dependency paths differently from member manifests
+                        // (including Windows verbatim prefixes). Resolve against the same
+                        // acquired member index used by exact-dependency discovery.
+                        resolved_member(
+                            &workspace_root,
+                            path,
+                            &tracked_members_by_dir,
+                            &canonical_tracked_members_by_dir,
+                        ) == Some(dep.name.as_str())
+                    },
                     manifest_doc,
                     root_manifest,
                 )
@@ -1265,14 +1280,14 @@ fn mark_public_dependencies(
 
 fn is_intra_workspace_released(
     dep: &MetadataDep,
-    members_by_dir: &BTreeMap<PathBuf, String>,
+    member: impl FnOnce(&str) -> bool,
     manifest: &DocumentMut,
     workspace_manifest: &DocumentMut,
 ) -> bool {
     let Some(path) = &dep.path else {
         return false;
     };
-    if !members_by_dir.contains_key(Path::new(path)) {
+    if !member(path) {
         return false;
     }
     dep.kind.as_deref().unwrap_or("normal") != "dev"
@@ -1622,6 +1637,7 @@ mod tests {
     #[test]
     fn released_intra_workspace_deps_require_a_member_directory() {
         let dirs = BTreeMap::from([(PathBuf::from("/ws/packages/bar"), "bar".to_string())]);
+        let member = |path: &str| dirs.contains_key(Path::new(path));
         let path_dep = MetadataDep {
             source: None,
             name: "bar".to_string(),
@@ -1632,7 +1648,7 @@ mod tests {
         };
         assert!(is_intra_workspace_released(
             &path_dep,
-            &dirs,
+            member,
             &doc(""),
             &doc("")
         ));
@@ -1646,7 +1662,7 @@ mod tests {
         };
         assert!(!is_intra_workspace_released(
             &named,
-            &dirs,
+            member,
             &doc(""),
             &doc("")
         ));
@@ -1660,7 +1676,7 @@ mod tests {
         };
         assert!(!is_intra_workspace_released(
             &colliding,
-            &dirs,
+            member,
             &doc(""),
             &doc("")
         ));
@@ -1674,7 +1690,7 @@ mod tests {
         };
         assert!(is_intra_workspace_released(
             &build,
-            &dirs,
+            member,
             &doc(""),
             &doc("")
         ));
@@ -1688,7 +1704,7 @@ mod tests {
         };
         assert!(is_intra_workspace_released(
             &dev,
-            &dirs,
+            member,
             &doc("[dev-dependencies]\nbar = { path = \"../bar\", version = \"0.1.0\" }\n"),
             &doc("")
         ));
@@ -1702,7 +1718,7 @@ mod tests {
         };
         assert!(!is_intra_workspace_released(
             &path_only_dev,
-            &dirs,
+            member,
             &doc("[dev-dependencies]\nbar = { path = \"../bar\" }\n"),
             &doc("")
         ));
@@ -1716,7 +1732,7 @@ mod tests {
         };
         assert!(is_intra_workspace_released(
             &wildcard_dev,
-            &dirs,
+            member,
             &doc("[dev-dependencies]\nbar = { path = \"../bar\", version = \"*\" }\n"),
             &doc("")
         ));
@@ -1732,7 +1748,7 @@ mod tests {
         };
         assert!(is_intra_workspace_released(
             &path_only_normal,
-            &dirs,
+            member,
             &doc(""),
             &doc("")
         ));
@@ -1746,7 +1762,7 @@ mod tests {
         };
         assert!(!is_intra_workspace_released(
             &foreign,
-            &dirs,
+            member,
             &doc(""),
             &doc("")
         ));
@@ -1755,6 +1771,7 @@ mod tests {
     #[test]
     fn inherited_wildcard_dev_dependency_is_released() {
         let dirs = BTreeMap::from([(PathBuf::from("/ws/packages/bar"), "bar".to_string())]);
+        let is_member = |path: &str| dirs.contains_key(Path::new(path));
         let dep = MetadataDep {
             source: None,
             name: "bar".to_string(),
@@ -1769,7 +1786,7 @@ mod tests {
         );
         assert!(!is_intra_workspace_released(
             &dep,
-            &dirs,
+            is_member,
             &member,
             &versionless_workspace
         ));
@@ -1778,9 +1795,45 @@ mod tests {
         );
         assert!(is_intra_workspace_released(
             &dep,
-            &dirs,
+            is_member,
             &member,
             &versioned_workspace
+        ));
+    }
+
+    #[test]
+    fn released_dependency_membership_uses_acquired_path_resolution() {
+        let dependency = MetadataDep {
+            source: None,
+            name: "member".to_owned(),
+            req: "=1.0.0".to_owned(),
+            rename: Some("alias".to_owned()),
+            path: Some("/workspace/alternate/member".to_owned()),
+            kind: None,
+        };
+        for resolved in [false, true] {
+            assert_eq!(
+                is_intra_workspace_released(
+                    &dependency,
+                    |path| {
+                        assert_eq!(path, "/workspace/alternate/member");
+                        resolved
+                    },
+                    &doc(""),
+                    &doc(""),
+                ),
+                resolved
+            );
+        }
+        let foreign = MetadataDep {
+            path: None,
+            ..dependency
+        };
+        assert!(!is_intra_workspace_released(
+            &foreign,
+            |_| panic!("a registry dependency has no member path to resolve"),
+            &doc(""),
+            &doc(""),
         ));
     }
 

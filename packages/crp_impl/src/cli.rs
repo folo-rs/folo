@@ -21,10 +21,9 @@ use crate::{CheckFormat, RunInput};
 #[command(
     name = "cargo-release-plan",
     about = "Classify publishable packages against version anchors and apply increment plans.",
-    // Cargo subcommands are versioned by the crate that ships them, and a
-    // `--version` flag here would report this binary's own version as if it
-    // were a property of the workspace being planned.
-    disable_version_flag = true
+    // The implementation partition and application share an exact release version.
+    // Installation checks identify that executable, independently of a consumer workspace.
+    version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -47,6 +46,11 @@ impl Cli {
         if argv.get(1).is_some_and(|arg| arg == "release-plan") {
             argv.remove(1);
         }
+        // Cargo invokes providers with only its plugin marker; configured extra arguments
+        // belong to the JSON request, not executable argv.
+        if argv.get(1).is_some_and(|arg| arg == "--cargo-plugin") {
+            argv.insert(1, OsString::from("credential-provider"));
+        }
         Self::try_parse_from(argv).map_err(|error| EarlyExit::from_clap(&error))
     }
 
@@ -58,6 +62,83 @@ impl Cli {
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
+            Command::CheckPublished(args) => RunInput::CheckPublished {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                plan: args.plan,
+                verbose: args.verbose,
+            },
+            Command::CheckCompatibility(args) => RunInput::CheckCompatibility {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                prepared: args.prepared,
+                plan: args.plan,
+                base: args.base,
+                output: args.output,
+                deny_findings: args.deny_findings,
+                verbose: args.verbose,
+            },
+            Command::Publish(PublishCommand::Report(args)) => RunInput::PublicationReport {
+                repository: args.repository,
+                publication: args.publication,
+                outcomes: args.outcomes,
+                jobs: args.jobs,
+                output: args.output,
+                no_issue: args.no_issue,
+            },
+            Command::ReleaseContext(args) => RunInput::ReleaseContext {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                config: args.config,
+                base: args.base,
+                verbose: args.verbose,
+            },
+            Command::CheckPublishingIdentity(args) => RunInput::CheckPublishingIdentity {
+                verbose: args.verbose,
+            },
+            Command::Publish(PublishCommand::Binaries(args)) => RunInput::PublishBinaries {
+                publication: args.publication,
+                batch: args.batch,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                output: args.output,
+                artifacts: args.artifacts,
+                no_upload: args.no_upload,
+            },
+            Command::Publish(PublishCommand::Github(args)) => RunInput::PublishGithub {
+                publication: args.registry.publication,
+                manifest_path: args
+                    .registry
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                output: args.registry.output,
+                batches: args.batches,
+                dry_run: args.registry.dry_run,
+                verbose: args.registry.verbose,
+            },
+            Command::Publish(PublishCommand::Registry(args)) => RunInput::PublishRegistry {
+                publication: args.publication,
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                output: args.output,
+                dry_run: args.dry_run,
+                verbose: args.verbose,
+            },
+            Command::CredentialProvider(_) => RunInput::CredentialProvider,
+            Command::PreparePublish(args) => RunInput::PreparePublish {
+                manifest_path: args
+                    .manifest_path
+                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
+                config: args.config,
+                source: args.source,
+                output: args.output,
+                verbose: args.verbose,
+            },
             Command::InspectPlan(args) => RunInput::InspectPlan {
                 plan: args.plan,
                 require_resolved: args.require_resolved,
@@ -117,6 +198,7 @@ impl Cli {
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 format: args.format.into(),
                 verify_packaging: args.verify_packaging,
+                config: args.config,
                 verbose: args.verbose,
             },
             Command::Expand(args) => RunInput::Expand {
@@ -175,6 +257,21 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Check first-publication prerequisites; a resolved plan selects a fail-closed gate.
+    CheckPublished(PublishedArgs),
+    /// Collect supported external API comparisons without choosing semantic change levels.
+    CheckCompatibility(CompatibilityArgs),
+    /// Resolve configured release-branch history and a workspace-scoped concurrency identity.
+    ReleaseContext(ContextArgs),
+    /// Exchange and immediately revoke a GitHub OIDC credential without publishing.
+    CheckPublishingIdentity(IdentityArgs),
+    /// Deliver the versions captured in an immutable publication manifest.
+    #[command(subcommand)]
+    Publish(PublishCommand),
+    #[command(hide = true)]
+    CredentialProvider(CredentialProviderArgs),
+    /// Validate clean merged source and capture its immutable publication requests.
+    PreparePublish(PreparePublishArgs),
     /// Validate an expanded plan and print publication and evidence facts as JSON.
     InspectPlan(InspectPlanArgs),
     /// Print dependency-ordered analysis batches from a report as JSON.
@@ -203,6 +300,170 @@ enum Command {
     Expand(ExpandArgs),
     /// Install captured files without resolution, or make proposed manifest-only edits.
     Apply(ApplyArgs),
+}
+
+/// Context resolution does not require a clean or already-merged source checkout.
+#[derive(Debug, Parser)]
+struct ContextArgs {
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Explicit tested baseline (for example a merge-queue base); otherwise fetch the release branch.
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Setup verification needs only ambient GitHub identity, not workspace source.
+#[derive(Debug, Parser)]
+struct IdentityArgs {
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Publication phases share immutable intent, not a mutable version plan.
+#[derive(Debug, Subcommand)]
+enum PublishCommand {
+    /// Report final completeness and create an operator failure issue when required.
+    Report(PublicationReportArgs),
+    /// Build and publish a frozen native batch from actual tag commits.
+    Binaries(BinaryArgs),
+    /// Reconcile crates.io and upload missing versions using Cargo.
+    Registry(RegistryArgs),
+    /// Reconcile package tags and releases, then emit missing native binary batches.
+    Github(GithubArgs),
+}
+
+/// An optional resolved plan narrows and strengthens the registry prerequisite check.
+#[derive(Debug, Parser)]
+struct PublishedArgs {
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long)]
+    plan: Option<PathBuf>,
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Captured evidence or fresh read-only classification supplies the comparison inputs.
+#[derive(Debug, Parser)]
+struct CompatibilityArgs {
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long,conflicts_with_all=["plan","base"])]
+    prepared: Option<PathBuf>,
+    #[arg(long,conflicts_with_all=["prepared","base"])]
+    plan: Option<PathBuf>,
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long)]
+    output: PathBuf,
+    /// Fail the command when completed comparisons find an insufficient version increment.
+    #[arg(long)]
+    deny_findings: bool,
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Failure reporting can proceed even when preparation supplied no usable manifest.
+#[derive(Debug, Parser)]
+struct PublicationReportArgs {
+    #[arg(long)]
+    repository: String,
+    #[arg(long)]
+    publication: Option<PathBuf>,
+    /// Directory of downloaded attempt artifacts, retaining their subdirectories.
+    #[arg(long)]
+    outcomes: PathBuf,
+    /// JSON prepare/registry/github/binaries platform result facts.
+    #[arg(long)]
+    jobs: PathBuf,
+    #[arg(long)]
+    output: PathBuf,
+    /// Write the report without creating or updating a GitHub issue.
+    #[arg(long)]
+    no_issue: bool,
+}
+
+/// Binary execution keeps frozen input, outcome and staged files separate.
+#[derive(Debug, Parser)]
+struct BinaryArgs {
+    #[arg(long)]
+    publication: PathBuf,
+    #[arg(long)]
+    batch: PathBuf,
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    #[arg(long)]
+    output: PathBuf,
+    #[arg(long)]
+    artifacts: PathBuf,
+    /// Build and stage archives without GitHub queries or uploads.
+    #[arg(long)]
+    no_upload: bool,
+}
+
+/// GitHub reconciliation adds an independently transportable batch directory.
+#[derive(Debug, Parser)]
+struct GithubArgs {
+    #[command(flatten)]
+    registry: RegistryArgs,
+    /// Directory for frozen per-target batch artifacts; must not already exist.
+    #[arg(long)]
+    batches: PathBuf,
+}
+
+/// Registry source selection, output and nonpublishing observation mode.
+#[derive(Debug, Parser)]
+struct RegistryArgs {
+    /// Immutable publication manifest produced by prepare-publish.
+    #[arg(long)]
+    publication: PathBuf,
+    /// Cargo manifest in the clean publication source.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+    /// Structured outcome file, separate from publication intent.
+    #[arg(long)]
+    output: PathBuf,
+    /// Read remote availability without exchanging credentials or uploading.
+    #[arg(long)]
+    dry_run: bool,
+    /// Explain registry observations and upload selection.
+    #[arg(long)]
+    verbose: bool,
+}
+
+/// Cargo's explicit plugin marker prevents accidental interactive credential requests.
+#[derive(Debug, Parser)]
+struct CredentialProviderArgs {
+    #[arg(long, required = true)]
+    cargo_plugin: bool,
+}
+
+/// Source selection and artifact destination for publication preparation.
+#[derive(Debug, Parser)]
+struct PreparePublishArgs {
+    /// Cargo manifest in the clean source checkout.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+
+    /// Publication configuration relative to the selected workspace.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Full immutable source commit ID; the source checkout must match it.
+    #[arg(long)]
+    source: String,
+
+    /// Manifest output file; an existing file must contain identical publication intent.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Explain source and publication validation.
+    #[arg(long)]
+    verbose: bool,
 }
 
 /// Report-only commands never discover or resolve a workspace.
@@ -336,6 +597,10 @@ struct CheckArgs {
     #[arg(long)]
     manifest_path: Option<PathBuf>,
 
+    /// Validate publication settings from this workspace-relative configuration file.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
     /// How to render diagnostics.
     #[arg(long, value_enum, default_value_t = CliCheckFormat::Text)]
     format: CliCheckFormat,
@@ -415,6 +680,7 @@ impl From<CliCheckFormat> for CheckFormat {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::path::Path;
 
     use static_assertions::assert_impl_all;
 
@@ -430,6 +696,325 @@ mod tests {
         match cli.into_input() {
             RunInput::Check { .. } => {}
             other => panic!("expected check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_identifies_the_application_without_a_workspace() {
+        let cases: &[&[&str]] = &[
+            &["cargo-release-plan", "--version"],
+            &["cargo-release-plan", "-V"],
+            &["cargo-release-plan", "release-plan", "--version"],
+            &["cargo-release-plan", "release-plan", "-V"],
+        ];
+        for args in cases {
+            let exit = Cli::from_args_os(args.iter().copied()).unwrap_err();
+            assert!(exit.status.is_ok());
+            assert_eq!(
+                exit.output.trim(),
+                format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_plugin_marker_selects_the_internal_provider() {
+        let cli = Cli::from_args_os(["cargo-release-plan", "--cargo-plugin"]).unwrap();
+        assert!(matches!(cli.into_input(), RunInput::CredentialProvider));
+    }
+
+    #[test]
+    fn compatibility_defaults_to_fresh_advisory_evidence() {
+        let cli = Cli::from_args_os([
+            "cargo-release-plan",
+            "check-compatibility",
+            "--output",
+            "evidence",
+        ])
+        .unwrap();
+        let RunInput::CheckCompatibility {
+            manifest_path,
+            prepared,
+            plan,
+            base,
+            output,
+            deny_findings,
+            verbose,
+        } = cli.into_input()
+        else {
+            panic!()
+        };
+        assert_eq!(manifest_path, Path::new("Cargo.toml"));
+        assert_eq!(output, Path::new("evidence"));
+        assert!(prepared.is_none());
+        assert!(plan.is_none());
+        assert!(base.is_none());
+        assert!(!deny_findings);
+        assert!(!verbose);
+    }
+
+    #[test]
+    fn compatibility_preserves_each_exclusive_source_and_execution_option() {
+        for option in ["--prepared", "--plan", "--base"] {
+            let cli = Cli::from_args_os([
+                "cargo-release-plan",
+                "release-plan",
+                "check-compatibility",
+                option,
+                "selected-source",
+                "--manifest-path",
+                "selected-manifest",
+                "--output",
+                "new-evidence",
+                "--deny-findings",
+                "--verbose",
+            ])
+            .unwrap();
+            let RunInput::CheckCompatibility {
+                manifest_path,
+                prepared,
+                plan,
+                base,
+                output,
+                deny_findings,
+                verbose,
+            } = cli.into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(manifest_path, Path::new("selected-manifest"));
+            assert_eq!(output, Path::new("new-evidence"));
+            assert_eq!(
+                prepared.as_deref(),
+                (option == "--prepared").then_some(Path::new("selected-source"))
+            );
+            assert_eq!(
+                plan.as_deref(),
+                (option == "--plan").then_some(Path::new("selected-source"))
+            );
+            assert_eq!(
+                base.as_deref(),
+                (option == "--base").then_some("selected-source")
+            );
+            assert!(deny_findings);
+            assert!(verbose);
+        }
+    }
+
+    #[test]
+    fn compatibility_rejects_ambiguous_sources_and_missing_output() {
+        for options in [
+            vec!["--prepared", "prepared", "--plan", "plan"],
+            vec!["--prepared", "prepared", "--base", "base"],
+            vec!["--plan", "plan", "--base", "base"],
+        ] {
+            let mut args = vec![
+                "cargo-release-plan",
+                "check-compatibility",
+                "--output",
+                "evidence",
+            ];
+            args.extend(options);
+            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+        }
+        assert!(
+            Cli::from_args_os(["cargo-release-plan", "check-compatibility"])
+                .unwrap_err()
+                .status
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn published_discovery_and_resolved_plan_gate_remain_distinct() {
+        for explicit in [false, true] {
+            let mut args = vec!["cargo-release-plan", "check-published"];
+            if explicit {
+                args.extend([
+                    "--manifest-path",
+                    "selected-manifest",
+                    "--plan",
+                    "resolved-plan",
+                    "--verbose",
+                ]);
+            }
+            let RunInput::CheckPublished {
+                manifest_path,
+                plan,
+                verbose,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "selected-manifest"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(
+                plan.as_deref(),
+                explicit.then_some(Path::new("resolved-plan"))
+            );
+            assert_eq!(verbose, explicit);
+        }
+    }
+
+    #[test]
+    fn release_context_retains_default_and_explicit_workspace_policy() {
+        for explicit in [false, true] {
+            let mut args = vec!["cargo-release-plan", "release-context"];
+            if explicit {
+                args.extend([
+                    "--manifest-path",
+                    "selected-manifest",
+                    "--config",
+                    "selected-config",
+                    "--base",
+                    "tested-base",
+                    "--verbose",
+                ]);
+            }
+            let RunInput::ReleaseContext {
+                manifest_path,
+                config,
+                base,
+                verbose,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "selected-manifest"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(
+                config.as_deref(),
+                explicit.then_some(Path::new("selected-config"))
+            );
+            assert_eq!(base.as_deref(), explicit.then_some("tested-base"));
+            assert_eq!(verbose, explicit);
+        }
+    }
+
+    #[test]
+    fn publication_preparation_preserves_source_and_configuration() {
+        for explicit in [false, true] {
+            let mut args = vec![
+                "cargo-release-plan",
+                "prepare-publish",
+                "--source",
+                "immutable-commit",
+                "--output",
+                "publication",
+            ];
+            if explicit {
+                args.extend([
+                    "--manifest-path",
+                    "selected-manifest",
+                    "--config",
+                    "selected-config",
+                    "--verbose",
+                ]);
+            }
+            let RunInput::PreparePublish {
+                manifest_path,
+                config,
+                source,
+                output,
+                verbose,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "selected-manifest"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(
+                config.as_deref(),
+                explicit.then_some(Path::new("selected-config"))
+            );
+            assert_eq!(source, "immutable-commit");
+            assert_eq!(output, Path::new("publication"));
+            assert_eq!(verbose, explicit);
+        }
+    }
+
+    #[test]
+    fn registry_and_github_options_keep_the_frozen_input_separate_from_outputs() {
+        for phase in ["registry", "github"] {
+            for explicit in [false, true] {
+                let mut args = vec![
+                    "cargo-release-plan",
+                    "publish",
+                    phase,
+                    "--publication",
+                    "immutable-publication",
+                    "--output",
+                    "phase-outcome",
+                ];
+                if phase == "github" {
+                    args.extend(["--batches", "native-batches"]);
+                }
+                if explicit {
+                    args.extend([
+                        "--manifest-path",
+                        "selected-manifest",
+                        "--dry-run",
+                        "--verbose",
+                    ]);
+                }
+                let input = Cli::from_args_os(args).unwrap().into_input();
+                match &input {
+                    RunInput::PublishGithub { batches, .. } => {
+                        assert_eq!(phase, "github");
+                        assert_eq!(batches, Path::new("native-batches"));
+                    }
+                    RunInput::PublishRegistry { .. } => assert_eq!(phase, "registry"),
+                    _ => panic!(),
+                }
+                let (RunInput::PublishRegistry {
+                    publication,
+                    manifest_path,
+                    output,
+                    dry_run,
+                    verbose,
+                }
+                | RunInput::PublishGithub {
+                    publication,
+                    manifest_path,
+                    output,
+                    dry_run,
+                    verbose,
+                    ..
+                }) = input
+                else {
+                    panic!()
+                };
+                assert_eq!(publication, Path::new("immutable-publication"));
+                assert_eq!(output, Path::new("phase-outcome"));
+                assert_eq!(
+                    manifest_path,
+                    Path::new(if explicit {
+                        "selected-manifest"
+                    } else {
+                        "Cargo.toml"
+                    })
+                );
+                assert_eq!(dry_run, explicit);
+                assert_eq!(verbose, explicit);
+            }
         }
     }
 }

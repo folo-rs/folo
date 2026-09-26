@@ -351,10 +351,16 @@ Describe 'Immutable binary build planning' {
     BeforeEach {
         $script:outputs = @{}
         Mock Get-PublishableBinaryCrate -ModuleName ReleasePublication {
-            [pscustomobject]@{ Name = 'app'; Version = '1.0.0' }
+            [pscustomobject]@{ Name = 'app'; Binary = 'app-bin'; Version = '1.0.0'; ReleaseTargets = @() }
         }
-        Mock Get-MissingBinaryMatrix -ModuleName ReleasePublication {
-            [pscustomobject]@{ name = 'app'; version = '1.0.0'; tag = 'app-v1.0.0' }
+        Mock Invoke-ReleaseBinariesHelper -ModuleName ReleasePublication {
+            $inputPlan = ConvertFrom-Json -InputObject $InputJson
+            ConvertTo-Json -InputObject @(@{
+                triple = 'x86_64-unknown-linux-gnu'
+                os = 'ubuntu-latest'
+                timeout_minutes = 150
+                binaries = @($inputPlan.binaries)
+            }) -Depth 8 -Compress
         }
         Mock Get-ReleaseTagMap -ModuleName ReleasePublication { @{ 'app-v1.0.0' = 'c' * 40 } }
         Mock Set-GitHubOutput -ModuleName ReleasePublication { $outputs[$Name] = $Value }
@@ -364,8 +370,9 @@ Describe 'Immutable binary build planning' {
         Invoke-ReleaseBinaryPlan -Repository 'owner/repo'
 
         $matrix = ConvertFrom-Json $outputs.matrix -NoEnumerate
-        $matrix[0].source_sha | Should -Be ('c' * 40)
-        $matrix[0].tag | Should -Be 'app-v1.0.0'
+        $matrix[0].binaries[0].source_sha | Should -Be ('c' * 40)
+        $matrix[0].binaries[0].tag | Should -Be 'app-v1.0.0'
+        $matrix[0].binaries[0].bin | Should -Be 'app-bin'
         $outputs.has_binaries | Should -Be 'true'
     }
 
@@ -375,18 +382,29 @@ Describe 'Immutable binary build planning' {
         $outputs.Count | Should -Be 0
     }
 
-    It 'emits an empty matrix without querying tags when every asset exists' {
-        Mock Get-MissingBinaryMatrix -ModuleName ReleasePublication { @() }
+    It 'preserves the native empty-array result when every asset exists' {
+        Mock Invoke-ReleaseBinariesHelper -ModuleName ReleasePublication { '[]' }
         Invoke-ReleaseBinaryPlan -Repository 'owner/repo'
         $outputs.matrix | Should -Be '[]'
         $outputs.has_binaries | Should -Be 'false'
-        Should -Invoke Get-ReleaseTagMap -ModuleName ReleasePublication -Times 0 -Exactly
     }
 
     It 'handles a workspace with no binary packages' {
         Mock Get-PublishableBinaryCrate -ModuleName ReleasePublication { @() }
         Invoke-ReleaseBinaryPlan -Repository 'owner/repo'
         $outputs.matrix | Should -Be '[]'
-        Should -Invoke Get-MissingBinaryMatrix -ModuleName ReleasePublication -Times 0 -Exactly
+        Should -Invoke Invoke-ReleaseBinariesHelper -ModuleName ReleasePublication -Times 0 -Exactly
+        Should -Invoke Get-ReleaseTagMap -ModuleName ReleasePublication -Times 0 -Exactly
+    }
+
+    It 'propagates native failure without emitting successful outputs' {
+        Mock Invoke-ReleaseBinariesHelper -ModuleName ReleasePublication { throw 'native query failed' }
+        { Invoke-ReleaseBinaryPlan -Repository 'owner/repo' } | Should -Throw '*native query failed*'
+        $outputs.Count | Should -Be 0
+    }
+
+    It 'rejects a scalar native result rather than emitting an invalid Actions matrix' {
+        Mock Invoke-ReleaseBinariesHelper -ModuleName ReleasePublication { '{}' }
+        { Invoke-ReleaseBinaryPlan -Repository 'owner/repo' } | Should -Throw '*explicit array*'
     }
 }

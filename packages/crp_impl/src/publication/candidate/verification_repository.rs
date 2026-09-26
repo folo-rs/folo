@@ -1,10 +1,10 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use cargo_release_plan::{RunInput, RunOutcome, run};
 use ohno::AppError;
 
-use crate::{Metadata, Repository, capture};
+use crate::publication::candidate::{Metadata, Repository, capture};
+use crate::{RunInput, RunOutcome, run};
 
 /// Supplies external evidence to the shared verification sequence.
 ///

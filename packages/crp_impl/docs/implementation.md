@@ -6,10 +6,11 @@ artifact planning and application for
 The application's [implementation guide](../../cargo-release-plan/docs/implementation.md)
 describes the shared architecture.
 
-The public application re-exports only its supported API and owns the executable.
-This partition exposes the internal operations needed by maintainer integration
-tests without extending that application API. Both crates are released in
-lockstep through the application's exact dependency.
+The application package owns the executable and re-exports only the Rust items
+needed by that executable and maintainer tests. This partition exposes the other
+internal operations needed by its integration tests. Neither library target
+defines a supported Rust API. Both crates are released in lockstep through the
+application's exact dependency.
 
 Unit tests retain in-process parsing, decisions and orchestration. Real Git,
 Cargo and filesystem assertions run in this package's integration targets.

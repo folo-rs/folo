@@ -193,6 +193,8 @@ fn check_parses_github_format_and_verify_packaging() {
         "HEAD",
         "--format",
         "github",
+        "--config",
+        ".cargo/release_plan.toml",
         "--verify-packaging",
         "--verbose",
     ])
@@ -203,12 +205,14 @@ fn check_parses_github_format_and_verify_packaging() {
             base,
             format,
             verify_packaging,
+            config,
             verbose,
             ..
         } => {
             assert_eq!(base.as_deref(), Some("HEAD"));
             assert_eq!(format, CheckFormat::Github);
             assert!(verify_packaging);
+            assert_eq!(config, Some(PathBuf::from(".cargo/release_plan.toml")));
             assert!(verbose);
         }
         other => panic!("expected check, got {other:?}"),

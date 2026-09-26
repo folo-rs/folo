@@ -101,7 +101,7 @@ Describe 'Test-ReleaseTargetMetadata' {
         $pkg = [pscustomobject]@{
             name     = 'crafted'
             metadata = [pscustomobject]@{
-                folo = [pscustomobject]@{ 'release-targets' = @('x86_64-pc-windows-msvc') }
+                'release-plan' = [pscustomobject]@{ 'release-targets' = @('x86_64-pc-windows-msvc') }
             }
         }
         @(Test-ReleaseTargetMetadata -Package $pkg).Count | Should -Be 0
