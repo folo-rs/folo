@@ -1,5 +1,3 @@
-#![cfg_attr(coverage_nightly, coverage(off))]
-
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;

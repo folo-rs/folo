@@ -3,7 +3,6 @@
 //! This compatibility executable delegates source validation to cargo-release-plan's
 //! implementation partition. Its integration target retains the executable-boundary coverage.
 
-#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
 #![allow(
     missing_docs,
     reason = "This nonpublished library exposes implementation operations to its integration target, not a public API"
