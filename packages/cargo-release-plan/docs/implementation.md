@@ -292,6 +292,12 @@ without new input admission, and retained verification ordering independently of
 the host filesystem. Windows path-prefix conversion and Unix mode interpretation
 are compiled for all test hosts because those transformations are pure.
 
+Released dependency discovery resolves Cargo's dependency paths against the same
+canonical member index as exact-version grouping. Equivalent member and dependency
+spellings, including Windows verbatim paths, retain the same graph in ordinary,
+prepared and fresh compatibility reports. Filesystem resolution stays in metadata
+acquisition; membership decisions use acquired observations in unit tests.
+
 Offline resolver invocation and changed-artifact selection have in-process cores
 that preserve arguments, working directories, bytes and errors. Preparation and
 preview retain integration-owned Git/Cargo workspace orchestration and completion

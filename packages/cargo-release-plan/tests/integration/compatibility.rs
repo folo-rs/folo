@@ -49,6 +49,81 @@ fn unchanged_workspace_needs_no_checker_or_registry_and_keeps_fresh_report() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "Compares real Cargo dependency graphs across captured report modes"
+)]
+fn compatibility_reports_preserve_workspace_dependency_graphs() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "dependency",
+        "1.0.0",
+        "[package.metadata.release-plan]\nprivate-api = true\n",
+    );
+    write_package(
+        &fixture,
+        "consumer",
+        "1.0.0",
+        "[dependencies]\ndep_alias = { package = 'dependency', path = '../dependency', version = '=1.0.0' }\n\
+         [package.metadata.release-plan]\nprivate-api = true\n\
+         [package.metadata.cargo_check_external_types]\nallowed_external_types = ['dependency::*']\n",
+    );
+    fixture.commit("workspace dependency graph");
+    let output = TempDir::new().unwrap();
+    let prepared = output.path().join("prepared");
+    run(&RunInput::Prepare {
+        output: prepared.clone(),
+        base: Some(fixture.sha("HEAD")),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    let expected: Value =
+        serde_json::from_slice(&fs::read(prepared.join("report.json")).unwrap()).unwrap();
+    let packages = expected.get("packages").unwrap().as_array().unwrap();
+    let consumer = packages
+        .iter()
+        .find(|package| package.get("name").unwrap() == "consumer")
+        .unwrap();
+    assert_eq!(
+        consumer.pointer("/dependencies/0/name").unwrap(),
+        "dependency"
+    );
+    assert_eq!(consumer.pointer("/dependencies/0/public").unwrap(), true);
+    let dependency = packages
+        .iter()
+        .find(|package| package.get("name").unwrap() == "dependency")
+        .unwrap();
+    assert_eq!(dependency.get("dependents").unwrap(), &json!(["consumer"]));
+
+    for (label, prepared_path, base) in [
+        ("fresh", None, Some(fixture.sha("HEAD"))),
+        ("prepared", Some(prepared.join("prepared.json")), None),
+    ] {
+        let evidence = output.path().join(label).join("compatibility");
+        assert!(matches!(
+            run(&RunInput::CheckCompatibility {
+                manifest_path: fixture.manifest(),
+                prepared: prepared_path,
+                plan: None,
+                base,
+                output: evidence.clone(),
+                deny_findings: true,
+                verbose: false,
+            })
+            .unwrap(),
+            RunOutcome::Check { passed: true, .. }
+        ));
+        let report: Value =
+            serde_json::from_slice(&fs::read(evidence.join("report.json")).unwrap()).unwrap();
+        assert_eq!(report, expected);
+        let outcome = read_outcome(&evidence);
+        assert_eq!(outcome.get("packages").unwrap(), &json!([]));
+    }
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "Prepares and validates a real Cargo/Git workspace")]
 fn prepared_compatibility_rejects_same_head_source_drift_before_comparison() {
     let fixture = Fixture::new("");
