@@ -218,6 +218,14 @@ invalid identities or cancellation do not authorize downstream work.
 On the matching native runner, select the emitted batch for its target. This
 example assumes the outcome includes Windows x64 work:
 
+Choose an absolute shared Cargo build-cache location outside the clean source,
+or beneath an ignored directory. This preserves source cleanliness in repositories
+that do not ignore Cargo's default `target` directory:
+
+```powershell
+$env:CARGO_TARGET_DIR = [IO.Path]::GetFullPath((Join-Path $Work "build-cache"))
+```
+
 ```powershell
 $Routing = Get-Content $GithubOutcome -Raw | ConvertFrom-Json
 $Selected = $Routing.batches | Where-Object target -eq "x86_64-pc-windows-msvc"
