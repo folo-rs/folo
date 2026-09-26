@@ -54,8 +54,8 @@ directly:
   workflow role in inline comments. Explain non-obvious decisions and link
   design-bearing workflow steps to the relevant documentation chapter. Follow
   [docs/build-and-tooling.md](docs/build-and-tooling.md#automation-language-and-boundaries).
-* **Do not execute `just gh-release`** — it performs real crates.io publishes and is
-  a CI-only entry point (driven by the release workflow); never run it manually.
+* **Do not invoke mutating release commands locally** without explicit publication
+  authorization. Implementation, validation and PR work do not grant that authority.
 * **Make version decisions reviewable in the PR.** Run `increment-versions` without a
   separate approval gate; human review of the complete PR is the approval step.
   Keep a **Version/release plan** section current with every expanded-plan package/group,
@@ -397,13 +397,10 @@ publication and rerunning the action's required installation check.
 
 ### [docs/release-automation.md](docs/release-automation.md)
 
-How crates.io publishing and `cargo-binstall` prebuilt binaries are automated from
-CI on merge to `main`: the `release.yml` flow (publish via Trusted Publishing →
-reconcile which binary-crate releases are missing per-target archives → matrix-build
-+ upload checksummed archives → alert on failure), the asset-naming contract that
-keeps the archive filenames and each crate's `[package.metadata.binstall]` block in
-lockstep, the `release-plz.toml` configuration, and the
-rate-limit/idempotency/self-healing-retry/new-crate-bootstrap handling.
+Folo's source-dogfood callers of the shared cargo-release-plan action: the registered
+`release.yml` identity, `.cargo/release_plan.toml` policy, publication authorization,
+native target selection and operator recovery. Generic release behavior belongs
+in the application's public book, linked from this local adapter.
 
 **Open this when**: implementing or debugging automated releases, the
 crates.io/OIDC publish flow, the prebuilt-binary matrix, or a `cargo binstall`

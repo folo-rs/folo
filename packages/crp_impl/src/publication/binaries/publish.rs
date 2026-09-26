@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::publication::binaries::batch::{Outcome, execute_items};
 use crate::publication::binaries::command::install_cancellation_handler;
-use crate::publication::binaries::native::Native;
+use crate::publication::binaries::native::{Github, Native};
 use crate::publication::context::WorkflowRun;
 use crate::publication::github::{PlatformBatch, verify_batch_tags};
 use crate::publication::manifest::{InvalidManifest, PublicationManifest};
@@ -63,7 +63,7 @@ pub(crate) fn publish(
         workspace,
         artifacts.to_path_buf(),
         batch.target.clone(),
-        batch.repository.clone(),
+        Github::new(batch.repository.clone()),
     )?;
     let items = execute_items(&batch.target, &batch.binaries, no_upload, &mut executor)?;
     let passed = successful(&items, batch.binaries.len(), no_upload);

@@ -1,41 +1,39 @@
 name: Release
 
-# Automated crates.io publishing + cargo-binstall prebuilt binaries, driven from
-# every push to `main`. Version increments land in the pull request that causes
-# them; merge publishes. See docs/release-versioning.md and
-# docs/release-automation.md.
-#
-# Registry publication and GitHub reconciliation live in one workflow. The reconciler
-# creates tags only at verified release-equivalent main snapshots; binary jobs do not
-# depend on token-authored tags triggering another workflow.
-# Ref: .github/workflows/design.md#publication-and-recovery.
-#
-# Native helpers own structured release decisions; PowerShell/Just provide process boundaries.
-# The steps here remain thin local entry points.
+# The caller filename is part of Folo's crates.io Trusted Publisher registration.
+# Shared workflows own publication, reconciliation, native batches and failure reporting.
+# Ref: .github/workflows/implementation.md#release-publication.
 on:
   push:
     branches: [main]
-  # Default dispatch reconciles publication; the explicit probe only verifies caller identity.
   workflow_dispatch:
     inputs:
+      source:
+        description: Optional full original source SHA for recovery after artifacts expire
+        type: string
+        default: ''
       verify-publishing-identity:
         description: Exchange and revoke an OIDC credential without publishing
         type: boolean
         default: false
 
-# Never cancel a publish mid-flight: releasing is not safe to interrupt. Keyed on the
-# ref so a later push to main queues behind the in-flight release rather than killing it.
+# Retain the outer publisher lock while earlier runs drain. The shared graph's
+# workspace-scoped inner lock has a distinct name, so it cannot wait on this caller.
+# Ref: .github/workflows/design.md#publication-and-recovery.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
 
 jobs:
   verify-publishing-identity:
-    if: github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity && github.repository == 'folo-rs/folo'
-    # Keep the registered caller filename while checking the reusable workflow's OIDC identity.
-    # Controller installation runs separately without OIDC. No package upload is performed.
+    if: github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    # This route never starts the publisher; credentials are exchanged and revoked only.
     # Ref: design.md#publication-identity-verification.
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@e4d98d54c913f41866774670a3e27236ddc1d5dd
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@512ff6afc7e101f21243b15ed7dbedddc2ac052d
     with:
       install-method: path
       source-path: .
@@ -45,209 +43,17 @@ jobs:
       id-token: write
 
   publish:
-    # crates.io Trusted Publishing federates only this repository's identity; a fork
-    # cannot mint a matching OIDC token, so gate to the canonical repo (a fork's push
-    # skips cleanly instead of failing at the token exchange). The `main` gate matters
-    # only for `workflow_dispatch`, which can target any ref: the `push` trigger is
-    # already main-only, so this stops a dispatch on a feature branch from publishing.
     if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
-    runs-on: ubuntu-latest
-    # Generous ceiling: covers up to 3 publish attempts (release-plz publish_timeout is
-    # 45m) with 15-minute waits between retries (~165m), plus up to 90 min for a cold-cache
-    # setup-environment, comfortably under this cap.
-    timeout-minutes: 270
-
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/release.yml@512ff6afc7e101f21243b15ed7dbedddc2ac052d
+    with:
+      install-method: path
+      # Controller code always comes from the invocation checkout. Recovery selects
+      # a separate immutable publication source, never a different automation revision.
+      # Ref: implementation.md#release-publication.
+      source-path: .
+      source: ${{ inputs.source || '' }}
     permissions:
-      # Forge writes belong to reconciliation, not the potentially historical publish checkout.
-      # Ref: .github/workflows/implementation.md#release-publication.
-      contents: read
-      # crates.io Trusted Publishing: release-plz exchanges a GitHub OIDC token for a
-      # short-lived crates.io token itself, so no CARGO_REGISTRY_TOKEN is stored.
-      id-token: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        # Full history lets release-plz resolve existing tags and commits.
-        with:
-          fetch-depth: 0
-
-      - name: Setup environment
-        # A no-release run may do no compilation; build-cache writes belong to compiling jobs.
-        # Ref: implementation.md#shared-environment-cache-identity.
-        uses: ./.github/actions/setup-environment
-
-      - name: Verify checked-in lockfile is consistent
-        shell: pwsh
-        # Fail the release BEFORE any crate is published or tag is created if the committed
-        # Cargo.lock disagrees with the manifests. The workspace shares one lockfile, so a single
-        # stale entry (e.g. a manifest bumped without its lock entry) would otherwise sail through
-        # publish and then fail every `build-binaries` job under `--locked`. Verify-only: it reads
-        # the checked-in lockfile and aborts, it never regenerates it. See docs/release-automation.md.
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          just verify-lockfile
-
-      - name: Release to crates.io (Trusted Publishing) with retries
-        shell: pwsh
-        env:
-          # Read-only forge access; the config disables release-plz's tag/release writes.
-          # crates.io authentication remains independent Trusted Publishing.
-          GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          just gh-release
-
-  plan-binaries:
-    # Runs after every successful publish (including no-op pushes), NOT gated on whether
-    # anything was published this run. This is what makes retries self-healing: a plain
-    # re-run or a bare workflow_dispatch reconciles the actual published state against the
-    # uploaded assets and rebuilds only what is missing - no manual crate list.
-    needs: publish
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
-    runs-on: ubuntu-latest
-    # Fast reconcile work plus up to 90 min for a cold-cache setup-environment - which itself
-    # timed out the previous 30-minute cap on a cache miss.
-    timeout-minutes: 120
-
-    permissions:
-      # Reconciliation reads existing releases and creates any release/tag that a manual
-      # crates.io publish or partial release-plz run left absent.
       contents: write
-
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-      has_binaries: ${{ steps.plan.outputs.has_binaries }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          # The controller and candidate verifier need first-parent release history.
-          fetch-depth: 0
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-        # Reconciliation builds the repository-native release verifier.
-        with:
-          save-build-cache: "true"
-
-      - name: Reconcile package tags and binary GitHub releases
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        # Freeze requests at the publication source, then verify a current-main snapshot before
-        # creating any missing tag. Existing tags remain immutable.
-        # Ref: .github/workflows/design.md#release-equivalent-snapshots.
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          just gh-reconcile-releases "$env:GITHUB_SHA"
-
-      - name: Reconcile missing binary assets
-        id: plan
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        # The recipe always emits its Write-Verbose decision history, so the step log records how
-        # the incomplete-asset plan was derived per crate and target - not just the final count.
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          just gh-plan-release-binaries
-
-  build-binaries:
-    name: build-binaries (${{ matrix.triple }})
-    needs: [publish, plan-binaries]
-    if: needs.plan-binaries.outputs.has_binaries == 'true' && !inputs.verify-publishing-identity
-    strategy:
-      # One target's failure must not abandon the others' archives. The reconciliation
-      # in plan-binaries means the next run rebuilds only whatever is still missing.
-      fail-fast: false
-      matrix:
-        # One entry per target: {triple, os, timeout_minutes, binaries: [{name, bin,
-        # version, tag, source_sha}]}. Items build separately but reuse one Cargo cache.
-        # Ref: .github/workflows/implementation.md#release-binary-batches.
-        include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
-    runs-on: ${{ matrix.os }}
-    # The planner budgets cold setup plus each item, capped at the hosted runner ceiling.
-    timeout-minutes: ${{ matrix.timeout_minutes }}
-
-    permissions:
-      # Upload the archive + checksum as assets on the crate's release.
-      contents: write
-
-    steps:
-      - name: Checkout release controller
-        uses: actions/checkout@v7
-        # Automation comes from the triggering commit; the helper creates distinct tag-pinned
-        # source worktrees, including for historical tags that predate this controller.
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-        with:
-          save-build-cache: "true"
-
-      - name: Build and publish platform batch
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_BINARY_BATCH: ${{ toJSON(matrix) }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          just gh-build-release-binaries
-
-  alert:
-    # File a GitHub issue unique to this run whenever any job above fails, so every failed
-    # release is tracked individually (not folded into a rolling issue). `failure()` fires
-    # only on a real failure - a skipped build-binaries (nothing to build) does not count.
-    needs: [publish, plan-binaries, build-binaries]
-    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    permissions:
       issues: write
-
-    steps:
-      - name: Open failure issue for this run
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          # Ensure the shared label exists (idempotent) so `gh issue create` cannot fail
-          # on a missing label.
-          $PSNativeCommandUseErrorActionPreference = $false
-          gh label create ci-failure --color B60205 --description "CI workflow failure" --force *> $null
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          $body = @"
-          The release workflow failed.
-
-          Once the cause is fixed, re-run this workflow (or a bare ``workflow_dispatch``): the publish step resumes any partial crates.io publish, and ``plan-binaries`` reconciles and rebuilds any missing prebuilt binaries automatically.
-
-          Failed run: $env:RUN_URL
-          "@
-          gh issue create --label ci-failure --title "Release workflow failed (run $env:RUN_ID)" --body $body
+      actions: read
+      id-token: write

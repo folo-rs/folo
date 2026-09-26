@@ -116,7 +116,7 @@ Non-goals (explicitly out of scope here):
 
 The Marketplace requires the action's metadata file to sit at the **repository
 root**, and a Marketplace listing is tied to a whole repository's release/tag
-stream. The monorepo already spends its tag namespace on automated `release-plz` package
+stream. The monorepo uses its tag namespace for automated package
 releases and per-binary-package GitHub Releases (`cargo-bench-history-vX.Y.Z`, etc.; see
 [`../../../docs/release-automation.md`](../../../docs/release-automation.md)), so it cannot
 also carry the clean, independently-moving `v2` / `vX.Y.Z` action tags the Marketplace and

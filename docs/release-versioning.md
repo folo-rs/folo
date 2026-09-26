@@ -32,8 +32,8 @@ whether benchmark-action coordination is needed.
 The [local-planning walkthrough](https://folo-rs.github.io/folo/cargo-release-plan/integration/local-planning.html)
 owns the command sequence and evidence interpretation. The skill uses installed
 tool operations for compatibility evidence and publication preflight, not Folo
-Just wrappers. Repository convenience recipes remain available to development
-and CI callers.
+Just wrappers. `just validate-versions` remains the local source-built version and
+publication-input check; hosted validation consumes the shared read-only workflow.
 
 ## Release-branch movement during planning
 

@@ -244,78 +244,16 @@ jobs:
 
   # Workspace-wide release-plan generation: every publishable package's released content
   # versus its version anchor. Delta cannot narrow that set, so this job is not gated on
-  # skip_all. Independent release checks share setup without suppressing later findings.
+  # skip_all. The shared read-only graph owns version, publication-input and API checks.
   # Ref: .github/workflows/implementation.md#release-validation.
   validate-versions:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          # cargo-release-plan resolves the release baseline and each package's version anchor
-          # from the release branch's first-parent history, so a truncated clone can hide the
-          # commit that last changed a version and report that package as unchanged.
-          fetch-depth: 0
-
-      - name: Setup environment
-        id: setup
-        uses: ./.github/actions/setup-environment
-        with:
-          save-build-cache: "true"
-
-      # Live Cargo metadata belongs with unconditional release validation: target autodiscovery
-      # can change the binary set without a manifest edit.
-      # Ref: .github/workflows/implementation.md#release-validation.
-      - name: Validate binstall metadata
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just validate-binstall
-
-      - name: Check package versions
-        id: check
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        env:
-          # The release baseline is the tip of the branch releases are made from, which is
-          # not the branch a pull request targets: a stacked pull request targets an
-          # unreleased parent, and anchoring on it would treat that parent's pending
-          # increment as a release. Main runs use the tested commit, not a moving remote tip.
-          RELEASE_PLAN_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.event.repository.default_branch) || github.sha }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just validate-versions
-
-      # Never interpret a broken compatibility tool as evidence of no breaking changes.
-      # Ref: .github/workflows/implementation.md#release-validation.
-      - name: Verify cargo-semver-checks can run
-        id: semver-canary
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just verify-semver-checks
-
-      # The report owns consumer-contract selection, including version-group closure.
-      # Targets are emitted before the readiness verdict, so a missing version increment does not
-      # suppress compatibility findings. No comparison is possible without targets or a working tool.
-      - name: Run cargo-semver-checks on releasing packages
-        if: ${{ !cancelled() && steps.semver-canary.outcome == 'success' && steps.check.outputs.semver_targets != '' }}
-        shell: pwsh
-        env:
-          SEMVER_TARGETS: ${{ steps.check.outputs.semver_targets }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          just package="$env:SEMVER_TARGETS" semver-checks
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@512ff6afc7e101f21243b15ed7dbedddc2ac052d
+    with:
+      install-method: path
+      source-path: .
+    permissions:
+      contents: read
+      actions: read
 
   # Formatting, dev Clippy, documentation and minimum-dependency compilation share setup.
   # Documentation builds and doctests use the same platform coverage as compilation, including PRs.

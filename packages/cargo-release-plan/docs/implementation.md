@@ -55,10 +55,9 @@ assessment performs no publication discovery.
 Publication preparation composes that policy with the candidate verifier under
 `publication::candidate`. The verifier owns clean-head/index checks, tracked
 input containment, first-parent membership and candidate-relative version
-validation. The compatibility `release-target-check` executable delegates to
-these same operations while repository workflows consume its command interface.
-Its executable-connected integration tests remain in that package; pure decisions
-and their unit tests belong to `crp_impl`.
+validation. Its typed request comes from publication preparation, not another
+executable or argument parser. Real candidate-boundary tests and the in-process
+verification sequence belong to `crp_impl`.
 
 The preparation boundary fetches the configured GitHub branch through a
 per-invocation Git credential helper and captures its resolved commit. It does not
@@ -145,11 +144,10 @@ source checkout merely because that repository has no target-directory ignore.
 
 ## Native binary execution
 
-`publication::binaries` owns the native batch engine used by both unified
-publication and the compatibility `release-binaries` executable. The latter is a
-thin entry point with executable-connected smoke tests, not another implementation.
-Batch decisions and source/artifact validation stay in the implementation
-partition's unit tests.
+`publication::binaries` owns the native batch engine behind `publish binaries`.
+Frozen manifest-linked batches are its only job protocol; runner assignments
+and workflow timeouts belong to the shared action. Batch decisions and
+source/artifact validation stay in the implementation partition's unit tests.
 
 The controller repository supplies Git objects and the shared target directory,
 while each release tag selects a disposable immutable source worktree.
@@ -167,6 +165,9 @@ exclude upload credentials and controller toolchain overrides. Independent
 packages retain separate Cargo invocations, while compatible target artifacts
 are shared. The batch retains source cleanup diagnostics alongside publication
 outcomes, including both Git-worktree and directory cleanup failures.
+The GitHub asset adapter owns its executable and token separately. Integration
+tests supply a native protocol fixture without altering process-global
+environment or introducing a second release-command implementation.
 
 ## GitHub reconciliation and reporting
 
@@ -245,6 +246,22 @@ the containing directory's probed alias behavior; it never redirects a distinct
 manifest on a sensitive filesystem. Git lookups continue to use recorded spelling.
 
 ### Test boundaries
+
+`cargo-release-plan/tests/integration/native_binaries/` drives the unified
+executable with publication manifests and sealed batches. It covers historical
+and nested sources, exact missing-source acquisition, independent package
+failures and feature selection, shared build output, native archive permissions
+and checksums, rejected artifact paths, and process-tree cancellation. The native
+GitHub upload boundary runs in `crp_impl/tests/boundaries/native_binaries.rs`,
+including incomplete uploads, retries and source cleanup failure.
+`just release-binary-smoke` selects both owners on the native platform.
+Ordinary test and coverage selection includes both targets.
+
+Candidate-boundary tests in `crp_impl/tests/boundaries/candidate/` cover actual
+Git index, history and tracked-input semantics and real Cargo verification.
+Windows candidate cases share a nextest group and an in-process libtest slot
+before starting their watchdog, so queued cases do not consume that budget.
+Other platforms retain normal parallelism.
 
 Registry-publication boundary tests invoke real Cargo against an isolated sparse
 registry. The fixture retains uploaded archives and immediately exposes their

@@ -20,7 +20,7 @@ rust-version.workspace = true
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 
-# The release workflow publishes prebuilt archives under release-plz's `<crate>-v<version>` tag,
+# The release workflow publishes prebuilt archives under each package's `<crate>-v<version>` tag,
 # which cargo-binstall cannot derive on its own. Ref: docs/release-automation.md.
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"

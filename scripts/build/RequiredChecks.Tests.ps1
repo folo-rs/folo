@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for RequiredChecks.psm1. The allowed-result policy (must-succeed vs may-skip)
@@ -189,11 +190,13 @@ Describe 'Planned tooling results' {
     }
 
     It 'requires integration tests for an affected native helper' {
-        $needs.prepare.outputs.packages_json = '["release-target-check"]'
+        $needs.prepare.outputs.packages_json = '["cargo-release-plan"]'
         { Assert-PlannedResult } | Should -Throw
         $needs.prepare.outputs.script_domains = '["release"]'
         { Assert-PlannedResult } | Should -Throw
         $needs['test-scripts'].result = 'success'
+        $needs.prepare.outputs.release_binary_smoke = 'true'
+        $needs['clippy-dev-docs'] = @{ result = 'success' }
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
@@ -208,7 +211,7 @@ Describe 'Planned tooling results' {
         { Assert-PlannedResult } | Should -Not -Throw
     }
 
-    It 'rejects a lost native-helper smoke selection for <_>' -ForEach @('release-binaries', 'crp_impl') {
+    It 'rejects a lost native-helper smoke selection for <_>' -ForEach @('cargo-release-plan', 'crp_impl') {
         $needs.prepare.outputs.packages_json = ConvertTo-Json -InputObject @($_) -Compress
         $needs.prepare.outputs.script_domains = '["release"]'
         $needs['test-scripts'].result = 'success'

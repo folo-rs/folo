@@ -644,6 +644,7 @@ dependencies = [
  "mimalloc",
  "ohno",
  "serde_json",
+ "sha2",
  "tempfile",
  "testing",
 ]
@@ -3304,30 +3305,6 @@ dependencies = [
  "static_assertions",
  "testing",
  "tokio",
-]
-
-[[package]]
-name = "release-binaries"
-version = "0.4.1"
-dependencies = [
- "crp_impl",
- "mimalloc",
- "serde_json",
- "sha2",
- "tempfile",
- "testing",
-]
-
-[[package]]
-name = "release-target-check"
-version = "0.4.1"
-dependencies = [
- "crp_impl",
- "mimalloc",
- "ohno",
- "serde_json",
- "tempfile",
- "testing",
 ]
 
 [[package]]

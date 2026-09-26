@@ -2,6 +2,7 @@
 
 mod apply;
 mod artifact_path;
+mod candidate;
 mod classify;
 mod classify_dependency_tests;
 mod classify_discovery_tests;
@@ -17,6 +18,7 @@ mod metadata;
 mod metadata_dependency_tests;
 mod metadata_discovery_tests;
 mod metadata_installation_tests;
+mod native_binaries;
 mod preview;
 mod prospective;
 mod publication;

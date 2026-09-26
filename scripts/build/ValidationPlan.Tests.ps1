@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Protects Standard validation's change domains, whole-candidate Git comparisons and explicit
@@ -193,7 +194,7 @@ Describe 'Caller integration selection' {
 
 Describe 'Cargo helper integration selection' {
     It 'adds release tests for affected helper <_>' -ForEach @(
-        'cargo-release-plan', 'crp_impl', 'release-target-check', 'release-binaries'
+        'cargo-release-plan', 'crp_impl'
     ) {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('scripts/book/BookSite.psm1'))
         $packages = ConvertTo-Json -InputObject @($_) -Compress
@@ -230,7 +231,7 @@ Describe 'Cargo helper integration selection' {
 Describe 'Release binary smoke selection' {
     It 'selects the native smoke for release adapter and shared setup inputs' -ForEach @(
         '.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just',
-        'scripts/release/ReleaseBinaries.psm1',
+        '.cargo/release_plan.toml', '.github/actions/release-plan-setup/action.yml',
         'scripts/setup/ReleaseArchiveTools.psm1', 'scripts/build/RequiredChecks.psm1',
         '.cargo/config.toml'
     ) {
@@ -240,7 +241,7 @@ Describe 'Release binary smoke selection' {
 
     It 'selects helper dependency impact without unrelated Cargo impact' {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('Cargo.lock'))
-        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["release-binaries"]' | Should -BeTrue
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["cargo-release-plan"]' | Should -BeTrue
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["crp_impl"]' | Should -BeTrue
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["events_once"]' | Should -BeFalse
     }

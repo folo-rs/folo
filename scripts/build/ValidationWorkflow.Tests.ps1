@@ -13,6 +13,7 @@ BeforeAll {
     $script:standard = Get-Content -LiteralPath (Join-Path $root '.github/workflows/standard-validation.yml') -Raw
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
+    $script:release = Get-Content -LiteralPath (Join-Path $root '.github/workflows/release.yml') -Raw
     $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
@@ -100,7 +101,7 @@ Describe 'Workflow dependency extraction' {
 
 Describe 'Validation job references' {
     It 'resolves every declared prerequisite within its workflow' {
-        foreach ($workflow in (@($standard, $deep, $queue) + $benchmarkWorkflows)) {
+        foreach ($workflow in (@($standard, $deep, $queue, $release) + $benchmarkWorkflows)) {
             $jobNames = @(Get-WorkflowJobName $workflow)
             foreach ($name in $jobNames) {
                 $job = Get-WorkflowJob $workflow $name
@@ -110,6 +111,68 @@ Describe 'Validation job references' {
                 }
             }
         }
+    }
+}
+
+Describe 'Shared release integration' {
+    It 'pins every shared release entry point to the same immutable action revision' {
+        $references = @([regex]::Matches(($standard, $queue, $release -join "`n"),
+                'uses: folo-rs/cargo-release-plan-action(?:/\.github/workflows/[^@\r\n]+)?@(?<revision>[^\s]+)') |
+            ForEach-Object { $_.Groups['revision'].Value })
+        $references.Count | Should -BeGreaterThan 0
+        foreach ($revision in $references) { $revision | Should -Match '^[0-9a-f]{40}$' }
+        @($references | Sort-Object -Unique).Count | Should -Be 1
+    }
+
+    It 'keeps the complete shared check unconditional and read-only within the existing fan-in' {
+        $check = Get-WorkflowJob $standard 'validate-versions'
+        $check | Should -Match '(?m)^    uses: folo-rs/cargo-release-plan-action/\.github/workflows/check\.yml@'
+        $check | Should -Not -Match '(?m)^    (if|needs):'
+        $check | Should -Not -Match '(?m)^\s+(id-token|contents|issues): write'
+        @(Get-WorkflowJobDependency (Get-WorkflowJob $standard 'required-checks')) |
+            Should -Contain 'validate-versions'
+        @(Get-MustSucceedJob (Get-WorkflowJob $standard 'required-checks')) |
+            Should -Contain 'validate-versions'
+    }
+
+    It 'uses only the lower version-readiness command against the tested merge-queue baseline' {
+        $check = Get-WorkflowJob $queue 'validate-versions'
+        $check | Should -Match '(?m)^\s+command: version-readiness\r?$'
+        $check | Should -Match 'base: \$\{\{ github\.event\.merge_group\.base_sha \}\}'
+        $check | Should -Not -Match '(?m)^\s+(config|deny-findings):'
+        $check | Should -Not -Match '/\.github/workflows/check\.yml@'
+    }
+
+    It 'keeps controller installation and explicit recovery-source routing distinct' {
+        $publisher = Get-WorkflowJob $release 'publish'
+        $publisher | Should -Match 'uses: folo-rs/cargo-release-plan-action/\.github/workflows/release\.yml@'
+        $publisher | Should -Match '(?m)^      install-method: path\r?$'
+        $publisher | Should -Match '(?m)^      source-path: \.\r?$'
+        $publisher | Should -Match 'source: \$\{\{ inputs\.source \|\| '''' \}\}'
+        $release | Should -Match '(?m)^      source:\r?$'
+        $publisher | Should -Not -Match '(?m)^    (steps|runs-on):'
+    }
+
+    It 'makes the exchange/revoke probe and publisher mutually exclusive on the registered caller' {
+        $probe = Get-WorkflowJob $release 'verify-publishing-identity'
+        $publisher = Get-WorkflowJob $release 'publish'
+        $probe | Should -Match '/\.github/workflows/identity-probe\.yml@'
+        $probe | Should -Match '&& inputs\.verify-publishing-identity &&'
+        $publisher | Should -Match '&& !inputs\.verify-publishing-identity'
+        foreach ($job in @($probe, $publisher)) {
+            $job | Should -Match 'github\.repository == ''folo-rs/folo'''
+            $job | Should -Match 'github\.ref == ''refs/heads/main'''
+        }
+        $probe | Should -Not -Match '(?m)^\s+(contents|issues): write'
+    }
+
+    It 'retains the migration lock without cancelling or replacing queued publisher runs' {
+        $lock = [regex]::Match($release, '(?ms)^concurrency:\r?\n(?<body>.*?)(?=^\S|\z)').Groups['body'].Value
+        $lock | Should -Match 'group: release-\$\{\{ github\.ref \}\}'
+        $lock | Should -Match '(?m)^  cancel-in-progress: false\r?$'
+        $lock | Should -Match '(?m)^  queue: max\r?$'
+        # release-context uses its workspace-scoped prefix for the nested graph's lock.
+        $lock | Should -Not -Match 'group: cargo-release-plan-'
     }
 }
 

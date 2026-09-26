@@ -1,6 +1,6 @@
-#requires -Version 7
+#requires -Version 7.6
 
-# Native ZIP prerequisites for release-binaries and its no-upload integration smoke. Called by
+# Native ZIP prerequisites for cargo-release-plan's no-upload integration smoke. Called by
 # just install-tools on developers' machines and every setup-environment job. PowerShell owns
 # this bootstrap boundary because Rust tooling is itself installed by the enclosing recipe.
 # Ref: docs/build-and-tooling.md#release-archive-tools.

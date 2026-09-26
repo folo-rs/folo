@@ -15,7 +15,7 @@ rust-version.workspace = true
 
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml (see
-# docs/release-automation.md). release-plz tags releases as `<crate>-v<version>`,
+# docs/release-automation.md). Package tags identify `<crate>-v<version>`,
 # which cargo-binstall's auto-detection does not derive, so the URL is explicit.
 # Archives are `.zip` on every platform and the binary sits at the archive root.
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"

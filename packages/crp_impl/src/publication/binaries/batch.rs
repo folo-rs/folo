@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use ohno::AppError;
 use serde::Serialize;
 
-use crate::publication::binaries::model::{Asset, Batch, Binary, InvalidPlan};
+use crate::publication::binaries::model::{Asset, Binary, InvalidPlan};
 
 /// Native operations used by the in-process batch sequence.
-pub(crate) trait Executor {
+pub trait Executor {
     fn cancelled(&self) -> bool;
     fn assets(&mut self, binary: &Binary) -> Result<Vec<Asset>, AppError>;
     fn prepare(&mut self, binary: &Binary) -> Result<(), AppError>;
@@ -18,24 +18,15 @@ pub(crate) trait Executor {
 
 /// A retained item result makes partial success visible even when the job fails.
 #[derive(Debug, Serialize)]
-pub(crate) struct Outcome {
-    pub(crate) binary: Binary,
-    pub(crate) status: &'static str,
-    pub(crate) stage: &'static str,
-    pub(crate) diagnostic: Option<String>,
-    pub(crate) cleanup_error: Option<String>,
+pub struct Outcome {
+    pub binary: Binary,
+    pub status: &'static str,
+    pub stage: &'static str,
+    pub diagnostic: Option<String>,
+    pub cleanup_error: Option<String>,
 }
 
-pub(crate) fn execute(
-    batch: &Batch,
-    no_upload: bool,
-    executor: &mut impl Executor,
-) -> Result<Vec<Outcome>, AppError> {
-    batch.validate()?;
-    execute_items(&batch.triple, &batch.binaries, no_upload, executor)
-}
-
-pub(crate) fn execute_items(
+pub fn execute_items(
     target: &str,
     binaries: &[Binary],
     no_upload: bool,
@@ -173,8 +164,8 @@ fn outcome(
 )]
 mod tests {
     use super::*;
+    use crate::publication::binaries::model::InvalidPlan;
     use crate::publication::binaries::model::tests::binary;
-    use crate::publication::binaries::model::{InvalidPlan, timeout_minutes};
 
     /// Records ordered native operations and injects selected stage failures.
     #[derive(Default)]
@@ -230,13 +221,16 @@ mod tests {
         }
     }
 
-    fn batch() -> Batch {
-        Batch {
-            triple: "native".into(),
-            os: "runner".into(),
-            timeout_minutes: timeout_minutes(2),
-            binaries: vec![binary("alpha"), binary("beta")],
-        }
+    fn batch() -> Vec<Binary> {
+        vec![binary("alpha"), binary("beta")]
+    }
+
+    fn execute(
+        binaries: &[Binary],
+        no_upload: bool,
+        executor: &mut impl Executor,
+    ) -> Result<Vec<Outcome>, AppError> {
+        execute_items("native", binaries, no_upload, executor)
     }
 
     #[test]
@@ -293,7 +287,7 @@ mod tests {
     #[test]
     fn failed_source_only_blocks_its_own_group() {
         let mut batch = batch();
-        batch.binaries[1].source_sha = "b".repeat(40);
+        batch[1].source_sha = "b".repeat(40);
         let mut fake = Fake {
             failures: vec!["source:alpha".into()],
             ..Fake::default()

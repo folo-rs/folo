@@ -1,15 +1,13 @@
-//! Shared native binary engine; the compatibility executable preserves the existing job protocol.
+//! Native batch execution for manifest-linked publication.
 
-pub use model::Binary;
-pub use run::run;
+pub use batch::{Executor, Outcome, execute_items};
+pub use model::{Asset, Binary};
+pub use native::{Github, Native};
 
 mod archive;
 mod batch;
-mod cli;
 pub(crate) mod command;
 pub(crate) mod model;
 pub(crate) mod native;
-mod plan;
 pub(crate) mod publish;
-mod run;
 mod source;

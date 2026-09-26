@@ -210,7 +210,6 @@ runs:
           !~/.cargo/bin/cargo-fmt*
           !~/.cargo/bin/cargo-miri*
           ~/.cargo/bin/just*
-          ~/.cargo/bin/release-plz*
           ~/.cargo/bin/gungraun-runner*
           ~/.cargo/bin/7za.exe
           ~/.cargo/bin/release-7zip-license.txt

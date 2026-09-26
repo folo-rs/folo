@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::slice;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::publication::binaries::model::Asset;
@@ -21,6 +21,7 @@ struct FakeForge {
     release_exists: bool,
     created_source: Option<String>,
     hide_created_tag: bool,
+    assets: Vec<Value>,
 }
 
 impl Forge for FakeForge {
@@ -66,7 +67,11 @@ impl Forge for FakeForge {
 
     fn assets(&self, _release: &Release) -> Result<Vec<Asset>, AppError> {
         self.calls.borrow_mut().push("assets".to_owned());
-        Ok(Vec::new())
+        Ok(self
+            .assets
+            .iter()
+            .map(|asset| serde_json::from_value(asset.clone()).unwrap())
+            .collect())
     }
 }
 
@@ -389,4 +394,141 @@ fn an_accepted_but_unobserved_tag_remains_failed_after_bounded_revalidation() {
     );
     assert!(work.batches.is_empty());
     assert!(forge.release_sources.borrow().is_empty());
+}
+
+#[test]
+fn native_batches_preserve_every_selected_incomplete_package_target_pair() {
+    let targets = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ];
+    let [first_target, second_target, ..] = targets;
+    for restricted in [false, true] {
+        let packages: Vec<_> = ["alpha", "beta", "gamma"]
+            .into_iter()
+            .map(|name| {
+                let selected: &[&str] = if restricted && name == "alpha" {
+                    slice::from_ref(&first_target)
+                } else {
+                    &targets
+                };
+                json!({
+                    "name":name,"version":"1.0.0","manifest":format!("{name}/Cargo.toml"),
+                    "binary":{"name":format!("{name}-bin"),"targets":selected},
+                })
+            })
+            .collect();
+        let publication = PublicationManifest::new(serde_json::from_value(json!({
+                "schema_version":1,"tool_version":"1.0.0","source":"a".repeat(40),
+                "workspace_manifest":"Cargo.toml","config_path":".cargo/release_plan.toml",
+                "configuration":{"schema-version":1,"repository":"example/tools","release-branch":"main","targets":targets},
+                "packages":packages,
+            })).unwrap()).unwrap();
+        let mut forge = FakeForge::default();
+        for (name, source) in [("alpha", "a"), ("beta", "b"), ("gamma", "c")] {
+            forge
+                .tags
+                .borrow_mut()
+                .insert(format!("{name}-v1.0.0"), source.repeat(40));
+            if restricted {
+                // Complete pairs remove only this target; a lone archive never removes work.
+                for extension in ["zip", "sha256"] {
+                    forge.assets.push(json!({
+                            "name":format!("{name}-v1.0.0-{second_target}.{extension}"),"state":"uploaded",
+                        }));
+                }
+            }
+        }
+        forge.assets.push(json!({
+            "name":format!("gamma-v1.0.0-{first_target}.zip"),"state":"uploaded",
+        }));
+        let mut work = Reconciliation {
+            github: &forge,
+            publication: &publication,
+            load_candidate: || -> Result<Candidate, AppError> {
+                panic!("existing tags retain their own sources")
+            },
+            retry_pause: |_| {},
+            candidate: None,
+            batches: BTreeMap::new(),
+            dry_run: false,
+            verbose: Verbose::new(false),
+        };
+        let mut expected = BTreeMap::<String, Vec<(String, String)>>::new();
+        for (package, source) in publication.publication.packages.iter().zip(["a", "b", "c"]) {
+            let mut result = record(GithubState::Pending);
+            result.name.clone_from(&package.name);
+            result.tag = format!("{}-v{}", package.name, package.version);
+            work.package(package, forge.tag(&result.tag).unwrap(), &mut result).unwrap();
+            assert_eq!(result.state, GithubState::Complete);
+            for target in &targets {
+                if restricted
+                    && (*target == second_target
+                        || (package.name == "alpha" && *target != first_target))
+                {
+                    continue;
+                }
+                expected
+                    .entry((*target).to_owned())
+                    .or_default()
+                    .push((package.name.clone(), source.repeat(40)));
+            }
+        }
+        let actual: BTreeMap<_, _> = work
+            .batches
+            .iter()
+            .map(|(target, batch)| {
+                assert_eq!(batch.publication_id, publication.id);
+                assert_eq!(batch.target, *target);
+                (
+                    target.clone(),
+                    batch
+                        .binaries
+                        .iter()
+                        .map(|binary| (binary.name.clone(), binary.source_sha.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn complete_assets_produce_no_native_batches() {
+    let publication = publication();
+    let forge = FakeForge {
+            assets: ["zip", "sha256"].map(|extension| json!({
+                "name":format!("tool-v1.0.0-x86_64-unknown-linux-gnu.{extension}"),"state":"uploaded",
+            })).into(),
+            ..FakeForge::default()
+        };
+    forge
+        .tags
+        .borrow_mut()
+        .insert("tool-v1.0.0".to_owned(), "a".repeat(40));
+    let mut work = Reconciliation {
+        github: &forge,
+        publication: &publication,
+        load_candidate: || -> Result<Candidate, AppError> {
+            panic!("existing tags do not select a candidate")
+        },
+        retry_pause: |_| {},
+        candidate: None,
+        batches: BTreeMap::new(),
+        dry_run: false,
+        verbose: Verbose::new(false),
+    };
+    let mut result = record(GithubState::Pending);
+    work.package(
+        publication.publication.packages.first().unwrap(),
+        forge.tag(&result.tag).unwrap(),
+        &mut result,
+    )
+    .unwrap();
+    assert_eq!(result.state, GithubState::Complete);
+    assert!(work.batches.is_empty());
 }

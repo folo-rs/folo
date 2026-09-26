@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Plans non-Cargo Standard validation in the prepare job before toolchain setup, using only
 # Git and the runner's PowerShell. The same job adds Cargo dependency impact after setup.
@@ -128,7 +128,7 @@ function Get-ValidationPlan {
             $null = $domains.Add('build')
             Write-Verbose "'$path' configures build/check execution; selecting build-helper tests."
         }
-        if ($path -ceq 'release-plz.toml') {
+        if ($path -ceq '.cargo/release_plan.toml') {
             $null = $domains.Add('release')
             Write-Verbose "'$path' configures release automation; selecting release tests."
         }
@@ -137,8 +137,9 @@ function Get-ValidationPlan {
             $null = $domains.Add('release')
             Write-Verbose "'$path' supplies the release workflow or its native executable boundary; selecting release tests."
         }
-        if ($path -cin @('.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just') -or
-            $path -cmatch '^scripts/release/(ReleaseBinaries|ReleasePublication|ReleaseAutomation)(\.Tests)?\.ps(m1|1)$' -or
+        if ($path -cin @('.github/workflows/release.yml', '.github/workflows/standard-validation.yml',
+                'justfiles/just_release.just', '.cargo/release_plan.toml') -or
+            $path -cmatch '^\.github/actions/release-plan-setup/' -or
             $path -cmatch '^scripts/build/CargoExecutable\.(psm1|Tests\.ps1)$' -or
             $path -cmatch '^\.cargo/config(\.toml)?$') {
             $releaseBinarySmoke = $true
@@ -218,7 +219,7 @@ function Get-ValidationScriptDomain {
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -cin @('cargo-release-plan', 'crp_impl', 'release-target-check', 'release-binaries')) {
+        if ($package -cin @('cargo-release-plan', 'crp_impl')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
@@ -241,7 +242,7 @@ function Test-ReleaseBinarySmokeSelected {
 
     $plan = Read-ValidationPlan -Json $PlanJson
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
-    return $plan.release_binary_smoke -or 'release-binaries' -cin $packages -or 'crp_impl' -cin $packages
+    return $plan.release_binary_smoke -or 'cargo-release-plan' -cin $packages -or 'crp_impl' -cin $packages
 }
 
 function Read-ValidationAffectedPackage {
