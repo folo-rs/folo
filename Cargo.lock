@@ -3154,7 +3154,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.38"
+version = "1.0.39"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3176,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.38"
+version = "1.0.39"
 dependencies = [
  "arc-swap",
  "axum",
