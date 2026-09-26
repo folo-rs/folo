@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use std::{env, fs};
 
 use crp_diag::{Quotable as _, Verbose};
+use crp_publication::PublicationOutput;
 use crp_publication::publication::registry::RegistryClient;
 use crp_versioning::inspect_plan::run_inspect_plan;
 use crp_versioning::plan::PlanFile;
@@ -172,8 +173,9 @@ pub(crate) fn check(
     base: Option<&str>,
     output: &Path,
     deny_findings: bool,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
+    let verbose = diagnostics.notes();
     if output.try_exists()? {
         return Err(CompatibilityError::new(
             "compatibility output directory must be new".to_owned(),
@@ -223,7 +225,7 @@ pub(crate) fn check(
             outcome.identify(&checker)?;
             canary(&cache, &mut log)?;
         }
-        let registry = RegistryClient::new()?;
+        let registry = RegistryClient::new(diagnostics.clone())?;
         outcome.assess(
             targets,
             |name| comparison_baseline(name, registry.latest(name)?, || registry.exists(name)),

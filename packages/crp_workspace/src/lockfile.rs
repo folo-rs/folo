@@ -589,6 +589,7 @@ impl ClosureChange {
 }
 
 /// Dependencies whose locked identities differ, in name order.
+#[must_use]
 pub fn closure_changes(anchor: &Closure, work: &Closure) -> Vec<(String, ClosureChange)> {
     let names: BTreeSet<&String> = anchor.keys().chain(work.keys()).collect();
     names

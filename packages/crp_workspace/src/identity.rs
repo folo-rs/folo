@@ -1,4 +1,5 @@
 /// Recognizes a complete Git object identity without selecting a revision.
+#[must_use]
 pub fn immutable_commit(value: &str) -> bool {
     // Git supports these full object identities; abbreviated revisions are not transport identities.
     matches!(value.len(), 40 | 64)

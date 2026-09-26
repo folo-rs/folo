@@ -35,4 +35,4 @@ validate-versions:
 # Ref: packages/cargo-release-plan/docs/implementation.md#test-boundaries.
 [group('release')]
 release-binary-smoke:
-    cargo test --locked --package cargo-release-plan --package crp_impl --tests native_binaries:: -- --nocapture
+    cargo test --locked --package cargo-release-plan --package crp_publication --package crp_native --tests native_binaries:: -- --nocapture

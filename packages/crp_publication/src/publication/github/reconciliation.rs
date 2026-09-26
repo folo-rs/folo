@@ -8,9 +8,9 @@ use std::path::Path;
 use std::time::Duration;
 use std::{fs, thread};
 
-use crp_diag::Verbose;
 use ohno::AppError;
 
+use crate::PublicationOutput;
 use crate::publication::binaries::Binary;
 use crate::publication::context::WorkflowRun;
 use crate::publication::github::candidate::{Candidate, verify_tag_source};
@@ -28,7 +28,7 @@ pub fn publish(
     output: &Path,
     batches: &Path,
     dry_run: bool,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
     if output.try_exists()? || batches.try_exists()? {
         return Err(InvalidManifest::new(
@@ -49,9 +49,15 @@ pub fn publish(
         errors: Vec::new(),
         github: WorkflowRun::capture()?,
     };
-    let result = reconcile(&publication, manifest_path, batches, &mut outcome, verbose);
+    let result = reconcile(
+        &publication,
+        manifest_path,
+        batches,
+        &mut outcome,
+        diagnostics,
+    );
     if let Err(error) = result {
-        eprintln!("{error}");
+        diagnostics.line(format_args!("{error}"));
         outcome.errors.push(
             "GitHub reconciliation did not complete; inspect command diagnostics.".to_owned(),
         );
@@ -76,20 +82,23 @@ fn reconcile(
     manifest: &Path,
     batches_path: &Path,
     outcome: &mut GithubOutcome,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> Result<(), AppError> {
     if publication.publication.packages.is_empty() {
         verify_source(publication, manifest)?;
         return Ok(());
     }
-    let registry = RegistryClient::new()?;
-    let github = Github::new(publication.publication.configuration.repository())?;
+    let registry = RegistryClient::new(diagnostics.clone())?;
+    let github = Github::new(
+        publication.publication.configuration.repository(),
+        diagnostics,
+    )?;
     reconcile_with(
         publication,
         manifest,
         batches_path,
         outcome,
-        verbose,
+        diagnostics,
         &registry,
         &github,
     )
@@ -102,7 +111,7 @@ pub fn reconcile_with(
     manifest: &Path,
     batches_path: &Path,
     outcome: &mut GithubOutcome,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
     registry: &RegistryClient,
     github: &Github,
 ) -> Result<(), AppError> {
@@ -119,12 +128,12 @@ pub fn reconcile_with(
     let mut work = Reconciliation {
         github,
         publication,
-        load_candidate: || Candidate::create(repository.root(), publication, verbose),
+        load_candidate: || Candidate::create(repository.root(), publication, diagnostics),
         retry_pause: thread::sleep,
         candidate: None,
         batches: BTreeMap::new(),
         dry_run: outcome.dry_run,
-        verbose,
+        diagnostics,
     };
     for package in &publication.publication.packages {
         let tag = format!("{}-v{}", package.name, package.version);
@@ -141,7 +150,9 @@ pub fn reconcile_with(
         // not current release policy, so an operator-created old-version tag can recover.
         let existing = github.tag(&record.tag);
         let identity = match &existing {
-            Ok(Some(source)) => verify_tag_source(repository.root(), publication, package, source),
+            Ok(Some(source)) => {
+                verify_tag_source(repository.root(), publication, package, source, diagnostics)
+            }
             Ok(None) => Ok(()),
             Err(_) => Err(InvalidManifest::new(
                 "cannot determine existing tag identity".to_owned(),
@@ -149,9 +160,9 @@ pub fn reconcile_with(
             .into()),
         };
         if let Err(error) = identity {
-            eprintln!("{}: {error}", record.tag);
+            diagnostics.line(format_args!("{}: {error}", record.tag));
             if let Err(error) = &existing {
-                eprintln!("{error}");
+                diagnostics.line(format_args!("{error}"));
             }
             record.state = GithubState::Failed;
             record.source = existing.ok().flatten();
@@ -160,7 +171,7 @@ pub fn reconcile_with(
             continue;
         }
         if let Err(error) = work.package(package, existing?, &mut record) {
-            eprintln!("{}: {error}", record.tag);
+            diagnostics.line(format_args!("{}: {error}", record.tag));
             let tag = &record.tag;
             outcome.errors.push(match &record.recovery_source {
                     Some(source) => format!("Cannot create {tag}. Verify and create this missing tag at {source} using operator rights, then retry the original failed workflow. Do not move an existing tag."),
@@ -199,7 +210,7 @@ struct Reconciliation<'a, F, C> {
     candidate: Option<Candidate>,
     batches: BTreeMap<String, PlatformBatch>,
     dry_run: bool,
-    verbose: Verbose<'a>,
+    diagnostics: &'a PublicationOutput,
 }
 
 impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, C> {
@@ -301,7 +312,7 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
                 ))
                 .into());
             }
-            self.verbose.note(|| format!(
+            self.diagnostics.notes().note(|| format!(
                 "{tag} is absent; candidate {} retains its requested version and released content.", candidate.source
             ));
             if self.dry_run {
@@ -309,7 +320,9 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
             }
             let created = self.github.create_tag(tag, &candidate.source);
             if let Err(error) = &created {
-                eprintln!("Tag creation attempt {attempt} failed: {error}");
+                self.diagnostics.line(format_args!(
+                    "Tag creation attempt {attempt} failed: {error}"
+                ));
             }
             if let Some(source) = self.github.tag(tag)? {
                 if source != candidate.source {

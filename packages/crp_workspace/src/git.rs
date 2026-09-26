@@ -57,6 +57,7 @@ const REGULAR_TREE_MODE: &str = "100644";
 ///
 /// Reports name the mode rather than the bit, so that what they print is the
 /// vocabulary Git and Cargo both use.
+#[must_use]
 pub fn tree_mode(executable: bool) -> &'static str {
     if executable {
         EXECUTABLE_TREE_MODE
@@ -90,6 +91,7 @@ pub enum DefaultBase {
 }
 
 impl DefaultBase {
+    #[must_use]
     pub fn revision(&self) -> &str {
         match self {
             Self::RemoteHead(revision) | Self::Convention(revision) => revision,
@@ -678,6 +680,7 @@ fn overlay_work_tree_modes(stdout: &[u8], modes: &mut WorkTreeModes) -> Result<(
 /// character in a file name on Unix, so rewriting one would name a different
 /// file, and paths Git itself reports already use `/` on every platform and are
 /// therefore taken verbatim.
+#[must_use]
 pub fn os_path(path: &Path) -> String {
     to_git_separators(&path.to_string_lossy(), MAIN_SEPARATOR).into_owned()
 }
@@ -715,6 +718,7 @@ fn cased_pathspec(path: &str, case: PathCase) -> String {
 /// the repository root. Parent components allow Cargo members beside a nested
 /// workspace root to remain addressable. Both operands are already in Git's
 /// `/`-separated space.
+#[must_use]
 pub fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
     let mut normalized = Vec::new();
     for component in prefix.split('/').chain(workspace_rel.split('/')) {

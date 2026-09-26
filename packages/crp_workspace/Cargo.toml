@@ -22,7 +22,6 @@ development = ["criterion"]
 
 [package.metadata.cargo_check_external_types]
 allowed_external_types = [
-    "crp_diag::*",
     "ignore::gitignore::Gitignore",
     "ignore::overrides::Override",
     "ohno::app::error::AppError",
@@ -33,8 +32,8 @@ allowed_external_types = [
     "serde_core::de::Deserialize",
     "serde_core::ser::Serialize",
     "serde_json::value::Value",
-    "tempfile::file::NamedTempFile",
     "toml_edit::document::DocumentMut",
+    "toml_edit::item::Item",
     "toml_edit::table::TableLike",
 ]
 

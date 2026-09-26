@@ -14,6 +14,7 @@ pub struct Groups {
 
 impl Groups {
     /// Derives version-group policy from the acquired exact dependency facts.
+    #[must_use]
     pub fn from_workspace(workspace: &WorkTree) -> Self {
         Self::from_edges(
             workspace

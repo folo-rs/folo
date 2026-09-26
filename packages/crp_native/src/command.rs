@@ -1,12 +1,14 @@
 use std::ffi::{OsStr, OsString};
-use std::io::{BufRead, BufReader, Read, Write, stderr};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use command_group::CommandGroup;
+use crp_diag::{DiagnosticSink, diagnostic};
 use ohno::AppError;
 
 /// Native command failures retain command identity and process diagnostics.
@@ -54,9 +56,18 @@ pub fn capture(
     arguments: &[OsString],
     directory: &Path,
     environment: &[(&str, &OsStr)],
+    diagnostics: &Arc<dyn DiagnosticSink>,
     deadline: Instant,
 ) -> Result<String, AppError> {
-    capture_controlled(program, arguments, directory, environment, deadline, true)
+    capture_controlled(
+        program,
+        arguments,
+        directory,
+        environment,
+        diagnostics,
+        deadline,
+        true,
+    )
 }
 
 // Cleanup remains available after cancellation, with its own bounded deadline.
@@ -64,6 +75,7 @@ pub fn capture(
 pub fn capture_cleanup(
     arguments: &[OsString],
     directory: &Path,
+    diagnostics: &Arc<dyn DiagnosticSink>,
     deadline: Instant,
 ) -> Result<String, AppError> {
     capture_controlled(
@@ -71,6 +83,7 @@ pub fn capture_cleanup(
         arguments,
         directory,
         &[],
+        diagnostics,
         deadline,
         false,
     )
@@ -83,17 +96,21 @@ fn capture_controlled(
     arguments: &[OsString],
     directory: &Path,
     environment: &[(&str, &OsStr)],
+    diagnostics: &Arc<dyn DiagnosticSink>,
     deadline: Instant,
     cancellable: bool,
 ) -> Result<String, AppError> {
     if let Some(reason) = interruption(Instant::now() >= deadline, cancellable && cancelled()) {
         return Err(CommandFailed::new(program.display().to_string(), reason.to_owned()).into());
     }
-    eprintln!(
-        "Running {} {:?} in {}",
-        program.display(),
-        arguments,
-        directory.display()
+    diagnostic(
+        diagnostics.as_ref(),
+        &format!(
+            "Running {} {:?} in {}\n",
+            program.display(),
+            arguments,
+            directory.display()
+        ),
     );
     let mut command = Command::new(program);
     command
@@ -123,8 +140,8 @@ fn capture_controlled(
         .stderr
         .take()
         .expect("stderr was explicitly piped");
-    let stdout = reader(stdout, false);
-    let stderr = reader(stderr, true);
+    let stdout = reader(stdout, None);
+    let stderr = reader(stderr, Some(Arc::clone(diagnostics)));
     let mut interrupted = None;
     let mut status = None;
     loop {
@@ -181,13 +198,16 @@ fn interruption(deadline_reached: bool, cancelled: bool) -> Option<&'static str>
 
 // Pipe reading/streaming is an OS boundary; exercised with the real executable.
 #[cfg_attr(test, mutants::skip)]
-fn reader(pipe: impl Read + Send + 'static, stream: bool) -> JoinHandle<std::io::Result<String>> {
+fn reader(
+    pipe: impl Read + Send + 'static,
+    stream: Option<Arc<dyn DiagnosticSink>>,
+) -> JoinHandle<std::io::Result<String>> {
     thread::spawn(move || {
         let mut output = String::new();
         for line in BufReader::new(pipe).lines() {
             let line = line?;
-            if stream {
-                writeln!(stderr(), "{line}")?;
+            if let Some(sink) = &stream {
+                sink.write(&format!("{line}\n"))?;
             }
             output.push_str(&line);
             output.push('\n');
@@ -207,6 +227,11 @@ fn join_reader(reader: JoinHandle<std::io::Result<String>>) -> Result<String, Ap
             )
         })?
         .map_err(Into::into)
+}
+
+/// Constructs literal subprocess arguments without changing the environment or running a command.
+pub fn strings(values: &[&str]) -> Vec<OsString> {
+    values.iter().map(OsString::from).collect()
 }
 
 #[cfg(test)]
@@ -229,10 +254,10 @@ mod tests {
     fn reader_results_preserve_text_and_propagate_errors() {
         testing::with_watchdog(|| {
             assert_eq!(
-                join_reader(reader(&b"first\nsecond"[..], false)).unwrap(),
+                join_reader(reader(&b"first\nsecond"[..], None)).unwrap(),
                 "first\nsecond\n"
             );
-            let error = join_reader(reader(&b"\xff"[..], false)).unwrap_err();
+            let error = join_reader(reader(&b"\xff"[..], None)).unwrap_err();
             assert_eq!(
                 error.find_source::<Error>().unwrap().kind(),
                 ErrorKind::InvalidData
@@ -241,9 +266,4 @@ mod tests {
             assert!(error.find_source::<CommandFailed>().is_some());
         });
     }
-}
-
-/// Constructs literal subprocess arguments without changing the environment or running a command.
-pub fn strings(values: &[&str]) -> Vec<OsString> {
-    values.iter().map(OsString::from).collect()
 }

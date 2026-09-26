@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use ohno::AppError;
 
-/// Executes a read-only Git or Cargo query without shell interpretation.
+/// Captures a read-only source-snapshot query without optional Git locks.
 // This adapter's subprocess behavior is exercised by the integration target.
 #[cfg_attr(test, mutants::skip)]
 pub fn capture(

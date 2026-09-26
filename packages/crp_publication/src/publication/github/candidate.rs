@@ -8,6 +8,7 @@ use crp_workspace::git::GitRepo;
 use ohno::AppError;
 use tempfile::TempDir;
 
+use crate::PublicationOutput;
 use crate::publication::manifest::{InvalidManifest, Package, PublicationManifest};
 use crate::publication::packages::PublicationWorkspace;
 use crate::publication::prepare::fetch_release_line;
@@ -19,6 +20,7 @@ pub(crate) struct Candidate {
     root: PathBuf,
     pub(crate) source: String,
     pub(crate) packages: BTreeMap<String, CandidatePackage>,
+    diagnostics: PublicationOutput,
 }
 
 impl Candidate {
@@ -26,7 +28,7 @@ impl Candidate {
     pub(crate) fn create(
         repository: &Path,
         publication: &PublicationManifest,
-        verbose: Verbose<'_>,
+        diagnostics: &PublicationOutput,
     ) -> Result<Self, AppError> {
         let source = fetch_release_line(repository, &publication.publication.configuration)?;
         if !GitRepo::discover(repository)?
@@ -49,6 +51,7 @@ impl Candidate {
             root,
             source,
             packages: BTreeMap::new(),
+            diagnostics: diagnostics.clone(),
         };
         run_capture(
             "git",
@@ -61,7 +64,7 @@ impl Candidate {
             ],
             repository,
         )?;
-        candidate.classify(publication, verbose)
+        candidate.classify(publication, diagnostics.notes())
     }
 
     #[cfg_attr(test, mutants::skip)] // Real Git/Cargo classification supplies the pure eligibility facts.
@@ -113,7 +116,8 @@ impl Candidate {
         );
         let cleanup = directory.close();
         if let Err(error) = &cleanup {
-            eprintln!("Candidate directory cleanup failed: {error}");
+            self.diagnostics
+                .line(format_args!("Candidate directory cleanup failed: {error}"));
         }
         git?;
         cleanup?;
@@ -126,7 +130,8 @@ impl Drop for Candidate {
     fn drop(&mut self) {
         // Cleanup is also needed after classification failure; failures remain visible.
         if let Err(error) = self.finish() {
-            eprintln!("Candidate worktree cleanup failed: {error}");
+            self.diagnostics
+                .line(format_args!("Candidate worktree cleanup failed: {error}"));
         }
     }
 }
@@ -143,6 +148,7 @@ pub(crate) fn verify_tag_source(
     publication: &PublicationManifest,
     package: &Package,
     source: &str,
+    diagnostics: &PublicationOutput,
 ) -> Result<(), AppError> {
     let git = GitRepo::discover(root)?;
     if git.rev_parse(&format!("{source}^{{commit}}")).is_err() {
@@ -173,6 +179,7 @@ pub(crate) fn verify_tag_source(
         repository: root.to_path_buf(),
         source: source.to_owned(),
         packages: BTreeMap::new(),
+        diagnostics: diagnostics.clone(),
     };
     run_capture(
         "git",
@@ -217,6 +224,11 @@ pub(crate) mod tests {
     pub(crate) fn candidate(version: &str, unchanged: bool) -> Candidate {
         // Acquired observations remain meaningful after their worktree has been released.
         Candidate {
+            diagnostics: PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
             directory: None,
             repository: PathBuf::new(),
             root: PathBuf::new(),

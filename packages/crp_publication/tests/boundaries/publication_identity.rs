@@ -17,8 +17,11 @@ fn exchanges_fresh_oidc_identity_and_revokes_without_exposing_credentials() {
         "request_token": "identity-credential-canary"
     }))
     .unwrap();
-    let publisher =
-        TrustedPublisher::with_endpoint(&format!("{}/tokens", service.http.url())).unwrap();
+    let publisher = TrustedPublisher::with_endpoint(
+        &format!("{}/tokens", service.http.url()),
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     let token = publisher.exchange(&identity).unwrap();
     assert_eq!(token, "registry-credential-canary");
     publisher.revoke(&token).unwrap();
@@ -38,8 +41,11 @@ fn rejected_exchange_does_not_echo_identity_response_bodies() {
         "request_token": "identity-credential-canary"
     }))
     .unwrap();
-    let publisher =
-        TrustedPublisher::with_endpoint(&format!("{}/tokens", service.http.url())).unwrap();
+    let publisher = TrustedPublisher::with_endpoint(
+        &format!("{}/tokens", service.http.url()),
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     let error = publisher.exchange(&identity).unwrap_err();
     assert!(!error.to_string().contains("credential-canary"));
     assert_eq!(
@@ -65,8 +71,11 @@ fn malformed_success_responses_cannot_echo_credential_values() {
             "request_token":"identity-credential-canary"
         }))
         .unwrap();
-        let publisher =
-            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url())).unwrap();
+        let publisher = TrustedPublisher::with_endpoint(
+            &format!("{}/tokens", service.url()),
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
         let error = publisher.exchange(&identity).unwrap_err();
         assert!(!error.to_string().contains("credential-canary"));
     }
@@ -95,8 +104,11 @@ fn empty_credentials_and_invalid_transport_inputs_fail_without_exposing_them() {
             "request_token":"identity-credential-canary"
         }))
         .unwrap();
-        let publisher =
-            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url())).unwrap();
+        let publisher = TrustedPublisher::with_endpoint(
+            &format!("{}/tokens", service.url()),
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
         publisher.exchange(&identity).unwrap_err();
     }
 
@@ -118,8 +130,11 @@ fn empty_credentials_and_invalid_transport_inputs_fail_without_exposing_them() {
             "request_token":"identity-credential-canary"
         }))
         .unwrap();
-        let publisher =
-            TrustedPublisher::with_endpoint("invalid URL containing credential-canary").unwrap();
+        let publisher = TrustedPublisher::with_endpoint(
+            "invalid URL containing credential-canary",
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
         let error = publisher.exchange(&identity).unwrap_err();
         assert!(!error.to_string().contains("credential-canary"));
         let error = publisher.revoke("registry-credential-canary").unwrap_err();

@@ -93,7 +93,11 @@ fn competing_tag_creation_does_not_authorize_release_or_binary_publication() {
         candidate: None,
         batches: BTreeMap::new(),
         dry_run: false,
-        verbose: Verbose::new(false, &crp_diag::Discard),
+        diagnostics: &PublicationOutput::new(
+            "1.2.3",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        ),
     };
     let mut result = record(GithubState::Pending);
     work.package(
@@ -142,7 +146,11 @@ fn missing_tag_uses_equivalent_candidate_and_emits_linked_binary_work() {
         candidate: None,
         batches: BTreeMap::new(),
         dry_run: false,
-        verbose: Verbose::new(false, &crp_diag::Discard),
+        diagnostics: &PublicationOutput::new(
+            "1.2.3",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        ),
     };
     let mut result = record(GithubState::Pending);
     work.package(
@@ -188,7 +196,11 @@ fn existing_tag_bypasses_current_candidate_and_records_only_consulted_evidence()
         candidate: Some(candidate("2.0.0", true)),
         batches: BTreeMap::new(),
         dry_run: false,
-        verbose: Verbose::new(false, &crp_diag::Discard),
+        diagnostics: &PublicationOutput::new(
+            "1.2.3",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        ),
     };
     let mut result = record(GithubState::Pending);
     work.package(
@@ -223,7 +235,11 @@ fn incompatible_candidate_retains_manual_recovery_without_writes() {
             candidate: None,
             batches: BTreeMap::new(),
             dry_run: false,
-            verbose: Verbose::new(false, &crp_diag::Discard),
+            diagnostics: &PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
         };
         let mut result = record(GithubState::Pending);
         work.package(
@@ -258,7 +274,11 @@ fn dry_run_never_creates_missing_tags_or_releases() {
             candidate: None,
             batches: BTreeMap::new(),
             dry_run: true,
-            verbose: Verbose::new(false, &crp_diag::Discard),
+            diagnostics: &PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
         };
         let mut result = record(GithubState::Pending);
         work.package(
@@ -307,7 +327,11 @@ fn tag_retries_refresh_source_and_stop_at_the_bounded_attempt_count() {
             candidate: None,
             batches: BTreeMap::new(),
             dry_run: false,
-            verbose: Verbose::new(false, &crp_diag::Discard),
+            diagnostics: &PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
         };
         let mut result = record(GithubState::Pending);
         let attempted = work.package(
@@ -340,7 +364,11 @@ fn moved_tag_does_not_replace_verified_release_or_batch_source() {
         candidate: None,
         batches: BTreeMap::new(),
         dry_run: false,
-        verbose: Verbose::new(false, &crp_diag::Discard),
+        diagnostics: &PublicationOutput::new(
+            "1.2.3",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        ),
     };
     let mut result = record(GithubState::Pending);
     work.package(
@@ -377,7 +405,7 @@ fn an_accepted_but_unobserved_tag_remains_failed_after_bounded_revalidation() {
         candidate: None,
         batches: BTreeMap::new(),
         dry_run: false,
-        verbose: Verbose::new(true, &crp_diag::Discard),
+        diagnostics: &PublicationOutput::new("1.2.3", true, std::sync::Arc::new(crp_diag::Discard)),
     };
     let mut result = record(GithubState::Pending);
     work.package(
@@ -455,7 +483,11 @@ fn native_batches_preserve_every_selected_incomplete_package_target_pair() {
             candidate: None,
             batches: BTreeMap::new(),
             dry_run: false,
-            verbose: Verbose::new(false, &crp_diag::Discard),
+            diagnostics: &PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
         };
         let mut expected = BTreeMap::<String, Vec<(String, String)>>::new();
         for (package, source) in publication.publication.packages.iter().zip(["a", "b", "c"]) {
@@ -521,7 +553,11 @@ fn complete_assets_produce_no_native_batches() {
         candidate: None,
         batches: BTreeMap::new(),
         dry_run: false,
-        verbose: Verbose::new(false, &crp_diag::Discard),
+        diagnostics: &PublicationOutput::new(
+            "1.2.3",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        ),
     };
     let mut result = record(GithubState::Pending);
     work.package(

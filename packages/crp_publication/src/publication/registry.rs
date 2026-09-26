@@ -15,7 +15,6 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tempfile::Builder;
 
-use crate::WriteFileError;
 use crate::publication::candidate::{Repository, package_identifier};
 use crate::publication::config::Configuration;
 use crate::publication::context::WorkflowRun;
@@ -24,6 +23,7 @@ use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
 use crate::publication::manifest::{InvalidManifest, PublicationManifest};
 use crate::publication::packages::PublicationWorkspace;
 use crate::publication::prepare::capture_requests;
+use crate::{PublicationOutput, WriteFileError};
 
 /// Observations for the exact version set in one immutable publication manifest.
 #[derive(Debug, Deserialize, Serialize)]
@@ -85,23 +85,25 @@ pub enum RegistryState {
 pub struct RegistryClient {
     client: Client,
     endpoint: String,
+    output: PublicationOutput,
 }
 
 impl RegistryClient {
-    pub fn new() -> Result<Self, AppError> {
-        Self::with_endpoint("https://index.crates.io")
+    pub fn new(output: PublicationOutput) -> Result<Self, AppError> {
+        Self::with_endpoint("https://index.crates.io", output)
     }
 
     // Local HTTP services exercise the real adapter; the CLI's registry remains fixed.
-    pub fn with_endpoint(endpoint: &str) -> Result<Self, AppError> {
+    pub fn with_endpoint(endpoint: &str, output: PublicationOutput) -> Result<Self, AppError> {
         let client = Client::builder()
             .timeout(REGISTRY_QUERY_TIMEOUT)
-            .user_agent(concat!("cargo-release-plan/", env!("CARGO_PKG_VERSION")))
+            .user_agent(output.user_agent())
             .build()
             .map_err(RegistryQueryError::caused_by)?;
         Ok(Self {
             client,
             endpoint: endpoint.to_owned(),
+            output,
         })
     }
 
@@ -148,6 +150,7 @@ impl RegistryClient {
             },
             Response::status,
             wait,
+            &self.output,
         )?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(Vec::new());
@@ -187,9 +190,11 @@ pub trait RegistryRuntime {
 }
 
 /// Uses the authorized job identity, native Cargo process and infrastructure retry clock.
-struct NativeRuntime;
+struct NativeRuntime<'a> {
+    output: &'a PublicationOutput,
+}
 
-impl RegistryRuntime for NativeRuntime {
+impl RegistryRuntime for NativeRuntime<'_> {
     fn credentials(
         &self,
         publication: &PublicationManifest,
@@ -201,7 +206,7 @@ impl RegistryRuntime for NativeRuntime {
             publication.clone(),
             manifest.to_path_buf(),
             target.to_path_buf(),
-            TrustedPublisher::new()?,
+            TrustedPublisher::new(self.output.clone())?,
         )
     }
 
@@ -233,6 +238,7 @@ fn query_with_retry<T>(
     mut query: impl FnMut() -> Result<T, AppError>,
     status: impl Fn(&T) -> StatusCode,
     mut wait: impl FnMut(Duration),
+    diagnostics: &PublicationOutput,
 ) -> Result<T, AppError> {
     // Metadata endpoints occasionally return rate-limit or transient server failures.
     // Bound retries independently of a long Cargo upload and do not retry deterministic 4xx.
@@ -251,9 +257,13 @@ fn query_with_retry<T>(
             return result;
         }
         if let Err(error) = &result {
-            eprintln!("Registry query attempt {attempt} failed: {error}");
+            diagnostics.line(format_args!(
+                "Registry query attempt {attempt} failed: {error}"
+            ));
         } else {
-            eprintln!("Registry query attempt {attempt} returned a transient status; retrying.");
+            diagnostics.line(format_args!(
+                "Registry query attempt {attempt} returned a transient status; retrying."
+            ));
         }
         wait(RETRY_DELAY);
     }
@@ -306,7 +316,7 @@ pub fn publish(
     manifest_path: &Path,
     output: &Path,
     dry_run: bool,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
     if output
         .try_exists()
@@ -318,7 +328,7 @@ pub fn publish(
         .into());
     }
     let publication = PublicationManifest::read(publication_path)?;
-    let client = RegistryClient::new()?;
+    let client = RegistryClient::new(diagnostics.clone())?;
     let mut outcome = RegistryOutcome {
         schema_version: OUTCOME_SCHEMA_VERSION,
         publication_id: publication.id.clone(),
@@ -344,12 +354,14 @@ pub fn publish(
         manifest_path,
         &client,
         &mut outcome,
-        verbose,
-        &NativeRuntime,
+        diagnostics.notes(),
+        &NativeRuntime {
+            output: diagnostics,
+        },
     );
     if let Err(error) = result {
         // Outcomes contain only a concise handoff; full typed diagnostics stay on stderr.
-        eprintln!("{error}");
+        diagnostics.line(format_args!("{error}"));
         outcome.errors.push(
             "Registry publication did not complete; inspect the command diagnostics.".to_owned(),
         );
@@ -448,15 +460,21 @@ pub fn execute_with(
     let upload = runtime.upload(&mut command);
     let cleanup = session.finish();
     if let Err(error) = &cleanup {
-        eprintln!("{error}");
+        client.output.line(format_args!("{error}"));
     }
     let build_cleanup = target.close();
     if let Err(error) = &build_cleanup {
-        eprintln!("Registry build-directory cleanup failed: {error}");
+        client.output.line(format_args!(
+            "Registry build-directory cleanup failed: {error}"
+        ));
     }
     let upload = upload.map_err(RegistryUploadError::caused_by)?;
-    eprint!("{}", String::from_utf8_lossy(&upload.stderr));
-    eprint!("{}", String::from_utf8_lossy(&upload.stdout));
+    client
+        .output
+        .text(format_args!("{}", String::from_utf8_lossy(&upload.stderr)));
+    client
+        .output
+        .text(format_args!("{}", String::from_utf8_lossy(&upload.stdout)));
     observe_uploads(
         &mut outcome.packages,
         |name, version| client.contains_with_wait(name, version, |delay| runtime.pause(delay)),
@@ -710,6 +728,7 @@ mod tests {
             || Ok(responses.next().unwrap()),
             |status| *status,
             |_| waits += 1,
+            &PublicationOutput::new("1.2.3", false, std::sync::Arc::new(crp_diag::Discard)),
         )
         .unwrap();
         assert_eq!(result, StatusCode::OK);
@@ -718,6 +737,7 @@ mod tests {
             || Ok(StatusCode::FORBIDDEN),
             |status| *status,
             |_| panic!("deterministic status must not retry"),
+            &PublicationOutput::new("1.2.3", false, std::sync::Arc::new(crp_diag::Discard)),
         )
         .unwrap();
         let mut attempts = 0;
@@ -728,6 +748,7 @@ mod tests {
             },
             |status| *status,
             |_| {},
+            &PublicationOutput::new("1.2.3", false, std::sync::Arc::new(crp_diag::Discard)),
         )
         .unwrap();
         assert_eq!(result, StatusCode::SERVICE_UNAVAILABLE);

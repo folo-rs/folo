@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crp_native::{BuildRequest, Native};
 use ohno::AppError;
@@ -24,7 +25,13 @@ impl BinaryPublisher {
         target: String,
         github: Github,
     ) -> Result<Self, AppError> {
-        let native = Native::new(controller, output, target.clone(), Box::new(github.clone()))?;
+        let native = Native::new(
+            controller,
+            output,
+            target.clone(),
+            Box::new(github.clone()),
+            Arc::clone(github.output.diagnostics()),
+        )?;
         Ok(Self {
             native,
             github,

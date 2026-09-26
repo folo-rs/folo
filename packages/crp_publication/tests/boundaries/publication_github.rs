@@ -3,7 +3,6 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use crp_diag::Verbose;
 use crp_publication::publication::context::WorkflowRun;
 use crp_publication::publication::github::{Github, GithubOutcome, GithubState, reconcile_with};
 use crp_publication::publication::manifest::PublicationManifest;
@@ -103,11 +102,16 @@ fn failed_tag_does_not_suppress_other_releases_and_manual_tag_allows_retry() {
                 .unwrap();
         }
     });
-    let registry = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
+    let registry = RegistryClient::with_endpoint(
+        &format!("{}/index", service.url()),
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     let github = Github::with_endpoint(
         service.url(),
         "example/releases",
         Some("fixture-token".to_owned()),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
     )
     .unwrap();
     let output = tempfile::tempdir().unwrap();
@@ -117,7 +121,7 @@ fn failed_tag_does_not_suppress_other_releases_and_manual_tag_allows_retry() {
         &repository.path().join("Cargo.toml"),
         &output.path().join("unavailable"),
         &mut unavailable,
-        Verbose::new(false, &crp_diag::Discard),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         &registry,
         &github,
     )
@@ -131,7 +135,7 @@ fn failed_tag_does_not_suppress_other_releases_and_manual_tag_allows_retry() {
         &repository.path().join("Cargo.toml"),
         &output.path().join("first"),
         &mut first,
-        Verbose::new(false, &crp_diag::Discard),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         &registry,
         &github,
     )
@@ -157,7 +161,7 @@ fn failed_tag_does_not_suppress_other_releases_and_manual_tag_allows_retry() {
         &repository.path().join("Cargo.toml"),
         &output.path().join("retry"),
         &mut retry,
-        Verbose::new(false, &crp_diag::Discard),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         &registry,
         &github,
     )
@@ -300,11 +304,16 @@ pkg-fmt="zip"
                         .unwrap();
                 }
             });
-        let registry = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
+        let registry = RegistryClient::with_endpoint(
+            &format!("{}/index", service.url()),
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
         let github = Github::with_endpoint(
             service.url(),
             "example/releases",
             Some("fixture-token".to_owned()),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         )
         .unwrap();
         let output = tempfile::tempdir().unwrap();
@@ -315,7 +324,7 @@ pkg-fmt="zip"
             &repository.path().join("Cargo.toml"),
             &output.path().join("dry"),
             &mut dry,
-            Verbose::new(false, &crp_diag::Discard),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
             &registry,
             &github,
         )
@@ -334,7 +343,7 @@ pkg-fmt="zip"
             &repository.path().join("Cargo.toml"),
             &output.path().join("batches"),
             &mut result,
-            Verbose::new(false, &crp_diag::Discard),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
             &registry,
             &github,
         )
@@ -364,7 +373,7 @@ pkg-fmt="zip"
             &repository.path().join("Cargo.toml"),
             &output.path().join("existing-release"),
             &mut repeated,
-            Verbose::new(true, &crp_diag::Discard),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
             &registry,
             &github,
         )
@@ -449,6 +458,7 @@ fn failure_issue_is_run_qualified_and_reused_after_retry() {
         service.url(),
         "example/releases",
         Some("fixture".to_owned()),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
     )
     .unwrap();
     for attempt in [1, 2] {
@@ -515,17 +525,30 @@ fn github_tag_resolution_rejects_cycles_missing_objects_and_invalid_identities()
             .respond(Response::from_string(body.to_string()).with_status_code(StatusCode(status)))
             .unwrap();
     });
-    let github = Github::with_endpoint(service.url(), "example/releases", None).unwrap();
+    let github = Github::with_endpoint(
+        service.url(),
+        "example/releases",
+        None,
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     assert_eq!(github.tag("annotated").unwrap(), Some("e".repeat(40)));
     assert_eq!(github.tag("missing").unwrap(), None);
     for tag in ["cycle", "missing-object", "tree", "invalid-commit"] {
         github.tag(tag).unwrap_err();
     }
-    Github::with_endpoint(service.url(), "example/other", None).unwrap_err();
+    Github::with_endpoint(
+        service.url(),
+        "example/other",
+        None,
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap_err();
     let privileged = Github::with_endpoint(
         service.url(),
         "example/releases",
         Some("github-credential-canary".to_owned()),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
     )
     .unwrap();
     assert!(!format!("{privileged:?}").contains("credential-canary"));
@@ -592,8 +615,18 @@ fn existing_tags_fetch_their_exact_source_and_reject_wrong_package_identity() {
         "configuration":{"schema-version":1,"repository":"example/releases","release-branch":"main","targets":[]},
         "packages":[{"name":"library","version":"1.0.0","manifest":"Cargo.toml","binary":null}]
     })).unwrap()).unwrap();
-    let registry = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
-    let github = Github::with_endpoint(service.url(), "example/releases", None).unwrap();
+    let registry = RegistryClient::with_endpoint(
+        &format!("{}/index", service.url()),
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
+    let github = Github::with_endpoint(
+        service.url(),
+        "example/releases",
+        None,
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     let output = tempfile::tempdir().unwrap();
     let mut accepted = outcome(&publication);
     reconcile_with(
@@ -601,7 +634,7 @@ fn existing_tags_fetch_their_exact_source_and_reject_wrong_package_identity() {
         &repository.path().join("Cargo.toml"),
         &output.path().join("accepted"),
         &mut accepted,
-        Verbose::new(true, &crp_diag::Discard),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         &registry,
         &github,
     )
@@ -627,7 +660,7 @@ fn existing_tags_fetch_their_exact_source_and_reject_wrong_package_identity() {
         &repository.path().join("Cargo.toml"),
         &output.path().join("rejected"),
         &mut rejected,
-        Verbose::new(true, &crp_diag::Discard),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         &registry,
         &github,
     )
@@ -649,7 +682,7 @@ fn existing_tags_fetch_their_exact_source_and_reject_wrong_package_identity() {
         &repository.path().join("Cargo.toml"),
         &output.path().join("invalid-tag-response"),
         &mut invalid,
-        Verbose::new(true, &crp_diag::Discard),
+        &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         &registry,
         &github,
     )
@@ -700,11 +733,18 @@ fn unavailable_or_incomplete_github_metadata_never_authorizes_issue_writes() {
                 )
                 .unwrap();
         });
-        Github::with_endpoint(service.url(), "example/missing", None).unwrap_err();
+        Github::with_endpoint(
+            service.url(),
+            "example/missing",
+            None,
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap_err();
         let github = Github::with_endpoint(
             service.url(),
             "example/releases",
             Some("fixture-token".to_owned()),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         )
         .unwrap();
         let context = serde_json::from_value(json!({"run_id":123,"run_attempt":1})).unwrap();

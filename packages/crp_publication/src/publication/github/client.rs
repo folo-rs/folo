@@ -12,6 +12,7 @@ use semver::Version;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::PublicationOutput;
 use crate::publication::binaries::model::Asset;
 use crate::publication::context::WorkflowRun;
 use crate::publication::manifest::InvalidManifest;
@@ -81,13 +82,14 @@ impl Github {
     }
 
     #[cfg_attr(test, mutants::skip)] // Environment and HTTP setup are native integration boundaries.
-    pub fn new(repository: &str) -> Result<Self, AppError> {
+    pub fn new(repository: &str, output: &PublicationOutput) -> Result<Self, AppError> {
         Self::with_endpoint(
             "https://api.github.com",
             repository,
             env::var("GH_TOKEN")
                 .ok()
                 .or_else(|| env::var("GITHUB_TOKEN").ok()),
+            output,
         )
     }
 
@@ -97,10 +99,11 @@ impl Github {
         endpoint: &str,
         repository: &str,
         token: Option<String>,
+        output: &PublicationOutput,
     ) -> Result<Self, AppError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
-            .user_agent(concat!("cargo-release-plan/", env!("CARGO_PKG_VERSION")))
+            .user_agent(output.user_agent())
             .build()
             .map_err(GithubTransportError::caused_by)?;
         let github = Self {

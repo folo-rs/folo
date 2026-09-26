@@ -5,6 +5,7 @@
     missing_docs,
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
+    clippy::module_name_repetitions,
     reason = "Private application and maintainer-test wiring has no supported Rust API."
 )]
 
@@ -22,6 +23,8 @@ pub mod lockfile;
 pub mod manifest;
 pub mod metadata;
 pub mod packaging;
+pub mod snapshot;
+pub mod snapshot_command;
 
 #[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]

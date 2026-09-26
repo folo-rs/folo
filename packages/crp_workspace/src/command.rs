@@ -23,6 +23,7 @@ pub struct CommandError {
 
 impl CommandError {
     /// Distinguishes command rejection from inability to start or communicate with the process.
+    #[must_use]
     pub fn is_nonzero_exit(&self) -> bool {
         self.nonzero_exit
     }

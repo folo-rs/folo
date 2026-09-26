@@ -84,6 +84,7 @@ impl Quotable for PathBuf {
 /// Diagnostics report counts that are only known at runtime, and the workspace
 /// prefers agreeing prose over `package(s)` forms, so every such message routes
 /// through this helper instead of choosing a form at the call site.
+#[must_use]
 pub fn plural(count: usize, singular: &str) -> impl fmt::Display {
     // The noun is borrowed: every call site names it with a literal that
     // outlives the rendering.
@@ -95,6 +96,7 @@ pub fn plural(count: usize, singular: &str) -> impl fmt::Display {
 /// Ref: `packages/cbh_detect/src/detect/findings.rs`, `short_commit`.
 const SHORT_COMMIT_LEN: usize = 12;
 
+#[must_use]
 pub fn short_commit(commit: &str) -> &str {
     commit
         .get(..commit.len().min(SHORT_COMMIT_LEN))
@@ -105,6 +107,7 @@ pub fn short_commit(commit: &str) -> &str {
 ///
 /// Deriving the label keeps it in step with a rename; a string literal cannot
 /// be, and no tooling would flag the drift.
+#[must_use]
 pub fn short_type_name<T: ?Sized>() -> &'static str {
     let name = type_name::<T>();
     // Generic arguments carry their own module paths and lifetimes, so the

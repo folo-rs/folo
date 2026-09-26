@@ -12,8 +12,10 @@
 //! Publication policy, remote delivery and recovery for cargo-release-plan.
 
 pub(crate) use errors::*;
+pub use output::PublicationOutput;
 
 mod errors;
+mod output;
 pub mod publication;
 
 #[cfg(test)]

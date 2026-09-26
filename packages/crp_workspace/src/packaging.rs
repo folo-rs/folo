@@ -56,6 +56,7 @@ impl PackagingRules {
     /// Matching consults each parent directory as well as the path itself, so a
     /// directory pattern such as `src/` covers everything beneath it the way it
     /// does in Cargo and in `.gitignore`.
+    #[must_use]
     pub fn is_released(&self, package_relative_path: &str) -> bool {
         let path = package_relative_path.trim_start_matches("./");
         if path == "Cargo.lock" {
@@ -114,6 +115,7 @@ fn compile_gitignore(patterns: &[String]) -> Result<Gitignore, AppError> {
 }
 
 /// Relative path of `full` inside `package_dir`, both repo-relative with `/`.
+#[must_use]
 pub fn relativize<'a>(full: &'a str, package_dir: &str) -> Option<&'a str> {
     let full = full.trim_start_matches("./");
     if package_dir.is_empty() || package_dir == "." {

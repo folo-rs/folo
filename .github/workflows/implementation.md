@@ -575,12 +575,13 @@ boundaries belong to the
 
 `clippy-dev-docs` also runs `just release-binary-smoke` on Linux, macOS and Windows before
 minimum-dependency freezing. The explicit `release_binary_smoke` selection combines path
-inputs with Cargo impact on `cargo-release-plan` and `crp_impl`. Script-only smoke selection starts the job without
+inputs with Cargo impact on `cargo-release-plan` and its private implementation family.
+Script-only smoke selection starts the job without
 expanding empty Cargo scope into a workspace-wide check. The required-checks fan-in
 reconstructs this selection and rejects a skipped or absent selected platform job.
 The recipe selects the executable-connected native suite in `cargo-release-plan`
-and the upload-boundary suite in `crp_impl`. Ordinary coverage includes both through
-its normal integration-test selection.
+and the upload-boundary suite in `crp_publication`, together with `crp_native` process
+coverage. Ordinary coverage includes these through its normal integration-test selection.
 
 ## Merge-blocking result
 

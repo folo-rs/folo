@@ -1,7 +1,7 @@
 use std::fs;
 
 use crate::candidate::fixture::Fixture;
-use crate::candidate::scheduling::with_io_test;
+use crate::with_io_test;
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]

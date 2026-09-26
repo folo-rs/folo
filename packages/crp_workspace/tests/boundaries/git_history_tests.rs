@@ -68,7 +68,7 @@ fn shallow_boundaries_and_true_roots_remain_distinct() {
         repo.first_parent_commits(&head).unwrap(),
         slice::from_ref(&head)
     );
-    assert!(repo.rev_parse(&format!("{head}^")).is_err());
+    repo.rev_parse(&format!("{head}^")).unwrap_err();
     assert!(repo.has_parent_or_is_shallow_boundary(&head).unwrap());
     assert_eq!(
         repo.first_parent_manifest_commits(&head, PathCase::Sensitive)

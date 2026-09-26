@@ -61,6 +61,7 @@ pub struct PackageManifest {
 }
 
 impl PackageManifest {
+    #[must_use]
     pub fn identity(&self) -> PackageIdentity {
         PackageIdentity {
             name: self.name.clone(),
@@ -172,6 +173,7 @@ impl From<Result<Vec<InstallationDependency>, AppError>> for InstallationDepende
 /// Shared original cause retained until installation facts are actually needed.
 pub type InstallationError = Arc<dyn Error + Send + Sync>;
 
+#[must_use]
 pub fn installation_error(error: AppError) -> InstallationError {
     let error: Box<dyn Error + Send + Sync> = error.into();
     Arc::from(error)
@@ -400,6 +402,7 @@ impl PathCase {
     }
 
     /// Whether a Git path names a Cargo manifest under these filesystem rules.
+    #[must_use]
     pub fn is_manifest(self, path: &str) -> bool {
         path.rsplit('/')
             .next()
@@ -407,6 +410,7 @@ impl PathCase {
     }
 
     /// Relative Git path inside a directory, retaining the recorded suffix spelling.
+    #[must_use]
     pub fn relativize<'a>(self, full: &'a str, directory: &str) -> Option<&'a str> {
         let mut relative = full;
         while let Some(rest) = relative.strip_prefix("./") {
@@ -451,6 +455,7 @@ impl PathCase {
 /// as `odd\name.md` to a different path and mis-attribute its content.
 /// The separator is a parameter so both spellings are reachable from a test on
 /// either host.
+#[must_use]
 pub fn to_git_separators(relative: &str, native_separator: char) -> Cow<'_, str> {
     if native_separator == '/' {
         Cow::Borrowed(relative)
@@ -927,6 +932,7 @@ pub fn installation_patches(root: &DocumentMut) -> Vec<DependencyPatch> {
 /// Cargo configuration candidates, from repository root to workspace directory.
 ///
 /// Cargo prefers the extensionless filename when both names are present.
+#[must_use]
 pub fn cargo_config_paths(workspace_prefix: &str) -> Vec<[String; 2]> {
     let mut directories = vec![String::new()];
     let mut directory = String::new();
@@ -962,6 +968,7 @@ pub fn collect_registry_indices(doc: &DocumentMut, indices: &mut BTreeMap<String
 }
 
 /// The index spelling Cargo uses for registry and sparse source identifiers.
+#[must_use]
 pub fn locked_registry_index(source: &str) -> Option<&str> {
     source
         .strip_prefix("registry+")
@@ -1250,6 +1257,7 @@ pub fn parse_workspace_members(
 /// The directory comes from Git, which separates with `/` on every platform, so
 /// a backslash in it is an ordinary character of a file name and is matched as
 /// one. Only the pattern, which a manifest author writes, is normalised.
+#[must_use]
 pub fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool {
     let dir = dir.trim_end_matches('/');
     // A non-virtual root's own package is a member whatever the lists say, so it
@@ -1273,6 +1281,7 @@ pub fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool {
 /// Membership that Cargo derives from a path dependency still honours
 /// `exclude`, so that list is queried separately from the `members` patterns.
 /// The directory is in Git's path space, as it is for `is_workspace_member`.
+#[must_use]
 pub fn is_workspace_excluded(dir: &str, members: &WorkspaceMembers) -> bool {
     let dir = dir.trim_end_matches('/');
     members.exclude.iter().any(|pattern| pattern.matches(dir))
@@ -1448,6 +1457,7 @@ fn directory_of(manifest_path: &str) -> String {
 /// bare requirement to the caret form before `check` sees it, while `apply`
 /// reads the manifest text, so both forms reach this predicate.
 /// Ref: docs/dependencies.md, "Intra-workspace requirements name the declared version".
+#[must_use]
 pub fn requirement_names_version(requirement: &str, version: &Version) -> bool {
     let trimmed = requirement.trim();
     let bare = version.to_string();

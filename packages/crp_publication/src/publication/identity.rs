@@ -5,22 +5,23 @@ use std::env;
 use std::fmt::{self, Debug, Formatter};
 use std::time::Duration;
 
-use crp_diag::Verbose;
 use ohno::AppError;
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
+use crate::PublicationOutput;
+
 /// Verifies caller identity setup without constructing or uploading a package.
-pub fn check_publishing_identity(verbose: Verbose<'_>) -> Result<String, AppError> {
-    verbose.note(|| {
+pub fn check_publishing_identity(output: &PublicationOutput) -> Result<String, AppError> {
+    output.notes().note(|| {
         "Checking the caller workflow's GitHub OIDC identity against crates.io; \
         this exchanges and immediately revokes a temporary credential without publishing."
             .to_owned()
     });
     let identity = ActionsIdentity::from_environment()?;
-    let publisher = TrustedPublisher::new()?;
+    let publisher = TrustedPublisher::new(output.clone())?;
     let token = publisher.exchange(&identity)?;
     publisher.revoke(&token)?;
     Ok("GitHub OIDC exchange and revocation succeeded. Package-specific publication grants are checked when uploading.".to_owned())
@@ -74,6 +75,7 @@ impl Debug for ActionsIdentity {
 pub struct TrustedPublisher {
     client: Client,
     endpoint: String,
+    pub(crate) output: PublicationOutput,
 }
 
 impl TrustedPublisher {
@@ -81,21 +83,22 @@ impl TrustedPublisher {
         &self.endpoint
     }
 
-    pub fn new() -> Result<Self, AppError> {
-        Self::with_endpoint(TOKEN_ENDPOINT)
+    pub fn new(output: PublicationOutput) -> Result<Self, AppError> {
+        Self::with_endpoint(TOKEN_ENDPOINT, output)
     }
 
     // Boundary tests supply a local service; production selection remains fixed to crates.io.
-    pub fn with_endpoint(endpoint: &str) -> Result<Self, AppError> {
+    pub fn with_endpoint(endpoint: &str, output: PublicationOutput) -> Result<Self, AppError> {
         let client = Client::builder()
             .timeout(IDENTITY_REQUEST_TIMEOUT)
             .redirect(Policy::none())
-            .user_agent(concat!("cargo-release-plan/", env!("CARGO_PKG_VERSION")))
+            .user_agent(output.user_agent())
             .build()
             .map_err(|error| IdentityTransport::caused_by("credential client setup", error))?;
         Ok(Self {
             client,
             endpoint: endpoint.to_owned(),
+            output,
         })
     }
 

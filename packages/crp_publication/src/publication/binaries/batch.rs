@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use ohno::AppError;
 use serde::Serialize;
 
+use crate::PublicationOutput;
 use crate::publication::binaries::model::{Asset, Binary, InvalidPlan};
 
 /// Native operations used by the in-process batch sequence.
@@ -31,6 +32,7 @@ pub fn execute_items(
     binaries: &[Binary],
     no_upload: bool,
     executor: &mut impl Executor,
+    diagnostics: &PublicationOutput,
 ) -> Result<Vec<Outcome>, AppError> {
     let mut outcomes = Vec::new();
     let mut sources = BTreeMap::<&str, Vec<&Binary>>::new();
@@ -48,7 +50,7 @@ pub fn execute_items(
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    outcomes.push(failure(binary, "refresh", &error));
+                    outcomes.push(failure(binary, "refresh", &error, diagnostics));
                     continue;
                 }
             }
@@ -85,18 +87,23 @@ pub fn execute_items(
                             if no_upload { "package" } else { "upload" },
                             None,
                         )),
-                        Err((stage, error)) => outcomes.push(failure(binary, stage, &error)),
+                        Err((stage, error)) => {
+                            outcomes.push(failure(binary, stage, &error, diagnostics));
+                        }
                     }
                 }
             }
             Err(error) => {
                 for binary in binaries {
-                    outcomes.push(failure(binary, "source", &error));
+                    outcomes.push(failure(binary, "source", &error, diagnostics));
                 }
             }
         }
         if let Err(error) = executor.cleanup() {
-            eprintln!("Source {} cleanup failed: {error}", first.source_sha);
+            diagnostics.line(format_args!(
+                "Source {} cleanup failed: {error}",
+                first.source_sha
+            ));
             // Refresh failures and completed releases did not use this group's worktree.
             for outcome in outcomes.iter_mut().skip(source_outcomes_start) {
                 outcome.cleanup_error = Some(error.to_string());
@@ -133,11 +140,16 @@ fn check_cancellation(executor: &impl Executor) -> Result<(), (&'static str, App
     Ok(())
 }
 
-fn failure(binary: &Binary, stage: &'static str, error: &AppError) -> Outcome {
-    eprintln!(
+fn failure(
+    binary: &Binary,
+    stage: &'static str,
+    error: &AppError,
+    diagnostics: &PublicationOutput,
+) -> Outcome {
+    diagnostics.line(format_args!(
         "{} ({}) failed during {stage}: {error}",
         binary.tag, binary.source_sha
-    );
+    ));
     outcome(binary, "failed", stage, Some(error.to_string()))
 }
 
@@ -230,7 +242,13 @@ mod tests {
         no_upload: bool,
         executor: &mut impl Executor,
     ) -> Result<Vec<Outcome>, AppError> {
-        execute_items("native", binaries, no_upload, executor)
+        execute_items(
+            "native",
+            binaries,
+            no_upload,
+            executor,
+            &PublicationOutput::new("1.2.3", false, std::sync::Arc::new(crp_diag::Discard)),
+        )
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Invocation-owned credential state shared with Cargo's short-lived provider processes.
 
 use std::fmt::Write as _;
-use std::io::{self, BufRead, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
@@ -15,7 +15,7 @@ use crate::publication::candidate::Repository;
 use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
 use crate::publication::manifest::{InvalidManifest, PublicationManifest};
 use crate::publication::resolution::verify_packaged_closure;
-use crate::{ReadFileError, WriteFileError};
+use crate::{PublicationOutput, ReadFileError, WriteFileError};
 
 /// Owns temporary credential files until Cargo exits and every issued token is revoked.
 ///
@@ -101,7 +101,7 @@ impl CredentialSession {
             (Err(error), Ok(())) => Err(error),
             (Ok(()), Err(error)) => Err(error.into()),
             (Err(error), Err(cleanup)) => {
-                eprintln!("{cleanup}");
+                self.publisher.output.line(format_args!("{cleanup}"));
                 Err(error)
             }
         }
@@ -147,11 +147,15 @@ const LEASE_PREFIX: &str = "token-";
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 /// Serves one Cargo request; token output belongs only to the private credential-protocol pipe.
-pub fn provide() -> Result<(), AppError> {
+pub fn provide(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    diagnostics: &PublicationOutput,
+) -> Result<(), AppError> {
     let path = env::var_os(CONTEXT_ENV).map(PathBuf::from).ok_or_else(|| {
         InvalidManifest::new("credential provider requires its publication session".to_owned())
     })?;
-    serve_credential(&path, &mut io::stdin().lock(), &mut io::stdout().lock())
+    serve_credential(&path, input, output, diagnostics)
 }
 
 /// Serves the same private provider protocol over supplied streams for native boundary tests.
@@ -159,6 +163,7 @@ pub fn serve_credential(
     path: &Path,
     input: &mut impl BufRead,
     output: &mut impl Write,
+    diagnostics: &PublicationOutput,
 ) -> Result<(), AppError> {
     let context: CredentialContext = serde_json::from_slice(
         &fs::read(path).map_err(|error| ReadFileError::caused_by(path, error))?,
@@ -209,14 +214,14 @@ pub fn serve_credential(
         )?;
     }
     repository.ensure_clean_head()?;
-    let publisher = TrustedPublisher::with_endpoint(&context.token_endpoint)?;
+    let publisher = TrustedPublisher::with_endpoint(&context.token_endpoint, diagnostics.clone())?;
     let token = publisher.exchange(&context.identity)?;
     let directory = path
         .parent()
         .expect("session context has an owning directory");
     if let Err(error) = save_lease(directory, &token) {
         if let Err(revocation) = publisher.revoke(&token) {
-            eprintln!("{revocation}");
+            diagnostics.line(format_args!("{revocation}"));
         }
         return Err(error);
     }
@@ -288,17 +293,21 @@ fn revoke_directory(directory: &Path, publisher: &TrustedPublisher) -> Result<()
         match fs::read_to_string(&path) {
             Ok(token) => {
                 if let Err(error) = publisher.revoke(&token) {
-                    eprintln!("{error}");
+                    publisher.output.line(format_args!("{error}"));
                     failed = true;
                 }
             }
             Err(error) => {
-                eprintln!("{}", ReadFileError::caused_by(&path, error));
+                publisher
+                    .output
+                    .line(format_args!("{}", ReadFileError::caused_by(&path, error)));
                 failed = true;
             }
         }
         if let Err(error) = fs::remove_file(&path) {
-            eprintln!("{}", WriteFileError::caused_by(&path, error));
+            publisher
+                .output
+                .line(format_args!("{}", WriteFileError::caused_by(&path, error)));
             failed = true;
         }
     }

@@ -1,9 +1,11 @@
 use std::any::type_name;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, fs, io};
 
+use crp_diag::{DiagnosticSink, diagnostic};
 use crp_workspace::git::GitRepo;
 use ohno::AppError;
 use tempfile::TempDir;
@@ -22,6 +24,7 @@ pub struct Native {
     target: PathBuf,
     triple: String,
     source_provider: Box<dyn SourceProvider>,
+    diagnostics: Arc<dyn DiagnosticSink>,
     source: Option<TempDir>,
     metadata: Option<Metadata>,
     staging: Option<Staging>,
@@ -48,10 +51,11 @@ struct CleanupFailed {
 
 // Queries and owned cleanup use a separate budget from each native item.
 const QUERY_BUDGET: Duration = Duration::from_secs(300);
-const ITEM_BUDGET: Duration = Duration::from_secs(60 * 60);
+const ITEM_BUDGET: Duration = Duration::from_hours(1);
 
 impl Native {
     /// Carries the current item budget unchanged into delivery and its postcondition query.
+    #[must_use]
     pub fn execution_context(&self) -> ExecutionContext<'_> {
         ExecutionContext {
             directory: &self.controller,
@@ -72,6 +76,7 @@ impl Native {
 
     // Native clock acquisition belongs to execution, not deterministic argument construction.
     #[cfg_attr(test, mutants::skip)]
+    #[must_use]
     pub fn deadline_after(budget: Duration) -> Instant {
         deadline_after(budget)
     }
@@ -83,6 +88,7 @@ impl Native {
         output: PathBuf,
         triple: String,
         source_provider: Box<dyn SourceProvider>,
+        diagnostics: Arc<dyn DiagnosticSink>,
     ) -> Result<Self, AppError> {
         // Standard Win32 paths are required by PowerShell's script authorization/file APIs.
         let controller = dunce::canonicalize(controller)?;
@@ -100,6 +106,7 @@ impl Native {
             ]),
             &controller,
             &[],
+            &diagnostics,
             deadline_after(QUERY_BUDGET),
         )?;
         let metadata: Metadata = serde_json::from_str(&metadata)?;
@@ -119,6 +126,7 @@ impl Native {
             target,
             triple,
             source_provider,
+            diagnostics,
             source: None,
             metadata: None,
             staging: None,
@@ -145,12 +153,14 @@ impl Native {
                 ("CARGO_TARGET_DIR", self.target.as_os_str()),
                 ("GIT_LFS_SKIP_SMUDGE", OsStr::new("1")),
             ],
+            &self.diagnostics,
             self.deadline,
         )
     }
 }
 
 impl Native {
+    #[must_use]
     pub fn cancelled(&self) -> bool {
         cancelled()
     }
@@ -166,10 +176,14 @@ impl Native {
             &strings(&["cat-file", "-e", &object]),
             &self.controller,
             &environment,
+            &self.diagnostics,
             self.deadline,
         )
         .inspect_err(|error| {
-            eprintln!("Exact source object is unavailable locally; fetching it: {error}");
+            diagnostic(
+                self.diagnostics.as_ref(),
+                &format!("Exact source object is unavailable locally; fetching it: {error}\n"),
+            );
         })
         .is_err()
         {
@@ -192,6 +206,7 @@ impl Native {
             ],
             &self.controller,
             &environment,
+            &self.diagnostics,
             self.deadline,
         )?;
         let head = self.source_command("git", &strings(&["rev-parse", "HEAD"]))?;
@@ -329,6 +344,7 @@ impl Native {
             &arguments,
             &staging.directory,
             &[],
+            &self.diagnostics,
             self.deadline,
         )?;
         staging.checksum()
@@ -349,6 +365,7 @@ impl Native {
                     source.path().join("source").into_os_string(),
                 ],
                 &self.controller,
+                &self.diagnostics,
                 deadline_after(QUERY_BUDGET),
             );
             return finish_cleanup(result, source.close());

@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 
 use crp_diag::Verbose;
 use crp_versioning::{CheckOutcome, CheckRequest, check};
+use crp_workspace::snapshot_command::capture;
 use ohno::AppError;
 
-use crate::publication::candidate::{Metadata, Repository, capture};
+use crate::publication::candidate::{Metadata, Repository};
 
 /// Supplies external evidence to the shared verification sequence.
 ///
@@ -46,7 +47,7 @@ impl VerificationRepository for Repository {
     // The verifier constructs the command; this adapter only supplies its real execution context.
     #[cfg_attr(test, mutants::skip)]
     fn capture(&self, program: &str, arguments: &[&OsStr]) -> Result<Vec<u8>, AppError> {
-        capture(program, arguments, &self.root)
+        capture(program, arguments, self.root())
     }
 
     // Metadata's input-selection decisions have in-process coverage; filesystem wiring does not.

@@ -2,10 +2,8 @@
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
-mod command;
 mod fixture;
 mod metadata;
 mod repository;
 mod repository_fixture;
-mod scheduling;
 mod snapshots;

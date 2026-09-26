@@ -25,15 +25,11 @@ allowed_external_types = [
     "crp_diag::*",
     "crp_workspace::*",
     "ohno::app::error::AppError",
-    "ohno::enrichable::Enrichable",
-    "ohno::error_ext::ErrorExt",
     "semver::Version",
-    "semver::VersionReq",
     "serde_core::de::Deserialize",
     "serde_core::ser::Serialize",
     "tempfile::file::NamedTempFile",
     "toml_edit::document::DocumentMut",
-    "toml_edit::table::TableLike",
 ]
 
 [lib]

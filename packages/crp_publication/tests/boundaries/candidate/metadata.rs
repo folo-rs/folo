@@ -9,7 +9,7 @@ use crp_publication::publication::candidate::Metadata;
 use serde_json::json;
 
 use crate::candidate::repository_fixture::{command, fixture};
-use crate::candidate::scheduling::with_io_test;
+use crate::with_io_test;
 
 fn sample(root: &Path, manifest: &Path) -> Metadata {
     let input = json!({

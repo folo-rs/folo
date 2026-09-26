@@ -63,8 +63,11 @@ pub struct BatchArtifact {
 }
 
 #[cfg_attr(test, mutants::skip)] // Remote tag recheck; local batch validation is unit-tested.
-pub(crate) fn verify_batch_tags(batch: &PlatformBatch) -> Result<(), AppError> {
-    let github = Github::new(&batch.repository)?;
+pub(crate) fn verify_batch_tags(
+    batch: &PlatformBatch,
+    output: &crate::PublicationOutput,
+) -> Result<(), AppError> {
+    let github = Github::new(&batch.repository, output)?;
     verify_tags(batch, |tag| github.tag(tag))
 }
 

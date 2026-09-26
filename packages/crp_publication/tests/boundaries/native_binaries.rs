@@ -115,6 +115,11 @@ impl Fixture {
             "fixture/does-not-exist".to_owned(),
             self.forge.path().join(format!("gh{EXE_SUFFIX}")),
             Some("credential-filter-canary".into()),
+            crp_publication::PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
         );
         let mut native = BinaryPublisher::new(
             self.repository.path().to_path_buf(),
@@ -136,7 +141,18 @@ impl Fixture {
         );
         assert!(diagnostic.contains(&self.target));
         assert!(!diagnostic.contains("credential-filter-canary"));
-        execute_items(&self.target, &self.binaries(), false, &mut native).unwrap()
+        execute_items(
+            &self.target,
+            &self.binaries(),
+            false,
+            &mut native,
+            &crp_publication::PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
+        )
+        .unwrap()
     }
 }
 

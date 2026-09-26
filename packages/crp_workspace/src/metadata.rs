@@ -68,6 +68,7 @@ pub struct WorkTree {
 
 impl WorkTree {
     /// Returns declared versions for every Git-tracked version target.
+    #[must_use]
     pub fn target_versions(&self) -> BTreeMap<String, Version> {
         self.version_targets
             .iter()
@@ -1336,6 +1337,7 @@ fn workspace_dependency_declares_version(manifest: &DocumentMut, name: &str) -> 
         .is_some_and(dependency_item_declares_version)
 }
 
+#[must_use]
 pub fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String> {
     packages
         .iter()

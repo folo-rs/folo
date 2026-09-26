@@ -7,6 +7,17 @@ pub trait DiagnosticSink: fmt::Debug + Send + Sync + RefUnwindSafe {
     fn write(&self, text: &str) -> io::Result<()>;
 }
 
+/// Writes an unconditional diagnostic using ordinary process-output failure behavior.
+///
+/// # Panics
+///
+/// Panics if the selected destination rejects the write.
+pub fn diagnostic(sink: &dyn DiagnosticSink, text: &str) {
+    if let Err(error) = sink.write(text) {
+        panic!("failed to write diagnostic output: {error}");
+    }
+}
+
 /// The process stderr destination selected by the application shell.
 #[derive(Debug)]
 pub struct Stderr;
@@ -30,7 +41,7 @@ impl DiagnosticSink for Discard {
 /// Enables explanatory notes on a caller-selected diagnostic destination.
 #[derive(Clone, Copy, Debug)]
 pub struct Verbose<'a> {
-    pub enabled: bool,
+    enabled: bool,
     sink: &'a dyn DiagnosticSink,
 }
 
@@ -40,8 +51,14 @@ impl<'a> Verbose<'a> {
         Self { enabled, sink }
     }
 
+    #[must_use]
     pub fn sink(self) -> &'a dyn DiagnosticSink {
         self.sink
+    }
+
+    #[must_use]
+    pub fn enabled(self) -> bool {
+        self.enabled
     }
 
     pub fn note(self, message: impl FnOnce() -> String) {
@@ -130,6 +147,14 @@ mod tests {
             "decision".to_owned()
         });
         assert!(built);
+    }
+
+    #[test]
+    fn unconditional_diagnostics_retain_write_failure_behavior() {
+        ::testing::assert_panics(|| diagnostic(&Closed, "diagnostic"));
+        let recording = Recording::default();
+        diagnostic(&recording, "raw output\n");
+        assert_eq!(*recording.0.lock().unwrap(), ["raw output\n"]);
     }
 
     #[test]

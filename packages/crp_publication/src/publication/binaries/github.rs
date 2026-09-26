@@ -8,6 +8,7 @@ use crp_native::command::{cancelled, capture};
 use crp_native::{Native, SourceProvider};
 use ohno::AppError;
 
+use crate::PublicationOutput;
 use crate::publication::binaries::model::{Asset, Binary, Release};
 
 // Delivery retries retain the existing idempotent-request window and query budget.
@@ -20,6 +21,7 @@ pub struct Github {
     repository: String,
     executable: PathBuf,
     token: Option<OsString>,
+    pub(crate) output: PublicationOutput,
 }
 
 impl fmt::Debug for Github {
@@ -34,11 +36,12 @@ impl fmt::Debug for Github {
 
 impl Github {
     #[must_use]
-    pub fn new(repository: String) -> Self {
+    pub fn new(repository: String, output: PublicationOutput) -> Self {
         Self::with_executable(
             repository,
             PathBuf::from("gh"),
             env::var_os("GH_TOKEN").or_else(|| env::var_os("GITHUB_TOKEN")),
+            output,
         )
     }
 
@@ -48,11 +51,13 @@ impl Github {
         repository: String,
         executable: PathBuf,
         token: Option<OsString>,
+        output: PublicationOutput,
     ) -> Self {
         Self {
             repository,
             executable,
             token,
+            output,
         }
     }
 
@@ -78,6 +83,7 @@ impl Github {
                 &arguments,
                 cwd,
                 &environment,
+                self.output.diagnostics(),
                 deadline,
             ) {
                 Ok(output) => return Ok(output),
@@ -86,9 +92,9 @@ impl Github {
                         && attempt < GITHUB_ATTEMPTS
                         && Native::deadline_after(RETRY_DELAY) < deadline =>
                 {
-                    eprintln!(
+                    self.output.line(format_args!(
                         "GitHub operation attempt {attempt} failed; retrying idempotent request: {error}"
-                    );
+                    ));
                     thread::sleep(RETRY_DELAY);
                 }
                 Err(error) => return Err(error),
@@ -139,6 +145,7 @@ impl SourceProvider for Github {
             ]),
             controller,
             &environment,
+            self.output.diagnostics(),
             deadline,
         )?;
         Ok(())
@@ -154,6 +161,7 @@ mod tests {
             "A/B".to_owned(),
             PathBuf::from("X"),
             Some(OsString::from("SECRET")),
+            PublicationOutput::new("1.2.3", false, std::sync::Arc::new(crp_diag::Discard)),
         );
         let rendered = format!("{github:?}");
         assert!(rendered.contains("A/B"));

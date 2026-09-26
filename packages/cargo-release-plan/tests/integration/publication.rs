@@ -18,6 +18,50 @@ use tempfile::TempDir;
 use crate::fixture::{Fixture, write_binary_package, write_package};
 
 #[test]
+#[cfg_attr(miri, ignore = "Discovers an owned Cargo workspace")]
+fn publication_preflight_accepts_a_workspace_with_no_publishable_targets() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "private-helper", "1.0.0", "publish = false\n");
+    fixture.commit("private workspace");
+    let RunOutcome::Check {
+        passed,
+        message,
+        warnings,
+    } = run(&RunInput::CheckPublished {
+        manifest_path: fixture.manifest(),
+        plan: None,
+        verbose: true,
+    })
+    .unwrap()
+    else {
+        panic!("publication preflight must return a check verdict");
+    };
+    assert!(passed);
+    assert!(warnings.is_empty());
+    assert_eq!(
+        message,
+        "Every selected publishable package is established on crates.io."
+    );
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Attempts Cargo workspace acquisition from an absent manifest"
+)]
+fn publication_preflight_propagates_workspace_acquisition_failure() {
+    let directory = TempDir::new().unwrap();
+    assert!(
+        run(&RunInput::CheckPublished {
+            manifest_path: directory.path().join("absent").join("Cargo.toml"),
+            plan: None,
+            verbose: false,
+        })
+        .is_err()
+    );
+}
+
+#[test]
 #[cfg_attr(
     miri,
     ignore = "Builds and archives an immutable native source worktree"
@@ -577,7 +621,15 @@ fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() 
             publication,
             directory.path().join("unused-source/Cargo.toml"),
             directory.path().join("target"),
-            TrustedPublisher::with_endpoint("http://127.0.0.1:0/unused").unwrap(),
+            TrustedPublisher::with_endpoint(
+                "http://127.0.0.1:0/unused",
+                crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    std::sync::Arc::new(crp_diag::Discard),
+                ),
+            )
+            .unwrap(),
         )
         .unwrap();
         let mut cargo = Command::new("cargo");

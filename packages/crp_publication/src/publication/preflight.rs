@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
-use crp_diag::Verbose;
 use crp_versioning::inspect_plan::run_inspect_plan;
 use crp_workspace::metadata::load_tracked_work_tree;
 use ohno::AppError;
 use serde::Deserialize;
 
+use crate::PublicationOutput;
 use crate::publication::registry::RegistryClient;
 
 #[derive(Deserialize)]
@@ -18,8 +18,9 @@ struct PlanTargets {
 pub fn check(
     manifest: &Path,
     plan: Option<&Path>,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
+    let verbose = diagnostics.notes();
     let targets = if let Some(plan) = plan {
         serde_json::from_str::<PlanTargets>(&run_inspect_plan(plan, true, manifest, verbose)?)?
             .publication_targets
@@ -31,12 +32,12 @@ pub fn check(
             .map(|package| package.manifest.name)
             .collect()
     };
-    let client = RegistryClient::new()?;
+    let client = RegistryClient::new(diagnostics.clone())?;
     Ok(observe(
         targets,
         plan.is_some(),
         |name| client.exists(name),
-        verbose,
+        diagnostics,
     ))
 }
 
@@ -44,15 +45,16 @@ fn observe(
     targets: Vec<String>,
     required: bool,
     mut exists: impl FnMut(&str) -> Result<bool, AppError>,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> (bool, String) {
+    let verbose = diagnostics.notes();
     let mut missing = Vec::new();
     let mut unknown = Vec::new();
     for name in targets {
         match exists(&name) {
             Ok(true)=>verbose.note(||format!("{name} has an established registry identity; no first-publication handoff is required.")),
             Ok(false)=>missing.push(name),
-            Err(error)=>{eprintln!("{name}: {error}");unknown.push(name);}
+            Err(error)=>{diagnostics.line(format_args!("{name}: {error}"));unknown.push(name);}
         }
     }
     conclusion(required, &missing, &unknown)
@@ -113,7 +115,7 @@ mod tests {
                         _ => panic!("unexpected registry lookup"),
                     }
                 },
-                Verbose::new(true, &crp_diag::Discard),
+                &PublicationOutput::new("1.2.3", true, std::sync::Arc::new(crp_diag::Discard)),
             );
             assert_eq!(queried, ["present", "missing", "unknown"]);
             assert_eq!(result.0, !required);
@@ -125,7 +127,7 @@ mod tests {
                 Vec::new(),
                 true,
                 |_| panic!("an empty selection must not query a registry"),
-                Verbose::new(true, &crp_diag::Discard),
+                &PublicationOutput::new("1.2.3", true, std::sync::Arc::new(crp_diag::Discard)),
             )
             .0
         );

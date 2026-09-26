@@ -20,11 +20,7 @@ private-api = true
 allowed_external_types = [
     "crp_diag::*",
     "crp_native::*",
-    "crp_versioning::*",
-    "crp_workspace::*",
     "ohno::app::error::AppError",
-    "ohno::enrichable::Enrichable",
-    "ohno::error_ext::ErrorExt",
     "semver::Version",
     "serde_core::de::Deserialize",
     "serde_core::ser::Serialize",

@@ -284,16 +284,18 @@ fn add_consequences(
     resolved: &mut ResolvedVersions,
 ) -> Result<(), AppError> {
     let versions = work_tree.target_versions();
+    let membership = Groups::from_workspace(work_tree);
     for (name, group) in groups {
         if !group.is_consistent() {
-            raise(work_tree, resolved, name, group.version());
+            raise(&membership, &versions, resolved, name, group.version());
         }
     }
     for package in packages {
         if package.status() == PackageStatus::NeedsIncrement {
             let anchor = package.anchor().expect("needs-increment has an anchor");
             raise(
-                work_tree,
+                &membership,
+                &versions,
                 resolved,
                 &package.name,
                 &increment_version(&anchor.version, IncrementLevel::Patch)?,
@@ -305,7 +307,7 @@ fn add_consequences(
             };
             if !requirement_names_version(&dependency.req, version) {
                 // Explicitly retaining the target version also schedules its requirement rewrites.
-                raise(work_tree, resolved, &dependency.name, version);
+                raise(&membership, &versions, resolved, &dependency.name, version);
             }
             if !dependency.public || releases_breaking_change(package) {
                 continue;
@@ -323,7 +325,8 @@ fn add_consequences(
                     IncrementLevel::Major
                 };
                 raise(
-                    work_tree,
+                    &membership,
+                    &versions,
                     resolved,
                     &package.name,
                     &increment_version(&anchor.version, level)?,
@@ -335,20 +338,30 @@ fn add_consequences(
         if let Some(version) = versions.get(&dependency.target)
             && !requirement_names_version(&dependency.requirement, version)
         {
-            raise(work_tree, resolved, &dependency.target, version);
+            raise(
+                &membership,
+                &versions,
+                resolved,
+                &dependency.target,
+                version,
+            );
         }
     }
     Ok(())
 }
 
-fn raise(work_tree: &WorkTree, resolved: &mut ResolvedVersions, target: &str, minimum: &Version) {
-    let groups = &Groups::from_workspace(&work_tree);
+fn raise(
+    groups: &Groups,
+    versions: &BTreeMap<String, Version>,
+    resolved: &mut ResolvedVersions,
+    target: &str,
+    minimum: &Version,
+) {
     let group = groups.group_of(target).unwrap_or(target);
     let mut members = groups.members(group).to_vec();
     if members.is_empty() {
         members.push(target.to_owned());
     }
-    let versions = work_tree.target_versions();
     let version = members
         .iter()
         .filter_map(|name| resolved.packages.get(name).or_else(|| versions.get(name)))

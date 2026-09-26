@@ -8,6 +8,7 @@ use crp_native::command::install_cancellation_handler;
 use ohno::AppError;
 use serde::Serialize;
 
+use crate::PublicationOutput;
 use crate::publication::binaries::batch::{Outcome, execute_items};
 use crate::publication::binaries::{BinaryPublisher, Github};
 use crate::publication::context::WorkflowRun;
@@ -38,6 +39,7 @@ pub fn publish(
     output: &Path,
     artifacts: &Path,
     no_upload: bool,
+    diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
     if output.try_exists()? || artifacts.try_exists()? {
         return Err(InvalidManifest::new(
@@ -51,7 +53,7 @@ pub fn publish(
     validate(&publication, &batch)?;
     verify_source(&publication, manifest)?;
     if !no_upload {
-        verify_batch_tags(&batch)?;
+        verify_batch_tags(&batch, diagnostics)?;
     }
     install_cancellation_handler()?;
     let workspace = manifest
@@ -63,9 +65,15 @@ pub fn publish(
         workspace,
         artifacts.to_path_buf(),
         batch.target.clone(),
-        Github::new(batch.repository.clone()),
+        Github::new(batch.repository.clone(), diagnostics.clone()),
     )?;
-    let items = execute_items(&batch.target, &batch.binaries, no_upload, &mut executor)?;
+    let items = execute_items(
+        &batch.target,
+        &batch.binaries,
+        no_upload,
+        &mut executor,
+        diagnostics,
+    )?;
     let passed = successful(&items, batch.binaries.len(), no_upload);
     let outcome = BinaryOutcome {
         schema_version: 1,

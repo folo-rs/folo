@@ -72,6 +72,7 @@ pub fn report(
     jobs_path: &Path,
     output: &Path,
     no_issue: bool,
+    diagnostics: &crate::PublicationOutput,
 ) -> Result<(bool, String), AppError> {
     let context = WorkflowRun::capture()?.ok_or_else(|| {
         InvalidManifest::new(
@@ -85,7 +86,7 @@ pub fn report(
     let publication = match publication_path.map(PublicationManifest::read).transpose() {
         Ok(publication) => publication,
         Err(error) => {
-            eprintln!("{error}");
+            diagnostics.line(format_args!("{error}"));
             evidence_errors.push("The original publication manifest is unavailable or invalid; restore its artifact before retrying publication.".to_owned());
             None
         }
@@ -104,7 +105,7 @@ pub fn report(
     let mut assessment = match result {
         Ok(assessment) => assessment,
         Err(error) => {
-            eprintln!("{error}");
+            diagnostics.line(format_args!("{error}"));
             let mut details = job_failures(&jobs);
             details.push(
                 "Publication evidence is invalid or unavailable; inspect the reporter diagnostics."
@@ -152,7 +153,7 @@ pub fn report(
     file.persist_noclobber(output)
         .map_err(|error| WriteFileError::caused_by(output, error))?;
     if !assessment.complete && !no_issue {
-        Github::new(repository)?.report_failure(context, &body)?;
+        Github::new(repository, diagnostics)?.report_failure(context, &body)?;
     }
     Ok((
         assessment.complete,

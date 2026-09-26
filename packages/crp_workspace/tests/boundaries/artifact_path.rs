@@ -1,6 +1,7 @@
 //! External acquisition for `artifact_path`.
 
 use std::fs;
+use std::io::Write as _;
 #[cfg(unix)]
 use std::io::{Error as IoError, ErrorKind};
 #[cfg(unix)]
@@ -10,6 +11,35 @@ use crp_workspace::artifact_path::*;
 use tempfile::tempdir;
 #[cfg(unix)]
 use tempfile::tempdir_in;
+
+#[test]
+#[cfg_attr(miri, ignore = "Creates and promotes owned temporary artifact files")]
+fn artifact_promotion_preserves_existing_files_and_discards_failed_writes() {
+    let directory = tempdir().unwrap();
+    let output = directory.path().join("nested").join("report.json");
+    write_new(&output, |file| Ok(file.write_all(b"original")?)).unwrap();
+    let error = write_new(&output, |file| Ok(file.write_all(b"replacement")?)).unwrap_err();
+    assert!(error.find_source::<tempfile::PersistError>().is_some());
+    drop(error);
+    assert_eq!(fs::read(&output).unwrap(), b"original");
+
+    let failed = output.with_file_name("failed.json");
+    let error = write_new(&failed, |file| {
+        file.write_all(b"partial")?;
+        Err(std::io::Error::other("serialization canary").into())
+    })
+    .unwrap_err();
+    assert!(error.find_source::<std::io::Error>().is_some());
+    assert!(!failed.exists());
+    assert_eq!(fs::read_dir(output.parent().unwrap()).unwrap().count(), 1);
+
+    let error = write_new(&output.join("child.json"), |_| {
+        panic!("an invalid parent must fail before invoking the writer")
+    })
+    .unwrap_err();
+    assert!(error.find_source::<std::io::Error>().is_some());
+    assert_eq!(fs::read(&output).unwrap(), b"original");
+}
 
 #[test]
 #[cfg_attr(miri, ignore = "resolves filesystem paths with missing ancestors")]

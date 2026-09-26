@@ -1,6 +1,9 @@
+use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crp_diag::Verbose;
+use crp_publication::PublicationOutput;
 use crp_publication::publication::binaries::publish::publish as publish_binaries;
 use crp_publication::publication::context::release_context;
 use crp_publication::publication::credentials::provide;
@@ -329,7 +332,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             let (passed, message) = check_published(
                 manifest_path,
                 plan.as_deref(),
-                Verbose::new(*verbose, &crp_diag::Stderr),
+                &publication_output(*verbose),
             )?;
             Ok(RunOutcome::Check {
                 passed,
@@ -353,7 +356,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 base.as_deref(),
                 output,
                 *deny_findings,
-                Verbose::new(*verbose, &crp_diag::Stderr),
+                &publication_output(*verbose),
             )?;
             Ok(RunOutcome::Check {
                 passed,
@@ -376,6 +379,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 jobs,
                 output,
                 *no_issue,
+                &publication_output(false),
             )?;
             Ok(RunOutcome::Publication { passed, message })
         }
@@ -394,7 +398,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             Ok(RunOutcome::ArtifactQuery { message })
         }
         RunInput::CheckPublishingIdentity { verbose } => {
-            let message = check_publishing_identity(Verbose::new(*verbose, &crp_diag::Stderr))?;
+            let message = check_publishing_identity(&publication_output(*verbose))?;
             Ok(RunOutcome::IdentityCheck { message })
         }
         RunInput::PublishBinaries {
@@ -412,6 +416,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 output,
                 artifacts,
                 *no_upload,
+                &publication_output(false),
             )?;
             Ok(RunOutcome::Publication { passed, message })
         }
@@ -429,7 +434,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 output,
                 batches,
                 *dry_run,
-                Verbose::new(*verbose, &crp_diag::Stderr),
+                &publication_output(*verbose),
             )?;
             Ok(RunOutcome::Publication { passed, message })
         }
@@ -445,12 +450,16 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 manifest_path,
                 output,
                 *dry_run,
-                Verbose::new(*verbose, &crp_diag::Stderr),
+                &publication_output(*verbose),
             )?;
             Ok(RunOutcome::Publication { passed, message })
         }
         RunInput::CredentialProvider => {
-            provide()?;
+            provide(
+                &mut io::stdin().lock(),
+                &mut io::stdout().lock(),
+                &publication_output(false),
+            )?;
             Ok(RunOutcome::ArtifactQuery {
                 message: String::new(),
             })
@@ -467,7 +476,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 config.as_deref(),
                 source,
                 output,
-                Verbose::new(*verbose, &crp_diag::Stderr),
+                &publication_output(*verbose),
             )?;
             Ok(RunOutcome::Prepare { message })
         }
@@ -624,6 +633,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             Ok(RunOutcome::Apply { message })
         }
     }
+}
+
+fn publication_output(verbose: bool) -> PublicationOutput {
+    PublicationOutput::new(
+        env!("CARGO_PKG_VERSION"),
+        verbose,
+        Arc::new(crp_diag::Stderr),
+    )
 }
 
 #[cfg(test)]

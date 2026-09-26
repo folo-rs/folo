@@ -62,3 +62,85 @@ pub fn is_workspace_inherit(item: &Item) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    fn doc(text: &str) -> DocumentMut {
+        text.parse().unwrap()
+    }
+    #[test]
+    fn collects_workspace_inherited_package_and_dep_keys() {
+        let package = doc(r#"
+[package]
+name = "foo"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bar.workspace = true
+semver = "1.0"
+"#);
+        let keys = collect_inherited_keys(&package);
+        assert_eq!(keys.package, vec!["edition", "license"]);
+        assert_eq!(keys.dependencies, vec!["bar"]);
+    }
+
+    #[test]
+    fn inline_table_workspace_true_is_inherited() {
+        let package = doc(r#"
+[package]
+name = "foo"
+version = "0.1.0"
+
+[dependencies]
+bar = { workspace = true }
+semver = { version = "1.0.0" }
+"#);
+        let keys = collect_inherited_keys(&package);
+        assert_eq!(keys.dependencies, vec!["bar"]);
+    }
+
+    #[test]
+    fn a_manifest_without_inheritable_tables_yields_no_keys() {
+        assert!(collect_inherited_keys(&doc("")).package.is_empty());
+
+        let odd_target = doc("[target]\nnot-a-spec = 1\n");
+
+        assert!(collect_inherited_keys(&odd_target).dependencies.is_empty());
+    }
+
+    /// Target gated tables contribute inherited dependencies.
+    ///
+    /// Cargo lets a package inherit a workspace dependency from a target-gated table, and those
+    /// keys must be watched the same as unconditional ones.
+    #[test]
+    fn target_gated_tables_contribute_inherited_dependencies() {
+        let package = doc(r#"
+[package]
+name = "foo"
+
+[target.'cfg(unix)'.dependencies]
+bar.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+baz.workspace = true
+"#);
+        let keys = collect_inherited_keys(&package);
+        assert_eq!(keys.dependencies, vec!["bar", "baz"]);
+        assert_eq!(keys.dev_only_dependencies, vec!["baz"]);
+    }
+
+    #[test]
+    fn dependency_used_normally_and_for_development_is_not_dev_only() {
+        let package = doc("[dependencies]\nbar.workspace = true\n\
+             [dev-dependencies]\nbar.workspace = true\n");
+
+        let keys = collect_inherited_keys(&package);
+
+        assert_eq!(keys.dependencies, vec!["bar"]);
+        assert!(keys.dev_only_dependencies.is_empty());
+    }
+}

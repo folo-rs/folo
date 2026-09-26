@@ -121,7 +121,7 @@ impl VerificationRepository for Evidence<'_> {
         assert_eq!(*manifest_path, canonical_manifest());
         assert!(matches!(format, CheckFormat::Text));
         assert!(!verify_packaging);
-        assert_eq!(verbose.enabled, self.cli.verbose);
+        assert_eq!(verbose.enabled(), self.cli.verbose);
         self.step("checker")?;
         Ok(self.outcome.clone())
     }

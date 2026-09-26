@@ -2,10 +2,10 @@ use std::fs;
 use std::io::Error;
 use std::string::FromUtf8Error;
 
-use crp_publication::publication::candidate::{capture, git};
+use crp_workspace::snapshot_command::{capture, git};
 use tempfile::TempDir;
 
-use crate::candidate::scheduling::with_io_test;
+use crate::with_io_test;
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]

@@ -4,7 +4,7 @@ use crp_publication::publication::candidate::Repository;
 use tempfile::TempDir;
 
 use crate::candidate::repository_fixture::{command, fixture};
-use crate::candidate::scheduling::with_io_test;
+use crate::with_io_test;
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]

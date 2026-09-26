@@ -16,7 +16,14 @@ pub struct Repository {
     directory: TempDir,
 }
 
+impl Default for Repository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Repository {
+    #[must_use]
     pub fn new() -> Self {
         let fixture = Self {
             directory: tempdir().unwrap(),
@@ -43,10 +50,12 @@ impl Repository {
         fixture
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.directory.path()
     }
 
+    #[must_use]
     pub fn repo(&self) -> GitRepo {
         GitRepo {
             root: self.path().to_path_buf(),
@@ -60,6 +69,10 @@ impl Repository {
         fs::write(path, bytes).unwrap();
     }
 
+    #[expect(
+        clippy::must_use_candidate,
+        reason = "Fixture commands stage and commit as well as query; their output is optional."
+    )]
     pub fn command(&self, args: &[&str]) -> String {
         let output = Command::new("git")
             .current_dir(self.path())

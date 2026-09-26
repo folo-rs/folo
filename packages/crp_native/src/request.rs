@@ -117,17 +117,15 @@ pub(crate) mod tests {
             ("tool", "bin", "1.2.3", "a".repeat(40), ".."),
             ("tool", "bin", "1.2.3", "a".repeat(40), ""),
         ] {
-            assert!(
-                BuildRequest::new(
-                    name.to_owned(),
-                    bin.to_owned(),
-                    version.to_owned(),
-                    request.label.clone(),
-                    source,
-                    archive.to_owned(),
-                )
-                .is_err()
-            );
+            BuildRequest::new(
+                name.to_owned(),
+                bin.to_owned(),
+                version.to_owned(),
+                request.label.clone(),
+                source,
+                archive.to_owned(),
+            )
+            .unwrap_err();
         }
     }
 }

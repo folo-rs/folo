@@ -65,8 +65,15 @@ fn provider_issues_only_requested_credentials_and_parent_revokes_the_lease() {
             "request_token":"identity-credential-canary"
         }))
         .unwrap();
-        let publisher =
-            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url())).unwrap();
+        let publisher = TrustedPublisher::with_endpoint(
+            &format!("{}/tokens", service.url()),
+            crp_publication::PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
+        )
+        .unwrap();
         let session = CredentialSession::new(
             identity,
             PublicationManifest::new(publication).unwrap(),
@@ -113,6 +120,11 @@ fn provider_issues_only_requested_credentials_and_parent_revokes_the_lease() {
             &PathBuf::from(&context),
             &mut Cursor::new(request.as_bytes()),
             &mut output,
+            &crp_publication::PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
         )
         .unwrap();
         let output = String::from_utf8(output).unwrap();
@@ -197,7 +209,15 @@ fn binary_credentials_require_the_exact_archive_and_assessed_lockfile() {
             publication,
             repository.path().join("Cargo.toml"),
             target.path().to_owned(),
-            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url())).unwrap(),
+            TrustedPublisher::with_endpoint(
+                &format!("{}/tokens", service.url()),
+                crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    std::sync::Arc::new(crp_diag::Discard),
+                ),
+            )
+            .unwrap(),
         )
         .unwrap();
         let mut command = Command::new("cargo");
@@ -217,7 +237,16 @@ fn binary_credentials_require_the_exact_archive_and_assessed_lockfile() {
             "cksum":checksum,"registry":{"index-url":"sparse+https://index.crates.io/"}
         });
         let mut output = Vec::new();
-        let result = serve_credential(&context, &mut Cursor::new(request.to_string()), &mut output);
+        let result = serve_credential(
+            &context,
+            &mut Cursor::new(request.to_string()),
+            &mut output,
+            &crp_publication::PublicationOutput::new(
+                "1.2.3",
+                false,
+                std::sync::Arc::new(crp_diag::Discard),
+            ),
+        );
         assert_eq!(result.is_ok(), matches!(case, ArchiveCase::Valid));
         assert_eq!(
             service.operations(),

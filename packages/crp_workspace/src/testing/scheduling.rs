@@ -1,26 +1,20 @@
-//! Schedules native-I/O cases before starting their last-chance watchdogs.
+//! Schedules source-verification I/O before starting last-chance watchdogs.
 
 #[cfg(any(windows, test))]
 use std::sync::Mutex;
-use std::time::Duration;
 
-use testing::with_watchdog_timeout;
-
-// All I/O cases live in this binary. Nextest supplies process-level isolation through its group;
-// libtest needs this in-process slot. See cargo-release-plan/docs/implementation.md, "Test boundaries".
+// Nextest serializes owning binaries through their shared group; libtest needs a per-process slot.
+// See cargo-release-plan/docs/implementation.md, "Test boundaries".
 #[cfg(windows)]
 static IO_TEST: Mutex<()> = Mutex::new(());
 
-// Native process startup and filesystem work can be slow during instrumented, concurrent runs.
-// This is the same conservative hang guard used by other native integration fixtures.
-const IO_WATCHDOG: Duration = Duration::from_mins(5);
-
-pub(crate) fn with_io_test(test: impl FnOnce() + Send + 'static) {
+/// Acquires the process-local I/O slot before the caller starts a watchdog.
+pub fn with_io_slot(run: impl FnOnce()) {
     #[cfg(windows)]
-    with_slot(&IO_TEST, || with_watchdog_timeout(IO_WATCHDOG, test));
+    with_slot(&IO_TEST, run);
 
     #[cfg(not(windows))]
-    with_watchdog_timeout(IO_WATCHDOG, test);
+    run();
 }
 
 #[cfg(any(windows, test))]

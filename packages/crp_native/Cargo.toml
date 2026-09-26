@@ -17,15 +17,7 @@ all-features = true
 private-api = true
 
 [package.metadata.cargo_check_external_types]
-allowed_external_types = [
-    "crp_diag::*",
-    "crp_workspace::*",
-    "ohno::app::error::AppError",
-    "ohno::enrichable::Enrichable",
-    "ohno::error_ext::ErrorExt",
-    "serde_core::de::Deserialize",
-    "serde_core::ser::Serialize",
-]
+allowed_external_types = ["crp_diag::*", "ohno::app::error::AppError"]
 
 [lib]
 doc = false

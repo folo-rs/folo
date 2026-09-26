@@ -43,7 +43,11 @@ fn absence_is_distinct_from_query_failure_or_mismatched_identity() {
             .respond(Response::from_string(body).with_status_code(StatusCode(status)))
             .unwrap();
     });
-    let client = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
+    let client = RegistryClient::with_endpoint(
+        &format!("{}/index", service.url()),
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     assert!(client.contains("present", "1.0.0").unwrap());
     assert!(!client.contains("present", "1.0.1").unwrap());
     assert!(!client.contains("missing", "1.0.0").unwrap());
@@ -52,7 +56,11 @@ fn absence_is_distinct_from_query_failure_or_mismatched_identity() {
             .contains_with_wait(name, "1.0.0", |_| {})
             .unwrap_err();
     }
-    let invalid = RegistryClient::with_endpoint("not a registry URL").unwrap();
+    let invalid = RegistryClient::with_endpoint(
+        "not a registry URL",
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     let mut pauses = 0_usize;
     invalid
         .contains_with_wait("library", "1.0.0", |_| {
@@ -60,6 +68,63 @@ fn absence_is_distinct_from_query_failure_or_mismatched_identity() {
         })
         .unwrap_err();
     assert_eq!(pauses, 2);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Queries fresh registry observations over loopback HTTP"
+)]
+fn identity_and_comparison_queries_refresh_evidence_and_use_the_shell_identity() {
+    testing::with_watchdog(|| {
+        let requests = Arc::new(Mutex::new(0));
+        let service = HttpService::new({
+            let requests = Arc::clone(&requests);
+            move |_, request| {
+                assert_eq!(request.url(), "/li/br/library");
+                assert_eq!(
+                    request
+                        .headers()
+                        .iter()
+                        .find(|header| header.field.equiv("User-Agent"))
+                        .unwrap()
+                        .value
+                        .as_str(),
+                    "cargo-release-plan/9.8.7",
+                );
+                let mut count = requests.lock().unwrap();
+                let (status, body) = if *count < 2 {
+                    (
+                        200,
+                        concat!(
+                            "{\"name\":\"library\",\"vers\":\"1.2.3\",\"yanked\":false}\n",
+                            "{\"name\":\"library\",\"vers\":\"9.0.0\",\"yanked\":true}\n",
+                            "{\"name\":\"library\",\"vers\":\"2.0.0-alpha\",\"yanked\":false}\n",
+                        ),
+                    )
+                } else {
+                    (404, "")
+                };
+                *count += 1;
+                request
+                    .respond(Response::from_string(body).with_status_code(StatusCode(status)))
+                    .unwrap();
+            }
+        });
+        let client = RegistryClient::with_endpoint(
+            service.url(),
+            crp_publication::PublicationOutput::new("9.8.7", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
+        assert!(client.exists("library").unwrap());
+        assert_eq!(
+            client.latest("library").unwrap().unwrap(),
+            "1.2.3".parse().unwrap()
+        );
+        assert!(!client.exists("library").unwrap());
+        assert!(client.latest("library").unwrap().is_none());
+        assert_eq!(*requests.lock().unwrap(), 4);
+    });
 }
 
 #[test]
@@ -78,7 +143,11 @@ fn registry_orchestration_retains_completed_work_and_reconciles_upload_results()
         let (repository, publication) = publication_source();
         let available = Arc::new(Mutex::new(BTreeSet::from(["alpha".to_owned()])));
         let service = registry_service(&available);
-        let client = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
+        let client = RegistryClient::with_endpoint(
+            &format!("{}/index", service.url()),
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
         let identity = IdentityService::new(false);
         let runtime = UploadRuntime {
             repository: &repository,
@@ -157,7 +226,11 @@ fn established_versions_and_dry_runs_never_acquire_upload_credentials() {
             available.lock().unwrap().insert("beta".to_owned());
         }
         let service = registry_service(&available);
-        let client = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
+        let client = RegistryClient::with_endpoint(
+            &format!("{}/index", service.url()),
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
         let identity = IdentityService::new(false);
         let runtime = UploadRuntime {
             repository: &repository,
@@ -207,7 +280,11 @@ fn mismatched_source_configuration_and_requests_fail_before_registry_or_credenti
     let (repository, publication) = publication_source();
     let service =
         HttpService::new(|_, _| panic!("source validation must precede registry queries"));
-    let client = RegistryClient::with_endpoint(&format!("{}/index", service.url())).unwrap();
+    let client = RegistryClient::with_endpoint(
+        &format!("{}/index", service.url()),
+        crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+    )
+    .unwrap();
     let identity = IdentityService::new(false);
     let runtime = UploadRuntime {
         repository: &repository,
@@ -299,7 +376,14 @@ impl RegistryRuntime for UploadRuntime<'_> {
             publication.clone(),
             manifest.to_owned(),
             target.to_owned(),
-            TrustedPublisher::with_endpoint(&format!("{}/tokens", self.identity.url()))?,
+            TrustedPublisher::with_endpoint(
+                &format!("{}/tokens", self.identity.url()),
+                crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    Arc::new(crp_diag::Discard),
+                ),
+            )?,
         )
     }
 
@@ -343,6 +427,7 @@ impl RegistryRuntime for UploadRuntime<'_> {
             &context,
             &mut Cursor::new(request.to_string()),
             &mut Vec::new(),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
         )
         .unwrap();
         if !matches!(self.mode, UploadMode::PartialFailure) {

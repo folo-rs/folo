@@ -484,7 +484,7 @@ fn artifact_case_aliases_require_unique_captured_workspace_targets() {
             ])
             .unwrap_err();
     } else {
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }
 

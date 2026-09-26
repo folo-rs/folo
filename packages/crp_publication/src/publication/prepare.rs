@@ -3,13 +3,13 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crp_diag::Verbose;
 use crp_workspace::command::run_capture;
 use crp_workspace::git::GitRepo;
 use crp_workspace::identity::immutable_commit;
 use ohno::AppError;
 use semver::Version;
 
+use crate::PublicationOutput;
 use crate::publication::candidate::{CandidateRequest, Repository, verify};
 use crate::publication::config::Configuration;
 use crate::publication::manifest::{
@@ -22,8 +22,9 @@ pub fn prepare(
     config_path: Option<&Path>,
     source: &str,
     output: &Path,
-    verbose: Verbose<'_>,
+    diagnostics: &PublicationOutput,
 ) -> Result<String, AppError> {
+    let verbose = diagnostics.notes();
     if !immutable_commit(source) {
         return Err(
             InvalidManifest::new("source must be a full immutable commit ID".to_owned()).into(),
@@ -57,7 +58,7 @@ pub fn prepare(
             commit: source.to_owned(),
             release_line: line,
             packages: requested,
-            verbose: verbose.enabled,
+            verbose: verbose.enabled(),
         },
         verbose,
     )?;
@@ -81,7 +82,7 @@ pub fn prepare(
     let packages = capture_requests(&repository, requests)?;
     let publication = PublicationManifest::new(Publication {
         schema_version: PUBLICATION_SCHEMA_VERSION,
-        tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+        tool_version: diagnostics.tool_version().to_owned(),
         source: source.to_owned(),
         workspace_manifest: tracked_relative(&repository, &manifest)?,
         config_path: tracked_relative(&repository, &config_path)?,

@@ -219,7 +219,7 @@ function Get-ValidationScriptDomain {
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -cin @('cargo-release-plan', 'crp_impl')) {
+        if ($package -cin @('cargo-release-plan', 'crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
@@ -242,7 +242,9 @@ function Test-ReleaseBinarySmokeSelected {
 
     $plan = Read-ValidationPlan -Json $PlanJson
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
-    return $plan.release_binary_smoke -or 'cargo-release-plan' -cin $packages -or 'crp_impl' -cin $packages
+    return $plan.release_binary_smoke -or @($packages | Where-Object {
+        $_ -cin @('cargo-release-plan', 'crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication')
+    }).Count -gt 0
 }
 
 function Read-ValidationAffectedPackage {
