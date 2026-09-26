@@ -197,6 +197,8 @@ each shard. The shared recipe applies this to both local and CI runs while
 preserving the 1-based `N/M` shard argument. Unsharded runs select every mutant.
 
 The `mutants` Cargo profile omits debug data and enables incremental compilation.
+After helper preparation, the recipe clears the global `CARGO_INCREMENTAL`
+override supplied by CI so the mutation profile governs worker builds.
 Each worker reuses unchanged compiler work within its private source and target
 tree as single-site mutations are applied and reverted. This reduces repeated
 compilation without reusing test verdicts: the baseline and every selected mutant

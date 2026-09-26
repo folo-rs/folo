@@ -87,6 +87,11 @@ mutants $SHARD="" $CAREFUL='false' $OUTPUT='':
         $env:DURE_TEST_HELPER = just _dure-test-helper-path | Select-Object -Last 1
     }
 
+    # CI disables incremental compilation globally. Let the dedicated mutation profile
+    # govern worker builds without changing helper preparation or other recipes.
+    # Ref: docs/build-and-tooling.md, "Mutation target selection".
+    $env:CARGO_INCREMENTAL = $null
+
     # Enable the mutation-test cfg. cargo-mutants preserves RUSTFLAGS,
     # chaining its own `--cap-lints=warn` onto them.
     $existing_rustflags = if ($env:RUSTFLAGS) { $env:RUSTFLAGS } else { "" }
