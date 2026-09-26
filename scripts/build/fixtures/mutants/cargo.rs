@@ -16,6 +16,7 @@ fn main() -> ExitCode {
     }
     // These are the environment settings the shared recipe prepares for cargo-mutants.
     for name in [
+        "CARGO_INCREMENTAL",
         "CARGO_TARGET_DIR",
         "TMP",
         "RUSTFLAGS",

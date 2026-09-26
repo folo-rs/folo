@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # MutantsRecipe.Tests.ps1 selects this interpreter for the real Just recipe. Only helper prebuilds
 # are replaced here; a native cargo stand-in on PATH receives the recipe's unchanged arguments.
@@ -13,7 +13,7 @@ function global:just {
         throw 'The mutation recipe requested an unexpected helper.'
     }
     $helper = [string]$args[0]
-    @{ name = $helper; rustflags = $env:RUSTFLAGS } | ConvertTo-Json -Compress |
+    @{ name = $helper; rustflags = $env:RUSTFLAGS; incremental = $env:CARGO_INCREMENTAL } | ConvertTo-Json -Compress |
         Add-Content -LiteralPath $env:MUTANTS_FIXTURE_TRACE
     if ($env:MUTANTS_FIXTURE_FAIL_HELPER -ceq $helper) { throw 'Helper failure canary.' }
     if ($helper -ceq '_faker-path') { return $env:MUTANTS_FIXTURE_FAKER }

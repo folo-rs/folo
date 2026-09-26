@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Deep validation runs the same Just recipes as developers. This wrapper only supplies matrix
 # scope, captures output and writes readable diagnostics; the recipe exit status is authoritative.
@@ -53,7 +53,9 @@ function Invoke-ScheduledCheck {
         ''
         'Execution started. An absent final result means execution was interrupted.'
     ) | Set-Content -LiteralPath $summary
-    $exitCode = 0
+    # Pipeline interruption can bypass catch while still running finally. Only a completed
+    # capture may establish success. Ref: .github/workflows/implementation.md#deep-execution.
+    $exitCode = 1
     try {
         if ($SourceSha -cnotmatch '^[0-9a-f]{40}$') { throw 'Expected a full tested commit SHA.' }
         Write-Host "Running $command in $SourceRoot"

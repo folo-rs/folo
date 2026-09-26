@@ -396,9 +396,10 @@ debug = "full"
 
 [profile.mutants]
 inherits = "test"
-# Speed up the build.
+# Avoid debug data and reuse unchanged compiler work between single-site mutations.
+# Ref: docs/build-and-tooling.md, "Mutation target selection".
 debug = "none"
-incremental = false
+incremental = true
 
 # Best-case benchmarking profile used by `just bench-best`. `cargo bench` defaults to the built-in
 # `bench` profile (which mirrors `release`: opt-level 3, no LTO, 16 codegen units); this inherits
