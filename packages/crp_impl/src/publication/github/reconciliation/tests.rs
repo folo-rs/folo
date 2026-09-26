@@ -462,7 +462,8 @@ fn native_batches_preserve_every_selected_incomplete_package_target_pair() {
             let mut result = record(GithubState::Pending);
             result.name.clone_from(&package.name);
             result.tag = format!("{}-v{}", package.name, package.version);
-            work.package(package, forge.tag(&result.tag).unwrap(), &mut result).unwrap();
+            work.package(package, forge.tag(&result.tag).unwrap(), &mut result)
+                .unwrap();
             assert_eq!(result.state, GithubState::Complete);
             for target in &targets {
                 if restricted
