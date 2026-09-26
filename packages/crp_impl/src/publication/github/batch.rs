@@ -65,8 +65,15 @@ pub struct BatchArtifact {
 #[cfg_attr(test, mutants::skip)] // Remote tag recheck; local batch validation is unit-tested.
 pub(crate) fn verify_batch_tags(batch: &PlatformBatch) -> Result<(), AppError> {
     let github = Github::new(&batch.repository)?;
+    verify_tags(batch, |tag| github.tag(tag))
+}
+
+fn verify_tags(
+    batch: &PlatformBatch,
+    mut lookup: impl FnMut(&str) -> Result<Option<String>, AppError>,
+) -> Result<(), AppError> {
     for binary in &batch.binaries {
-        if github.tag(&binary.tag)?.as_deref() != Some(binary.source_sha.as_str()) {
+        if lookup(&binary.tag)?.as_deref() != Some(binary.source_sha.as_str()) {
             return Err(InvalidManifest::new(format!(
                 "tag {} no longer identifies the frozen binary source {}",
                 binary.tag, binary.source_sha
@@ -75,4 +82,53 @@ pub(crate) fn verify_batch_tags(batch: &PlatformBatch) -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_frozen_source_requires_a_matching_tag_observation() {
+        let batch = PlatformBatch {
+            schema_version: 1,
+            publication_id: "publication".to_owned(),
+            repository: "example/tools".to_owned(),
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+            binaries: ["first", "second"]
+                .into_iter()
+                .map(|name| Binary {
+                    name: name.to_owned(),
+                    bin: name.to_owned(),
+                    version: "1.0.0".to_owned(),
+                    tag: format!("{name}-v1.0.0"),
+                    source_sha: "a".repeat(40),
+                })
+                .collect(),
+            batch_id: String::new(),
+        }
+        .seal()
+        .unwrap();
+        let mut observed = Vec::new();
+        verify_tags(&batch, |tag| {
+            observed.push(tag.to_owned());
+            Ok(Some("a".repeat(40)))
+        })
+        .unwrap();
+        assert_eq!(observed, ["first-v1.0.0", "second-v1.0.0"]);
+        for source in [None, Some("b".repeat(40))] {
+            let mut observed = Vec::new();
+            verify_tags(&batch, |tag| {
+                observed.push(tag.to_owned());
+                Ok(source.clone())
+            })
+            .unwrap_err();
+            assert_eq!(observed, ["first-v1.0.0"]);
+        }
+        verify_tags(&batch, |_| Err(UnavailableTag::new().into())).unwrap_err();
+    }
+
+    #[ohno::error]
+    struct UnavailableTag;
 }

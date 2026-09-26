@@ -680,6 +680,7 @@ impl From<CliCheckFormat> for CheckFormat {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::path::Path;
 
     use static_assertions::assert_impl_all;
 
@@ -720,5 +721,300 @@ mod tests {
     fn cargo_plugin_marker_selects_the_internal_provider() {
         let cli = Cli::from_args_os(["cargo-release-plan", "--cargo-plugin"]).unwrap();
         assert!(matches!(cli.into_input(), RunInput::CredentialProvider));
+    }
+
+    #[test]
+    fn compatibility_defaults_to_fresh_advisory_evidence() {
+        let cli = Cli::from_args_os([
+            "cargo-release-plan",
+            "check-compatibility",
+            "--output",
+            "evidence",
+        ])
+        .unwrap();
+        let RunInput::CheckCompatibility {
+            manifest_path,
+            prepared,
+            plan,
+            base,
+            output,
+            deny_findings,
+            verbose,
+        } = cli.into_input()
+        else {
+            panic!()
+        };
+        assert_eq!(manifest_path, Path::new("Cargo.toml"));
+        assert_eq!(output, Path::new("evidence"));
+        assert!(prepared.is_none());
+        assert!(plan.is_none());
+        assert!(base.is_none());
+        assert!(!deny_findings);
+        assert!(!verbose);
+    }
+
+    #[test]
+    fn compatibility_preserves_each_exclusive_source_and_execution_option() {
+        for option in ["--prepared", "--plan", "--base"] {
+            let cli = Cli::from_args_os([
+                "cargo-release-plan",
+                "release-plan",
+                "check-compatibility",
+                option,
+                "selected-source",
+                "--manifest-path",
+                "selected-manifest",
+                "--output",
+                "new-evidence",
+                "--deny-findings",
+                "--verbose",
+            ])
+            .unwrap();
+            let RunInput::CheckCompatibility {
+                manifest_path,
+                prepared,
+                plan,
+                base,
+                output,
+                deny_findings,
+                verbose,
+            } = cli.into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(manifest_path, Path::new("selected-manifest"));
+            assert_eq!(output, Path::new("new-evidence"));
+            assert_eq!(
+                prepared.as_deref(),
+                (option == "--prepared").then_some(Path::new("selected-source"))
+            );
+            assert_eq!(
+                plan.as_deref(),
+                (option == "--plan").then_some(Path::new("selected-source"))
+            );
+            assert_eq!(
+                base.as_deref(),
+                (option == "--base").then_some("selected-source")
+            );
+            assert!(deny_findings);
+            assert!(verbose);
+        }
+    }
+
+    #[test]
+    fn compatibility_rejects_ambiguous_sources_and_missing_output() {
+        for options in [
+            vec!["--prepared", "prepared", "--plan", "plan"],
+            vec!["--prepared", "prepared", "--base", "base"],
+            vec!["--plan", "plan", "--base", "base"],
+        ] {
+            let mut args = vec![
+                "cargo-release-plan",
+                "check-compatibility",
+                "--output",
+                "evidence",
+            ];
+            args.extend(options);
+            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+        }
+        assert!(
+            Cli::from_args_os(["cargo-release-plan", "check-compatibility"])
+                .unwrap_err()
+                .status
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn published_discovery_and_resolved_plan_gate_remain_distinct() {
+        for explicit in [false, true] {
+            let mut args = vec!["cargo-release-plan", "check-published"];
+            if explicit {
+                args.extend([
+                    "--manifest-path",
+                    "selected-manifest",
+                    "--plan",
+                    "resolved-plan",
+                    "--verbose",
+                ]);
+            }
+            let RunInput::CheckPublished {
+                manifest_path,
+                plan,
+                verbose,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "selected-manifest"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(
+                plan.as_deref(),
+                explicit.then_some(Path::new("resolved-plan"))
+            );
+            assert_eq!(verbose, explicit);
+        }
+    }
+
+    #[test]
+    fn release_context_retains_default_and_explicit_workspace_policy() {
+        for explicit in [false, true] {
+            let mut args = vec!["cargo-release-plan", "release-context"];
+            if explicit {
+                args.extend([
+                    "--manifest-path",
+                    "selected-manifest",
+                    "--config",
+                    "selected-config",
+                    "--base",
+                    "tested-base",
+                    "--verbose",
+                ]);
+            }
+            let RunInput::ReleaseContext {
+                manifest_path,
+                config,
+                base,
+                verbose,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "selected-manifest"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(
+                config.as_deref(),
+                explicit.then_some(Path::new("selected-config"))
+            );
+            assert_eq!(base.as_deref(), explicit.then_some("tested-base"));
+            assert_eq!(verbose, explicit);
+        }
+    }
+
+    #[test]
+    fn publication_preparation_preserves_source_and_configuration() {
+        for explicit in [false, true] {
+            let mut args = vec![
+                "cargo-release-plan",
+                "prepare-publish",
+                "--source",
+                "immutable-commit",
+                "--output",
+                "publication",
+            ];
+            if explicit {
+                args.extend([
+                    "--manifest-path",
+                    "selected-manifest",
+                    "--config",
+                    "selected-config",
+                    "--verbose",
+                ]);
+            }
+            let RunInput::PreparePublish {
+                manifest_path,
+                config,
+                source,
+                output,
+                verbose,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "selected-manifest"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(
+                config.as_deref(),
+                explicit.then_some(Path::new("selected-config"))
+            );
+            assert_eq!(source, "immutable-commit");
+            assert_eq!(output, Path::new("publication"));
+            assert_eq!(verbose, explicit);
+        }
+    }
+
+    #[test]
+    fn registry_and_github_options_keep_the_frozen_input_separate_from_outputs() {
+        for phase in ["registry", "github"] {
+            for explicit in [false, true] {
+                let mut args = vec![
+                    "cargo-release-plan",
+                    "publish",
+                    phase,
+                    "--publication",
+                    "immutable-publication",
+                    "--output",
+                    "phase-outcome",
+                ];
+                if phase == "github" {
+                    args.extend(["--batches", "native-batches"]);
+                }
+                if explicit {
+                    args.extend([
+                        "--manifest-path",
+                        "selected-manifest",
+                        "--dry-run",
+                        "--verbose",
+                    ]);
+                }
+                let input = Cli::from_args_os(args).unwrap().into_input();
+                match &input {
+                    RunInput::PublishGithub { batches, .. } => {
+                        assert_eq!(phase, "github");
+                        assert_eq!(batches, Path::new("native-batches"));
+                    }
+                    RunInput::PublishRegistry { .. } => assert_eq!(phase, "registry"),
+                    _ => panic!(),
+                }
+                let (RunInput::PublishRegistry {
+                    publication,
+                    manifest_path,
+                    output,
+                    dry_run,
+                    verbose,
+                }
+                | RunInput::PublishGithub {
+                    publication,
+                    manifest_path,
+                    output,
+                    dry_run,
+                    verbose,
+                    ..
+                }) = input
+                else {
+                    panic!()
+                };
+                assert_eq!(publication, Path::new("immutable-publication"));
+                assert_eq!(output, Path::new("phase-outcome"));
+                assert_eq!(
+                    manifest_path,
+                    Path::new(if explicit {
+                        "selected-manifest"
+                    } else {
+                        "Cargo.toml"
+                    })
+                );
+                assert_eq!(dry_run, explicit);
+                assert_eq!(verbose, explicit);
+            }
+        }
     }
 }

@@ -20,6 +20,7 @@ struct FakeForge {
     failures: Cell<usize>,
     release_exists: bool,
     created_source: Option<String>,
+    hide_created_tag: bool,
 }
 
 impl Forge for FakeForge {
@@ -34,6 +35,9 @@ impl Forge for FakeForge {
             self.failures
                 .set(self.failures.get().checked_sub(1).unwrap());
             return Err(FakeFailure::new().into());
+        }
+        if self.hide_created_tag {
+            return Ok(());
         }
         self.tags.borrow_mut().insert(
             tag.to_owned(),
@@ -347,4 +351,42 @@ fn moved_tag_does_not_replace_verified_release_or_batch_source() {
     );
     let batch = work.batches.values().next().unwrap();
     assert_eq!(batch.binaries.first().unwrap().source_sha, verified_source);
+}
+
+#[test]
+fn an_accepted_but_unobserved_tag_remains_failed_after_bounded_revalidation() {
+    let publication = publication();
+    let forge = FakeForge {
+        hide_created_tag: true,
+        ..FakeForge::default()
+    };
+    let loads = Cell::new(0);
+    let mut work = Reconciliation {
+        github: &forge,
+        publication: &publication,
+        load_candidate: || {
+            loads.set(loads.get() + 1);
+            Ok(candidate("1.0.0", true))
+        },
+        retry_pause: |_| {},
+        candidate: None,
+        batches: BTreeMap::new(),
+        dry_run: false,
+        verbose: Verbose::new(true),
+    };
+    let mut result = record(GithubState::Pending);
+    work.package(
+        publication.publication.packages.first().unwrap(),
+        None,
+        &mut result,
+    )
+    .unwrap_err();
+    assert_eq!(loads.get(), 3);
+    assert!(result.source.is_none());
+    assert_eq!(
+        result.recovery_source,
+        Some(publication.publication.source.clone())
+    );
+    assert!(work.batches.is_empty());
+    assert!(forge.release_sources.borrow().is_empty());
 }

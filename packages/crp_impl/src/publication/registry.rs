@@ -1,9 +1,9 @@
 //! Registry availability reconciliation and Cargo-owned workspace uploads.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::Duration;
-use std::{env, fs, thread};
+use std::{env, fs, io, thread};
 
 use ohno::AppError;
 use reqwest::StatusCode;
@@ -128,19 +128,7 @@ impl RegistryClient {
 
     /// Selects a fixed API-comparison version, preferring the highest non-yanked stable release.
     pub(crate) fn latest(&self, name: &str) -> Result<Option<Version>, AppError> {
-        let entries = self.versions(name, thread::sleep)?;
-        let mut versions = Vec::new();
-        for entry in entries {
-            if !entry.yanked {
-                versions.push(Version::parse(&entry.version)?);
-            }
-        }
-        let stable = versions
-            .iter()
-            .filter(|version| version.pre.is_empty())
-            .max()
-            .cloned();
-        Ok(stable.or_else(|| versions.into_iter().max()))
+        latest_version(self.versions(name, thread::sleep)?)
     }
 
     fn versions(
@@ -178,6 +166,66 @@ impl RegistryClient {
         }
         Ok(entries)
     }
+}
+
+/// Acquires credentials and executes Cargo without changing registry or release policy.
+///
+/// Native boundary tests supply process outcomes and a controlled delay while retaining real
+/// source verification and HTTP observations. The CLI always uses the native implementation.
+pub trait RegistryRuntime {
+    fn credentials(
+        &self,
+        publication: &PublicationManifest,
+        manifest: &Path,
+        target: &Path,
+    ) -> Result<CredentialSession, AppError>;
+
+    fn upload(&self, command: &mut Command) -> io::Result<Output>;
+
+    fn pause(&self, delay: Duration);
+}
+
+/// Uses the authorized job identity, native Cargo process and infrastructure retry clock.
+struct NativeRuntime;
+
+impl RegistryRuntime for NativeRuntime {
+    fn credentials(
+        &self,
+        publication: &PublicationManifest,
+        manifest: &Path,
+        target: &Path,
+    ) -> Result<CredentialSession, AppError> {
+        CredentialSession::new(
+            ActionsIdentity::from_environment()?,
+            publication.clone(),
+            manifest.to_path_buf(),
+            target.to_path_buf(),
+            TrustedPublisher::new()?,
+        )
+    }
+
+    fn upload(&self, command: &mut Command) -> io::Result<Output> {
+        command.output()
+    }
+
+    fn pause(&self, delay: Duration) {
+        thread::sleep(delay);
+    }
+}
+
+fn latest_version(entries: Vec<RegistryVersion>) -> Result<Option<Version>, AppError> {
+    let mut versions = Vec::new();
+    for entry in entries {
+        if !entry.yanked {
+            versions.push(Version::parse(&entry.version)?);
+        }
+    }
+    let stable = versions
+        .iter()
+        .filter(|version| version.pre.is_empty())
+        .max()
+        .cloned();
+    Ok(stable.or_else(|| versions.into_iter().max()))
 }
 
 fn query_with_retry<T>(
@@ -290,7 +338,14 @@ pub(crate) fn publish(
         notes: Vec::new(),
         github: WorkflowRun::capture()?,
     };
-    let result = execute(&publication, manifest_path, &client, &mut outcome, verbose);
+    let result = execute_with(
+        &publication,
+        manifest_path,
+        &client,
+        &mut outcome,
+        verbose,
+        &NativeRuntime,
+    );
     if let Err(error) = result {
         // Outcomes contain only a concise handoff; full typed diagnostics stay on stderr.
         eprintln!("{error}");
@@ -316,17 +371,21 @@ pub(crate) fn publish(
     ))
 }
 
-fn execute(
+/// Reconciles real source/index evidence with the invocation's credential and process boundary.
+pub fn execute_with(
     publication: &PublicationManifest,
     manifest_path: &Path,
     client: &RegistryClient,
     outcome: &mut RegistryOutcome,
     verbose: Verbose,
+    runtime: &impl RegistryRuntime,
 ) -> Result<(), AppError> {
     let repository = verify_source(publication, manifest_path)?;
     let mut missing = Vec::new();
     for package in &mut outcome.packages {
-        if client.contains(&package.name, &package.version)? {
+        if client.contains_with_wait(&package.name, &package.version, |delay| {
+            runtime.pause(delay);
+        })? {
             package.state = RegistryState::AlreadyPresent;
             verbose.note(|| {
                 format!(
@@ -363,13 +422,7 @@ fn execute(
     let target = Builder::new()
         .prefix("cargo-release-plan-publish-")
         .tempdir()?;
-    let session = CredentialSession::new(
-        ActionsIdentity::from_environment()?,
-        publication.clone(),
-        source_manifest.clone(),
-        target.path().to_path_buf(),
-        TrustedPublisher::new()?,
-    )?;
+    let session = runtime.credentials(publication, &source_manifest, target.path())?;
     let mut command = Command::new("cargo");
     command
         .args([
@@ -391,7 +444,7 @@ fn execute(
         the credential provider acquires a fresh temporary credential for each upload."
             .to_owned()
     });
-    let upload = command.output();
+    let upload = runtime.upload(&mut command);
     let cleanup = session.finish();
     if let Err(error) = &cleanup {
         eprintln!("{error}");
@@ -405,8 +458,8 @@ fn execute(
     eprint!("{}", String::from_utf8_lossy(&upload.stdout));
     observe_uploads(
         &mut outcome.packages,
-        |name, version| client.contains(name, version),
-        thread::sleep,
+        |name, version| client.contains_with_wait(name, version, |delay| runtime.pause(delay)),
+        |delay| runtime.pause(delay),
     )?;
     repository.ensure_clean_head()?;
     cleanup?;
@@ -565,7 +618,42 @@ struct RegistryUploadFailed {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    #[test]
+    fn comparison_baseline_prefers_non_yanked_stable_versions() {
+        for (versions, expected) in [
+            (json!([]), None),
+            (json!([{"name":"tool","vers":"2.0.0","yanked":true}]), None),
+            (
+                json!([
+                    {"name":"tool","vers":"3.0.0-beta.2"},
+                    {"name":"tool","vers":"3.0.0-beta.1"}
+                ]),
+                Some("3.0.0-beta.2"),
+            ),
+            (
+                json!([
+                    {"name":"tool","vers":"3.0.0-beta.2"},
+                    {"name":"tool","vers":"2.0.0"},
+                    {"name":"tool","vers":"1.0.0"},
+                    {"name":"tool","vers":"4.0.0","yanked":true}
+                ]),
+                Some("2.0.0"),
+            ),
+        ] {
+            assert_eq!(
+                latest_version(serde_json::from_value(versions).unwrap()).unwrap(),
+                expected.map(|version| Version::parse(version).unwrap())
+            );
+        }
+        latest_version(
+            serde_json::from_value(json!([{"name":"tool","vers":"not-a-version"}])).unwrap(),
+        )
+        .unwrap_err();
+    }
 
     #[test]
     fn upload_observation_waits_for_missing_versions_without_requerying_completed_work() {

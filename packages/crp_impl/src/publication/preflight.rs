@@ -32,16 +32,30 @@ pub(crate) fn check(
             .collect()
     };
     let client = RegistryClient::new()?;
+    Ok(observe(
+        targets,
+        plan.is_some(),
+        |name| client.exists(name),
+        verbose,
+    ))
+}
+
+fn observe(
+    targets: Vec<String>,
+    required: bool,
+    mut exists: impl FnMut(&str) -> Result<bool, AppError>,
+    verbose: Verbose,
+) -> (bool, String) {
     let mut missing = Vec::new();
     let mut unknown = Vec::new();
     for name in targets {
-        match client.exists(&name) {
+        match exists(&name) {
             Ok(true)=>verbose.note(||format!("{name} has an established registry identity; no first-publication handoff is required.")),
             Ok(false)=>missing.push(name),
             Err(error)=>{eprintln!("{name}: {error}");unknown.push(name);}
         }
     }
-    Ok(conclusion(plan.is_some(), &missing, &unknown))
+    conclusion(required, &missing, &unknown)
 }
 
 fn conclusion(required: bool, missing: &[String], unknown: &[String]) -> (bool, String) {
@@ -78,4 +92,45 @@ mod tests {
             assert!(advisory.1.contains("First-publication prerequisites"));
         }
     }
+
+    #[test]
+    fn observes_every_selected_identity_and_preserves_missing_and_unknown_results() {
+        for required in [false, true] {
+            let mut queried = Vec::new();
+            let result = observe(
+                vec![
+                    "present".to_owned(),
+                    "missing".to_owned(),
+                    "unknown".to_owned(),
+                ],
+                required,
+                |name| {
+                    queried.push(name.to_owned());
+                    match name {
+                        "present" => Ok(true),
+                        "missing" => Ok(false),
+                        "unknown" => Err(UnavailableRegistry::new().into()),
+                        _ => panic!("unexpected registry lookup"),
+                    }
+                },
+                Verbose::new(true),
+            );
+            assert_eq!(queried, ["present", "missing", "unknown"]);
+            assert_eq!(result.0, !required);
+            assert!(result.1.contains("missing"));
+            assert!(result.1.contains("unknown"));
+        }
+        assert!(
+            observe(
+                Vec::new(),
+                true,
+                |_| panic!("an empty selection must not query a registry"),
+                Verbose::new(true),
+            )
+            .0
+        );
+    }
+
+    #[ohno::error]
+    struct UnavailableRegistry;
 }

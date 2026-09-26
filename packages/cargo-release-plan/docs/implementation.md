@@ -258,6 +258,13 @@ keeps the token-acquisition boundary aligned with the upload rather than the
 potentially long compilation phase. Partial publication is exercised by uploading
 the dependency first and publishing only the remaining dependent afterward.
 
+The registry runtime boundary supplies credential sessions, Cargo process results
+and retry delays. The CLI binds it to native operations. Additional integration
+tests retain real Git/source checks and loopback registry observations while
+controlling process completion, covering partial uploads, lost success responses
+and changed source without publishing packages. This is an internal testing
+boundary, not a selectable registry or publication backend.
+
 The [workspace in-process boundary](../../../docs/testing.md#unit-tests-stay-inside-the-process)
 applies to every fixture and acquisition call. Avoiding Cargo metadata or keeping
 a real Git history small does not make an acquisition test a unit test. Tests of

@@ -72,6 +72,61 @@ fn malformed_success_responses_cannot_echo_credential_values() {
     }
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Uses loopback identity responses and the real HTTP client"
+)]
+fn empty_credentials_and_invalid_transport_inputs_fail_without_exposing_them() {
+    for empty_identity in [false, true] {
+        let service = HttpService::new(move |_, request| {
+            let body = match request.method() {
+                Method::Get if empty_identity => json!({"value":""}),
+                Method::Get => json!({"value":"jwt-credential-canary"}),
+                Method::Post => json!({"token":""}),
+                method => panic!("Unexpected identity operation: {method}"),
+            };
+            request
+                .respond(Response::from_string(body.to_string()))
+                .unwrap();
+        });
+        let identity: ActionsIdentity = serde_json::from_value(json!({
+            "request_url":format!("{}/identity",service.url()),
+            "request_token":"identity-credential-canary"
+        }))
+        .unwrap();
+        let publisher =
+            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url())).unwrap();
+        publisher.exchange(&identity).unwrap_err();
+    }
+
+    let service = HttpService::new(|_, request| {
+        assert_eq!(request.method(), &Method::Get);
+        request
+            .respond(Response::from_string(
+                r#"{"value":"jwt-credential-canary"}"#,
+            ))
+            .unwrap();
+    });
+    for invalid_identity in [false, true] {
+        let identity: ActionsIdentity = serde_json::from_value(json!({
+            "request_url":if invalid_identity {
+                "invalid URL containing credential-canary".to_owned()
+            } else {
+                format!("{}/identity",service.url())
+            },
+            "request_token":"identity-credential-canary"
+        }))
+        .unwrap();
+        let publisher =
+            TrustedPublisher::with_endpoint("invalid URL containing credential-canary").unwrap();
+        let error = publisher.exchange(&identity).unwrap_err();
+        assert!(!error.to_string().contains("credential-canary"));
+        let error = publisher.revoke("registry-credential-canary").unwrap_err();
+        assert!(!error.to_string().contains("credential-canary"));
+    }
+}
+
 /// A disposable identity endpoint; stopping it wakes a blocked receiver without a timer.
 pub(crate) struct IdentityService {
     http: HttpService,
@@ -80,10 +135,14 @@ pub(crate) struct IdentityService {
 
 impl IdentityService {
     pub(crate) fn new(reject_exchange: bool) -> Self {
+        Self::with_failures(reject_exchange, false)
+    }
+
+    pub(crate) fn with_failures(reject_exchange: bool, reject_revocation: bool) -> Self {
         let operations = Arc::new(Mutex::new(Vec::new()));
         let http = HttpService::new({
             let operations = Arc::clone(&operations);
-            move |_, request| respond(request, &operations, reject_exchange)
+            move |_, request| respond(request, &operations, reject_exchange, reject_revocation)
         });
         Self { http, operations }
     }
@@ -97,7 +156,12 @@ impl IdentityService {
     }
 }
 
-fn respond(mut request: Request, operations: &Mutex<Vec<&'static str>>, reject_exchange: bool) {
+fn respond(
+    mut request: Request,
+    operations: &Mutex<Vec<&'static str>>,
+    reject_exchange: bool,
+    reject_revocation: bool,
+) {
     let authorization = request
         .headers()
         .iter()
@@ -138,6 +202,12 @@ fn respond(mut request: Request, operations: &Mutex<Vec<&'static str>>, reject_e
             Some("Bearer registry-credential-canary")
         );
         operations.lock().unwrap().push("revoke");
-        request.respond(Response::empty(StatusCode(204))).unwrap();
+        request
+            .respond(Response::empty(StatusCode(if reject_revocation {
+                403
+            } else {
+                204
+            })))
+            .unwrap();
     }
 }

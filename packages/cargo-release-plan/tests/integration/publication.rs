@@ -2,12 +2,16 @@
 
 use std::env::consts::EXE_SUFFIX;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use cargo_release_plan::{RunInput, RunOutcome, run};
+use crp_impl::publication::credentials::CredentialSession;
 use crp_impl::publication::github::PlatformBatch;
+use crp_impl::publication::identity::TrustedPublisher;
+use crp_impl::publication::manifest::PublicationManifest;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -162,7 +166,7 @@ fn release_context_resolves_baseline_without_requiring_clean_source() {
             manifest_path: fixture.manifest(),
             config: None,
             base: explicit,
-            verbose: false,
+            verbose: true,
         })
         .unwrap();
         let RunOutcome::ArtifactQuery { message } = outcome else {
@@ -278,7 +282,7 @@ fn rejects_different_existing_intent_without_overwriting_it() {
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Cargo and Git and persists phase outcomes")]
-fn empty_registry_work_needs_no_identity_and_never_overwrites_intent() {
+fn empty_publication_phases_need_no_identity_and_never_overwrite_intent() {
     let fixture = publication_source();
     write_package(&fixture, "library", "1.0.0", "publish = false\n");
     fixture.commit("private workspace");
@@ -288,32 +292,45 @@ fn empty_registry_work_needs_no_identity_and_never_overwrites_intent() {
     run(&preparation(&fixture, publication.clone())).unwrap();
     let intent = fs::read(&publication).unwrap();
     for dry_run in [false, true] {
-        let outcome = output.path().join(format!("registry-{dry_run}.json"));
-        let input = RunInput::PublishRegistry {
-            publication: publication.clone(),
-            manifest_path: fixture.manifest(),
-            output: outcome.clone(),
-            dry_run,
-            verbose: false,
-        };
-        assert!(matches!(
-            run(&input).unwrap(),
-            RunOutcome::Publication { passed: true, .. }
-        ));
-        let report: Value = serde_json::from_slice(&fs::read(&outcome).unwrap()).unwrap();
-        assert_eq!(report.get("complete").unwrap(), !dry_run);
-        assert_eq!(report.get("dry_run").unwrap(), dry_run);
-        assert!(
-            report
-                .get("packages")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        let manifest: Value = serde_json::from_slice(&intent).unwrap();
-        assert_eq!(report.get("publication_id"), manifest.get("id"));
-        run(&input).unwrap_err();
+        for phase in ["registry", "github"] {
+            let outcome = output.path().join(format!("{phase}-{dry_run}.json"));
+            let input = if phase == "github" {
+                RunInput::PublishGithub {
+                    publication: publication.clone(),
+                    manifest_path: fixture.manifest(),
+                    output: outcome.clone(),
+                    batches: output.path().join(format!("batches-{dry_run}")),
+                    dry_run,
+                    verbose: false,
+                }
+            } else {
+                RunInput::PublishRegistry {
+                    publication: publication.clone(),
+                    manifest_path: fixture.manifest(),
+                    output: outcome.clone(),
+                    dry_run,
+                    verbose: false,
+                }
+            };
+            assert!(matches!(
+                run(&input).unwrap(),
+                RunOutcome::Publication { passed: true, .. }
+            ));
+            let report: Value = serde_json::from_slice(&fs::read(&outcome).unwrap()).unwrap();
+            assert_eq!(report.get("complete").unwrap(), !dry_run);
+            assert_eq!(report.get("dry_run").unwrap(), dry_run);
+            assert!(
+                report
+                    .get("packages")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            let manifest: Value = serde_json::from_slice(&intent).unwrap();
+            assert_eq!(report.get("publication_id"), manifest.get("id"));
+            run(&input).unwrap_err();
+        }
     }
     run(&RunInput::PublishRegistry {
         publication: publication.clone(),
@@ -323,7 +340,37 @@ fn empty_registry_work_needs_no_identity_and_never_overwrites_intent() {
         verbose: false,
     })
     .unwrap_err();
-    assert_eq!(fs::read(publication).unwrap(), intent);
+    assert_eq!(fs::read(&publication).unwrap(), intent);
+
+    fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
+    for github in [false, true] {
+        let outcome = output.path().join(format!("invalid-source-{github}.json"));
+        let input = if github {
+            RunInput::PublishGithub {
+                publication: publication.clone(),
+                manifest_path: fixture.manifest(),
+                output: outcome.clone(),
+                batches: output.path().join("invalid-source-batches"),
+                dry_run: false,
+                verbose: false,
+            }
+        } else {
+            RunInput::PublishRegistry {
+                publication: publication.clone(),
+                manifest_path: fixture.manifest(),
+                output: outcome.clone(),
+                dry_run: false,
+                verbose: false,
+            }
+        };
+        assert!(matches!(
+            run(&input).unwrap(),
+            RunOutcome::Publication { passed: false, .. }
+        ));
+        let report: Value = serde_json::from_slice(&fs::read(outcome).unwrap()).unwrap();
+        assert_eq!(report.get("complete").unwrap(), false);
+        assert!(!report.get("errors").unwrap().as_array().unwrap().is_empty());
+    }
 }
 
 #[test]
@@ -373,13 +420,304 @@ fn reporter_preserves_job_failures_when_publication_artifacts_are_missing_or_inv
     }
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Exercises the report executable with real persisted outcomes"
+)]
+fn reporter_completes_valid_delivery_and_rejects_ambiguous_receipts_and_destinations() {
+    let fixture = publication_source();
+    let directory = TempDir::new().unwrap();
+    let publication = directory.path().join("publication.json");
+    run(&preparation(&fixture, publication.clone())).unwrap();
+    let intent: Value = serde_json::from_slice(&fs::read(&publication).unwrap()).unwrap();
+    let outcomes = directory.path().join("outcomes");
+    for phase in ["registry", "github"] {
+        fs::create_dir_all(outcomes.join(phase)).unwrap();
+        fs::write(
+            outcomes.join(phase).join("outcome.json"),
+            serde_json::to_vec(&json!({
+                "schema_version":1,"publication_id":intent.get("id").unwrap(),
+                "phase":phase,"complete":true,"github":{"run_id":123,"run_attempt":1}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let jobs = directory.path().join("jobs.json");
+    fs::write(
+        &jobs,
+        br#"{"prepare":"success","registry":"success","github":"success","binaries":"skipped"}"#,
+    )
+    .unwrap();
+    let command = |output: &Path, repository: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
+        command
+            .args([
+                "publish",
+                "report",
+                "--repository",
+                repository,
+                "--outcomes",
+            ])
+            .arg(&outcomes)
+            .arg("--publication")
+            .arg(&publication)
+            .arg("--jobs")
+            .arg(&jobs)
+            .arg("--output")
+            .arg(output)
+            .arg("--no-issue")
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_RUN_ID", "123")
+            .env("GITHUB_RUN_ATTEMPT", "1");
+        command
+    };
+    let output = directory.path().join("complete.md");
+    assert!(
+        command(&output, "example/publication-fixture")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let complete = fs::read(&output).unwrap();
+    assert!(String::from_utf8_lossy(&complete).contains("Release complete"));
+    assert!(
+        !command(&output, "example/publication-fixture")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(fs::read(&output).unwrap(), complete);
+    let wrong = directory.path().join("wrong-repository.md");
+    assert!(
+        !command(&wrong, "example/other")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(!wrong.exists());
+
+    fs::create_dir_all(outcomes.join("duplicate")).unwrap();
+    for schema in [1, 2] {
+        fs::write(
+            outcomes.join("duplicate/outcome.json"),
+            serde_json::to_vec(&json!({
+                "schema_version":schema,"publication_id":intent.get("id").unwrap(),
+                "phase":"registry","complete":true,"github":{"run_id":123,"run_attempt":1}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output = directory.path().join(format!("invalid-{schema}.md"));
+        assert!(
+            !command(&output, "example/publication-fixture")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert!(
+            fs::read_to_string(output)
+                .unwrap()
+                .contains("Release incomplete")
+        );
+    }
+    fs::write(&publication, b"{").unwrap();
+    let malformed = directory.path().join("malformed-manifest.md");
+    assert!(
+        !command(&malformed, "example/publication-fixture")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        fs::read_to_string(malformed)
+            .unwrap()
+            .contains("Release incomplete")
+    );
+    let unhosted = directory.path().join("unhosted.md");
+    assert!(
+        !command(&unhosted, "example/publication-fixture")
+            .env_remove("GITHUB_ACTIONS")
+            .env_remove("GITHUB_RUN_ID")
+            .env_remove("GITHUB_RUN_ATTEMPT")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(!unhosted.exists());
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Exercises private credential protocol routing in an isolated process"
+)]
+fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() {
+    testing::with_watchdog_timeout(Duration::from_mins(5), || {
+        let directory = TempDir::new().unwrap();
+        let publication = PublicationManifest::new(serde_json::from_value(json!({
+            "schema_version":1,"tool_version":"1.0.0","source":"a".repeat(40),
+            "workspace_manifest":"Cargo.toml","config_path":".cargo/release_plan.toml",
+            "configuration":{"schema-version":1,"repository":"example/tool","release-branch":"main","targets":[]},
+            "packages":[]
+        })).unwrap()).unwrap();
+        let session = CredentialSession::new(
+            serde_json::from_value(json!({
+                "request_url":"http://127.0.0.1:0/unused",
+                "request_token":"identity-credential-canary"
+            }))
+            .unwrap(),
+            publication,
+            directory.path().join("unused-source/Cargo.toml"),
+            directory.path().join("target"),
+            TrustedPublisher::with_endpoint("http://127.0.0.1:0/unused").unwrap(),
+        )
+        .unwrap();
+        let mut cargo = Command::new("cargo");
+        session
+            .configure(&mut cargo, Path::new("provider"))
+            .unwrap();
+        let context = cargo
+            .get_envs()
+            .find(|(name, _)| *name == "CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT")
+            .unwrap()
+            .1
+            .unwrap();
+        let executable = env!("CARGO_BIN_EXE_cargo-release-plan");
+        let missing = Command::new(executable)
+            .arg("--cargo-plugin")
+            .env_remove("CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT")
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+        assert!(missing.stdout.is_empty());
+        let mut child = Command::new(executable)
+            .arg("--cargo-plugin")
+            .env("CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT", context)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let request = json!({
+            "v":1,"kind":"get","operation":"publish","name":"unrequested","vers":"1.0.0",
+            "cksum":"b".repeat(64),"registry":{"index-url":"sparse+https://index.crates.io/"}
+        });
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(request.to_string().as_bytes())
+            .unwrap();
+        let rejected = child.wait_with_output().unwrap();
+        assert!(!rejected.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&rejected.stdout).unwrap(),
+            json!({"v":[1]})
+        );
+        assert!(!String::from_utf8_lossy(&rejected.stderr).contains("identity-credential-canary"));
+        session.finish().unwrap();
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Exercises identity environment validation in isolated processes"
+)]
+fn identity_probe_rejects_missing_or_empty_job_identity_without_network_access() {
+    for scenario in [
+        "missing-url",
+        "empty-url",
+        "missing-token",
+        "empty-token",
+        "invalid-url",
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
+        command
+            .args(["check-publishing-identity", "--verbose"])
+            .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
+            .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+        if scenario == "empty-url" {
+            command.env("ACTIONS_ID_TOKEN_REQUEST_URL", "");
+        } else if scenario != "missing-url" {
+            command.env("ACTIONS_ID_TOKEN_REQUEST_URL", "not an identity URL");
+            if scenario == "empty-token" {
+                command.env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "");
+            } else if scenario == "invalid-url" {
+                command.env(
+                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                    "identity-credential-canary",
+                );
+            }
+        }
+        assert!(!command.output().unwrap().status.success());
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Validates publication source before any registry query"
+)]
+fn nonempty_registry_intent_retains_unknown_package_states_when_source_is_invalid() {
+    let fixture = publication_source();
+    let directory = TempDir::new().unwrap();
+    let publication = directory.path().join("publication.json");
+    run(&preparation(&fixture, publication.clone())).unwrap();
+    fixture.write("packages/library/src/lib.rs", "pub fn changed() {}\n");
+    let output = directory.path().join("registry.json");
+    assert!(matches!(
+        run(&RunInput::PublishRegistry {
+            publication,
+            manifest_path: fixture.manifest(),
+            output: output.clone(),
+            dry_run: false,
+            verbose: true,
+        })
+        .unwrap(),
+        RunOutcome::Publication { passed: false, .. }
+    ));
+    let result: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+    assert_eq!(result.pointer("/packages/0/state").unwrap(), "unknown");
+    assert_eq!(result.get("complete").unwrap(), false);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Verifies that invalid publication sources create no artifact"
+)]
+fn publication_preparation_rejects_symbolic_or_abbreviated_source_identities() {
+    let directory = TempDir::new().unwrap();
+    for source in ["HEAD", "abc123", ""] {
+        let output = directory.path().join("publication.json");
+        run(&RunInput::PreparePublish {
+            manifest_path: directory.path().join("unused/Cargo.toml"),
+            config: None,
+            source: source.to_owned(),
+            output: output.clone(),
+            verbose: true,
+        })
+        .unwrap_err();
+        assert!(!output.exists());
+    }
+}
+
 fn preparation(fixture: &Fixture, output: PathBuf) -> RunInput {
     RunInput::PreparePublish {
         manifest_path: fixture.manifest(),
         config: None,
         source: fixture.sha("HEAD"),
         output,
-        verbose: false,
+        verbose: true,
     }
 }
 

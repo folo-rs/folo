@@ -280,4 +280,23 @@ mod tests {
         });
         PublicationManifest::new(invalid).unwrap_err();
     }
+
+    #[test]
+    fn rejects_changed_envelope_identity_and_invalid_binary_names() {
+        let mut envelope = PublicationManifest::new(publication()).unwrap();
+        envelope.id = "not-the-content-digest".to_owned();
+        envelope.validate().unwrap_err();
+
+        let mut invalid = publication();
+        invalid.configuration = serde_json::from_value(json!({
+            "schema-version":1,"repository":"example/tools","release-branch":"main",
+            "targets":["x86_64-unknown-linux-gnu"]
+        }))
+        .unwrap();
+        invalid.packages.first_mut().unwrap().binary = Some(Binary {
+            name: "../not-a-binary".to_owned(),
+            targets: serde_json::from_value(json!(["x86_64-unknown-linux-gnu"])).unwrap(),
+        });
+        PublicationManifest::new(invalid).unwrap_err();
+    }
 }
