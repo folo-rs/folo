@@ -555,6 +555,13 @@ shortens the generated paths upstream.
 
 ## Release publication
 
+`workflow_dispatch` accepts `verify-publishing-identity` for the separate
+exchange/revoke-only path. It calls the pinned reusable identity workflow from
+`release.yml`, preserving crates.io's registered caller filename. The normal
+publisher, tag/binary planning, build matrix and publication alert all explicitly
+exclude that input. The reusable workflow separates read-only installation from
+its OIDC job and transfers the verified executable by artifact identity.
+
 `release-plz` owns registry publication only. Its committed configuration disables Git
 tag and release creation, so a main-advance race in GitHub publication cannot turn a
 successful crates.io publish into a publisher retry. The publish job's ambient GitHub

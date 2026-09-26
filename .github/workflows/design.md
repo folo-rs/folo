@@ -801,6 +801,19 @@ unattended recovery depend on a permission the workflow does not possess. Select
 verified current-main snapshot preserves package identity without adding credentials or
 blocking unrelated merges.
 
+### Publication identity verification
+
+A manual `verify-publishing-identity` dispatch on `release.yml` verifies the
+registered caller through the reusable release action. The controller is built
+without OIDC permission and transferred to a separate identity-probe job, which
+exchanges and immediately revokes a temporary crates.io credential. It performs
+no package upload, tag/release write or binary publication.
+
+The probe and normal publication paths are mutually exclusive. Every mutating
+publication job explicitly excludes probe dispatches, including on `main`.
+The caller filename remains the one in the existing Trusted Publisher registration.
+Success validates that identity path, not every package-specific publisher grant.
+
 ### Publication and recovery
 
 Registry publication and GitHub publication have separate owners. Release-plz publishes

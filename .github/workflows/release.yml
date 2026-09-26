@@ -15,10 +15,13 @@ name: Release
 on:
   push:
     branches: [main]
-  # A bare manual re-trigger (no inputs). publish is a no-op when nothing changed, and
-  # plan-binaries reconciles + heals any missing prebuilt binaries. See the
-  # `plan-binaries` job and docs/release-automation.md ("Robust publishing").
-  workflow_dispatch: {}
+  # Default dispatch reconciles publication; the explicit probe only verifies caller identity.
+  workflow_dispatch:
+    inputs:
+      verify-publishing-identity:
+        description: Exchange and revoke an OIDC credential without publishing
+        type: boolean
+        default: false
 
 # Never cancel a publish mid-flight: releasing is not safe to interrupt. Keyed on the
 # ref so a later push to main queues behind the in-flight release rather than killing it.
@@ -27,13 +30,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-publishing-identity:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify-publishing-identity && github.repository == 'folo-rs/folo'
+    # Keep the registered caller filename while checking the reusable workflow's OIDC identity.
+    # Controller installation runs separately without OIDC. No package upload is performed.
+    # Ref: design.md#publication-identity-verification.
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@e4d98d54c913f41866774670a3e27236ddc1d5dd
+    with:
+      install-method: path
+      source-path: .
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+
   publish:
     # crates.io Trusted Publishing federates only this repository's identity; a fork
     # cannot mint a matching OIDC token, so gate to the canonical repo (a fork's push
     # skips cleanly instead of failing at the token exchange). The `main` gate matters
     # only for `workflow_dispatch`, which can target any ref: the `push` trigger is
     # already main-only, so this stops a dispatch on a feature branch from publishing.
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
     runs-on: ubuntu-latest
     # Generous ceiling: covers up to 3 publish attempts (release-plz publish_timeout is
     # 45m) with 15-minute waits between retries (~165m), plus up to 90 min for a cold-cache
@@ -91,7 +108,7 @@ jobs:
     # re-run or a bare workflow_dispatch reconciles the actual published state against the
     # uploaded assets and rebuilds only what is missing - no manual crate list.
     needs: publish
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
     runs-on: ubuntu-latest
     # Fast reconcile work plus up to 90 min for a cold-cache setup-environment - which itself
     # timed out the previous 30-minute cap on a cache miss.
@@ -150,7 +167,7 @@ jobs:
   build-binaries:
     name: build-binaries (${{ matrix.triple }})
     needs: [publish, plan-binaries]
-    if: needs.plan-binaries.outputs.has_binaries == 'true'
+    if: needs.plan-binaries.outputs.has_binaries == 'true' && !inputs.verify-publishing-identity
     strategy:
       # One target's failure must not abandon the others' archives. The reconciliation
       # in plan-binaries means the next run rebuilds only whatever is still missing.
@@ -200,7 +217,7 @@ jobs:
     # release is tracked individually (not folded into a rolling issue). `failure()` fires
     # only on a real failure - a skipped build-binaries (nothing to build) does not count.
     needs: [publish, plan-binaries, build-binaries]
-    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.verify-publishing-identity
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
