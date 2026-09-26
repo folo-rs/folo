@@ -146,28 +146,40 @@ Describe 'Release archive prerequisite setup' {
         Should -Invoke zip -ModuleName ReleaseArchiveTools -Times 0 -Exactly
     }
 
-    It 'uses the verified native <Architecture> payload; mismatch=<Mismatch>' -ForEach @(
-        @{ Mismatch = $false; Architecture = 'X64'; Directory = 'x64' },
-        @{ Mismatch = $true; Architecture = 'X64'; Directory = 'x64' },
-        @{ Mismatch = $false; Architecture = 'Arm64'; Directory = 'arm64' },
-        @{ Mismatch = $true; Architecture = 'Arm64'; Directory = 'arm64' }
+    It 'verifies archive and copied <Architecture> bytes before execution; archive mismatch=<ArchiveMismatch>; payload mismatch=<PayloadMismatch>' -ForEach @(
+        @{ ArchiveMismatch = $false; PayloadMismatch = $false; Architecture = 'X64'; Directory = 'x64' },
+        @{ ArchiveMismatch = $true; PayloadMismatch = $false; Architecture = 'X64'; Directory = 'x64' },
+        @{ ArchiveMismatch = $false; PayloadMismatch = $true; Architecture = 'X64'; Directory = 'x64' },
+        @{ ArchiveMismatch = $false; PayloadMismatch = $false; Architecture = 'Arm64'; Directory = 'arm64' },
+        @{ ArchiveMismatch = $true; PayloadMismatch = $false; Architecture = 'Arm64'; Directory = 'arm64' },
+        @{ ArchiveMismatch = $false; PayloadMismatch = $true; Architecture = 'Arm64'; Directory = 'arm64' }
     ) {
         InModuleScope ReleaseArchiveTools -Parameters @{
-            Mismatch = $Mismatch; Architecture = $Architecture; Directory = $Directory
+            ArchiveMismatch = $ArchiveMismatch; PayloadMismatch = $PayloadMismatch
+            Architecture = $Architecture; Directory = $Directory
         } {
-            param($Mismatch, $Architecture, $Directory)
+            param($ArchiveMismatch, $PayloadMismatch, $Architecture, $Directory)
             $expectedMember = Join-Path $Directory '7za.exe'
             Mock Test-Path { $false }
+            Mock Join-Path { 'Invoke-SevenZipProbeFixture' } -ParameterFilter {
+                $Path -eq 'managed-tools' -and $ChildPath -eq '7za.exe'
+            }
             Mock New-Item {}
             Mock Invoke-WebRequest {}
             Mock Get-FileHash {
-                # This is a correctly shaped but incorrect digest, not malformed metadata.
-                [pscustomobject]@{ Hash = $(if ($Mismatch) { '0' * 64 } else { $script:SevenZipHash }) }
+                $isPayload = $LiteralPath -eq 'Invoke-SevenZipProbeFixture'
+                $mismatch = if ($isPayload) { $PayloadMismatch } else { $ArchiveMismatch }
+                $expected = if ($isPayload) { $script:SevenZipPayload[$Architecture.ToString()].Hash } else { $script:SevenZipHash }
+                [pscustomobject]@{ Hash = $(if ($mismatch) { '0' * 64 } else { $expected }) }
             }
             Mock Invoke-WithRetry { & $Action }
             Mock Copy-Item {}
             Mock Remove-Item {}
             Mock Invoke-ArchiveExtractorFixture {}
+            Mock Invoke-SevenZipProbeFixture {
+                $global:LASTEXITCODE = 0
+                "7-Zip (a) $script:SevenZipVersion fixture"
+            }
             Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-ArchiveExtractorFixture' } }
 
             $previousRoot = $env:SystemRoot
@@ -175,18 +187,24 @@ Describe 'Release archive prerequisite setup' {
                 # The mocked application boundary makes this Windows bootstrap policy test
                 # portable, without creating files or downloading an executable.
                 $env:SystemRoot = [IO.Path]::GetTempPath()
-                if ($Mismatch) {
+                if ($ArchiveMismatch) {
                     { Install-StandaloneSevenZip -Destination 'managed-tools' -Architecture $Architecture } | Should -Throw
                     Should -Invoke Invoke-ArchiveExtractorFixture -Times 0 -Exactly
                     Should -Invoke Copy-Item -Times 0 -Exactly
                 } else {
-                    Install-StandaloneSevenZip -Destination 'managed-tools' -Architecture $Architecture
+                    if ($PayloadMismatch) {
+                        { Install-StandaloneSevenZip -Destination 'managed-tools' -Architecture $Architecture } | Should -Throw
+                    } else {
+                        Install-StandaloneSevenZip -Destination 'managed-tools' -Architecture $Architecture
+                    }
                     Should -Invoke Invoke-ArchiveExtractorFixture -Times 1 -Exactly
                     Should -Invoke Copy-Item -Times 2 -Exactly
                     Should -Invoke Copy-Item -Times 1 -Exactly -ParameterFilter {
                         $LiteralPath.EndsWith($expectedMember, [StringComparison]::Ordinal)
                     }
                 }
+                $probeCount = if ($ArchiveMismatch -or $PayloadMismatch) { 0 } else { 1 }
+                Should -Invoke Invoke-SevenZipProbeFixture -Times $probeCount -Exactly
                 Should -Invoke Get-Command -Times 1 -Exactly -ParameterFilter {
                     $Name -contains (Join-Path $env:SystemRoot 'System32' 'tar.exe') -and
                     $CommandType -eq 'Application'

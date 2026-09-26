@@ -249,7 +249,7 @@ fn main() {
     let directory = env::current_exe().unwrap().parent().unwrap().to_path_buf();
     let tag = &args[2];
     let mut log = OpenOptions::new().create(true).append(true).open(directory.join("calls")).unwrap();
-    writeln!(log, "{} {tag}", args[1]).unwrap();
+    log.write_all(format!("{} {tag}\n", args[1]).as_bytes()).unwrap();
     let base = format!("{tag}-{}", fs::read_to_string(directory.join("target")).unwrap());
     let state = directory.join(tag);
     match args[1].as_str() {

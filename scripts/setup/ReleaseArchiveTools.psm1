@@ -96,13 +96,16 @@ function Install-StandaloneSevenZip {
         $null = New-Item -ItemType Directory -Path $Destination -Force
         Copy-Item -LiteralPath (Join-Path $work $payload.Directory '7za.exe') -Destination $installed -Force
         Copy-Item -LiteralPath (Join-Path $work 'License.txt') -Destination (Join-Path $Destination 'release-7zip-license.txt') -Force
+        if (-not (Test-StandaloneSevenZip -Path $installed -ExpectedHash $payload.Hash)) {
+            throw 'Installed standalone 7-Zip payload failed verification.'
+        }
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force
     }
 }
 
 function Test-StandaloneSevenZip {
-    # Check restored bytes against the selected native payload before executing even a probe.
+    # Check managed bytes against the selected native payload before executing even a probe.
     # A matching version banner alone cannot reconcile stale or changed same-version assets.
     [CmdletBinding()]
     [OutputType([bool])]
@@ -112,7 +115,7 @@ function Test-StandaloneSevenZip {
     )
 
     if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedHash) {
-        Write-Verbose 'Replacing the cached archive tool because its bytes differ from the pinned native payload.' -Verbose
+        Write-Verbose 'Archive tool bytes differ from the pinned native payload.' -Verbose
         return $false
     }
     $previousPreference = $PSNativeCommandUseErrorActionPreference
@@ -121,12 +124,12 @@ function Test-StandaloneSevenZip {
         $output = & $Path i 2>&1
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
-            Write-Verbose "Replacing cached archive tool because its version probe exited $exitCode." -Verbose
+            Write-Verbose "Archive tool version probe exited $exitCode." -Verbose
             return $false
         }
         return [bool] ($output -match "7-Zip.* $([regex]::Escape($script:SevenZipVersion)) ")
     } catch [System.Management.Automation.ApplicationFailedException] {
-        Write-Verbose "Replacing cached archive tool because it could not start: $_" -Verbose
+        Write-Verbose "Archive tool could not start: $_" -Verbose
         return $false
     } finally {
         $PSNativeCommandUseErrorActionPreference = $previousPreference

@@ -10,11 +10,11 @@ fn main() {
         .append(true)
         .open(env::var_os("CRP_PUBLICATION_EVENTS").unwrap())
         .unwrap();
-    writeln!(
-        events,
-        r#"{{"operation":"build","name":"{}"}}"#,
+    // Cargo can run multiple build scripts concurrently; append each complete record together.
+    let event = format!(
+        "{{\"operation\":\"build\",\"name\":\"{}\"}}\n",
         env::var("CARGO_PKG_NAME").unwrap()
-    )
-    .unwrap();
+    );
+    events.write_all(event.as_bytes()).unwrap();
     println!("cargo::rerun-if-changed=build.rs");
 }

@@ -46,7 +46,7 @@ fn main() {
     if args[0] == "api" {
         let path = args[1].strip_prefix("repos/fixture/does-not-exist/git/").unwrap();
         if let Some(tag) = path.strip_prefix("matching-refs/tags/") {
-            writeln!(log, "tag {tag}").unwrap();
+            log.write_all(format!("tag {tag}\n").as_bytes()).unwrap();
             match fs::read_to_string(directory.join(format!("{tag}.source"))) {
                 Ok(source) => {
                     let annotated = fs::read_to_string(directory.join("annotated")).ok().as_deref() == Some(tag);
@@ -65,7 +65,7 @@ fn main() {
             }
         } else if let Some(object) = path.strip_prefix("tags/") {
             assert_eq!(object, "a".repeat(40));
-            writeln!(log, "peel {object}").unwrap();
+            log.write_all(format!("peel {object}\n").as_bytes()).unwrap();
             let tag = fs::read_to_string(directory.join("annotated")).unwrap();
             let source = fs::read_to_string(directory.join(format!("{tag}.source"))).unwrap();
             println!("{{\"object\":{{\"type\":\"commit\",\"sha\":\"{source}\"}}}}");
@@ -77,7 +77,7 @@ fn main() {
     assert_eq!(args[0], "release");
     assert_eq!(&args[args.len() - 2..], ["--repo", "fixture/does-not-exist"]);
     let tag = &args[2];
-    writeln!(log, "{} {tag}", args[1]).unwrap();
+    log.write_all(format!("{} {tag}\n", args[1]).as_bytes()).unwrap();
     let base = format!("{tag}-{}", env::var("RELEASE_FIXTURE_TRIPLE").unwrap());
     let state = directory.join(tag);
     match args[1].as_str() {
