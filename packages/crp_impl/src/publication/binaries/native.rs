@@ -216,11 +216,26 @@ impl Executor for Native {
         })
         .is_err()
         {
+            // Fetch from the configured destination, not an unrelated or absent local remote.
+            // Only this repository-read operation receives authentication; build children do not.
+            let mut fetch_environment = environment.to_vec();
+            if let Some(token) = self.github.token.as_deref() {
+                fetch_environment.push(("GH_TOKEN", token));
+            }
             capture(
                 OsStr::new("git"),
-                &strings(&["fetch", "--no-tags", "origin", &binary.source_sha]),
+                &strings(&[
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    "credential.helper=!gh auth git-credential",
+                    "fetch",
+                    "--no-tags",
+                    &format!("https://github.com/{}.git", self.github.repository),
+                    &binary.source_sha,
+                ]),
                 &self.controller,
-                &environment,
+                &fetch_environment,
                 self.deadline,
             )?;
         }

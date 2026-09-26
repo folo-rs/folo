@@ -193,6 +193,7 @@ impl Github {
         &self,
         tag: &str,
         version: &str,
+        source: &str,
         dry_run: bool,
     ) -> Result<Option<Release>, AppError> {
         if let Some(value) = self.get(&format!("/releases/tags/{tag}"))? {
@@ -201,11 +202,14 @@ impl Github {
         if dry_run {
             return Ok(None);
         }
+        // If the established tag disappears, the API must not choose a moving default-branch
+        // commit as an implicit replacement source.
         let result = self.request(
             &Method::POST,
             "/releases",
             Some(&json!({
-                "tag_name": tag, "name": tag, "draft": false, "prerelease": !Version::parse(version)?.pre.is_empty()
+                "tag_name": tag, "target_commitish": source, "name": tag, "draft": false,
+                "prerelease": !Version::parse(version)?.pre.is_empty()
             })),
         );
         if let Err(error) = result {
@@ -279,9 +283,10 @@ impl Forge for Github {
         &self,
         tag: &str,
         version: &str,
+        source: &str,
         dry_run: bool,
     ) -> Result<Option<Release>, AppError> {
-        Self::ensure_release(self, tag, version, dry_run)
+        Self::ensure_release(self, tag, version, source, dry_run)
     }
 
     #[cfg_attr(test, mutants::skip)]
@@ -298,6 +303,7 @@ pub(crate) trait Forge {
         &self,
         tag: &str,
         version: &str,
+        source: &str,
         dry_run: bool,
     ) -> Result<Option<Release>, AppError>;
     fn assets(&self, release: &Release) -> Result<Vec<Asset>, AppError>;

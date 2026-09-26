@@ -151,6 +151,9 @@ partition's unit tests.
 
 The controller repository supplies Git objects and the shared target directory,
 while each release tag selects a disposable immutable source worktree.
+Missing objects are fetched by exact commit from the configured GitHub repository;
+the caller need not have a local remote named `origin`. Fetch authentication is
+scoped to that repository-read command, not inherited by compilation.
 The controller workspace's repository-relative location is retained for nested
 Cargo projects. Build commands execute there and rustup selects a tracked
 toolchain within that source repository; the engine needs no repository-local
@@ -176,7 +179,10 @@ handoff rather than another version or broader credentials.
 Existing tags retain their commit identity and bypass candidate selection.
 Historical package identity is checked without imposing today's configuration or
 group policy on an old tag. Binary releases name the established tag explicitly,
-and paginated asset inventories determine which native pairs remain incomplete.
+and creation requests retain its observed commit instead of an implicit branch
+target. A competing ref created at a different commit is preserved but does not
+authorize this attempt's release or binary work.
+Paginated asset inventories determine which native pairs remain incomplete.
 Tag failures retain per-package diagnostics and do not discard valid batches for
 other releases. Batch identity hashes the complete native request set, including
 tag source commits, independently of a workflow attempt.

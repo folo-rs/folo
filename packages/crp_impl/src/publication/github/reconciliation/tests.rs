@@ -17,6 +17,7 @@ struct FakeForge {
     calls: RefCell<Vec<String>>,
     failures: Cell<usize>,
     release_exists: bool,
+    created_source: Option<String>,
 }
 
 impl Forge for FakeForge {
@@ -32,9 +33,10 @@ impl Forge for FakeForge {
                 .set(self.failures.get().checked_sub(1).unwrap());
             return Err(FakeFailure::new().into());
         }
-        self.tags
-            .borrow_mut()
-            .insert(tag.to_owned(), source.to_owned());
+        self.tags.borrow_mut().insert(
+            tag.to_owned(),
+            self.created_source.as_deref().unwrap_or(source).to_owned(),
+        );
         Ok(())
     }
 
@@ -42,9 +44,14 @@ impl Forge for FakeForge {
         &self,
         tag: &str,
         _version: &str,
+        source: &str,
         dry_run: bool,
     ) -> Result<Option<Release>, AppError> {
         self.calls.borrow_mut().push(format!("release:{tag}"));
+        assert_eq!(
+            self.tags.borrow().get(tag).map(String::as_str),
+            Some(source)
+        );
         if dry_run && !self.release_exists {
             return Ok(None);
         }
@@ -62,6 +69,42 @@ impl Forge for FakeForge {
 
 #[ohno::error]
 struct FakeFailure;
+
+#[test]
+fn competing_tag_creation_does_not_authorize_release_or_binary_publication() {
+    let publication = publication();
+    let forge = FakeForge {
+        created_source: Some("c".repeat(40)),
+        ..FakeForge::default()
+    };
+    let mut work = Reconciliation {
+        github: &forge,
+        publication: &publication,
+        load_candidate: || Ok(candidate("1.0.0", true)),
+        retry_pause: |_| {},
+        candidate: None,
+        batches: BTreeMap::new(),
+        dry_run: false,
+        verbose: Verbose::new(false),
+    };
+    let mut result = record(GithubState::Pending);
+    work.package(
+        publication.publication.packages.first().unwrap(),
+        &mut result,
+    )
+    .unwrap_err();
+    assert_eq!(result.source, Some("c".repeat(40)));
+    assert!(result.recovery_source.is_none());
+    assert!(work.batches.is_empty());
+    assert_eq!(
+        forge.tags.borrow().get("tool-v1.0.0"),
+        Some(&"c".repeat(40))
+    );
+    assert_eq!(
+        *forge.calls.borrow(),
+        ["tag:tool-v1.0.0", "create:tool-v1.0.0", "tag:tool-v1.0.0"]
+    );
+}
 
 fn publication() -> PublicationManifest {
     PublicationManifest::new(

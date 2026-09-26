@@ -223,7 +223,7 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
         };
         let Some(release) =
             self.github
-                .ensure_release(&record.tag, &package.version, self.dry_run)?
+                .ensure_release(&record.tag, &package.version, &source, self.dry_run)?
         else {
             record.state = GithubState::WouldCreateRelease;
             return Ok(());
@@ -304,6 +304,14 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
                 eprintln!("Tag creation attempt {attempt} failed: {error}");
             }
             if let Some(source) = self.github.tag(tag)? {
+                if source != candidate.source {
+                    record.source = Some(source.clone());
+                    record.recovery_source = None;
+                    return Err(InvalidManifest::new(format!(
+                        "tag {tag} appeared at {source}, not verified candidate {}; preserve the existing ref and inspect the competing creation",
+                        candidate.source
+                    )).into());
+                }
                 return Ok(Some(source));
             }
             if attempt == ATTEMPTS {

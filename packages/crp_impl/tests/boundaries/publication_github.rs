@@ -244,7 +244,7 @@ pkg-fmt="zip"
                     request.as_reader().read_to_string(&mut body).unwrap();
                     let body: Value = serde_json::from_str(&body).unwrap();
                     assert_eq!(body.get("tag_name").unwrap(), "tool-v1.0.0");
-                    assert!(body.get("target_commitish").is_none());
+                    assert_eq!(body.get("target_commitish").unwrap(), &source);
                     *created.lock().unwrap() = true;
                     (201, json!({"id":7,"tag_name":"tool-v1.0.0","draft":false}))
                 }

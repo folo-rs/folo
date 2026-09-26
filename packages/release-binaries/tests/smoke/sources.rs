@@ -82,10 +82,9 @@ fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
             fixture.root.path(),
             "git",
             &[
-                "remote",
-                "add",
-                "origin",
-                remote.root.path().to_str().unwrap(),
+                "config",
+                &format!("url.{}.insteadOf", remote.root.path().display()),
+                "https://github.com/fixture/does-not-exist.git",
             ],
         );
         let controller = run(fixture.root.path(), "git", &["rev-parse", "HEAD"]);
@@ -94,6 +93,7 @@ fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
             .output()
             .unwrap();
         assert!(!missing.status.success());
+        assert!(run(fixture.root.path(), "git", &["remote"]).is_empty());
 
         let result = fixture.execute(&json!([fixture.binary("alpha"), released]), "out");
         assert_success(&result);

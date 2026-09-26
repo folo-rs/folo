@@ -54,6 +54,6 @@ Pure protocol validation, grouping, completeness, artifact selection and batch
 transitions are unit tests in `crp_impl`. Git, Cargo, process and archive interactions
 are integration tests. Native adapters have narrow mutation exclusions; the
 decisions they execute remain covered in process.
-Source fixtures include exact-object fetching from a local origin whose tip has advanced,
+Source fixtures include exact-object fetching through a local transport whose tip has advanced,
 mixed source commits and native-host rejection. Cleanup failure coverage preserves
 successful publication outcomes while retaining the cleanup diagnostic and failing the job.
