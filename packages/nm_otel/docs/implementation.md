@@ -22,8 +22,17 @@ the trivial histogram-state forwarder used by allocation tests and benchmarks. T
 lookup assertion helper is also excluded: it consumes populated SDK snapshots that have no
 public in-memory constructors and are obtained through the SDK collection pipeline. Its
 consumers remain integration tests rather than running real SDK collection solely to test
-an assertion helper in the library harness. These exclusions are function-local and do not
-exclude the production algorithms or the rest of the test-reader support.
+an assertion helper in the library harness.
+
+Test-reader construction and pipeline registration are also integration-only mutation
+exclusions: provider construction runs SDK resource detection, and a live pipeline has no
+public constructor independent of that provider. The integration tests assert metrics from
+the returned provider through its paired reader, covering both connections. The reader's
+collection helper remains a mutation target. Its unit test verifies that an unregistered
+reader fails rather than returning an empty snapshot, without initializing resource detectors
+or reading a clock. Successful collection remains covered by the SDK integration assertions.
+These exclusions are function-local and do not exclude the production algorithms or the
+rest of the test-reader support.
 
 ### Collection boundary
 
