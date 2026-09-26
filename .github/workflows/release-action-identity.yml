@@ -14,6 +14,14 @@ permissions:
   actions: read
 
 jobs:
+  release-check:
+    # Exercise the complete public read-only check graph against Folo source and configuration.
+    # Ref: packages/cargo-release-plan/docs/design.md#consumption-and-configuration.
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/check.yml@512ff6afc7e101f21243b15ed7dbedddc2ac052d
+    with:
+      install-method: path
+      source-path: .
+
   identity:
     uses: folo-rs/cargo-release-plan-action/.github/workflows/identity.yml@f2f0621e8e1550ab831c75b70c292bb7315ea77d
     with:
