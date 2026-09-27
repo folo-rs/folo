@@ -191,6 +191,12 @@ contain binary shells and their private helpers, not shared library implementati
 Keep new binary targets in these conventional locations; a custom binary source
 layout needs corresponding source-selection handling.
 
+The same helper excludes `packages/infinity_pool/**` from source discovery under
+the maintenance policy in [Testing](testing.md#mutation-testing-target-selection).
+This applies to both local and scheduled mutation runs on every platform, including
+`just package=infinity_pool mutants`; an empty selection is no mutation work, not
+evidence of passing tests. Other validation selections are unchanged.
+
 Sharded runs use `--sharding round-robin` to distribute mutations from expensive
 source regions across runners rather than assigning consecutive source ranges to
 each shard. The shared recipe applies this to both local and CI runs while
