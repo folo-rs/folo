@@ -106,12 +106,10 @@ pub(crate) mod tests {
         for field in ["name", "bin", "version", "tag", "source_sha"] {
             let mut value = serde_json::to_value(&binary).unwrap();
             value[field] = serde_json::Value::String("../invalid".into());
-            assert!(
-                serde_json::from_value::<Binary>(value)
-                    .unwrap()
-                    .validate()
-                    .is_err()
-            );
+            serde_json::from_value::<Binary>(value)
+                .unwrap()
+                .validate()
+                .unwrap_err();
         }
     }
 

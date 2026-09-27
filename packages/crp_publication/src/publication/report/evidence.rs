@@ -522,9 +522,7 @@ mod tests {
             .unwrap()
             .is_none()
         );
-        assert!(
-            parse_receipt(b"{}", Some(&publication), Path::new("unknown/outcome.json")).is_err()
-        );
+        parse_receipt(b"{}", Some(&publication), Path::new("unknown/outcome.json")).unwrap_err();
     }
 
     #[test]

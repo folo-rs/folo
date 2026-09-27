@@ -34,7 +34,7 @@ fn expansion_input_protection_is_explicit() {
 
 #[test]
 fn inspection_requires_a_plan_and_preserves_workspace_selection() {
-    assert!(parse(&["inspect-plan"]).unwrap_err().status.is_err());
+    parse(&["inspect-plan"]).unwrap_err().status.unwrap_err();
     let input = parse(&[
         "inspect-plan",
         "--plan",
@@ -65,14 +65,12 @@ fn inspection_requires_a_plan_and_preserves_workspace_selection() {
 #[test]
 fn artifact_commands_require_inputs_and_do_not_accept_workspace_options() {
     for command in ["analysis-order", "semver-targets"] {
-        assert!(parse(&[command]).unwrap_err().status.is_err());
+        parse(&[command]).unwrap_err().status.unwrap_err();
         for option in ["--base", "--manifest-path"] {
-            assert!(
-                parse(&[command, "--report", "report.json", option, "other"])
-                    .unwrap_err()
-                    .status
-                    .is_err()
-            );
+            parse(&[command, "--report", "report.json", option, "other"])
+                .unwrap_err()
+                .status
+                .unwrap_err();
         }
         let input = parse(&[command, "--report", "report.json", "--verbose"])
             .unwrap()
@@ -107,7 +105,7 @@ fn proposal_requires_report_decisions_and_output() {
             "plan.json",
         ],
     ] {
-        assert!(parse(&args).unwrap_err().status.is_err());
+        parse(&args).unwrap_err().status.unwrap_err();
     }
     let input = parse(&[
         "propose",
@@ -140,30 +138,27 @@ fn proposal_requires_report_decisions_and_output() {
 #[test]
 fn missing_subcommand_prints_help() {
     let early = parse(&[]).unwrap_err();
-    assert!(
-        early.status.is_ok(),
-        "clap treats a missing subcommand as a help request"
-    );
+    early.status.unwrap();
     assert!(early.output.contains("Usage"));
 }
 
 #[test]
 fn help_request_is_a_success_early_exit() {
     let early = parse(&["--help"]).unwrap_err();
-    assert!(early.status.is_ok(), "help should be a success exit");
+    early.status.unwrap();
     assert!(early.output.contains("Usage"));
 }
 
 #[test]
 fn unknown_flag_is_a_failure_early_exit() {
     let early = parse(&["--definitely-not-a-flag"]).unwrap_err();
-    assert!(early.status.is_err());
+    early.status.unwrap_err();
 }
 
 #[test]
 fn report_requires_out_dir() {
     let early = parse(&["report"]).unwrap_err();
-    assert!(early.status.is_err());
+    early.status.unwrap_err();
 }
 
 #[test]
@@ -221,27 +216,23 @@ fn check_parses_github_format_and_verify_packaging() {
 
 #[test]
 fn expand_requires_arguments() {
-    assert!(parse(&["expand"]).unwrap_err().status.is_err());
+    parse(&["expand"]).unwrap_err().status.unwrap_err();
 }
 
 #[test]
 fn expand_requires_an_output_path() {
-    assert!(
-        parse(&["expand", "--plan", "plan.json"])
-            .unwrap_err()
-            .status
-            .is_err()
-    );
+    parse(&["expand", "--plan", "plan.json"])
+        .unwrap_err()
+        .status
+        .unwrap_err();
 }
 
 #[test]
 fn expand_requires_a_plan() {
-    assert!(
-        parse(&["expand", "--out", "expanded.json"])
-            .unwrap_err()
-            .status
-            .is_err()
-    );
+    parse(&["expand", "--out", "expanded.json"])
+        .unwrap_err()
+        .status
+        .unwrap_err();
 }
 
 #[test]
@@ -270,7 +261,7 @@ fn expand_defaults_the_manifest_path() {
 #[test]
 fn apply_requires_plan() {
     let early = parse(&["apply"]).unwrap_err();
-    assert!(early.status.is_err());
+    early.status.unwrap_err();
 }
 
 #[test]
@@ -297,7 +288,7 @@ fn apply_parses_dry_run() {
 
 #[test]
 fn preparation_requires_output_and_preserves_baseline_selection() {
-    assert!(parse(&["prepare"]).unwrap_err().status.is_err());
+    parse(&["prepare"]).unwrap_err().status.unwrap_err();
     let input = parse(&[
         "prepare",
         "--output",
@@ -349,7 +340,7 @@ fn preview_requires_the_prepared_state_proposal_and_output() {
             "proposal.json",
         ],
     ] {
-        assert!(parse(&args).unwrap_err().status.is_err());
+        parse(&args).unwrap_err().status.unwrap_err();
     }
 
     let input = parse(&[
@@ -385,12 +376,10 @@ fn preview_requires_the_prepared_state_proposal_and_output() {
 
 #[test]
 fn verify_preview_requires_an_explicit_candidate_manifest() {
-    assert!(
-        parse(&["verify-preview", "--plan", "plan.json"])
-            .unwrap_err()
-            .status
-            .is_err()
-    );
+    parse(&["verify-preview", "--plan", "plan.json"])
+        .unwrap_err()
+        .status
+        .unwrap_err();
     let input = parse(&[
         "verify-preview",
         "--plan",

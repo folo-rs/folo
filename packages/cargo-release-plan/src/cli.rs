@@ -736,7 +736,7 @@ mod tests {
         ];
         for args in cases {
             let exit = Cli::from_args_os(args.iter().copied()).unwrap_err();
-            assert!(exit.status.is_ok());
+            exit.status.unwrap();
             assert_eq!(
                 exit.output.trim(),
                 format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
@@ -842,14 +842,12 @@ mod tests {
                 "evidence",
             ];
             args.extend(options);
-            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+            Cli::from_args_os(args).unwrap_err().status.unwrap_err();
         }
-        assert!(
-            Cli::from_args_os(["cargo-release-plan", "check-compatibility"])
-                .unwrap_err()
-                .status
-                .is_err()
-        );
+        Cli::from_args_os(["cargo-release-plan", "check-compatibility"])
+            .unwrap_err()
+            .status
+            .unwrap_err();
     }
 
     #[test]
@@ -1071,7 +1069,7 @@ mod tests {
                     args.extend([*flag, *value]);
                 }
             }
-            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+            Cli::from_args_os(args).unwrap_err().status.unwrap_err();
         }
         for explicit in [false, true] {
             let mut args = vec!["cargo-release-plan", "publish", "report"];
@@ -1119,7 +1117,7 @@ mod tests {
                     args.extend([*flag, *value]);
                 }
             }
-            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+            Cli::from_args_os(args).unwrap_err().status.unwrap_err();
         }
         for explicit in [false, true] {
             let mut args = vec!["cargo-release-plan", "publish", "binaries"];
@@ -1180,7 +1178,7 @@ mod tests {
                 "outcome",
             ],
         ] {
-            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+            Cli::from_args_os(args).unwrap_err().status.unwrap_err();
         }
     }
 }

@@ -1,8 +1,7 @@
-use std::fs;
-use std::io;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::{fs, io};
 
 use crp_diag::DiagnosticSink;
 use crp_native::{BuildRequest, Native, SourceProvider};

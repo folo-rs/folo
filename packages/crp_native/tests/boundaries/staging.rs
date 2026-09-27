@@ -1,7 +1,6 @@
 #![cfg(feature = "private-test-util")]
 
-use std::fs;
-use std::{io, mem};
+use std::{fs, io, mem};
 
 use crp_native::__private::stage_executable_for_test;
 use tempfile::TempDir;

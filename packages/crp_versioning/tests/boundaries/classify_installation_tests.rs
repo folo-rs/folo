@@ -212,7 +212,7 @@ fn library_endpoints_need_no_lockfiles_but_binary_endpoints_do() {
             &InstallationGraph::default(),
         );
         if anchor_binary || work_binary {
-            assert!(result.is_err());
+            result.unwrap_err();
         } else {
             assert!(result.unwrap().is_empty());
         }

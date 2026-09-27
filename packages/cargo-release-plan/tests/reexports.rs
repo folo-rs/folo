@@ -17,7 +17,7 @@ fn executable_wiring_is_reexported() {
         }
     ));
     let exit: EarlyExit = Cli::from_args_os(["cargo-release-plan", "--help"]).unwrap_err();
-    assert!(exit.status.is_ok());
+    exit.status.unwrap();
     let outcome = RunOutcome::Propose {
         message: String::new(),
     };

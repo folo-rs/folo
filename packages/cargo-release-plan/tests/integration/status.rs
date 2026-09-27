@@ -372,10 +372,7 @@ fn declared_version_below_the_anchor_is_an_error() {
         config: None,
         verbose: false,
     });
-    assert!(
-        result.is_err(),
-        "a version below the anchor must not classify, got {result:?}"
-    );
+    result.unwrap_err();
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

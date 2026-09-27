@@ -74,10 +74,7 @@ fn shallow_history_without_a_version_change_is_an_error() {
         config: None,
         verbose: false,
     });
-    assert!(
-        result.is_err(),
-        "shallow clone must not pass classification, got {result:?}"
-    );
+    result.unwrap_err();
 }
 
 /// A package the baseline does not publish is treated as entirely new.

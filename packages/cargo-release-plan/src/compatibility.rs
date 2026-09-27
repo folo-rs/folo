@@ -1117,7 +1117,7 @@ mod tests {
             &mut output,
             Verbose::new(false, &crp_diag::Discard),
         );
-        assert!(result.is_ok());
+        result.as_ref().unwrap();
         assert!(outcome.completed);
         assert_eq!(outcome.packages.len(), 2);
         let log = String::from_utf8(output.log.clone()).unwrap();
@@ -1163,7 +1163,7 @@ mod tests {
                         &mut output,
                         Verbose::new(false, &crp_diag::Discard),
                     );
-                    assert!(result.is_err());
+                    result.as_ref().unwrap_err();
                     assert!(outcome.packages.is_empty());
                     let persisted = Cell::new(false);
                     let error = outcome

@@ -137,7 +137,8 @@ struct PackagedResolutionChanged {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crp_workspace::manifest::{DependencySource, InstallationDependency};
-    use flate2::{Compression, write::GzEncoder};
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use tar::{Builder, Header};
 
     use super::*;

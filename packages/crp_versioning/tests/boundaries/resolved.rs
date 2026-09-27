@@ -421,7 +421,7 @@ fn candidate_case_aliases_preserve_captured_membership_and_bytes() {
         let digest = fingerprint(directory.path(), &expected.paths, &BTreeMap::new()).unwrap();
         expected.compare_candidate(&candidate, &digest).unwrap();
     } else {
-        assert!(result.is_err());
+        result.unwrap_err();
     }
     for paths in [
         BTreeSet::new(),
@@ -431,10 +431,10 @@ fn candidate_case_aliases_preserve_captured_membership_and_bytes() {
             paths,
             ..candidate.clone()
         };
-        assert!(expected.compare_candidate(&candidate, &digest).is_err());
+        expected.compare_candidate(&candidate, &digest).unwrap_err();
     }
     fs::write(directory.path().join(original), "changed").unwrap();
-    assert!(expected.compare_candidate(&candidate, &digest).is_err());
+    expected.compare_candidate(&candidate, &digest).unwrap_err();
 }
 
 #[test]

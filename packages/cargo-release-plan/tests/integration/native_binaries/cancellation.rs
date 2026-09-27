@@ -442,7 +442,7 @@ fn a_surviving_descendant_answers_the_probe_instead_of_hanging() {
             peer.write_all(b"alive").unwrap();
         });
         let (events, received) = mpsc::channel();
-        assert!(probe_descendant(&mut socket, &events, &received).is_err());
+        probe_descendant(&mut socket, &events, &received).unwrap_err();
         peer.join().unwrap();
     });
 }

@@ -24,7 +24,7 @@ fn snapshot_reports_source_facts_without_release_policy() {
         assert!(snapshot.status().unwrap().is_empty());
         assert!(snapshot.index().unwrap().starts_with(b"H "));
         snapshot.tracked("Cargo.toml".as_ref()).unwrap();
-        assert!(snapshot.tracked("absent".as_ref()).is_err());
+        snapshot.tracked("absent".as_ref()).unwrap_err();
         fixture.write("Cargo.toml", b"[workspace]\nresolver = '3'\n");
         assert!(!snapshot.status().unwrap().is_empty());
     });
@@ -51,10 +51,8 @@ fn batched_membership_requires_every_exact_file_without_expanding_patterns() {
             .tracked_paths(&[PathBuf::from("Cargo.toml"), PathBuf::from("untracked.toml")])
             .unwrap_err();
         assert!(error.to_string().contains("untracked.toml"));
-        assert!(
-            snapshot
-                .tracked_paths(&[PathBuf::from("package/file*.toml")])
-                .is_err()
-        );
+        snapshot
+            .tracked_paths(&[PathBuf::from("package/file*.toml")])
+            .unwrap_err();
     });
 }
