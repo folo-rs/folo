@@ -52,6 +52,21 @@ impl From<CommandIoError> for CommandError {
 impl std::panic::UnwindSafe for CommandError {}
 impl std::panic::RefUnwindSafe for CommandError {}
 
+/// Fixed orchestration credential inputs removed from compilation environments.
+///
+/// Compilation adapters additionally remove named Cargo registry tokens and retain
+/// responsibility for any credentials explicitly granted to an individual operation.
+pub const BUILD_CREDENTIAL_VARIABLES: &[&str] = &[
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GIT_TOKEN",
+    "INPUT_TOKEN",
+    "DEFAULT_GITHUB_TOKEN",
+    "CARGO_REGISTRY_TOKEN",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+];
+
 /// Hashes captured input bytes without writing an object into the repository.
 pub fn hash_bytes(bytes: &[u8], cwd: &Path) -> Result<String, AppError> {
     run_capture_input("git", &["hash-object", "--stdin"], bytes, cwd)

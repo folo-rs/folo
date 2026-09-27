@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
+use crp_workspace::command::BUILD_CREDENTIAL_VARIABLES;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -134,14 +135,7 @@ const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-
 const CREDENTIAL_PROTOCOL_VERSION: u32 = 1;
 
 fn strip_credentials(command: &mut Command, names: impl Iterator<Item = OsString>) {
-    for name in [
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "GIT_TOKEN",
-        "ACTIONS_ID_TOKEN_REQUEST_URL",
-        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-        "CARGO_REGISTRY_TOKEN",
-    ] {
+    for name in BUILD_CREDENTIAL_VARIABLES {
         command.env_remove(name);
     }
     for name in names {
@@ -449,7 +443,11 @@ mod tests {
         for name in [
             "GH_TOKEN",
             "GITHUB_TOKEN",
+            "GIT_TOKEN",
+            "INPUT_TOKEN",
+            "DEFAULT_GITHUB_TOKEN",
             "CARGO_REGISTRY_TOKEN",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
             "CARGO_REGISTRIES_PRIVATE_TOKEN",
         ] {

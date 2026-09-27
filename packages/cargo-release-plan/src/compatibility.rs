@@ -20,6 +20,7 @@ use crp_versioning::report::{read_report, run_report};
 use crp_versioning::resolved::{Inputs, ResolvedState, read_json};
 use crp_versioning::semver_targets::semver_targets;
 use crp_workspace::artifact_path::write_new;
+use crp_workspace::command::BUILD_CREDENTIAL_VARIABLES;
 use ohno::AppError;
 use semver::Version;
 use serde::Serialize;
@@ -511,12 +512,7 @@ fn resolve_checker() -> Result<PathBuf, AppError> {
 // Compatibility compilation needs source-download access, not inherited upload or OIDC tokens.
 // This controls the child environment, not same-user filesystem access or build-code isolation.
 fn strip_checker_credentials(command: &mut Command, names: impl Iterator<Item = OsString>) {
-    for name in [
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "CARGO_REGISTRY_TOKEN",
-        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-    ] {
+    for name in BUILD_CREDENTIAL_VARIABLES {
         command.env_remove(name);
     }
     for name in names {

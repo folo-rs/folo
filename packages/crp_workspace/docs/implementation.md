@@ -18,6 +18,8 @@ index first, then filesystem-resolved member identity, so caller path spelling d
 not remove dependency edges. Shared artifact-file operations own path
 resolution and atomic promotion, while callers own serialization and overwrite policy.
 Repository-controlled display strings use the diagnostic component's presentation helpers.
+The command boundary also supplies the fixed orchestration credential names shared by
+native, compatibility and registry compilation; each adapter owns environment mutation.
 
 Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests
 belong to boundary integration targets, with hermetic Git identity/configuration.

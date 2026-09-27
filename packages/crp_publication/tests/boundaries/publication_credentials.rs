@@ -30,6 +30,84 @@ enum ArchiveCase {
 #[test]
 #[cfg_attr(
     miri,
+    ignore = "Executes a child with the publication credential configuration"
+)]
+fn configured_child_receives_no_orchestration_credentials() {
+    testing::with_watchdog(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let publication = PublicationManifest::new(serde_json::from_value(json!({
+            "schema_version":1,"tool_version":"1.0.0","source":"a".repeat(40),
+            "workspace_manifest":"Cargo.toml","config_path":".cargo/release_plan.toml",
+            "configuration":{"schema-version":1,"repository":"example/library","release-branch":"main","targets":[]},
+            "packages":[]
+        })).unwrap()).unwrap();
+        let session = CredentialSession::new(
+            serde_json::from_value(json!({
+                "request_url":"https://example.invalid/identity",
+                "request_token":"unused-identity-canary"
+            }))
+            .unwrap(),
+            publication,
+            directory.path().join("Cargo.toml"),
+            directory.path().join("target"),
+            TrustedPublisher::with_endpoint(
+                "https://example.invalid/tokens",
+                crp_publication::PublicationOutput::new(
+                    "1.0.0",
+                    false,
+                    std::sync::Arc::new(crp_diag::Discard),
+                ),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Inspect the actual child environment without invoking publication or an identity service.
+        // The trailing arguments supplied by configure are inert script arguments in this probe.
+        let mut command = Command::new("pwsh");
+        command.args([
+            "-NoProfile",
+            "-CommandWithArgs",
+            r#"Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+foreach ($name in @('GH_TOKEN', 'GITHUB_TOKEN', 'GIT_TOKEN', 'INPUT_TOKEN', 'DEFAULT_GITHUB_TOKEN',
+    'CARGO_REGISTRY_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN')) {
+    if ([Environment]::GetEnvironmentVariable($name) -ne $null) { throw "Credential survived: $name" }
+}
+if ($env:CARGO_REGISTRIES_PRIVATE_INDEX -ne 'index-canary') { throw 'Registry configuration removed' }
+if (-not (Test-Path -LiteralPath $env:CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT)) { throw 'Provider context missing' }
+"#,
+        ]);
+        for name in [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GIT_TOKEN",
+            "INPUT_TOKEN",
+            "DEFAULT_GITHUB_TOKEN",
+            "CARGO_REGISTRY_TOKEN",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        ] {
+            command.env(name, "must-not-reach-child");
+        }
+        command.env("CARGO_REGISTRIES_PRIVATE_INDEX", "index-canary");
+        session
+            .configure(&mut command, Path::new("provider"))
+            .unwrap();
+        let output = command.output().unwrap();
+        let cleanup = session.finish();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        cleanup.unwrap();
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
     ignore = "Invokes Cargo with an isolated credential configuration"
 )]
 fn cargo_uses_the_crates_io_provider_override_not_the_named_registry_key() {

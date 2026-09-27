@@ -404,9 +404,13 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
             for credential in [
                 "GH_TOKEN",
                 "GITHUB_TOKEN",
+                "GIT_TOKEN",
+                "INPUT_TOKEN",
+                "DEFAULT_GITHUB_TOKEN",
                 "CARGO_REGISTRY_TOKEN",
                 "CARGO_REGISTRIES_CRATES_IO_TOKEN",
                 "CARGO_REGISTRIES_PRIVATE_TOKEN",
+                "ACTIONS_ID_TOKEN_REQUEST_URL",
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
             ] {
                 command.env(credential, "must-not-reach-checker");
@@ -637,8 +641,9 @@ fn main() {
         println!("cargo-semver-checks 0.50.0 (fixture)");
         return;
     }
-    for name in ["GH_TOKEN", "GITHUB_TOKEN", "CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_CRATES_IO_TOKEN",
-        "CARGO_REGISTRIES_PRIVATE_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"] {
+    for name in ["GH_TOKEN", "GITHUB_TOKEN", "GIT_TOKEN", "INPUT_TOKEN", "DEFAULT_GITHUB_TOKEN",
+        "CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_CRATES_IO_TOKEN", "CARGO_REGISTRIES_PRIVATE_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"] {
         assert!(env::var_os(name).is_none());
     }
     assert_eq!(env::var("CARGO_TERM_COLOR").unwrap(), "never");

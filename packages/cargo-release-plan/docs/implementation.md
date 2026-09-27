@@ -189,6 +189,8 @@ Registry and GitHub credential variables are removed from Cargo's environment;
 the provider receives only its private context location. This is credential
 handling within the trusted publication job, not process isolation from reviewed
 build code running under the same account.
+Registry, native and compatibility compilation share the fixed credential-name
+list while their adapters remove named registry tokens and apply operation-specific grants.
 
 OIDC HTTP errors report the operation and status without echoing response bodies,
 and credential values have no diagnostic representation. Revocation and temporary

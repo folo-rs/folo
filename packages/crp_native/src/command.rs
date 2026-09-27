@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use command_group::CommandGroup;
 use crp_diag::{DiagnosticSink, diagnostic, quote_path};
+use crp_workspace::command::BUILD_CREDENTIAL_VARIABLES;
 use ohno::AppError;
 
 /// Native command failures retain command identity and process diagnostics.
@@ -44,18 +45,6 @@ struct CapturedStream {
     error: Option<AppError>,
 }
 
-/// Commands inherit the build environment but never inherit the upload credential.
-pub(crate) const TOKEN_VARIABLES: &[&str] = &[
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "GIT_TOKEN",
-    "INPUT_TOKEN",
-    "DEFAULT_GITHUB_TOKEN",
-    "CARGO_REGISTRY_TOKEN",
-    "ACTIONS_ID_TOKEN_REQUEST_URL",
-    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-];
-
 // Observe cancellation promptly without busy-waiting during long native commands. This cadence
 // limits routine wakeups, not end-to-end cleanup latency, which also depends on the OS scheduler.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -67,7 +56,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 fn strip_build_credentials(command: &mut Command, names: impl Iterator<Item = OsString>) {
-    for name in TOKEN_VARIABLES {
+    for name in BUILD_CREDENTIAL_VARIABLES {
         command.env_remove(name);
     }
     for name in names {
@@ -442,7 +431,7 @@ mod tests {
                 credential,
             );
         }
-        for name in TOKEN_VARIABLES {
+        for name in BUILD_CREDENTIAL_VARIABLES {
             assert!(removed.contains(&OsString::from(name)));
         }
     }
