@@ -36,7 +36,7 @@ jobs:
     # Keep the registered caller filename while checking the reusable workflow's OIDC identity.
     # Controller installation runs separately without OIDC. No package upload is performed.
     # Ref: implementation.md#release-publication.
-    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@9fb24e1c96dfd96bc7af5f5afb71737012123038
+    uses: folo-rs/cargo-release-plan-action/.github/workflows/identity-probe.yml@0a3faead9f7ee91b2702ee7d8847bb04100f23c7
     with:
       install-method: path
       source-path: .
