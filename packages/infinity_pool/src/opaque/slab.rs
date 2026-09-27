@@ -161,8 +161,11 @@ impl Slab {
             Layout::new::<T>()
         );
 
+        // Check the freelist independently of the fullness predicate used by the vacancy tracker,
+        // so a tracking/counting defect is caught before creating an out-of-bounds reference.
+        // Ref: docs/implementation.md, "Slab insertion invariants".
         debug_assert!(
-            !self.is_full(),
+            self.next_free_slot_index < self.layout.capacity().get(),
             "cannot insert value into a full Slab<{}> of capacity {}",
             type_name::<T>(),
             self.layout.capacity().get()
@@ -653,6 +656,8 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[cfg(debug_assertions)]
+    use new_zealand::nz;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::assert_panics;
 
@@ -1171,34 +1176,52 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn debug_build_insert_panics_when_slab_is_full() {
-        // Create a slab with minimal capacity to make it easy to fill
-        let layout = SlabLayout::new(Layout::new::<u32>());
+    #[cfg(debug_assertions)]
+    fn debug_build_insert_panics_when_freelist_is_exhausted() {
+        // Keep a live neighbor while exercising the last vacant slot.
+        let layout = SlabLayout::new(Layout::new::<usize>()).with_capacity(nz!(2));
         let mut slab = Slab::new(layout, DropPolicy::MayDropContents);
-
         let capacity = layout.capacity().get();
-
-        // Fill the slab to capacity
+        let mut handles = Vec::new();
         for i in 0..capacity {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "test uses small capacity values"
-            )]
-            // SAFETY: u32 layout matches slab layout
-            let _handle = unsafe { insert(&mut slab, i as u32) };
+            // SAFETY: The layout matches usize and each insertion has a vacant slot.
+            handles.push(unsafe { insert(&mut slab, i) });
         }
 
         assert!(slab.is_full());
         assert_eq!(slab.len(), capacity);
 
-        // This should panic - slab is full.
-        // NB! This only panics if debug_assertions is enabled. This is not part of the API
-        // contract, rather it is a debug build sanity check.
-        // SAFETY: u32 layout matches slab layout, but slab is full so should panic
-        unsafe {
-            insert(&mut slab, 999_u32);
+        // A stale count makes is_full() report false, but must not disable the freelist guard.
+        // Exercise both states without relying on the fullness assertion to catch the defect.
+        for count in [capacity, 0] {
+            slab.count = count;
+            let mut initialized = false;
+            assert_panics(|| {
+                // SAFETY: Deliberately violate the vacancy requirement to test the debug guard.
+                // It must reject the sentinel before constructing references or invoking user code.
+                unsafe {
+                    slab.insert_with_unchecked(|slot: &mut MaybeUninit<usize>| {
+                        initialized = true;
+                        slot.write(capacity);
+                    });
+                }
+            });
+            assert!(!initialized);
+            assert_eq!(slab.count, count);
+            assert_eq!(slab.next_free_slot_index, capacity);
         }
+        slab.count = capacity;
+
+        for (expected, handle) in handles.into_iter().enumerate() {
+            // SAFETY: Each handle still identifies its initialized object in this slab.
+            assert_eq!(unsafe { slab.remove_unpin(handle) }, expected);
+        }
+        assert!(slab.is_empty());
+
+        // SAFETY: The slab is empty and the layout matches usize.
+        let handle = unsafe { insert(&mut slab, capacity) };
+        // SAFETY: The handle identifies the object just inserted into this slab.
+        assert_eq!(unsafe { slab.remove_unpin(handle) }, capacity);
     }
 
     #[test]
