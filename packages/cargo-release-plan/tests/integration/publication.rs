@@ -564,6 +564,65 @@ fn empty_publication_phases_need_no_identity_and_never_overwrite_intent() {
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes the reporter with isolated workflow identity")]
+fn reporter_retains_job_failure_when_the_outcome_directory_is_a_file() {
+    testing::with_watchdog(|| {
+        let directory = TempDir::new().unwrap();
+        let publication = directory.path().join("publication.json");
+        // Reporting consumes an artifact, not a source checkout. An opaque source identity
+        // and empty request set keep this scenario focused on failed artifact acquisition.
+        PublicationManifest::new(serde_json::from_value(json!({
+            "schema_version":1,"tool_version":"1.0.0","source":"a".repeat(40),
+            "workspace_manifest":"Cargo.toml","config_path":".cargo/release_plan.toml",
+            "configuration":{"schema-version":1,"repository":"example/reporting","release-branch":"main","targets":[]},
+            "packages":[]
+        })).unwrap()).unwrap().write(&publication).unwrap();
+        let outcomes = directory.path().join("outcomes-as-file");
+        let downloaded = b"downloaded artifact occupies the expected directory path";
+        fs::write(&outcomes, downloaded).unwrap();
+        let jobs = directory.path().join("jobs.json");
+        fs::write(
+            &jobs,
+            br#"{"prepare":"success","registry":"failure","github":"skipped","binaries":"skipped"}"#,
+        )
+        .unwrap();
+        let output = directory.path().join("report.md");
+        let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args([
+                "publish",
+                "report",
+                "--repository",
+                "example/reporting",
+                "--publication",
+            ])
+            .arg(&publication)
+            .arg("--outcomes")
+            .arg(&outcomes)
+            .arg("--jobs")
+            .arg(&jobs)
+            .arg("--output")
+            .arg(&output)
+            .arg("--no-issue")
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_RUN_ID", "123")
+            .env("GITHUB_RUN_ATTEMPT", "2")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let body = fs::read_to_string(output).unwrap();
+        assert!(body.contains("Release incomplete"));
+        assert!(body.contains(&outcomes.display().to_string()));
+        assert!(
+            body.lines()
+                .any(|line| line.contains("registry job") && line.contains("Failure"))
+        );
+        assert!(body.contains("https://github.com/example/reporting/actions/runs/123"));
+        assert!(String::from_utf8_lossy(&result.stderr).contains("outcomes-as-file"));
+        assert_eq!(fs::read(outcomes).unwrap(), downloaded);
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Executes the reporter with isolated workflow identity")]
 fn reporter_preserves_job_failures_when_publication_artifacts_are_missing_or_invalid() {
     let fixture = publication_source();
     let directory = TempDir::new().unwrap();
