@@ -30,10 +30,9 @@ native targets. The binary set is discovered from publishable Cargo packages,
 not a maintained package list. Package restrictions use
 `[package.metadata.release-plan] release-targets`; `dure` selects Windows targets.
 
-Folo's native archive prerequisites are maintained by
-`scripts/setup/ReleaseArchiveTools.psm1` through `just install-tools`.
-The reusable action supplies its own minimal bootstrap rather than importing
-Folo's complete development environment.
+ZIP creation and checksums are built into the application; no archiver installation
+is required. The reusable action supplies its own minimal compiler/tool bootstrap
+rather than importing Folo's complete development environment.
 
 ## The asset-naming contract
 

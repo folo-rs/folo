@@ -2,12 +2,17 @@
 
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::Write as _;
-use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::{env, fs};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
-use crate::native_binaries::{Fixture, SMOKE_WATCHDOG, assert_success, command, run, write};
+use crate::native_binaries::{
+    Fixture, SMOKE_WATCHDOG, assert_success, command, compile_tool, run, write,
+};
 
 #[test]
 fn stages_tagged_binaries_with_shared_output_and_root_archives() {
@@ -16,10 +21,27 @@ fn stages_tagged_binaries_with_shared_output_and_root_archives() {
 
 fn stages_tagged_binaries() {
     let fixture = Fixture::new();
-    let result = fixture.execute(
-        &json!([fixture.binary("alpha"), fixture.binary("beta")]),
-        "out",
+    let tools = TempDir::new().unwrap();
+    // Any attempt to invoke the former native archiver fails this real CLI scenario.
+    compile_tool(
+        tools.path(),
+        if cfg!(windows) { "7za" } else { "zip" },
+        "fn main() { panic!(\"external archiver invoked\"); }\n",
     );
+    let path = env::join_paths(
+        std::iter::once(tools.path().to_path_buf())
+            .chain(env::split_paths(&env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let result = fixture
+        .batch_command(
+            &json!([fixture.binary("alpha"), fixture.binary("beta")]),
+            "out",
+        )
+        .arg("--no-upload")
+        .env("PATH", path)
+        .output()
+        .unwrap();
     assert_success(&result);
     assert!(String::from_utf8_lossy(&result.stdout).contains("Binary staging completed"));
     let outcomes = fixture.outcomes("out");
@@ -50,12 +72,13 @@ fn stages_tagged_binaries() {
             format!("{name}-bin")
         };
         let archive_argument = archive.to_str().unwrap();
-        // Inspect through the platform's existing archive implementation, not an in-repo codec.
+        let unpacked = staging.join("unpacked");
+        // .NET independently reads and extracts the Rust-written ZIP on every test platform.
         write(
             &staging,
             "inspect-archive.ps1",
             "
-param([string] $Archive)
+param([string] $Archive, [string] $Destination)
 $ErrorActionPreference = 'Stop'
 $z = [IO.Compression.ZipFile]::OpenRead($Archive)
 try {
@@ -63,6 +86,7 @@ try {
         @{ name = $_.FullName; attributes = $_.ExternalAttributes }
     }) -Compress
 } finally { $z.Dispose() }
+[IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
 ",
         );
         let inspection = command(&staging, "pwsh")
@@ -72,6 +96,8 @@ try {
                 "inspect-archive.ps1",
                 "-Archive",
                 archive_argument,
+                "-Destination",
+                unpacked.to_str().unwrap(),
             ])
             .output()
             .unwrap();
@@ -85,12 +111,19 @@ try {
             (entries[0]["attributes"].as_i64().unwrap() >> 16) & 0o111,
             0
         );
-        let unpacked = staging.join("unpacked");
-        fs::create_dir_all(&unpacked).unwrap();
-        #[cfg(windows)]
-        run(&unpacked, "7za", &["x", "-y", archive_argument]);
+        assert_eq!(
+            fs::read(unpacked.join(&binary)).unwrap(),
+            fs::read(staging.join(&binary)).unwrap()
+        );
+        // The extraction API need not apply Unix mode; it was independently asserted above.
         #[cfg(unix)]
-        run(&unpacked, "unzip", &["-q", archive_argument]);
+        fs::set_permissions(
+            unpacked.join(&binary),
+            fs::Permissions::from_mode(
+                u32::try_from((entries[0]["attributes"].as_i64().unwrap() >> 16) & 0o777).unwrap(),
+            ),
+        )
+        .unwrap();
         assert_eq!(run(&unpacked, unpacked.join(&binary), &[]).trim(), "tagged");
     }
     // Both independent builds use the fixture controller's shared target tree.

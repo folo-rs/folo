@@ -279,7 +279,7 @@ fn finish_reader(
     }
 }
 
-fn interruption(deadline_reached: bool, cancelled: bool) -> Option<&'static str> {
+pub(crate) fn interruption(deadline_reached: bool, cancelled: bool) -> Option<&'static str> {
     if cancelled {
         Some("batch cancelled")
     } else if deadline_reached {

@@ -245,7 +245,7 @@ explanatory selection and validation information to stderr.
 | Publication preflight | Registry reads; plan-scoped checks fail closed, workspace discovery is advisory. |
 | Publication preparation | Clean merged source, Git/Cargo, configuration and release-branch access; private repositories require GitHub authentication. |
 | Live registry work | crates.io access, supported Cargo, registered caller OIDC identity and package verification prerequisites. |
-| Native binaries | Native runner, source toolchain/build dependencies and archive tools; upload authority is separate from compilation. |
+| Native binaries | Native runner and source toolchain/build dependencies; ZIP creation is built in, and upload authority is separate from compilation. |
 | Final report | Retained outcomes, current job results and GitHub run context; issue writes unless `--no-issue`. |
 
 Do not treat the compiler used to install the controller, Cargo's publication

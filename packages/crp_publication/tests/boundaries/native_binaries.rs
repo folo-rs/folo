@@ -158,7 +158,7 @@ impl Fixture {
 
 #[test]
 fn verifies_uploaded_assets_and_retries_only_incomplete_releases() {
-    // Native builds and archive tools normally finish in seconds; this is only a last-chance guard.
+    // Native builds and archive writes normally finish in seconds; this is only a last-chance guard.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let fixture = Fixture::new();
         let incomplete = fixture.forge.path().join("incomplete");

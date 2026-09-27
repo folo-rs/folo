@@ -3,6 +3,8 @@
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::Write as _;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -51,12 +53,13 @@ fn stages_tagged_binaries() {
             format!("{name}-bin")
         };
         let archive_argument = archive.to_str().unwrap();
-        // Inspect through the platform's existing archive implementation, not an in-repo codec.
+        let unpacked = staging.join("unpacked");
+        // .NET independently reads and extracts the Rust-written ZIP on every test platform.
         write(
             &staging,
             "inspect-archive.ps1",
             "
-param([string] $Archive)
+param([string] $Archive, [string] $Destination)
 $ErrorActionPreference = 'Stop'
 $z = [IO.Compression.ZipFile]::OpenRead($Archive)
 try {
@@ -64,6 +67,7 @@ try {
         @{ name = $_.FullName; attributes = $_.ExternalAttributes }
     }) -Compress
 } finally { $z.Dispose() }
+[IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
 ",
         );
         let inspection = command(&staging, "pwsh")
@@ -73,6 +77,8 @@ try {
                 "inspect-archive.ps1",
                 "-Archive",
                 archive_argument,
+                "-Destination",
+                unpacked.to_str().unwrap(),
             ])
             .output()
             .unwrap();
@@ -86,12 +92,19 @@ try {
             (entries[0]["attributes"].as_i64().unwrap() >> 16) & 0o111,
             0
         );
-        let unpacked = staging.join("unpacked");
-        fs::create_dir_all(&unpacked).unwrap();
-        #[cfg(windows)]
-        run(&unpacked, "7za", &["x", "-y", archive_argument]);
+        assert_eq!(
+            fs::read(unpacked.join(&binary)).unwrap(),
+            fs::read(staging.join(&binary)).unwrap()
+        );
+        // Apply only the mode read and checked from the archive, not a fixture default.
         #[cfg(unix)]
-        run(&unpacked, "unzip", &["-q", archive_argument]);
+        fs::set_permissions(
+            unpacked.join(&binary),
+            fs::Permissions::from_mode(
+                u32::try_from((entries[0]["attributes"].as_i64().unwrap() >> 16) & 0o777).unwrap(),
+            ),
+        )
+        .unwrap();
         assert_eq!(run(&unpacked, unpacked.join(&binary), &[]).trim(), "tagged");
     }
     // Both independent builds use the fixture controller's shared target tree.

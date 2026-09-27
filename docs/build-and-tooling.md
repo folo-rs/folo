@@ -310,18 +310,13 @@ or invocation code and runs it inside the existing script-validation job. Main a
 validation retain full scope. See
 [workflow implementation](../.github/workflows/implementation.md#bicep-validation).
 
-## Release archive tools
+## Release archives
 
-`just install-tools` installs and verifies the ZIP tools used by `release-binaries`
-and `just release-binary-smoke`; runner images are not assumed to provide them.
-Windows receives the checksum-verified standalone `7za` executable from the pinned
-official 7-Zip extra archive in the Cargo bin directory. Setup selects the x64 or
-ARM64 payload matching the PowerShell process architecture and verifies its digest
-before running either a restored or newly extracted executable. The installer uses
-Windows' bundled `tar` to extract it.
-Linux uses the distribution's `zip` and `unzip` packages through APT; macOS installs
-missing tools through Homebrew. Package-manager failures are setup failures.
-Already available Unix tools are verified rather than reinstalled.
+The release application creates ZIP/checksum pairs in process. `just install-tools`
+does not install an archiver, and publication requires no `zip`, `unzip` or `7za`
+executable. The native smoke tests use PowerShell's .NET ZIP reader to inspect and
+extract the output independently of the Rust writer, including stored Unix modes.
+This test reader is not a publication runtime dependency.
 
 ## Multiplatform codebase
 

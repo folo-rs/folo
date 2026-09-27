@@ -1170,6 +1170,10 @@ Each release publishes `{package}-v{version}-{target}.zip` and its matching
 executable suffix and executable permissions where applicable. The package's
 `cargo-binstall` metadata must describe this same layout.
 
+Archive creation is included in the application; operators do not install a
+separate ZIP utility. Packaging streams executable contents without requiring
+memory proportional to executable size and remains subject to item cancellation.
+
 The standard binary build uses Cargo's release profile and default features.
 Publication configuration does not accept arbitrary Cargo arguments or silently
 enable features to reach a binary. Preparation verifies that the selected binary's

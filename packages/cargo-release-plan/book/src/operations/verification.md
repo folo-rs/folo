@@ -91,16 +91,28 @@ The comparison stops before extraction on a mismatch. This Windows ZIP should
 contain `widget.exe` at its root. The package name controls the tag and asset names.
 
 For a Unix-target archive, perform the same digest comparison, then inspect its
-stored mode using a mode-aware tool:
+stored mode using PowerShell's .NET ZIP reader:
 
 ```powershell
-zipinfo -l $Archive
+$Zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+try {
+    foreach ($Entry in $Zip.Entries) {
+        [pscustomobject]@{
+            Name = $Entry.FullName
+            UnixMode = [Convert]::ToString(($Entry.ExternalAttributes -shr 16) -band 0x1ff, 8)
+        }
+    }
+} finally {
+    $Zip.Dispose()
+}
 ```
 
-Confirm that the root member is `widget` and its stored mode includes executable
-permissions. Use `unzip` for Unix extraction and installation checks.
-`Expand-Archive` does not preserve the ZIP member's Unix mode and therefore
-cannot verify that part of the contract.
+`UnixMode` selects the permission bits from ZIP external attributes. Confirm that
+the root member is `widget` and its stored mode includes executable permissions.
+Use an extraction or installation path that preserves those permissions.
+`Expand-Archive` does not verify the stored Unix mode through the extracted file,
+so inspect the archive metadata rather than treating that extraction as permission
+evidence.
 
 The sidecar supports explicit verification. Do not assume that ordinary
 cargo-binstall installation discovers it automatically or that a checksum proves

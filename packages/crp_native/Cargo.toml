@@ -22,25 +22,38 @@ allowed_external_types = ["crp_diag::*", "ohno::app::error::AppError"]
 [lib]
 doc = false
 
+[features]
+private-test-util = []
+
 [dependencies]
 command-group = { workspace = true }
 crp_diag = { workspace = true }
 crp_workspace = { workspace = true }
 ctrlc = { workspace = true, features = ["termination"] }
 dunce = { workspace = true }
+# Select the safe-Rust backend explicitly for the interpreter-checked archive writer.
+flate2 = { workspace = true, features = ["miniz_oxide"] }
 ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+# ZIP/Deflate only, using a Rust backend rather than native archiver or compression libraries.
+zip = { workspace = true, features = ["deflate-flate2"] }
 
 [dev-dependencies]
+criterion = { workspace = true }
 crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 crp_workspace = { path = "../crp_workspace", features = ["private-test-util"] }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }
+
+[[bench]]
+name = "crp_native_archive"
+harness = false
+required-features = ["private-test-util"]
 
 [lints]
 workspace = true

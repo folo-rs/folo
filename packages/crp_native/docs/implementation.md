@@ -9,6 +9,21 @@ The controller supplies Git objects and a shared target directory. Native verifi
 the actual source, compiler host, selected package/bin and emitted executable before
 staging archives and checksums. No registry or GitHub delivery policy belongs here.
 
+ZIP creation uses the `zip` crate with only Deflate and the explicitly selected
+safe-Rust `miniz_oxide` backend through `flate2`.
+The writer streams one executable through bounded buffers, retaining its root name
+and Unix permissions. A fixed ZIP timestamp avoids incidental source-file timestamp
+variation; it is not a promise of byte-identical compression across tool versions.
+ZIP64 represents large entries without a separate archive format.
+
+The same item deadline and cancellation flag are checked between input buffers,
+around archive finalization, and while hashing the finished archive. Interruption
+and I/O errors fail packaging before the checksum pair is eligible for upload.
+These checks are cooperative around file I/O, not preemption of a blocked system call.
+The in-memory writer and error boundaries are unit-tested; .NET independently
+reads and extracts produced archives in native integration tests. Neither the
+application nor its setup needs an external archiver.
+
 Process groups, cancellation, deadlines and cleanup share one execution owner.
 Preparing a source starts the first item's budget; its first build shares that budget.
 Later builds start their own item budget. Publication receives the actual controller
@@ -29,6 +44,10 @@ Artifact staging and checksum errors retain their relevant paths separately from
 invalid build-request errors, including the underlying filesystem cause when present.
 
 Pure argument/source/artifact decisions are unit tested. Environment configuration,
-real worktrees, toolchains, process trees and archive tools belong in integration
+real worktrees, toolchains, process trees and archive files belong in integration
 tests. Native I/O scheduling precedes last-chance watchdog timing; mutation testing
 retains the watchdog disablement. The package does not depend on publication or CLI types.
+
+The low/high in-memory archive benchmark measures ZIP/Deflate work independently
+of source acquisition and filesystem noise. Its private driver is available only
+to maintainer builds through `private-test-util`.

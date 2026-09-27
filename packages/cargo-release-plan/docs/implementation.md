@@ -189,6 +189,12 @@ source checkout merely because that repository has no target-directory ignore.
 
 ## Native binary execution
 
+Archive encoding runs inside `crp_native` using a maintained ZIP library.
+It streams the staged executable, preserves the archive entry metadata, finalizes
+the ZIP and computes its SHA-256 sidecar without archiver subprocesses.
+Native's item deadline and cancellation remain in force during compression and
+hashing. The component guide owns the codec and buffering details.
+
 `crp_publication` owns platform-batch coordination behind `publish binaries`.
 That command consumes frozen manifest-linked batches; runner assignments
 and workflow timeouts belong to the shared action. It supplies validated, non-wire

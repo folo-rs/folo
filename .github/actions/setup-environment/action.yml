@@ -195,7 +195,7 @@ runs:
         env-vars: ImageVersion
 
     - name: Cache development tools
-      # Save Cargo installs/registration and the managed Windows archive tool together.
+      # Save installed Cargo tools and their registration metadata together.
       # Exclude rustup's cargo-* proxies: the runner/toolchain setup owns those.
       # A same-image fallback restores older pins; installation reconciles them before saving.
       # The checkout commit covers every install input without a maintained file-hash list.
@@ -203,9 +203,7 @@ runs:
       # Ref: .github/workflows/implementation.md#development-tool-bootstrap-and-caching.
       uses: actions/cache@v6
       with:
-        # Cargo metadata records installed versions/revisions. The Windows archive executable
-        # and license remain paired; setup verifies restored tools against their pins.
-        # Both use the source-revision key so installer changes invalidate their cached inputs.
+        # Cargo metadata records installed versions/revisions for verified reuse.
         path: |
           ~/.cargo/bin/cargo-*
           !~/.cargo/bin/cargo-clippy*
@@ -214,8 +212,6 @@ runs:
           ~/.cargo/bin/just*
           ~/.cargo/bin/release-plz*
           ~/.cargo/bin/gungraun-runner*
-          ~/.cargo/bin/7za.exe
-          ~/.cargo/bin/release-7zip-license.txt
           ~/.cargo/.crates.toml
           ~/.cargo/.crates2.json
           ~/.cargo/binstall

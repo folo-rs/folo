@@ -1,16 +1,18 @@
 use std::fmt::Write as _;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use ohno::AppError;
 use sha2::{Digest, Sha256};
 
+use crate::command::{cancelled, interruption};
 use crate::request::BuildRequest;
+use crate::zip_writer::write_archive;
 
 /// Fresh per-item staging keeps shared target artifacts separate from release asset contents.
 pub(crate) struct Staging {
-    pub(crate) directory: PathBuf,
     pub(crate) executable: PathBuf,
     pub(crate) archive: PathBuf,
     pub(crate) checksum: PathBuf,
@@ -74,14 +76,58 @@ impl Staging {
         Ok(Self {
             archive: directory.join(format!("{base}.zip")),
             checksum: directory.join(format!("{base}.sha256")),
-            directory,
             executable: staged,
         })
     }
 
+    // Filesystem and real-clock effects are covered by native integration tests.
+    #[cfg_attr(test, mutants::skip)]
+    pub(crate) fn package(&self, deadline: Instant) -> Result<(), AppError> {
+        let mut checkpoint = || {
+            if let Some(reason) = interruption(Instant::now() >= deadline, cancelled()) {
+                Err(ArchiveFailed::new(self.archive.clone(), reason).into())
+            } else {
+                Ok(())
+            }
+        };
+        checkpoint()?;
+        self.write_archive(&mut checkpoint).map_err(|error| {
+            ArchiveFailed::caused_by(self.archive.clone(), "Cannot write ZIP archive", error)
+        })?;
+        self.checksum(&mut checkpoint)
+    }
+
+    #[cfg_attr(test, mutants::skip)]
+    fn write_archive(
+        &self,
+        checkpoint: &mut impl FnMut() -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
+        let input = File::open(&self.executable)?;
+        let metadata = input.metadata()?;
+        #[cfg(unix)]
+        let permissions = {
+            use std::os::unix::fs::PermissionsExt;
+            Some(metadata.permissions().mode())
+        };
+        #[cfg(not(unix))]
+        let permissions = None;
+        let output = BufWriter::new(File::create_new(&self.archive)?);
+        write_archive(
+            input,
+            output,
+            archive_name(&self.executable)?,
+            metadata.len(),
+            permissions,
+            checkpoint,
+        )
+    }
+
     // SHA-256 is provided by sha2; only filesystem serialization lives at this boundary.
     #[cfg_attr(test, mutants::skip)]
-    pub(crate) fn checksum(&self) -> Result<(), AppError> {
+    fn checksum(
+        &self,
+        checkpoint: &mut impl FnMut() -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
         let mut archive = BufReader::new(File::open(&self.archive).map_err(|error| {
             ArchiveFailed::caused_by(
                 self.archive.clone(),
@@ -91,6 +137,7 @@ impl Staging {
         })?);
         let mut hash = Sha256::new();
         loop {
+            checkpoint()?;
             let bytes = archive.fill_buf().map_err(|error| {
                 ArchiveFailed::caused_by(
                     self.archive.clone(),
@@ -111,6 +158,7 @@ impl Staging {
         }
         let name = archive_name(&self.archive)?;
         let text = checksum_line(&digest, name, cfg!(windows));
+        checkpoint()?;
         File::create_new(&self.checksum)
             .and_then(|mut file| file.write_all(text.as_bytes()))
             .map_err(|error| {

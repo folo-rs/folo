@@ -1,9 +1,10 @@
 use std::ffi::OsStr;
-use std::io;
 use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::{fs, io};
 
 use crp_diag::DiagnosticSink;
 use crp_native::command::{capture, strings};
@@ -48,6 +49,87 @@ impl SourceProvider for LocalSource {
     fn fetch(&self, _controller: &Path, _commit: &str, _deadline: Instant) -> Result<(), AppError> {
         panic!("the fixture commit is already present locally")
     }
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "builds a native executable and writes archives")]
+fn packaging_failure_does_not_create_a_checksum_or_replace_existing_outputs() {
+    with_io_slot(|| {
+        // Compilation is native I/O; the watchdog is not an archive timing assertion.
+        testing::with_watchdog_timeout(Duration::from_mins(5), || {
+            let repository = Repository::new();
+            repository.write(
+                "Cargo.toml",
+                b"[workspace]\n[package]\nname='fixture'\nversion='1.0.0'\nedition='2024'\n",
+            );
+            repository.write("src/main.rs", b"fn main() {}\n");
+            repository.write(
+                "Cargo.lock",
+                b"version = 4\n[[package]]\nname = 'fixture'\nversion = '1.0.0'\n",
+            );
+            repository.write(".gitignore", b"/target\n");
+            repository.write(
+                "rust-toolchain.toml",
+                include_bytes!("../../../../rust-toolchain.toml"),
+            );
+            repository.command(&["add", "."]);
+            repository.command(&["commit", "--quiet", "-m", "archive fixture"]);
+            let source = repository.command(&["rev-parse", "HEAD"]).trim().to_owned();
+            let rustc = Command::new("rustc")
+                .args(["--version", "--verbose"])
+                .current_dir(repository.path())
+                .output()
+                .unwrap();
+            assert!(rustc.status.success());
+            let triple = String::from_utf8(rustc.stdout)
+                .unwrap()
+                .lines()
+                .find_map(|line| line.strip_prefix("host: "))
+                .unwrap()
+                .to_owned();
+            let output = TempDir::new().unwrap();
+            let mut native = Native::new(
+                repository.path().to_owned(),
+                output.path().to_owned(),
+                triple,
+                Box::new(LocalSource),
+                Arc::new(crp_diag::Discard),
+            )
+            .unwrap();
+            let request = BuildRequest::new(
+                "fixture".to_owned(),
+                "fixture".to_owned(),
+                "1.0.0".to_owned(),
+                "fixture-v1.0.0".to_owned(),
+                source,
+                "fixture-native".to_owned(),
+            )
+            .unwrap();
+            native.prepare(&request).unwrap();
+            native.build(&request).unwrap();
+            let artifacts = native.artifacts().unwrap();
+            let archive = artifacts.archive.to_owned();
+            let checksum = artifacts.checksum.to_owned();
+            fs::create_dir_all(&archive).unwrap();
+            native.package(&request).unwrap_err();
+            assert!(!checksum.exists());
+            assert!(archive.is_dir());
+            fs::remove_dir(&archive).unwrap();
+
+            fs::write(&checksum, b"existing checksum").unwrap();
+            native.package(&request).unwrap_err();
+            assert_eq!(fs::read(&checksum).unwrap(), b"existing checksum");
+            assert!(archive.is_file());
+            native.cleanup().unwrap();
+            assert_eq!(
+                repository
+                    .command(&["worktree", "list", "--porcelain"])
+                    .matches("worktree ")
+                    .count(),
+                1
+            );
+        });
+    });
 }
 
 #[test]

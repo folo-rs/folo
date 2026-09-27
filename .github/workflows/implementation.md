@@ -59,11 +59,6 @@ This cache is separate from `rust-cache`, whose binary caching is disabled, so c
 a tool pin does not discard workspace compilation artifacts. Standalone lint tools and
 Bicep retain their independent caches.
 
-The same cache retains the managed Windows archive executable and its accompanying
-license. Keeping them together preserves the standalone tool's complete installation.
-The source-revision key covers its installer; setup reconciles restored archive
-tools before use.
-
 Book jobs install into a separate Cargo install root and cache that entire root, including
 the binaries and registration metadata, after shared setup. Only book jobs populate this
 cache, so ordinary setup jobs cannot reserve its immutable key before book tools exist.

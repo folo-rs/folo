@@ -71,10 +71,9 @@ The published action pins the application and API compatibility checker versions
 prepares their installation separately from consumer builds. Binary sources
 continue to supply their own toolchain, Cargo configuration and lockfile.
 
-Native binary publication uses Git, Cargo, rustup and the GitHub CLI, plus
-`zip`/`unzip` on Unix or standalone `7za.exe` on Windows. The reusable workflow
-prepares those archive tools before builds. Direct CLI users must provide them;
-version assessment and publication reporting do not require archive tools.
+Native binary publication uses Git, Cargo, rustup and the GitHub CLI. ZIP creation
+and SHA-256 hashing are included in the application; no separate archiver needs
+installation on the runner or a direct CLI user's machine.
 
 ## Inspect your workspace before editing it
 

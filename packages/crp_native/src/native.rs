@@ -308,44 +308,13 @@ impl Native {
         Ok(())
     }
 
-    #[cfg_attr(test, mutants::skip)] // Native archive tools and file hashing use integration fixtures.
+    #[cfg_attr(test, mutants::skip)] // Archive filesystem effects use integration fixtures.
     pub fn package(&mut self, _binary: &BuildRequest) -> Result<(), AppError> {
         let staging = self
             .staging
             .as_ref()
             .ok_or_else(|| InvalidPlan::new("No staged executable".to_owned()))?;
-        let filename = staging
-            .executable
-            .file_name()
-            .ok_or_else(|| InvalidPlan::new("Missing binary filename".to_owned()))?;
-        #[cfg(windows)]
-        let (program, arguments) = (
-            "7za",
-            vec![
-                "a".into(),
-                "-tzip".into(),
-                staging.archive.as_os_str().to_owned(),
-                filename.to_owned(),
-            ],
-        );
-        #[cfg(unix)]
-        let (program, arguments) = (
-            "zip",
-            vec![
-                "-q".into(),
-                staging.archive.as_os_str().to_owned(),
-                filename.to_owned(),
-            ],
-        );
-        capture(
-            OsStr::new(program),
-            &arguments,
-            &staging.directory,
-            &[],
-            &self.diagnostics,
-            self.deadline,
-        )?;
-        staging.checksum()
+        staging.package(self.deadline)
     }
 
     #[cfg_attr(test, mutants::skip)] // Owned-worktree cleanup is a Git/filesystem boundary.

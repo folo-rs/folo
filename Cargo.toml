@@ -158,6 +158,7 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 trybuild = { version = "1.0.0", default-features = false }
 vicinal = { version = "0.1.42", path = "packages/vicinal", default-features = false }
 windows = { version = "0.62.0", default-features = false, features = ["std"] }
+zip = { version = "8.6.0", default-features = false }
 
 [workspace.metadata.cargo-udeps.ignore]
 development = ["mutants", "static_assertions"]
