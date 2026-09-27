@@ -56,7 +56,7 @@ impl VerificationRepository for Repository {
         metadata.validate_inputs(self, manifest)
     }
 
-    // The real release checker reads Git and filesystem state and belongs to integration tests.
+    // The candidate verifier reads Git and filesystem state and belongs to integration tests.
     #[cfg_attr(test, mutants::skip)]
     fn check(
         &self,

@@ -4,13 +4,14 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crp_diag::Quotable;
 use ohno::AppError;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::BuildRequest;
 use crate::command::{cancelled, interruption};
-use crate::request::BuildRequest;
-use crate::zip_writer::write_archive;
+use crate::zip_writer::{copy_artifact, write_archive};
 
 /// Fresh per-item staging keeps shared target artifacts separate from release asset contents.
 pub(crate) struct Staging {
@@ -31,8 +32,11 @@ impl Staging {
         binary: &BuildRequest,
         triple: &str,
         executable: &Path,
+        deadline: Instant,
     ) -> Result<Self, AppError> {
         let directory = output.join(&binary.archive_base);
+        let mut checkpoint = || check_progress(&directory, deadline);
+        checkpoint()?;
         fs::create_dir(&directory).map_err(|error| {
             ArchiveFailed::caused_by(directory.clone(), "Cannot create artifact staging", error)
         })?;
@@ -42,37 +46,7 @@ impl Staging {
             binary.bin.clone()
         };
         let staged = directory.join(name);
-        let metadata = fs::metadata(executable).map_err(|error| {
-            ArchiveFailed::caused_by(
-                executable.to_path_buf(),
-                "Cannot inspect Cargo executable",
-                error,
-            )
-        })?;
-        if !metadata.is_file() {
-            return Err(ArchiveFailed::new(
-                executable.to_path_buf(),
-                "Cargo executable is not a regular file",
-            )
-            .into());
-        }
-        fs::copy(executable, &staged).map_err(|error| {
-            ArchiveFailed::caused_by(staged.clone(), "Cannot stage Cargo executable", error)
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&staged).map_err(|error| {
-                ArchiveFailed::caused_by(staged.clone(), "Cannot inspect staged permissions", error)
-            })?;
-            if metadata.permissions().mode() & 0o111 == 0 {
-                return Err(ArchiveFailed::new(
-                    staged,
-                    "Staged binary has no executable permission",
-                )
-                .into());
-            }
-        }
+        stage_executable(executable, &staged, &mut checkpoint)?;
         let base = &binary.archive_base;
         Ok(Self {
             archive: directory.join(format!("{base}.zip")),
@@ -84,13 +58,7 @@ impl Staging {
     // Filesystem and real-clock effects are covered by native integration tests.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn package(&self, deadline: Instant) -> Result<(), AppError> {
-        let mut checkpoint = || {
-            if let Some(reason) = interruption(Instant::now() >= deadline, cancelled()) {
-                Err(ArchiveFailed::new(self.archive.clone(), reason).into())
-            } else {
-                Ok(())
-            }
-        };
+        let mut checkpoint = || check_progress(&self.archive, deadline);
         checkpoint()?;
         self.write_archive(&mut checkpoint)
             .map_err(|error| contextualize_archive_error(&self.archive, error))?;
@@ -190,10 +158,115 @@ impl Staging {
 
 /// Archive staging and checksum failures retain their artifact path and foreign cause.
 #[ohno::error]
-#[display("{message}: {}", path.display())]
+#[display("{message}: {}", path.quoted())]
 struct ArchiveFailed {
     path: PathBuf,
     message: &'static str,
+}
+
+// Clock acquisition is confined to the native adapter; tests inject checkpoints instead.
+#[cfg_attr(test, mutants::skip)]
+fn check_progress(path: &Path, deadline: Instant) -> Result<(), AppError> {
+    match interruption(Instant::now() >= deadline, cancelled()) {
+        Some(reason) => Err(ArchiveFailed::new(path.to_owned(), reason).into()),
+        None => Ok(()),
+    }
+}
+
+// The executable remains private until every copy/flush checkpoint has completed.
+#[cfg_attr(test, mutants::skip)]
+fn stage_executable(
+    executable: &Path,
+    staged: &Path,
+    checkpoint: &mut impl FnMut() -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    checkpoint()?;
+    let input = File::open(executable).map_err(|error| {
+        ArchiveFailed::caused_by(executable.to_owned(), "Cannot open Cargo executable", error)
+    })?;
+    let metadata = input.metadata().map_err(|error| {
+        ArchiveFailed::caused_by(
+            executable.to_owned(),
+            "Cannot inspect Cargo executable",
+            error,
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(ArchiveFailed::new(
+            executable.to_owned(),
+            "Cargo executable is not a regular file",
+        )
+        .into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if !executable_mode(metadata.permissions().mode()) {
+            return Err(ArchiveFailed::new(
+                executable.to_owned(),
+                "Cargo executable has no executable permission",
+            )
+            .into());
+        }
+    }
+    let directory = staged.parent().ok_or_else(|| {
+        ArchiveFailed::new(
+            staged.to_owned(),
+            "Staged executable has no parent directory",
+        )
+    })?;
+    let mut temporary = NamedTempFile::new_in(directory).map_err(|error| {
+        ArchiveFailed::caused_by(
+            staged.to_owned(),
+            "Cannot create executable staging file",
+            error,
+        )
+    })?;
+    {
+        let mut output = BufWriter::new(temporary.as_file_mut());
+        copy_artifact(input, &mut output, checkpoint).map_err(|error| {
+            ArchiveFailed::caused_by(staged.to_owned(), "Cannot copy Cargo executable", error)
+        })?;
+        output.flush().map_err(|error| {
+            ArchiveFailed::caused_by(staged.to_owned(), "Cannot flush staged executable", error)
+        })?;
+    }
+    checkpoint()?;
+    temporary
+        .as_file()
+        .set_permissions(metadata.permissions())
+        .map_err(|error| {
+            ArchiveFailed::caused_by(
+                staged.to_owned(),
+                "Cannot preserve executable permissions",
+                error,
+            )
+        })?;
+    temporary.persist_noclobber(staged).map_err(|error| {
+        ArchiveFailed::caused_by(
+            staged.to_owned(),
+            "Cannot promote staged executable",
+            error.error,
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(any(unix, test))]
+fn executable_mode(mode: u32) -> bool {
+    // Any Unix permission class can provide the executable capability.
+    const EXECUTE_BITS: u32 = 0o111;
+    mode & EXECUTE_BITS != 0
+}
+
+/// Drives native executable copying with an injected interruption source.
+#[cfg(any(test, feature = "private-test-util"))]
+pub fn stage_executable_for_test(
+    executable: &Path,
+    staged: &Path,
+    mut checkpoint: impl FnMut() -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    stage_executable(executable, staged, &mut checkpoint)
 }
 
 /// Drives the real file-promotion boundary with an in-process interruption source.
@@ -227,7 +300,8 @@ fn archive_name(path: &Path) -> Result<&str, AppError> {
 }
 
 fn checksum_line(digest: &str, name: &str, windows: bool) -> String {
-    // Match sha256sum's text/binary markers; either is accepted by checksum consumers.
+    // A raw ZIP digest uses GNU's binary marker where text translation can change bytes.
+    // Other platforms conventionally use its text marker because no translation is applied.
     format!("{digest} {}{name}\n", if windows { "*" } else { " " })
 }
 
@@ -275,5 +349,15 @@ mod tests {
             archive_name(Path::new("output/archive.zip")).unwrap(),
             "archive.zip"
         );
+    }
+
+    #[test]
+    fn executable_permission_observations_require_an_execute_bit() {
+        for mode in [0o100, 0o010, 0o001, 0o751] {
+            assert!(executable_mode(mode));
+        }
+        for mode in [0, 0o444, 0o644, 0o666] {
+            assert!(!executable_mode(mode));
+        }
     }
 }

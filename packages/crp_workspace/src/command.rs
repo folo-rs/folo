@@ -1,12 +1,10 @@
-// Subprocess helper for `git` and `cargo`.
-//
-// Classification is specified to shell out rather than link libgit2/gix or a
-// Cargo library, so this is the only subprocess boundary.
+// Shared captured Git/Cargo observation commands for workspace and versioning operations.
+// Native execution and external compatibility checking have their own process boundaries.
 
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use ohno::{AppError, OhnoCore};
 
@@ -22,7 +20,9 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    /// Distinguishes command rejection from inability to start or communicate with the process.
+    /// Reports a normal nonzero exit, not signal termination or a process I/O failure.
+    ///
+    /// The caller determines what that status means for the particular command.
     #[must_use]
     pub fn is_nonzero_exit(&self) -> bool {
         self.nonzero_exit
@@ -31,9 +31,10 @@ impl CommandError {
 
 impl From<CommandFailedError> for CommandError {
     fn from(error: CommandFailedError) -> Self {
+        let nonzero_exit = error.is_nonzero_exit();
         Self {
             core: OhnoCore::from(error),
-            nonzero_exit: true,
+            nonzero_exit,
         }
     }
 }
@@ -87,7 +88,7 @@ pub fn run_capture_input(
     if !output.status.success() {
         return Err(CommandFailedError::new(
             program,
-            failure_status(output.status),
+            output.status,
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         )
         .into());
@@ -120,7 +121,7 @@ pub fn run_capture_os(
     } else {
         Err(CommandFailedError::new(
             program,
-            failure_status(output.status),
+            output.status,
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )
         .into())
@@ -158,7 +159,7 @@ pub fn run_capture_os_bytes(
     } else {
         Err(CommandFailedError::new(
             program,
-            failure_status(output.status),
+            output.status,
             String::from_utf8_lossy(&output.stderr).trim().to_string(),
         )
         .into())
@@ -176,20 +177,16 @@ pub fn run_capture_ok_bytes(
     match run_capture_bytes(program, args, cwd) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) => {
-            if error.find_source::<CommandFailedError>().is_some() {
+            if error
+                .find_source::<CommandFailedError>()
+                .is_some_and(CommandFailedError::is_nonzero_exit)
+            {
                 Ok(None)
             } else {
                 Err(error)
             }
         }
     }
-}
-
-/// Renders either the exit code or the signal-only fallback.
-fn failure_status(status: ExitStatus) -> String {
-    status
-        .code()
-        .map_or_else(|| "signal".to_string(), |code| code.to_string())
 }
 
 /// Directory passed to `Command::current_dir`.
@@ -238,12 +235,22 @@ pub fn spawn(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::error::Error;
+    use std::fmt::Debug;
+    use std::io;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt as _;
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt as _;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::process::ExitStatus;
+
+    use ohno::ErrorExt as _;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(CommandError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn empty_cwd_uses_process_current_directory() {
@@ -253,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_status_preserves_the_exit_code() {
+    fn command_failure_reports_only_normal_nonzero_exits() {
         // Distinct ordinary failures must not collapse to a generic diagnostic.
         for code in [1, 23] {
             #[cfg(unix)]
@@ -261,15 +268,23 @@ mod tests {
             #[cfg(windows)]
             let status = ExitStatus::from_raw(code);
             assert!(!status.success());
-            assert_eq!(failure_status(status), code.to_string());
+            let failure = CommandFailedError::new("git", status, "rejected");
+            let error = CommandError::from(failure);
+            assert!(error.is_nonzero_exit());
         }
+        let error = CommandError::from(CommandIoError::caused_by("git", io::Error::other("spawn")));
+        assert!(!error.is_nonzero_exit());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_signal_only_exit_has_a_stable_status() {
+    fn signal_termination_is_an_operational_failure() {
         // POSIX wait status for a process terminated by SIGTERM.
         let status = ExitStatus::from_raw(15);
-        assert_eq!(failure_status(status), "signal");
+        let failure = CommandFailedError::new("git", status, "terminated");
+        let error = CommandError::from(failure);
+        assert!(!error.is_nonzero_exit());
+        assert!(error.find_source::<CommandFailedError>().is_some());
     }
 }

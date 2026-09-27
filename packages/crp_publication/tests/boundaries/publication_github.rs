@@ -13,6 +13,14 @@ use tiny_http::{Method, Response, StatusCode};
 use crate::git_fixture::Repository;
 use crate::http_fixture::HttpService;
 
+/// A failed HTTP response may follow successful creation, or creation may truly be rejected.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ReleaseCreation {
+    Success,
+    LostResponse,
+    Rejected,
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "Uses Git, Cargo and loopback registry/forge services")]
 fn failed_tag_does_not_suppress_other_releases_and_manual_tag_allows_retry() {
@@ -322,25 +330,36 @@ pkg-fmt="zip"
         )
         .unwrap();
         let output = tempfile::tempdir().unwrap();
-        let mut dry = outcome(&publication);
-        dry.dry_run = true;
-        reconcile_with(
-            &publication,
-            &repository.path().join("Cargo.toml"),
-            &output.path().join("dry"),
-            &mut dry,
-            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
-            &registry,
-            &github,
-        )
-        .unwrap();
-        assert_eq!(
-            dry.packages.first().unwrap().state,
-            GithubState::WouldCreateRelease
-        );
-        assert_eq!(dry.packages.first().unwrap().source.as_ref(), Some(&source));
-        assert!(!*created.lock().unwrap());
-        assert!(!output.path().join("dry").exists());
+        if creation == ReleaseCreation::Success {
+            // The dry run never sends the POST controlled by this outcome matrix.
+            let mut dry = outcome(&publication);
+            dry.dry_run = true;
+            reconcile_with(
+                &publication,
+                &repository.path().join("Cargo.toml"),
+                &output.path().join("dry"),
+                &mut dry,
+                &crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    Arc::new(crp_diag::Discard),
+                ),
+                &registry,
+                &github,
+            )
+            .unwrap();
+            assert_eq!(
+                dry.packages.first().unwrap().state,
+                GithubState::WouldCreateRelease
+            );
+            assert_eq!(dry.packages.first().unwrap().source.as_ref(), Some(&source));
+            assert_eq!(
+                dry.planned_targets,
+                ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+            );
+            assert!(!*created.lock().unwrap());
+            assert!(!output.path().join("dry").exists());
+        }
         *tag_reads.lock().unwrap() = 0;
         let mut result = outcome(&publication);
         reconcile_with(
@@ -389,14 +408,6 @@ pkg-fmt="zip"
     }
 }
 
-/// A failed HTTP response may follow successful creation, or creation may truly be rejected.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ReleaseCreation {
-    Success,
-    LostResponse,
-    Rejected,
-}
-
 #[test]
 #[cfg_attr(
     miri,
@@ -419,11 +430,14 @@ fn failure_issue_is_run_qualified_and_reused_after_retry() {
                     &Method::Get,
                     "/repos/example/releases/issues?state=all&creator=fixture-owner&per_page=100&page=1",
                 ) => {
+                    // Fill the first page to require pagination; otherwise matching author,
+                    // title and marker still cannot make pull-request records reusable issues.
                     json!(
                         (0..100)
                             .map(|index| json!({
                                 "number":index,"title":"Release failed: workflow run 123",
-                                "body":"<!-- cargo-release-plan:123:1 -->","pull_request":{}
+                                "body":"<!-- cargo-release-plan:123:1 -->","pull_request":{},
+                                "user":{"login":"fixture-owner"}
                             }))
                             .collect::<Vec<_>>()
                     )
@@ -789,6 +803,8 @@ fn issue_discovery_refuses_ambiguous_or_unbounded_owned_results() {
                     ) =>
                     {
                         *requests.lock().unwrap() += 1;
+                        // Full unrelated pages exhaust discovery; a short page with multiple
+                        // owned matches proves ambiguity without reaching the page budget.
                         let count = if full_pages { 100 } else { 2 };
                         json!((0..count).map(|number| json!({
                             "number":number,"title":if full_pages {"unrelated"} else {"Release failed: workflow run 123"},

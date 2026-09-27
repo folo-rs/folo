@@ -187,6 +187,8 @@ recorded tag commit, and completes missing ZIP/checksum pairs. `--no-upload`
 stages that frozen work without tag/release/asset queries or uploads, retaining
 source and archive verification. Missing source objects may still be fetched
 from the configured repository, requiring repository-read access.
+The [binary-outcome reference](artifacts.md#binary-outcome) defines its per-item
+states and completion semantics.
 
 Every attempt needs new outcome and batch/artifact destinations. Name phase
 outcomes `outcome.json` inside separate artifact subdirectories when handing
@@ -206,6 +208,9 @@ Run this in the original GitHub workflow context after downloading phase
 artifacts. It reads retained `outcome.json` files and the fixed current job
 results, then writes Markdown and creates or updates a run-qualified failure
 issue when publication is incomplete.
+
+`--repository` identifies the GitHub repository used by the report and must match
+the repository captured in a supplied valid publication manifest.
 
 The manifest can be omitted when unavailable; the report still runs but cannot
 claim complete delivery. Incomplete publication exits nonzero even when Markdown

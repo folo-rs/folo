@@ -150,8 +150,9 @@ call `WatchdogPhaseReporter::report()` immediately before each later operation
 that may block so a timeout identifies the latest stage. Keep
 `testing::with_watchdog()` for tests where one timeout label is sufficient.
 Native integration fixtures that compile programs or launch toolchains may use
-`testing::with_watchdog_timeout()` with an explicitly justified last-chance budget.
-It must comfortably exceed successful and failing runs, not serve as a failure assertion.
+`testing::with_watchdog_timeout()` with an explicitly justified last-chance timeout.
+It must comfortably exceed the expected execution duration of both successful and
+failing paths, not serve as a failure assertion.
 
 Watchdogs are automatically disabled during mutation testing (`MUTATION_TESTING=1`
 environment variable). A mutation that causes a test to hang should be fixed by

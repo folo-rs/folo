@@ -11,10 +11,7 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use crp_workspace::__private::benchmark_lockfile_closures;
 
-// This explicit target ships, so its allocator cannot depend on the unpublished testing helper.
-#[cfg(not(miri))]
-#[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+::testing::set_allocator!();
 
 /// Keeps the low lockfile case representative of a dependency chain.
 const LOW_PACKAGE_COUNT: usize = 8;

@@ -32,31 +32,38 @@ pub enum CheckFormat {
     Github,
 }
 
-/// Skill named in check failure text so a failing job is a sufficient prompt.
-///
-/// The name is the directory under `.github/skills` that an agent loads, so it
-/// must track that directory rather than any prose description of the recovery.
-const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
-
 /// Inputs to the shared version-readiness operation, independent of application dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct CheckRequest<'a> {
+    /// Release baseline; absence uses the ordinary remote-default-branch selection.
     pub base: Option<&'a str>,
+    /// Cargo manifest identifying the workspace to assess.
     pub manifest_path: &'a Path,
+    /// Diagnostic rendering format, without changing the verdict.
     pub format: CheckFormat,
+    /// Also compare Cargo's packaged files and collect advisory discrepancies.
     pub verify_packaging: bool,
 }
 
-/// The readiness verdict and diagnostics consumed by the shell and candidate verifier.
+/// A version-readiness verdict with independent gating and advisory diagnostics.
 #[derive(Clone, Debug)]
 pub struct CheckOutcome {
+    /// Whether all gating version-readiness checks passed.
     pub passed: bool,
+    /// The success summary or gating failure diagnostics.
     pub message: String,
+    /// Advisory packaging diagnostics; these never change passed.
     pub warnings: String,
 }
 
+/// Skill named in check failure text so a failing job is a sufficient prompt.
+///
+/// The name tracks the directory under `.github/skills`, not its recovery prose.
+const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
+
 // Classification and Cargo probing are real-system adapters. The shared check core below
-// owns their coordination, verdict and output; see docs/implementation.md, "Test boundaries".
+// owns their coordination, verdict and output; see
+// packages/cargo-release-plan/docs/implementation.md, "Test boundaries".
 #[cfg_attr(test, mutants::skip)]
 pub fn check(request: &CheckRequest<'_>, verbose: Verbose<'_>) -> Result<CheckOutcome, AppError> {
     let (passed, message, warnings) = check_workspace(
@@ -318,7 +325,7 @@ fn render_workspace_diagnostics(
             // holding the older dependency can no longer hand its types to this package. That
             // holds however unrelated the dependency's own breaking change was to the exposed
             // items, so it is decided from the version move rather than from the diff.
-            // Ref: docs/design.md, "Public dependencies".
+            // Ref: packages/cargo-release-plan/docs/design.md, "Public dependencies".
             let anchor = broken.anchor().expect(
                 "only a package that releases a breaking change reaches here, which requires an anchor to compare against",
             );
@@ -514,7 +521,8 @@ fn difference_text(left: &BTreeSet<String>, right: &BTreeSet<String>) -> String 
 /// than being a function of the package source; only the archive-root path is
 /// synthesized, so a lockfile nested deeper stays in the comparison as the
 /// ordinary source file it is.
-/// Ref: docs/design.md, "Released content"; Cargo's `cargo package` reference
+/// Ref: packages/cargo-release-plan/docs/design.md, "Released content"; Cargo's `cargo package`
+/// reference
 /// for the entries it adds to an archive.
 fn is_packaging_artifact(path: &str) -> bool {
     path == "Cargo.lock" || path == ".cargo_vcs_info.json" || path == "Cargo.toml.orig"

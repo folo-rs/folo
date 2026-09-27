@@ -1,6 +1,7 @@
 //! Candidate, registry, credentials and delivery integration boundaries.
 
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use crp_workspace::testing as git_fixture;
 
@@ -13,6 +14,8 @@ mod publication_config;
 mod publication_credentials;
 mod publication_github;
 mod publication_identity;
+mod publication_outputs;
+mod publication_prepare;
 mod publication_registry;
 
 ::testing::set_allocator!();

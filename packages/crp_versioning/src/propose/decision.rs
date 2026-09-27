@@ -94,7 +94,7 @@ impl ChangeLevel {
     pub(crate) fn minimum(self, anchor: &Version) -> Result<Version, AppError> {
         // Cargo's leftmost nonzero component determines compatibility. In particular every
         // 0.0.z movement is breaking, so even a breaking judgement only advances its patch.
-        // Ref: docs/design.md, "Public dependencies".
+        // Ref: packages/cargo-release-plan/docs/design.md, "Public dependencies".
         let level = match self {
             Self::Breaking if anchor.major > 0 => IncrementLevel::Major,
             Self::Breaking if anchor.minor > 0 => IncrementLevel::Minor,
@@ -211,7 +211,7 @@ struct FirstPublicationRequired {
     name: String,
 }
 
-/// Semantic component-based grading requires release versions at both endpoints.
+/// Semantic component-based assessment requires release versions at both endpoints.
 #[ohno::error]
 #[display("package {} has a prerelease version, which semantic proposal generation does not support", name.quoted())]
 struct PrereleaseDecision {

@@ -162,7 +162,7 @@ function Get-ValidationPlan {
         $null = $domains.Add('scheduled')
         Write-Verbose 'Scheduled tests consume build helpers; including that dependent domain.'
     }
-    Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, Bicep=$bicep, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
+    Write-Verbose "Tooling selection: workflows=$workflows, script analysis=$analysis, Bicep=$bicep, release binary smoke=$releaseBinarySmoke, script domains=$(@($domains | Sort-Object) -join ', '). Inputs outside declared tooling domains are left to Cargo/package checks."
     return @{
         workflows = $workflows
         script_analysis = $analysis
@@ -218,7 +218,7 @@ function Get-ValidationScriptDomain {
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -cin @('cargo-release-plan', 'crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication', 'release-target-check', 'release-binaries')) {
+        if ($package -cin @('cargo-release-plan', 'release-target-check', 'release-binaries')) {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
@@ -232,8 +232,8 @@ function Get-ValidationScriptDomain {
 function Test-ReleaseBinarySmokeSelected {
     # Path selection covers the native adapters; Cargo delta covers helper dependency changes.
     # Both prepare and the required-checks fan-in use this same union.
-    # The recipe exercises the application/private family and the retained binary wrapper;
-    # the candidate-only wrapper does not own this smoke.
+    # Cargo delta already supplies transitive affected consumers, so private partitions need
+    # no separate inventory. The candidate-only wrapper does not own native binary smoke.
     # Ref: .github/workflows/implementation.md#release-binary-batches.
     [CmdletBinding()]
     [OutputType([bool])]
@@ -245,7 +245,7 @@ function Test-ReleaseBinarySmokeSelected {
     $plan = Read-ValidationPlan -Json $PlanJson
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     return $plan.release_binary_smoke -or @($packages | Where-Object {
-        $_ -cin @('cargo-release-plan', 'crp_diag', 'crp_workspace', 'crp_versioning', 'crp_native', 'crp_publication', 'release-binaries')
+        $_ -cin @('cargo-release-plan', 'release-binaries')
     }).Count -gt 0
 }
 

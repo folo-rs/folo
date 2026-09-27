@@ -11,6 +11,7 @@ use semver::Version;
 
 use crate::anchor::Anchor;
 use crate::classify::{ChangedItem, Classification, PackageClass, PackageStatus, Verdict};
+use crate::groups::Groups;
 
 pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
     let version_targets = packages
@@ -27,6 +28,7 @@ pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
         base: "release-base".to_owned(),
         packages,
         groups: BTreeMap::new(),
+        membership: Groups::default(),
         work_tree: WorkTree {
             workspace_root: PathBuf::from("workspace"),
             packages: Vec::new(),

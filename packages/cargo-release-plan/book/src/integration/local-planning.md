@@ -48,8 +48,8 @@ $PSNativeCommandUseErrorActionPreference = $true
 $EvidenceRoot = ".release-plan-work"
 $Configuration = Join-Path ".cargo" "release_plan.toml"
 $Branch = (git symbolic-ref --quiet --short HEAD).Trim()
-git check-ignore --quiet -- $EvidenceRoot
 New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
+git check-ignore --quiet -- $EvidenceRoot
 $Work = Join-Path $EvidenceRoot ([guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Work | Out-Null
 $ContextPath = Join-Path $Work "context.json"

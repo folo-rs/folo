@@ -96,9 +96,14 @@ shared = {{ path = "../shared" }}
                 &format!("{name}/build.rs"),
                 r#"
 fn main() {
-    for name in ["GH_TOKEN", "GITHUB_TOKEN", "GIT_TOKEN", "INPUT_TOKEN", "DEFAULT_GITHUB_TOKEN"] {
+    for name in [
+        "GH_TOKEN", "GITHUB_TOKEN", "GIT_TOKEN", "INPUT_TOKEN", "DEFAULT_GITHUB_TOKEN",
+        "CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_CRATES_IO_TOKEN", "cargo_registries_fixture_token",
+        "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    ] {
         assert!(std::env::var_os(name).is_none(), "credential leaked into a build script");
     }
+    assert_ne!(std::env::var("CARGO").unwrap(), "launcher-cargo-canary");
 }
 "#,
             );
@@ -166,6 +171,7 @@ fn main() {
             .arg(self.root.path().join(output_name))
             .env("CARGO_TARGET_DIR", self.root.path().join("target"))
             .env("CARGO_TERM_COLOR", "never")
+            .env("CARGO", "launcher-cargo-canary")
             .env_remove("GITHUB_STEP_SUMMARY");
         for name in [
             "GH_TOKEN",
@@ -173,6 +179,11 @@ fn main() {
             "GIT_TOKEN",
             "INPUT_TOKEN",
             "DEFAULT_GITHUB_TOKEN",
+            "CARGO_REGISTRY_TOKEN",
+            "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+            "cargo_registries_fixture_token",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
         ] {
             command.env(name, "credential-filter-canary");
         }

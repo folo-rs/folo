@@ -43,7 +43,10 @@ impl PackagingRules {
         Ok(Self { selection })
     }
 
-    /// Whether `package_relative_path` would be put in the package archive.
+    /// Applies package-local include/exclude and reserved-path selection.
+    ///
+    /// Classification combines this result with manifest resources, automatic README
+    /// inclusion and package-boundary filtering to determine released content.
     ///
     /// The path is Git's, so `/` is the separator and every other byte —
     /// including `\` — is part of a file's name.
@@ -65,7 +68,7 @@ impl PackagingRules {
         if path == "Cargo.toml" {
             return true;
         }
-        // Ref: docs/design.md, "Where Cargo departs from those rules".
+        // Ref: packages/cargo-release-plan/docs/design.md, "Where Cargo departs from those rules".
         if path == BUILD_DIR
             || path
                 .strip_prefix(BUILD_DIR)

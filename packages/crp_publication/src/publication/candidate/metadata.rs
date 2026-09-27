@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::publication::candidate::Repository;
 use crate::publication::candidate::repository::{VerificationError, canonicalize};
 
-/// Validates Cargo's identity response before the release checker assesses package content.
+/// Validates Cargo's identity response before candidate verification assesses content.
 #[derive(Debug, Deserialize)]
 pub struct Metadata {
     packages: Vec<Package>,
@@ -31,12 +31,18 @@ impl Metadata {
         repository: &Repository,
         manifest: &Path,
     ) -> Result<(), AppError> {
+        let mut inputs = Vec::new();
         self.validate_inputs_using(
             manifest,
-            |path| repository.require_tracked(path).map(|_| ()),
+            |path| {
+                inputs.push(path.to_path_buf());
+                Ok(())
+            },
             lockfile_exists,
             canonicalize,
-        )
+        )?;
+        repository.require_tracked_paths(&inputs)?;
+        Ok(())
     }
 
     fn validate_inputs_using(
@@ -46,6 +52,9 @@ impl Metadata {
         lockfile_exists: impl FnOnce(&Path) -> Result<bool, AppError>,
         canonicalize: impl FnOnce(&Path) -> Result<PathBuf, AppError>,
     ) -> Result<(), AppError> {
+        // All workspace/member manifests contribute to the metadata response, not just
+        // requested releases. An existing lockfile is also source evidence; absence is allowed.
+        // Canonical containment binds the supplied manifest to that same workspace.
         require_tracked(&self.workspace_root.join("Cargo.toml"))?;
         let lockfile = self.workspace_root.join("Cargo.lock");
         if lockfile_exists(&lockfile)? {
@@ -64,6 +73,11 @@ impl Metadata {
         verbose: bool,
         mut diagnostic: impl FnMut(&str),
     ) -> Result<(), AppError> {
+        if verbose && !required.is_empty() {
+            diagnostic(
+                "Locked, offline, no-deps metadata supplies package identity without refreshing dependency resolution.",
+            );
+        }
         for (name, version) in required {
             let mut matches = self.packages.iter().filter(|package| package.name == *name);
             let package = matches.next().ok_or_else(|| {
@@ -85,9 +99,7 @@ impl Metadata {
             }
             if verbose {
                 diagnostic(&format!(
-                    "{name}@{version} matches a tracked publishable workspace \
-                     member; locked, offline, no-deps metadata supplies identity without refreshing \
-                     dependency resolution"
+                    "{name}@{version} matches a tracked publishable workspace member"
                 ));
             }
         }

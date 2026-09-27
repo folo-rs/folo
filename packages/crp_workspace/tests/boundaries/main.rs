@@ -20,7 +20,8 @@ mod snapshot_command;
 
 fn with_io_test(test: impl FnOnce() + Send + 'static) {
     crp_workspace::testing::with_io_slot(|| {
-        // Instrumented native toolchain startup needs a conservative last-chance budget.
+        // These isolated Git/process cases normally finish in seconds. The last-chance budget
+        // leaves a large margin for cold or instrumented hosts, never an expected failure timeout.
         testing::with_watchdog_timeout(std::time::Duration::from_mins(5), test);
     });
 }

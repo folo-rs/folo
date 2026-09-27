@@ -4,9 +4,7 @@ use std::sync::Arc;
 use crp_native::{BuildRequest, Native};
 use ohno::AppError;
 
-use crate::publication::binaries::batch::Executor;
-use crate::publication::binaries::github::Github;
-use crate::publication::binaries::model::{Asset, Binary, InvalidPlan};
+use crate::publication::binaries::{Asset, Binary, Executor, Github};
 
 /// Composes native execution with publication-owned asset delivery and verification.
 #[derive(Debug)]
@@ -38,18 +36,15 @@ impl BinaryPublisher {
             target,
         })
     }
-}
-
-impl Binary {
-    pub(crate) fn build_request(&self, target: &str) -> Result<BuildRequest, AppError> {
-        self.validate()?;
+    fn build_request(&self, binary: &Binary) -> Result<BuildRequest, AppError> {
+        binary.validate()?;
         BuildRequest::new(
-            self.name.clone(),
-            self.bin.clone(),
-            self.version.clone(),
-            self.tag.clone(),
-            self.source_sha.clone(),
-            self.archive_base(target),
+            binary.name.clone(),
+            binary.bin.clone(),
+            binary.version.clone(),
+            binary.tag.clone(),
+            binary.source_sha.clone(),
+            binary.archive_base(&self.target),
         )
     }
 }
@@ -67,17 +62,17 @@ impl Executor for BinaryPublisher {
 
     #[cfg_attr(test, mutants::skip)] // Native source acquisition has boundary coverage.
     fn prepare(&mut self, binary: &Binary) -> Result<(), AppError> {
-        self.native.prepare(&binary.build_request(&self.target)?)
+        self.native.prepare(&self.build_request(binary)?)
     }
 
     #[cfg_attr(test, mutants::skip)] // Native Cargo execution has boundary coverage.
     fn build(&mut self, binary: &Binary) -> Result<(), AppError> {
-        self.native.build(&binary.build_request(&self.target)?)
+        self.native.build(&self.build_request(binary)?)
     }
 
     #[cfg_attr(test, mutants::skip)] // Native archive execution has boundary coverage.
     fn package(&mut self, binary: &Binary) -> Result<(), AppError> {
-        self.native.package(&binary.build_request(&self.target)?)
+        self.native.package(&self.build_request(binary)?)
     }
 
     #[cfg_attr(test, mutants::skip)] // Explicit GitHub adapter, never a live write in tests.
@@ -102,11 +97,9 @@ impl Executor for BinaryPublisher {
                 .github
                 .assets_until(binary, context.directory, context.deadline)?,
         ) {
-            return Err(InvalidPlan::new(
-                "Upload returned success without both uploaded assets".to_owned(),
-            )
-            .into());
+            return Err(IncompleteAssetUpload::new(binary.tag.clone(), self.target.clone()).into());
         }
+
         Ok(())
     }
 
@@ -114,4 +107,12 @@ impl Executor for BinaryPublisher {
     fn cleanup(&mut self) -> Result<(), AppError> {
         self.native.cleanup()
     }
+}
+
+/// A successful upload command did not establish the required remote pair.
+#[ohno::error]
+#[display("upload for {tag} on {target} returned success without both uploaded assets")]
+struct IncompleteAssetUpload {
+    tag: String,
+    target: String,
 }

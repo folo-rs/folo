@@ -1,28 +1,37 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use crp_workspace::identity::immutable_commit;
 use ohno::AppError;
 use semver::Version;
 use serde_json::Value;
 
-use crate::publication::binaries::publish::{
-    BINARY_OUTCOME_SCHEMA_VERSION, BinaryReceipt as BinaryOutcome,
-};
+use crate::publication::binaries::publish::{BINARY_OUTCOME_SCHEMA_VERSION, BinaryOutcome};
 use crate::publication::context::WorkflowRun;
 use crate::publication::github::{
     GITHUB_OUTCOME_SCHEMA_VERSION, GithubOutcome, GithubState, PLATFORM_BATCH_SCHEMA_VERSION,
     PlatformBatch,
 };
 use crate::publication::manifest::{Package, PublicationManifest};
-use crate::publication::registry::{OUTCOME_SCHEMA_VERSION, RegistryOutcome};
+use crate::publication::registry::{OUTCOME_SCHEMA_VERSION, RegistryOutcome, RegistryState};
 use crate::publication::report::{ExpectedBatch, Receipt};
 
 /// Decodes complete phase schemas before projecting their validated evidence for selection.
 pub(crate) fn parse_receipt(
     bytes: &[u8],
     publication: Option<&PublicationManifest>,
+    path: &Path,
 ) -> Result<Option<Receipt>, AppError> {
     let value: Value = serde_json::from_slice(bytes)?;
+    let publication_id = value
+        .get("publication_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| InvalidReceipt::new("missing publication identity"))?;
+    // Only the minimal envelope is needed to discard an unrelated retained outcome.
+    // A malformed envelope is still an explicit collection error, never inferred absence.
+    let Some(publication) = applicable(publication, publication_id) else {
+        return Ok(None);
+    };
     let phase = value
         .get("phase")
         .and_then(Value::as_str)
@@ -34,9 +43,7 @@ pub(crate) fn parse_receipt(
                 outcome.schema_version == OUTCOME_SCHEMA_VERSION,
                 "registry schema",
             )?;
-            let Some(publication) = applicable(publication, &outcome.publication_id) else {
-                return Ok(None);
-            };
+            // Registry initialization records every request before any fallible acquisition.
             inventory(
                 publication,
                 outcome
@@ -46,20 +53,35 @@ pub(crate) fn parse_receipt(
                 true,
             )?;
             require(
+                outcome
+                    .packages
+                    .iter()
+                    .all(|package| registry_state_matches_mode(&package.state, outcome.dry_run)),
+                "registry execution mode",
+            )?;
+            require(
                 outcome.complete == (!outcome.dry_run && outcome.passed()),
                 "registry completion",
             )?;
             let summaries = outcome
                 .packages
                 .iter()
-                .map(|item| format!("Registry {}@{}: {:?}.", item.name, item.version, item.state))
+                .map(|item| {
+                    format!(
+                        "Registry {}@{}: {}.",
+                        item.name,
+                        item.version,
+                        registry_state_description(&item.state)
+                    )
+                })
                 .chain(outcome.notes.iter().cloned())
                 .collect();
             Ok(Some(Receipt {
+                path: path.to_path_buf(),
                 publication_id: outcome.publication_id,
                 phase: outcome.phase,
                 complete: outcome.complete,
-                github: hosted(outcome.github)?,
+                github: require_workflow_attribution(outcome.github)?,
                 target: None,
                 batch_id: None,
                 batches: Vec::new(),
@@ -73,9 +95,8 @@ pub(crate) fn parse_receipt(
                 outcome.schema_version == GITHUB_OUTCOME_SCHEMA_VERSION,
                 "GitHub schema",
             )?;
-            let Some(publication) = applicable(publication, &outcome.publication_id) else {
-                return Ok(None);
-            };
+            // GitHub records are appended during reconciliation; an early failed attempt can
+            // legitimately contain a partial inventory, but a complete outcome cannot.
             inventory(
                 publication,
                 outcome
@@ -125,8 +146,10 @@ pub(crate) fn parse_receipt(
                     "GitHub execution mode",
                 )?;
                 summaries.push(format!(
-                    "GitHub {}@{}: {:?}.",
-                    item.name, item.version, item.state
+                    "GitHub {}@{}: {}.",
+                    item.name,
+                    item.version,
+                    github_state_description(item.state)
                 ));
                 if let Some(version) = &item.observed_version {
                     summaries.push(format!(
@@ -160,7 +183,7 @@ pub(crate) fn parse_receipt(
             for batch in &outcome.batches {
                 require(targets.insert(&batch.target), "duplicate batch target")?;
                 require(planned.contains(&batch.target), "unplanned batch")?;
-                require(digest(&batch.batch_id), "batch identity")?;
+                require(is_batch_id(&batch.batch_id), "batch identity")?;
                 require(
                     batch.path == format!("{}.json", batch.target),
                     "batch routing path",
@@ -175,10 +198,11 @@ pub(crate) fn parse_receipt(
                 "missing planned batch artifact",
             )?;
             Ok(Some(Receipt {
+                path: path.to_path_buf(),
                 publication_id: outcome.publication_id,
                 phase: outcome.phase,
                 complete: outcome.complete,
-                github: hosted(outcome.github)?,
+                github: require_workflow_attribution(outcome.github)?,
                 target: None,
                 batch_id: None,
                 batches: outcome
@@ -193,7 +217,7 @@ pub(crate) fn parse_receipt(
                 summaries,
             }))
         }
-        "binaries" => binary_receipt(value, publication),
+        "binaries" => binary_receipt(value, publication, path),
         _ => Err(InvalidReceipt::new("unknown phase").into()),
     }
 }
@@ -205,7 +229,7 @@ fn applicable<'a>(
     publication.filter(|publication| publication.id == id)
 }
 
-fn hosted(context: Option<WorkflowRun>) -> Result<WorkflowRun, AppError> {
+fn require_workflow_attribution(context: Option<WorkflowRun>) -> Result<WorkflowRun, AppError> {
     context.ok_or_else(|| InvalidReceipt::new("missing workflow attribution").into())
 }
 
@@ -217,7 +241,9 @@ fn require(valid: bool, field: &'static str) -> Result<(), AppError> {
     }
 }
 
-fn digest(value: &str) -> bool {
+// PlatformBatch::identity emits lowercase SHA-256 hex for the current batch schema.
+// This is shape validation only; binary outcome validation reproduces the actual identity.
+fn is_batch_id(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -255,16 +281,14 @@ fn requested<'a>(
 
 fn binary_receipt(
     value: Value,
-    publication: Option<&PublicationManifest>,
+    publication: &PublicationManifest,
+    path: &Path,
 ) -> Result<Option<Receipt>, AppError> {
     let outcome: BinaryOutcome = serde_json::from_value(value)?;
     require(
         outcome.schema_version == BINARY_OUTCOME_SCHEMA_VERSION,
         "binary schema",
     )?;
-    let Some(publication) = applicable(publication, &outcome.publication_id) else {
-        return Ok(None);
-    };
     require(!outcome.items.is_empty(), "empty binary receipt")?;
     let mut names = BTreeSet::new();
     let mut binaries = Vec::new();
@@ -338,10 +362,11 @@ fn binary_receipt(
     };
     batch.verify_identity()?;
     Ok(Some(Receipt {
+        path: path.to_path_buf(),
         publication_id: outcome.publication_id,
         phase: outcome.phase,
         complete: outcome.complete,
-        github: hosted(outcome.github)?,
+        github: require_workflow_attribution(outcome.github)?,
         target: Some(outcome.target),
         batch_id: Some(outcome.batch_id),
         batches: Vec::new(),
@@ -355,6 +380,34 @@ fn binary_receipt(
 #[display("invalid publication receipt: {field}")]
 struct InvalidReceipt {
     field: &'static str,
+}
+
+fn registry_state_matches_mode(state: &RegistryState, dry_run: bool) -> bool {
+    match state {
+        RegistryState::AlreadyPresent | RegistryState::Unknown => true,
+        RegistryState::Published | RegistryState::Missing => !dry_run,
+        RegistryState::WouldPublish => dry_run,
+    }
+}
+
+fn registry_state_description(state: &RegistryState) -> &'static str {
+    match state {
+        RegistryState::AlreadyPresent => "already present",
+        RegistryState::Published => "published and available",
+        RegistryState::WouldPublish => "would publish",
+        RegistryState::Missing => "not available",
+        RegistryState::Unknown => "availability unknown",
+    }
+}
+
+fn github_state_description(state: GithubState) -> &'static str {
+    match state {
+        GithubState::Pending => "not completed",
+        GithubState::Complete => "required reconciliation complete",
+        GithubState::WouldCreateTag => "would create tag",
+        GithubState::WouldCreateRelease => "would create release",
+        GithubState::Failed => "reconciliation failed",
+    }
 }
 
 #[cfg(test)]
@@ -443,13 +496,51 @@ mod tests {
     }
 
     fn read(value: &Value, publication: &PublicationManifest) -> Result<Receipt, AppError> {
-        parse_receipt(&serde_json::to_vec(value).unwrap(), Some(publication))
-            .map(|receipt| receipt.unwrap())
+        parse_receipt(
+            &serde_json::to_vec(value).unwrap(),
+            Some(publication),
+            Path::new("outcome.json"),
+        )
+        .map(|receipt| receipt.unwrap())
     }
 
     fn assert_invalid(value: &Value, publication: &PublicationManifest) {
         let error = read(value, publication).unwrap_err();
         assert!(error.find_source::<InvalidReceipt>().is_some());
+    }
+
+    #[test]
+    fn unrelated_stale_schema_does_not_destroy_current_evidence() {
+        let publication = publication();
+        let value = json!({"publication_id":"unrelated","phase":"obsolete","schema_version":999});
+        assert!(
+            parse_receipt(
+                &serde_json::to_vec(&value).unwrap(),
+                Some(&publication),
+                Path::new("stale/outcome.json")
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_receipt(b"{}", Some(&publication), Path::new("unknown/outcome.json")).is_err()
+        );
+    }
+
+    #[test]
+    fn incomplete_registry_outcomes_still_reject_impossible_execution_modes() {
+        let publication = publication();
+        for (dry_run, state) in [
+            (true, "published"),
+            (true, "missing"),
+            (false, "would_publish"),
+        ] {
+            let mut value = registry(&publication);
+            value["dry_run"] = json!(dry_run);
+            value["complete"] = json!(false);
+            value["packages"][0]["state"] = json!(state);
+            assert_invalid(&value, &publication);
+        }
     }
 
     #[test]
@@ -546,13 +637,21 @@ mod tests {
             assert_invalid(&unattributed, &publication);
 
             let bytes = serde_json::to_vec(&value).unwrap();
-            assert!(parse_receipt(&bytes, None).unwrap().is_none());
+            assert!(
+                parse_receipt(&bytes, None, Path::new("outcome.json"))
+                    .unwrap()
+                    .is_none()
+            );
             let mut unrelated = value;
             unrelated["publication_id"] = json!("another-publication");
             assert!(
-                parse_receipt(&serde_json::to_vec(&unrelated).unwrap(), Some(&publication))
-                    .unwrap()
-                    .is_none()
+                parse_receipt(
+                    &serde_json::to_vec(&unrelated).unwrap(),
+                    Some(&publication),
+                    Path::new("unrelated/outcome.json"),
+                )
+                .unwrap()
+                .is_none()
             );
         }
         assert_invalid(&json!({"phase":"unknown"}), &publication);

@@ -5,8 +5,7 @@ use crp_workspace::snapshot::SourceSnapshot;
 use ohno::AppError;
 
 use crate::publication::candidate::repository::validation::{
-    relative_input, validate_around, validate_commit, validate_history, validate_index,
-    validate_status,
+    relative_input, validate_commit, validate_history, validate_index, validate_status,
 };
 
 /// Binds all verification reads to the caller's immutable candidate checkout.
@@ -46,15 +45,6 @@ impl Repository {
         validate_index(&files)
     }
 
-    // Trivial wiring of the real Git adapter into the unit-tested recheck sequence.
-    #[cfg_attr(test, mutants::skip)]
-    pub fn checked<T>(
-        &self,
-        operation: impl FnOnce() -> Result<T, AppError>,
-    ) -> Result<T, AppError> {
-        validate_around(|| self.ensure_clean_head(), operation)
-    }
-
     // Git supplies commit resolution and history; pure comparisons remain mutation-tested.
     #[cfg_attr(test, mutants::skip)]
     pub fn ensure_first_parent(&self, release_line: &str) -> Result<(), AppError> {
@@ -73,6 +63,24 @@ impl Repository {
         let relative = relative_input(&path, self.source.root())?;
         self.source.tracked(relative)?;
         Ok(path)
+    }
+
+    /// Validates one phase's inputs against a single acquired Git index.
+    #[cfg_attr(test, mutants::skip)] // Canonicalization and index acquisition use boundary tests.
+    pub(crate) fn require_tracked_paths(
+        &self,
+        paths: &[PathBuf],
+    ) -> Result<Vec<PathBuf>, AppError> {
+        let paths: Vec<_> = paths
+            .iter()
+            .map(|path| canonicalize(path))
+            .collect::<Result<_, _>>()?;
+        let relatives: Vec<_> = paths
+            .iter()
+            .map(|path| relative_input(path, self.source.root()).map(Path::to_path_buf))
+            .collect::<Result<_, _>>()?;
+        self.source.tracked_paths(&relatives)?;
+        Ok(paths)
     }
 }
 

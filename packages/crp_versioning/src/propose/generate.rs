@@ -128,7 +128,8 @@ impl ProposalArtifacts for FileArtifacts {
 /// Validated report evidence indexed for repeated, entirely in-memory resolution.
 ///
 /// Release assessments exclude helpers, while version targets and group maxima include them.
-/// Ref: docs/design.md, "Plan from captured evidence" and "Version groups".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Plan from captured evidence" and "Version
+/// groups".
 pub(crate) struct Proposal<'a> {
     pub(crate) report: &'a ReportFile,
     pub(crate) packages: BTreeMap<&'a str, &'a ReportPackage>,

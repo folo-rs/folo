@@ -14,13 +14,23 @@ use crp_publication::publication::packages::PublicationWorkspace;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// A disposable Git controller with different source and controller configurations.
+/// A live controller checkout and a separately recorded tagged-source commit.
+///
+/// The constructor records source before advancing controller configuration. Batch items retain
+/// that earlier commit so the source's tracked toolchain and settings govern native builds.
 pub(crate) struct Fixture {
+    /// Owns the live controller repository, not the disposable build worktree.
     pub(crate) root: TempDir,
+    /// Immutable source used by batch items; `commit_source` deliberately advances it.
     pub(crate) source: String,
+    /// Requested native target, normally the compiler host and changed for mismatch scenarios.
     pub(crate) triple: String,
+    /// Cargo workspace location, independently movable within the controller repository.
     pub(crate) workspace: PathBuf,
 }
+
+/// Ordinary release identity shared by generated manifests, batch items and expected asset names.
+pub(crate) const FIXTURE_VERSION: &str = "1.0.0";
 
 impl Fixture {
     pub(crate) fn new() -> Self {
@@ -61,13 +71,15 @@ resolver = "3"
         write(
             path,
             "shared/Cargo.toml",
-            r#"
+            &format!(
+                r#"
 [package]
 name = "shared"
-version = "1.0.0"
+version = "{FIXTURE_VERSION}"
 edition = "2024"
 publish = false
-"#,
+"#
+            ),
         );
         write(
             path,
@@ -82,7 +94,7 @@ publish = false
                     r#"
 [package]
 name = "{name}"
-version = "1.0.0"
+version = "{FIXTURE_VERSION}"
 edition = "2024"
 
 [[bin]]
@@ -281,9 +293,13 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
 
     pub(crate) fn binary(&self, name: &str) -> Value {
         json!({
-            "name": name, "bin": format!("{name}-bin"), "version": "1.0.0",
-            "tag": format!("{name}-v1.0.0"), "source_sha": self.source,
+            "name": name, "bin": format!("{name}-bin"), "version": FIXTURE_VERSION,
+            "tag": format!("{name}-v{FIXTURE_VERSION}"), "source_sha": self.source,
         })
+    }
+
+    pub(crate) fn archive_base(&self, name: &str) -> String {
+        format!("{name}-v{FIXTURE_VERSION}-{}", self.triple)
     }
 
     pub(crate) fn outcomes(&self, output_name: &str) -> Value {
@@ -307,6 +323,7 @@ pub(crate) fn write(root: &Path, relative: &str, content: &str) {
 
 pub(crate) fn command(root: &Path, program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);
+    // The controller override would beat a source worktree's tracked rust-toolchain.toml.
     command.current_dir(root).env_remove("RUSTUP_TOOLCHAIN");
     // Fixture repositories must not inherit workstation hooks, signing or global Git settings.
     command
@@ -338,6 +355,7 @@ pub(crate) fn run(root: &Path, program: impl AsRef<OsStr>, arguments: &[&str]) -
 pub(crate) fn compile_tool(root: &Path, name: &str, source: &str) {
     let filename = format!("{name}.rs");
     write(root, &filename, source);
+    // A fixed legal crate identifier permits descriptive executable names containing hyphens.
     let result = command(root, "rustc")
         .args([
             "--edition=2024",

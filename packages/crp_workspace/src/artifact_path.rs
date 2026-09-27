@@ -25,6 +25,8 @@ pub fn write_new(
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    // Keep promotion on one filesystem by staging beside the destination. No-clobber
+    // promotion separately preserves the caller's write-once artifact contract.
     let mut file =
         NamedTempFile::new_in(parent).map_err(|error| WriteFileError::caused_by(path, error))?;
     write(file.as_file_mut())?;
@@ -47,7 +49,8 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf, AppError> {
 }
 
 // Acquisition is injectable so transient filesystem failures can be exercised without
-// permission changes or races. See docs/implementation.md, "Test boundaries".
+// permission changes or races. See packages/cargo-release-plan/docs/implementation.md, "Test
+// boundaries".
 fn resolve_path_with(
     path: &Path,
     mut ancestor: PathBuf,

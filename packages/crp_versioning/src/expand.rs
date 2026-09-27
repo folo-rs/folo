@@ -79,7 +79,7 @@ fn expand(
     let work_tree = artifacts.workspace(manifest_path)?;
     // Every Git-tracked member is a valid version target, and a group increments
     // from the highest version any of its members declares.
-    // Ref: docs/implementation.md, "Plan resolution and application".
+    // Ref: packages/cargo-release-plan/docs/implementation.md, "Plan resolution and application".
     let target_versions = work_tree.target_versions();
     let resolved = resolve_plan(
         &plan,

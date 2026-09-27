@@ -140,17 +140,15 @@ fn emit_report(
         .map(|target| ReportVersionTarget {
             name: target.name.clone(),
             declared_version: target.version.to_string(),
-            group: classification.groups.iter().find_map(|(name, group)| {
-                group
-                    .members()
-                    .iter()
-                    .any(|member| member == &target.name)
-                    .then(|| name.clone())
-            }),
+            group: classification
+                .membership
+                .group_of(&target.name)
+                .map(ToOwned::to_owned),
         })
         .collect();
     // The emitted field names are part of the consumer-facing layout documented
-    // in the README, so they are compatibility-sensitive rather than incidental.
+    // in packages/cargo-release-plan/book/src/reference/artifacts.md, "Reports",
+    // so they are compatibility-sensitive rather than incidental.
     let report = ReportFile {
         schema_version: SCHEMA_VERSION,
         head: classification.head.clone(),
@@ -262,6 +260,7 @@ mod tests {
             [("api".to_owned(), "helper".to_owned())],
         );
         data.groups = groups.verdicts(&data.work_tree.target_versions(), &HashSet::new());
+        data.membership = groups;
         let mut output = MemoryOutput {
             report: Some("old completion".to_owned()),
             patches: BTreeMap::from([("stale.patch".to_owned(), "stale".to_owned())]),

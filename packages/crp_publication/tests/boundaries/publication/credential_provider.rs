@@ -9,6 +9,8 @@ use std::io::{self, Write};
 fn main() {
     assert_eq!(env::args().skip(1).collect::<Vec<_>>(), ["--cargo-plugin"]);
     println!(r#"{{"v":[1]}}"#);
+    // Cargo waits for the provider hello before sending its request. Flush the redirected
+    // output before blocking on input (Cargo Book, credential-provider protocol).
     io::stdout().flush().unwrap();
     let mut request = String::new();
     io::stdin().read_line(&mut request).unwrap();

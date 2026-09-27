@@ -1,7 +1,8 @@
+use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{fs, io, mem};
@@ -42,6 +43,76 @@ impl DiagnosticSink for ClosingSink {
             Ok(())
         }
     }
+}
+
+/// Accepts the launch record, then refuses the secondary stderr mirror.
+#[derive(Debug, Default)]
+struct FailedMirror(AtomicUsize);
+
+impl DiagnosticSink for FailedMirror {
+    fn write(&self, _text: &str) -> io::Result<()> {
+        if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+            Ok(())
+        } else {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "compiles and supervises a real process with output pipes"
+)]
+fn failed_stderr_delivery_retains_complete_native_output() {
+    with_io_slot(|| {
+        testing::with_watchdog_timeout(Duration::from_mins(5), || {
+            let directory = TempDir::new().unwrap();
+            let source = directory.path().join("output.rs");
+            let executable = directory.path().join(format!("output{EXE_SUFFIX}"));
+            fs::write(
+                &source,
+                r#"fn main() {
+                println!("stdout canary");
+                eprintln!("first stderr canary");
+                eprintln!("last stderr canary");
+            }"#,
+            )
+            .unwrap();
+            let discard: Arc<dyn DiagnosticSink> = Arc::new(crp_diag::Discard);
+            capture(
+                OsStr::new("rustc"),
+                &[
+                    "--edition=2024".into(),
+                    source.as_os_str().to_owned(),
+                    "-o".into(),
+                    executable.as_os_str().to_owned(),
+                ],
+                directory.path(),
+                &[],
+                &discard,
+                Native::deadline_after(Duration::from_mins(60)),
+            )
+            .unwrap();
+            let recording = Arc::new(FailedMirror::default());
+            let sink: Arc<dyn DiagnosticSink> = Arc::<FailedMirror>::clone(&recording);
+            let error = capture(
+                executable.as_os_str(),
+                &[],
+                directory.path(),
+                &[],
+                &sink,
+                Native::deadline_after(Duration::from_mins(60)),
+            )
+            .unwrap_err();
+            let diagnostic = error.to_string();
+            for canary in ["stdout canary", "first stderr canary", "last stderr canary"] {
+                assert!(diagnostic.contains(canary));
+            }
+            // The launch is delivered, the first mirrored line fails, and later lines are only drained.
+            assert_eq!(recording.0.load(Ordering::Relaxed), 2);
+        });
+    });
 }
 
 /// Requires the fixture's local commit without permitting network source acquisition.
@@ -266,7 +337,11 @@ fn captured_stdout_and_streamed_diagnostics_stay_separate() {
         )
         .unwrap_err();
         assert!(error.to_string().contains("--not-a-git-option"));
-        assert!(recording.0.lock().unwrap().len() > 2);
+        assert!(
+            recording.0.lock().unwrap().iter().any(|line| {
+                !line.starts_with("Running ") && line.contains("--not-a-git-option")
+            })
+        );
     });
 }
 

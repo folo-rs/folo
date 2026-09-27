@@ -11,7 +11,7 @@ use crate::WriteFileError;
 ///
 /// Reset invalidates the previous completion marker before replacing the patch tree;
 /// completion stages JSON next to its destination before promotion.
-/// Ref: docs/implementation.md, "Test boundaries".
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Test boundaries".
 pub(crate) trait ReportOutput {
     fn reset(&mut self) -> Result<(), AppError>;
     fn write_patch(&mut self, name: &str, patch: &str) -> Result<(), AppError>;

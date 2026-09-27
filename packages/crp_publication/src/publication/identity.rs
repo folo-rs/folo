@@ -1,4 +1,4 @@
-//! GitHub OIDC exchange and revocation for per-upload Cargo credentials.
+//! Exchanges GitHub OIDC assertions for per-upload crates.io credentials and revokes them.
 
 use std::any::type_name;
 use std::env;
@@ -17,14 +17,14 @@ use crate::PublicationOutput;
 pub fn check_publishing_identity(output: &PublicationOutput) -> Result<String, AppError> {
     output.notes().note(|| {
         "Checking the caller workflow's GitHub OIDC identity against crates.io; \
-        this exchanges and immediately revokes a temporary credential without publishing."
+        this obtains and immediately revokes a short-lived crates.io credential without publishing."
             .to_owned()
     });
     let identity = ActionsIdentity::from_environment()?;
     let publisher = TrustedPublisher::new(output.clone())?;
     let token = publisher.exchange(&identity)?;
     publisher.revoke(&token)?;
-    Ok("GitHub OIDC exchange and revocation succeeded. Package-specific publication grants are checked when uploading.".to_owned())
+    Ok("GitHub OIDC exchange for a crates.io credential and revocation of that credential succeeded. Package-specific publication grants are checked when uploading.".to_owned())
 }
 
 /// Ambient GitHub identity, retained only in private invocation-owned credential state.

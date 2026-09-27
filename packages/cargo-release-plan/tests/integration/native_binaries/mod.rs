@@ -8,7 +8,7 @@
 )]
 
 pub(crate) use harness::{
-    Fixture, SMOKE_WATCHDOG, assert_success, command, compile_tool, run, write,
+    FIXTURE_VERSION, Fixture, SMOKE_WATCHDOG, assert_success, command, compile_tool, run, write,
 };
 
 mod artifacts;

@@ -1,6 +1,5 @@
 //! Exercises native GitHub process arguments, asset transitions and cleanup without a live forge.
 
-#![cfg(not(miri))]
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::env::consts::EXE_SUFFIX;
@@ -157,6 +156,7 @@ impl Fixture {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Invokes Cargo, Rustc, Git and gh subprocesses")]
 fn verifies_uploaded_assets_and_retries_only_incomplete_releases() {
     // Native builds and archive writes normally finish in seconds; this is only a last-chance guard.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
@@ -188,6 +188,54 @@ fn verifies_uploaded_assets_and_retries_only_incomplete_releases() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Invokes Cargo, Rustc, Git and gh subprocesses")]
+fn unmet_binary_features_fail_in_cargo_without_suppressing_independent_items() {
+    testing::with_watchdog_timeout(Duration::from_mins(5), || {
+        let fixture = Fixture::new();
+        fixture.repository.write(
+            "alpha/Cargo.toml",
+            b"[package]\nname='alpha'\nversion='1.0.0'\nedition='2024'\n\
+              [features]\ncli=[]\n\
+              [[bin]]\nname='alpha'\npath='src/main.rs'\nrequired-features=['cli']\n",
+        );
+        fixture.repository.command(&["add", "."]);
+        fixture
+            .repository
+            .command(&["commit", "--quiet", "-m", "feature-gated binary"]);
+        let outcomes = fixture.execute("feature-gated");
+        let failed = outcomes.first().unwrap();
+        assert_eq!(
+            serde_json::to_value(&failed.binary)
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "alpha"
+        );
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.stage, "build");
+        assert!(
+            failed
+                .diagnostic
+                .as_ref()
+                .is_some_and(|message| !message.is_empty())
+        );
+        let completed = outcomes.last().unwrap();
+        assert_eq!(
+            serde_json::to_value(&completed.binary)
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "beta"
+        );
+        assert_eq!(completed.status, "published");
+        let calls = fs::read_to_string(fixture.forge.path().join("calls")).unwrap();
+        assert!(!calls.lines().any(|call| call == "upload alpha-v1.0.0"));
+        assert!(calls.lines().any(|call| call == "upload beta-v1.0.0"));
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Invokes Cargo, Rustc, Git and gh subprocesses")]
 fn malformed_inventory_does_not_suppress_independent_publication() {
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let fixture = Fixture::new();
@@ -200,6 +248,7 @@ fn malformed_inventory_does_not_suppress_independent_publication() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Invokes Cargo, Rustc, Git and gh subprocesses")]
 fn cleanup_failure_preserves_successful_publication() {
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let fixture = Fixture::new();

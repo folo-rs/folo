@@ -156,9 +156,11 @@ cargo release-plan prepare-publish --source $Source `
 ```
 
 `$Source` must be the full commit ID. Preparation verifies HEAD, clean source,
-tracked Cargo inputs, locked resolution and first-parent membership in the
+tracked Cargo inputs and first-parent membership in the
 configured release branch. It fetches that branch to establish eligibility; it
 does not replace the selected source with the fetched tip.
+Preparation preserves the recorded lockfile without resolving dependencies.
+Cargo's publication and native build commands use `--locked`.
 
 Keep output in an ignored artifact directory or outside tracked source.
 Preparation writes no registry package, tag or release. Repeating identical

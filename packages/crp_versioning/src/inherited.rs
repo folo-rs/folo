@@ -3,7 +3,7 @@
 // A root-manifest edit is in scope for a package only when that package actually
 // inherits the changed `[workspace.package]` key or `[workspace.dependencies]`
 // entry. `[workspace.lints]` is out of scope.
-// Ref: docs/design.md, "Inherited workspace values".
+// Ref: packages/cargo-release-plan/docs/design.md, "Inherited workspace values".
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -123,7 +123,7 @@ fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String
 /// and the root manifest is not shipped at all, so a root edit that only moves a
 /// path leaves every inheriting package's released content byte-identical.
 /// Attributing it would be a false `needs-increment` verdict. Ref:
-/// docs/design.md, "Inherited workspace values".
+/// packages/cargo-release-plan/docs/design.md, "Inherited workspace values".
 fn is_unpublished_dependency_key(key: &str) -> bool {
     key == "path"
 }
@@ -378,7 +378,7 @@ mod tests {
     ///
     /// Moving a workspace dependency's `path` does not alter what an inheriting package publishes.
     /// Ref:
-    /// docs/design.md, "Inherited values".
+    /// packages/cargo-release-plan/docs/design.md, "Inherited values".
     #[test]
     fn moving_an_inline_workspace_dependency_path_is_not_a_change() {
         let keys = InheritedKeys {

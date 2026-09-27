@@ -10,6 +10,7 @@ use std::{fs, thread};
 
 use ohno::AppError;
 
+use crate::publication::artifact::{require_separate_outputs, write_outcome};
 use crate::publication::binaries::Binary;
 use crate::publication::context::WorkflowRun;
 use crate::publication::github::candidate::{Candidate, tag_workspace};
@@ -20,7 +21,8 @@ use crate::publication::github::{
     PLATFORM_BATCH_SCHEMA_VERSION, PlatformBatch,
 };
 use crate::publication::manifest::{Package, PublicationManifest};
-use crate::publication::registry::{RegistryClient, verify_source, write_outcome};
+use crate::publication::registry::RegistryClient;
+use crate::publication::source::verify_source;
 use crate::{PublicationOutput, ReadFileError, WriteFileError};
 
 #[cfg_attr(test, mutants::skip)] // Artifact and transport wiring; outcome decisions are unit-tested.
@@ -32,6 +34,7 @@ pub fn publish(
     dry_run: bool,
     diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
+    require_separate_outputs(output, batches)?;
     for path in [output, batches] {
         if path
             .try_exists()
@@ -108,7 +111,7 @@ fn reconcile(
     )
 }
 
-/// Shared reconciliation boundary with explicit transports for native protocol tests.
+/// Shared reconciliation boundary with explicit transports for loopback protocol tests.
 #[cfg_attr(test, mutants::skip)] // Real source/registry acquisition; Reconciliation has in-process fakes.
 pub fn reconcile_with(
     publication: &PublicationManifest,
@@ -119,7 +122,7 @@ pub fn reconcile_with(
     registry: &RegistryClient,
     github: &Github,
 ) -> Result<(), AppError> {
-    let repository = verify_source(publication, manifest)?;
+    let repository = verify_source(publication, manifest)?.repository;
     // Registry availability is a whole-manifest prerequisite for any GitHub mutation.
     // Do not fold this gate into the later best-effort package loop.
     let mut snapshots = BTreeMap::new();
@@ -216,12 +219,12 @@ pub fn reconcile_with(
     if !outcome.dry_run {
         fs::create_dir_all(batches_path)
             .map_err(|error| WriteFileError::caused_by(batches_path, error))?;
-        for (target, batch) in &work.batches {
-            let batch = batch.clone().seal()?;
+        for (target, batch) in work.batches {
+            let batch = batch.seal()?;
             let filename = format!("{target}.json");
             write_outcome(&batches_path.join(&filename), &batch)?;
             outcome.batches.push(BatchArtifact {
-                target: target.clone(),
+                target,
                 path: filename,
                 batch_id: batch.batch_id,
             });
@@ -269,14 +272,17 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
             record.state = GithubState::Complete;
             return Ok(());
         };
-        let Some(release) =
-            self.github
-                .ensure_release(&record.tag, &package.version, &source, self.dry_run)?
-        else {
-            record.state = GithubState::WouldCreateRelease;
-            return Ok(());
+        let (assets, state) = match self.github.ensure_release(
+            &record.tag,
+            &package.version,
+            &source,
+            self.dry_run,
+        )? {
+            Some(release) => (self.github.assets(&release)?, GithubState::Complete),
+            // An established tag with no release has no complete asset pairs. Dry runs can
+            // report those targets without emitting authoritative batch files or writing GitHub.
+            None => (Vec::new(), GithubState::WouldCreateRelease),
         };
-        let assets = self.github.assets(&release)?;
         for target in &binary.targets {
             let binary = Binary {
                 name: package.name.clone(),
@@ -305,7 +311,7 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
                     .push(binary);
             }
         }
-        record.state = GithubState::Complete;
+        record.state = state;
         Ok(())
     }
 
@@ -316,6 +322,8 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
     ) -> Result<Option<String>, AppError> {
         // Ref writes can race branch movement or lose their response. Each retry revalidates
         // fresh source rather than retrying indefinitely against a stale candidate.
+        // The attempt/pause envelope is a deliberately small engineering allowance for
+        // transient races before an operator handoff, not a GitHub propagation guarantee.
         const ATTEMPTS: usize = 3;
         let tag = &record.tag;
         for attempt in 1..=ATTEMPTS {
@@ -354,7 +362,19 @@ impl<F: Forge, C: FnMut() -> Result<Candidate, AppError>> Reconciliation<'_, F, 
                     "Tag creation attempt {attempt} failed: {error}"
                 ));
             }
-            if let Some(source) = self.github.tag(tag)? {
+            let observed = match self.github.tag(tag) {
+                Ok(observed) => observed,
+                Err(confirmation) => {
+                    return Err(match created {
+                        Ok(()) => confirmation,
+                        Err(operation) => {
+                            TagConfirmationFailed::caused_by(tag.clone(), confirmation, operation)
+                                .into()
+                        }
+                    });
+                }
+            };
+            if let Some(source) = observed {
                 if source != candidate.source {
                     record.source = Some(source.clone());
                     record.recovery_source = None;
@@ -422,6 +442,14 @@ struct CompetingTag {
     tag: String,
     observed: String,
     expected: String,
+}
+
+/// A failed ref write remains relevant when its follow-up observation also fails.
+#[ohno::error]
+#[display("tag {tag} creation confirmation also failed: {confirmation}")]
+struct TagConfirmationFailed {
+    tag: String,
+    confirmation: AppError,
 }
 
 #[cfg(test)]

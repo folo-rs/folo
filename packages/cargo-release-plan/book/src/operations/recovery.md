@@ -17,6 +17,7 @@ when choosing evidence to reuse.
 1. Identify the original run, publication identity, source commit and failing
    phase.
 2. Read package-specific diagnostics, including cleanup and reporting failures.
+   Interpret native results using the [binary-outcome contract](../reference/artifacts.md#binary-outcome).
 3. Distinguish unknown remote state from confirmed missing state.
 4. Confirm the original manifest and required batches remain available.
 5. Correct the specific source, setup, permission or remote-state blocker.

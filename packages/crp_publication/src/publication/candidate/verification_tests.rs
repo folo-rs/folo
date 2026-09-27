@@ -194,12 +194,14 @@ fn verifies_the_complete_sequence_before_emitting_success() {
             "Verified release target candidate: alpha@2.0.0, widget@1.2.3."
         );
         if verbose {
-            let [identity, alpha, widget, baseline, warning, verdict] = diagnostics.as_slice()
+            let [identity, mode, alpha, widget, baseline, warning, verdict] =
+                diagnostics.as_slice()
             else {
                 panic!();
             };
             assert!(identity.contains("candidate"));
             assert!(identity.contains("later-main"));
+            assert!(mode.contains("metadata"));
             assert!(alpha.contains("alpha@2.0.0"));
             assert!(widget.contains("widget@1.2.3"));
             assert!(baseline.contains("candidate"));

@@ -76,24 +76,6 @@ verify-lockfile:
     Import-Module "{{ justfile_directory() }}/scripts/bench-history/CallerFixture.psm1" -Force
     Assert-CallerFixtureLock -Workspace "{{ justfile_directory() }}"
 
-# Warns about publishable crates that crates.io has never seen. Trusted Publishing cannot
-# perform a crate's first-ever publish (it can only be configured on a crate that already
-# exists), so a brand-new crate's first release must be done by hand (cargo publish), after
-# which Trusted Publishing is configured and subsequent releases flow through the workflow.
-# Run locally as an advisory preflight, so the warning surfaces before the CI publish job.
-# Best-effort, never a gate: a transient
-# crates.io failure degrades to a warning and continues. See docs/release-automation.md.
-[group('release')]
-[script]
-check-never-published:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-    Import-Module ./scripts/release/ReleaseAutomation.psm1 -Force
-
-    Write-Verbose "Checking crates.io for never-before-published crates" -Verbose
-    Test-NeverPublishedCrate -Verbose
-
 # CI version-readiness wrappers.
 #
 # `RELEASE_PLAN_BASE` supplies the release baseline when set (CI passes the release branch, or
@@ -182,7 +164,7 @@ gh-plan-release-binaries:
 
     Invoke-ReleaseBinaryPlan -Repository $env:GH_REPO -Verbose
 
-# Runs the frozen matrix batch supplied through RELEASE_BINARY_BATCH, rebuilding only incomplete
+# Runs the frozen platform batch supplied through RELEASE_BINARY_BATCH, rebuilding only incomplete
 # asset pairs. The invocation checkout supplies the controller; Rust owns immutable source
 # worktrees at the peeled package-tag commits.
 [group('automation')]
@@ -196,8 +178,8 @@ gh-build-release-binaries:
     $output = Join-Path $env:RUNNER_TEMP "release-binaries-$([guid]::NewGuid().ToString('N'))"
     Invoke-ReleaseBinariesHelper -Operation run -InputJson $env:RELEASE_BINARY_BATCH -Repository $env:GH_REPO -OutputPath $output
 
-# Native ZIP/checksum smoke on the same no-upload path used for local release verification.
-# The fixture creates its own pinned Git history and never queries or modifies GitHub releases.
+# The bootstrap suite checks its private protocol and a native wiring case. The permanent
+# suites own engine/source/archive coverage; fake GitHub adapters never contact the live service.
 [group('release')]
 release-binary-smoke:
     cargo test --locked --package release-binaries --test smoke -- --nocapture

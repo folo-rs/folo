@@ -21,12 +21,16 @@ struct FakeForge {
     release_exists: bool,
     created_source: Option<String>,
     hide_created_tag: bool,
+    fail_tag_read: bool,
     assets: Vec<Value>,
 }
 
 impl Forge for FakeForge {
     fn tag(&self, tag: &str) -> Result<Option<String>, AppError> {
         self.calls.borrow_mut().push(format!("tag:{tag}"));
+        if self.fail_tag_read {
+            return Err(FakeTagReadFailure::new().into());
+        }
         Ok(self.tags.borrow().get(tag).cloned())
     }
 
@@ -79,6 +83,9 @@ impl Forge for FakeForge {
 #[ohno::error]
 struct FakeFailure;
 
+#[ohno::error]
+struct FakeTagReadFailure;
+
 #[test]
 fn competing_tag_creation_does_not_authorize_release_or_binary_publication() {
     let publication = publication();
@@ -117,6 +124,46 @@ fn competing_tag_creation_does_not_authorize_release_or_binary_publication() {
     assert_eq!(
         *forge.calls.borrow(),
         ["tag:tool-v1.0.0", "create:tool-v1.0.0", "tag:tool-v1.0.0"]
+    );
+}
+
+#[test]
+fn failed_tag_creation_and_failed_confirmation_keep_both_causes() {
+    let publication = publication();
+    let forge = FakeForge {
+        failures: Cell::new(1),
+        fail_tag_read: true,
+        ..FakeForge::default()
+    };
+    let mut work = Reconciliation {
+        github: &forge,
+        publication: &publication,
+        load_candidate: || Ok(candidate("1.0.0", true)),
+        retry_pause: |_| panic!("an unavailable confirmation must not retry blindly"),
+        candidate: None,
+        batches: BTreeMap::new(),
+        dry_run: false,
+        diagnostics: &PublicationOutput::new(
+            "1.0.0",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        ),
+    };
+    let error = work
+        .package(
+            publication.publication.packages.first().unwrap(),
+            None,
+            &mut record(GithubState::Pending),
+        )
+        .unwrap_err();
+    assert!(error.find_source::<FakeFailure>().is_some());
+    assert!(
+        error
+            .find_source::<TagConfirmationFailed>()
+            .unwrap()
+            .confirmation
+            .find_source::<FakeTagReadFailure>()
+            .is_some()
     );
 }
 
@@ -303,7 +350,7 @@ fn dry_run_never_creates_missing_tags_or_releases() {
                 .iter()
                 .any(|call| call.starts_with("create:"))
         );
-        assert!(work.batches.is_empty());
+        assert_eq!(work.batches.is_empty(), !tagged);
         assert!(result.recovery_source.is_none());
     }
 }

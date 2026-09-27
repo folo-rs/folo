@@ -1,10 +1,11 @@
 //! Package-driven publication validation over Cargo's unresolved metadata.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crp_diag::Verbose;
-use crp_workspace::metadata::capture_metadata;
+use crp_workspace::metadata::{
+    capture_metadata, permits_publication_to, reject_legacy_groups, validate_release_plan_metadata,
+};
 use ohno::AppError;
 use serde::Deserialize;
 use serde_json::Value;
@@ -18,6 +19,8 @@ pub struct PublicationWorkspace {
     workspace_root: PathBuf,
     workspace_members: Vec<String>,
     packages: Vec<PublicationPackage>,
+    #[serde(default)]
+    metadata: Value,
 }
 
 impl PublicationWorkspace {
@@ -54,17 +57,8 @@ impl PublicationWorkspace {
     pub fn requests(&self, config: &Configuration) -> Result<Vec<PackageRequest>, AppError> {
         config.validate(Path::new(".cargo/release_plan.toml"))?;
         let mut requests = Vec::new();
-        for package in &self.packages {
-            if !self.workspace_members.contains(&package.id)
-                || package.publish.as_ref().is_some_and(Vec::is_empty)
-            {
-                continue;
-            }
-            if package
-                .publish
-                .as_ref()
-                .is_some_and(|registries| !registries.iter().any(|name| name == "crates-io"))
-            {
+        for package in self.publication_packages(None)? {
+            if !permits_publication_to(package.publish.as_deref(), "crates-io") {
                 return Err(PackageConfigurationError::new(
                     &package.name,
                     "the package is not publishable to crates.io".to_owned(),
@@ -79,18 +73,7 @@ impl PublicationWorkspace {
             let binary = match targets.as_slice() {
                 [] => None,
                 [target] => {
-                    validate_binary(package, target, config)?;
-                    if package
-                        .metadata
-                        .get("release-plan")
-                        .is_some_and(|value| !value.is_object())
-                    {
-                        return Err(PackageConfigurationError::new(
-                            &package.name,
-                            "metadata.release-plan must be a table".to_owned(),
-                        )
-                        .into());
-                    }
+                    validate_binary_metadata(package, config)?;
                     let restriction = package
                         .metadata
                         .get("release-plan")
@@ -123,9 +106,46 @@ impl PublicationWorkspace {
         requests.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(requests)
     }
+
+    /// Registry preflight uses destination eligibility, not binary-build validation.
+    pub(crate) fn registry_targets(
+        &self,
+        selected: Option<&[String]>,
+    ) -> Result<Vec<String>, AppError> {
+        let mut targets: Vec<_> = self
+            .publication_packages(selected)?
+            .into_iter()
+            .filter(|package| permits_publication_to(package.publish.as_deref(), "crates-io"))
+            .map(|package| package.name.clone())
+            .collect();
+        targets.sort();
+        Ok(targets)
+    }
+
+    fn publication_packages(
+        &self,
+        selected: Option<&[String]>,
+    ) -> Result<Vec<&PublicationPackage>, AppError> {
+        reject_legacy_groups(&self.metadata)?;
+        let mut packages = Vec::new();
+        for package in &self.packages {
+            if !self.workspace_members.contains(&package.id)
+                || selected.is_some_and(|names| !names.contains(&package.name))
+            {
+                continue;
+            }
+            reject_legacy_groups(&package.metadata)?;
+            validate_release_plan_metadata(&package.name, &package.metadata)?;
+            if package.publish.as_ref().is_some_and(Vec::is_empty) {
+                continue;
+            }
+            packages.push(package);
+        }
+        Ok(packages)
+    }
 }
 
-/// Validated package selection, before repository-relative publication identity is captured.
+/// Validated package selection before repository-relative paths enter publication intent.
 #[derive(Debug)]
 pub struct PackageRequest {
     pub name: String,
@@ -141,7 +161,7 @@ pub struct BinaryRequest {
     pub targets: Vec<NativeTarget>,
 }
 
-/// Publication-specific projection of Cargo metadata, including feature-gated binary inputs.
+/// Cargo package facts needed for publication selection and archive naming.
 #[derive(Debug, Deserialize)]
 struct PublicationPackage {
     id: String,
@@ -152,73 +172,21 @@ struct PublicationPackage {
     publish: Option<Vec<String>>,
     metadata: Value,
     targets: Vec<PublicationTarget>,
-    features: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    dependencies: Vec<PublicationDependency>,
 }
 
-/// Cargo dependency facts needed to distinguish dependency activation from local features.
-#[derive(Debug, Deserialize)]
-struct PublicationDependency {
-    name: String,
-    rename: Option<String>,
-    optional: bool,
-}
-
-/// One Cargo target and the features required to build it.
+/// The Cargo target identity, independent of whether its default-feature build succeeds.
 #[derive(Debug, Deserialize)]
 struct PublicationTarget {
     name: String,
     kind: Vec<String>,
-    #[serde(default, rename = "required-features")]
-    required_features: Vec<String>,
 }
 
-fn validate_binary(
+fn validate_binary_metadata(
     package: &PublicationPackage,
-    target: &PublicationTarget,
     config: &Configuration,
 ) -> Result<(), AppError> {
-    let mut selected = BTreeSet::new();
-    let mut pending = vec!["default".to_owned()];
-    while let Some(feature) = pending.pop() {
-        let previous = selected.len();
-        if selected.insert(feature.clone()) {
-            debug_assert!(
-                selected.len() > previous,
-                "expanded features must be newly selected"
-            );
-            if let Some(features) = package.features.get(&feature) {
-                pending.extend(features.iter().cloned());
-            }
-            // Cargo activates an optional dependency's implicit feature only when it exists.
-            // A non-optional dependency or a suppressed implicit feature must not activate
-            // an unrelated same-named local feature. Cargo Book, "Dependency features".
-            if let Some((dependency, _)) = feature.split_once('/')
-                && !dependency.ends_with('?')
-                && package.dependencies.iter().any(|entry| {
-                    entry.optional && entry.rename.as_deref().unwrap_or(&entry.name) == dependency
-                })
-                && package
-                    .features
-                    .get(dependency)
-                    .is_some_and(|features| features == &[format!("dep:{dependency}")])
-            {
-                pending.push(dependency.to_owned());
-            }
-        }
-    }
-    if target
-        .required_features
-        .iter()
-        .any(|feature| !selected.contains(feature))
-    {
-        return Err(PackageConfigurationError::new(
-            &package.name,
-            "the binary requires features not enabled by default".to_owned(),
-        )
-        .into());
-    }
+    // Feature selection and buildability belong to the actual default-feature Cargo build.
+    // This metadata check only confirms the cheap naming/layout inputs publication owns.
     let repository = format!("https://github.com/{}", config.repository());
     if package.repository.as_deref() != Some(repository.as_str()) {
         return Err(PackageConfigurationError::new(
@@ -227,6 +195,8 @@ fn validate_binary(
         )
         .into());
     }
+    // Match the publisher's package/version tag, target-qualified ZIP name and root executable.
+    // Ref: book/src/reference/configuration.md, "Binary metadata and naming".
     let required = [
         (
             "pkg-url",
@@ -333,7 +303,6 @@ mod tests {
             "repository": "https://github.com/example/tools",
             "publish": null,
             "targets": [{"name": "different-executable", "kind": ["bin"]}],
-            "features": {},
             "metadata": {
                 "binstall": {
                     "pkg-url": "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip",
@@ -369,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unreachable_or_ambiguous_binary_and_archive_promises() {
+    fn rejects_ambiguous_binary_and_invalid_archive_promises() {
         let mut cases = Vec::new();
         for (field, value) in [
             ("repository", json!("https://github.com/another/repository")),
@@ -400,44 +369,75 @@ mod tests {
         let mut malformed = package();
         malformed["metadata"]["release-plan"] = json!(true);
         cases.push(malformed);
-        let mut gated = package();
-        gated["targets"] = json!([{"name":"gated","kind":["bin"],"required-features":["cli"]}]);
-        cases.push(gated);
         for package in cases {
             requests(&package).unwrap_err();
         }
     }
 
     #[test]
-    fn default_feature_closure_enables_required_binary_features() {
+    fn feature_gated_binary_metadata_is_selected_without_resolving_features() {
         let mut package = package();
-        package["features"] = json!({"default":["full"], "full":["cli"], "cli":["full"]});
         package["targets"] = json!([{"name":"gated","kind":["bin"],"required-features":["cli"]}]);
-        requests(&package).unwrap();
-        package["features"] = json!({"default":["optional/enhanced"], "optional":["dep:optional"]});
-        package["dependencies"] = json!([{"name":"optional","rename":null,"optional":true}]);
-        package["targets"] =
-            json!([{"name":"gated","kind":["bin"],"required-features":["optional"]}]);
-        requests(&package).unwrap();
-        package["features"] =
-            json!({"default":["optional?/enhanced"], "optional":["dep:optional"]});
-        requests(&package).unwrap_err();
+        let selected = requests(&package).unwrap();
+        assert_eq!(
+            selected.first().unwrap().binary.as_ref().unwrap().name,
+            "gated"
+        );
     }
 
     #[test]
-    fn dependency_forwarding_does_not_enable_unrelated_local_features() {
-        for optional in [false, true] {
+    fn reserved_package_metadata_uses_the_shared_schema() {
+        for metadata in [
+            json!({"release_targets":["x86_64-pc-windows-msvc"]}),
+            json!({"release-targtes":["x86_64-pc-windows-msvc"]}),
+            json!({"private-api":"true"}),
+            json!({"release-targets":[false]}),
+            json!({"groups":[]}),
+        ] {
             let mut package = package();
-            package["dependencies"] =
-                json!([{"name":"original","rename":"codec","optional":optional}]);
-            package["features"] = json!({"default":["codec/serde"],"codec":["local"],"local":[]});
-            package["targets"] =
-                json!([{"name":"gated","kind":["bin"],"required-features":["codec"]}]);
+            package["metadata"]["release-plan"] = metadata;
             requests(&package).unwrap_err();
-            package["features"] = json!({"default":["codec/serde"],"codec":["dep:codec"]});
-            assert_eq!(requests(&package).is_ok(), optional);
-            package["features"] = json!({"default":["dep:codec","codec?/serde"]});
-            requests(&package).unwrap_err();
+        }
+        let mut package = package();
+        package["metadata"]["release-plan"] = json!({
+            "private-api":true,"release-targets":["x86_64-pc-windows-msvc"]
+        });
+        requests(&package).unwrap();
+    }
+
+    #[test]
+    fn registry_preflight_selects_only_permitted_destinations_without_binary_checks() {
+        for (publish, included) in [
+            (Value::Null, true),
+            (json!([]), false),
+            (json!(["private"]), false),
+            (json!(["private", "crates-io"]), true),
+        ] {
+            let mut package = package();
+            package["publish"] = publish;
+            package["metadata"] = json!({});
+            let workspace: PublicationWorkspace = serde_json::from_value(json!({
+                "workspace_root":"workspace","workspace_members":["tool-id"],"packages":[package]
+            }))
+            .unwrap();
+            let expected = if included {
+                vec!["tool".to_owned()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(workspace.registry_targets(None).unwrap(), expected);
+            assert_eq!(
+                workspace
+                    .registry_targets(Some(&["tool".to_owned()]))
+                    .unwrap(),
+                expected
+            );
+            assert!(
+                workspace
+                    .registry_targets(Some(&["another".to_owned()]))
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 

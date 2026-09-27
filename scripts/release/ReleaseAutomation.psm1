@@ -1,7 +1,6 @@
 #requires -Version 7.6
 
-# Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml)
-# and the local `just check-never-published` recipe.
+# Release-automation logic for the `Release` GitHub workflow (.github/workflows/release.yml).
 #
 # The workflow steps and release recipes import this module for package discovery, runner
 # selection and registry publication. ReleasePublication.psm1 owns GitHub reconciliation;
@@ -78,56 +77,12 @@ function Get-BinaryTarget {
     @($Package.targets | Where-Object { $_.kind -contains 'bin' })
 }
 
-function Test-PathCaseInsensitive {
-    # Cargo opens manifests through the filesystem while Git pathspecs are case-sensitive by
-    # default. Probe the workspace directory instead of inferring its behavior from the operating
-    # system; an inconclusive probe keeps the stricter case-sensitive result.
-    param(
-        [Parameter(Mandatory)][string] $Directory
-    )
-
-    try {
-        $entryName = @(
-            Get-ChildItem -LiteralPath $Directory -Force -ErrorAction Stop |
-                ForEach-Object { $_.Name }
-        )
-    } catch {
-        return $false
-    }
-    $present = [System.Collections.Generic.HashSet[string]]::new(
-        [StringComparer]::Ordinal
-    )
-    foreach ($name in $entryName) {
-        [void] $present.Add($name)
-    }
-    foreach ($name in $entryName) {
-        $flippedBuilder = [Text.StringBuilder]::new($name.Length)
-        foreach ($character in $name.ToCharArray()) {
-            if ([char]::IsUpper($character)) {
-                [void] $flippedBuilder.Append([char]::ToLowerInvariant($character))
-            } elseif ([char]::IsLower($character)) {
-                [void] $flippedBuilder.Append([char]::ToUpperInvariant($character))
-            } else {
-                [void] $flippedBuilder.Append($character)
-            }
-        }
-        $flipped = $flippedBuilder.ToString()
-        if ($flipped -ceq $name -or $present.Contains($flipped)) {
-            continue
-        }
-        return Test-Path -LiteralPath (Join-Path $Directory $flipped)
-    }
-    return $false
-}
-
 function Get-WorkspaceMember {
-    # Returns current Cargo workspace members with publication eligibility and manifest identity.
-    # Tracking is opt-in because the increment publication gate needs it, while ordinary release
-    # discovery retains its Cargo-defined scope and must not gain a Git failure boundary.
+    # Cargo defines the package inventory used by the legacy publisher and tag reconciliation.
+    # Version assessment and tracked-input validation belong to cargo-release-plan.
     [CmdletBinding()]
     param(
-        [string] $ManifestPath,
-        [switch] $IncludeTracking
+        [string] $ManifestPath
     )
 
     $cargoArgs = @('metadata', '--no-deps', '--format-version', '1')
@@ -159,174 +114,18 @@ function Get-WorkspaceMember {
         [void] $workspaceMemberId.Add([string] $id)
     }
 
-    $workspaceRoot = [IO.Path]::GetFullPath([string] $metadata.workspace_root)
-    $repositoryRoot = $null
-    $workspacePrefix = $null
-    $caseInsensitivePath = $false
-    if ($IncludeTracking) {
-        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-        try {
-            $PSNativeCommandUseErrorActionPreference = $false
-            $gitOutput = @(& git -C $workspaceRoot rev-parse --show-toplevel 2>&1)
-            $gitExitCode = $LASTEXITCODE
-        } finally {
-            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-        }
-        if ($gitExitCode -ne 0) {
-            $diagnostic = @(
-                $gitOutput | ForEach-Object { $_.ToString() }
-            ) -join [Environment]::NewLine
-            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
-                $diagnostic = '(no diagnostic output)'
-            }
-            throw (
-                "git rev-parse failed while resolving the repository for workspace " +
-                "'$workspaceRoot' with exit code $gitExitCode`: $diagnostic"
-            )
-        }
-        $repositoryRootLine = @(
-            $gitOutput |
-                ForEach-Object { $_.ToString() } |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        )
-        if ($repositoryRootLine.Count -ne 1) {
-            throw (
-                "git rev-parse returned an invalid repository root for workspace " +
-                "'$workspaceRoot'."
-            )
-        }
-        $repositoryRoot = [IO.Path]::GetFullPath($repositoryRootLine[0])
-
-        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-        try {
-            $PSNativeCommandUseErrorActionPreference = $false
-            $gitOutput = @(& git -C $workspaceRoot rev-parse --show-prefix 2>&1)
-            $gitExitCode = $LASTEXITCODE
-        } finally {
-            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-        }
-        if ($gitExitCode -ne 0) {
-            $diagnostic = @(
-                $gitOutput | ForEach-Object { $_.ToString() }
-            ) -join [Environment]::NewLine
-            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
-                $diagnostic = '(no diagnostic output)'
-            }
-            throw (
-                "git rev-parse failed while resolving the workspace prefix for " +
-                "'$workspaceRoot' with exit code $gitExitCode`: $diagnostic"
-            )
-        }
-        $workspacePrefixLine = @(
-            $gitOutput |
-                ForEach-Object { $_.ToString() } |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        )
-        if ($workspacePrefixLine.Count -gt 1) {
-            throw (
-                "git rev-parse returned an invalid workspace prefix for " +
-                "'$workspaceRoot'."
-            )
-        }
-        $workspacePrefix = if ($workspacePrefixLine.Count -eq 0) {
-            ''
-        } else {
-            $workspacePrefixLine[0].TrimEnd('/', '\')
-        }
-        $caseInsensitivePath = Test-PathCaseInsensitive -Directory $workspaceRoot
-    }
-
     foreach ($package in $metadata.packages | Sort-Object -Property name) {
         if (-not $workspaceMemberId.Contains([string] $package.id)) {
             continue
         }
 
-        $packageManifestPath = [IO.Path]::GetFullPath([string] $package.manifest_path)
-        $tracked = $null
-        if ($IncludeTracking) {
-            # Cargo's workspace root and package manifests share Cargo's path spelling. Rebase
-            # their relative relationship through Git's workspace prefix instead of subtracting
-            # Git's independently spelled repository root from a Cargo path. This also retains
-            # leading parent components for supported sibling members.
-            $workspaceRelativeManifestPath =
-                [IO.Path]::GetRelativePath($workspaceRoot, $packageManifestPath)
-            $gitWorkspacePath = [IO.Path]::GetFullPath(
-                [IO.Path]::Combine($repositoryRoot, $workspacePrefix)
-            )
-            $gitManifestPath = [IO.Path]::GetFullPath(
-                [IO.Path]::Combine($gitWorkspacePath, $workspaceRelativeManifestPath)
-            )
-            $relativeManifestPath =
-                [IO.Path]::GetRelativePath($repositoryRoot, $gitManifestPath)
-            $outsideRepository =
-                [IO.Path]::IsPathRooted($relativeManifestPath) -or
-                $relativeManifestPath -eq '..' -or
-                $relativeManifestPath.StartsWith(
-                    "..$([IO.Path]::DirectorySeparatorChar)",
-                    [StringComparison]::Ordinal
-                )
-            if ($outsideRepository) {
-                $tracked = $false
-            } else {
-                # Git pathspecs are relative to -C and accept slash separators on every
-                # supported host. Explicit literal magic prevents manifest directory names from
-                # being interpreted as patterns; `icase` follows a case-insensitive checkout.
-                $gitPath = $relativeManifestPath.Replace('\', '/')
-                $gitPathspec = if ($caseInsensitivePath) {
-                    ":(icase,literal)$gitPath"
-                } else {
-                    ":(literal)$gitPath"
-                }
-                $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-                try {
-                    $PSNativeCommandUseErrorActionPreference = $false
-                    $gitOutput = @(
-                        & git -C $repositoryRoot ls-files --error-unmatch -- $gitPathspec 2>&1
-                    )
-                    $gitExitCode = $LASTEXITCODE
-                } finally {
-                    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-                }
-                switch ($gitExitCode) {
-                    0 { $tracked = $true }
-                    1 { $tracked = $false }
-                    default {
-                        $diagnostic = @(
-                            $gitOutput | ForEach-Object { $_.ToString() }
-                        ) -join [Environment]::NewLine
-                        if ([string]::IsNullOrWhiteSpace($diagnostic)) {
-                            $diagnostic = '(no diagnostic output)'
-                        }
-                        throw (
-                            "git ls-files failed while checking workspace manifest " +
-                            "'$relativeManifestPath' with exit code $gitExitCode`: $diagnostic"
-                        )
-                    }
-                }
-            }
-        }
-
         [pscustomobject]@{
             Name         = [string] $package.name
             Version      = [string] $package.version
-            ManifestPath = $packageManifestPath
             Publishable  = ($null -eq $package.publish) -or ($package.publish.Count -gt 0)
-            Tracked      = $tracked
             Package      = $package
         }
     }
-}
-
-function Get-TrackedWorkspaceMember {
-    # The current workspace members whose manifests Git tracks. Version-group membership remains
-    # cargo-release-plan's responsibility; this projection only secures the publication gate.
-    [CmdletBinding()]
-    param(
-        [string] $ManifestPath
-    )
-
-    Get-WorkspaceMember -ManifestPath $ManifestPath -IncludeTracking |
-        Where-Object Tracked
 }
 
 function Get-PublishableBinaryCrate {
@@ -427,8 +226,8 @@ function Invoke-ReleasePublish {
 
 function Get-PublishableCrate {
     # Every Cargo workspace crate publishable to a registry (unlike Get-PublishableBinaryCrate,
-    # not filtered to binaries), as {Name, Version} objects sorted by name. Used by the
-    # never-published preflight, which must warn about any brand-new crate, library or binary.
+    # not filtered to binaries), as {Name, Version} objects sorted by name. Tag reconciliation
+    # uses this inventory to complete the registry publication's package requests.
     # Runs real Cargo metadata; tests point it at a fixture workspace via -ManifestPath.
     [CmdletBinding()]
     param(
@@ -439,76 +238,6 @@ function Get-PublishableCrate {
         Where-Object Publishable |
         ForEach-Object { [pscustomobject]@{ Name = $_.Name; Version = $_.Version } } |
         Sort-Object -Property Name -Unique
-}
-
-function Get-CrateIndexPath {
-    # crates.io sparse-index path for a crate, keyed by (lowercased) name length. Pure, so the
-    # length-branch logic is unit-tested without touching the network. 1 and 2-char names live
-    # under `1/` and `2/`; 3-char under `3/<first-letter>/`; everything else under
-    # `<first-two>/<next-two>/`.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $Name
-    )
-
-    $n = $Name.ToLowerInvariant()
-    switch ($n.Length) {
-        1 { "1/$n" }
-        2 { "2/$n" }
-        3 { "3/$($n.Substring(0, 1))/$n" }
-        default { "$($n.Substring(0, 2))/$($n.Substring(2, 2))/$n" }
-    }
-}
-
-function Get-CratePublishStatus {
-    # Best-effort crates.io presence check for one crate. Returns 'Published' (HTTP 200),
-    # 'NeverPublished' (HTTP 404), or 'Unknown' (a transient rate-limit / 5xx / network error).
-    # Isolates the single HTTP call so the preflight loop and its tests stay off the network.
-    # -SkipHttpErrorCheck stops Invoke-WebRequest throwing on 4xx/5xx so 404 is classified rather
-    # than caught; the try/catch handles genuine network failures.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string] $Name
-    )
-
-    $url = "https://index.crates.io/$(Get-CrateIndexPath -Name $Name)"
-    try {
-        $response = Invoke-WebRequest -Uri $url -Method Get -SkipHttpErrorCheck
-    } catch {
-        return 'Unknown'
-    }
-
-    switch ([int] $response.StatusCode) {
-        200 { 'Published' }
-        404 { 'NeverPublished' }
-        default { 'Unknown' }
-    }
-}
-
-function Test-NeverPublishedCrate {
-    # Preflight for the `increment-versions` skill: warns about publishable crates that crates.io
-    # has never seen. Trusted Publishing cannot perform a crate's first-ever publish (the crate
-    # must already exist so a trusted publisher can be configured on it), so a brand-new crate's
-    # first release must be done by hand. Best-effort and never a gate: a status that cannot be
-    # confirmed degrades to a warning and continues. The skill treats a never-published crate in
-    # the increment set as a stop.
-    [CmdletBinding()]
-    param(
-        [string] $ManifestPath
-    )
-
-    foreach ($crate in @(Get-PublishableCrate -ManifestPath $ManifestPath)) {
-        Write-Verbose "Checking crates.io publish status for '$($crate.Name)'"
-        switch (Get-CratePublishStatus -Name $crate.Name) {
-            'Published' { }
-            'NeverPublished' {
-                Write-Warning "$($crate.Name) has never been published. Its first release must be done manually (cargo publish); afterwards configure Trusted Publishing for it on crates.io and re-publish via the GitHub workflow."
-            }
-            default {
-                Write-Warning "Could not confirm crates.io publish status for '$($crate.Name)'; skipping its never-published preflight. Verify manually if it is a brand-new crate."
-            }
-        }
-    }
 }
 
 function Set-GitHubOutput {
@@ -537,12 +266,8 @@ Export-ModuleMember -Function `
     Get-ReleaseTarget, `
     Get-DeclaredReleaseTarget, `
     Get-BinaryTarget, `
-    Get-TrackedWorkspaceMember, `
     Get-PublishableBinaryCrate, `
     Get-PublishableCrate, `
-    Get-CrateIndexPath, `
-    Get-CratePublishStatus, `
-    Test-NeverPublishedCrate, `
     Get-BinaryReleaseAsset, `
     Invoke-ReleasePublish, `
     Set-GitHubOutput

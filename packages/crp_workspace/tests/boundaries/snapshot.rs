@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crp_workspace::snapshot::SourceSnapshot;
 
 use crate::git_fixture::Repository;
@@ -25,5 +27,34 @@ fn snapshot_reports_source_facts_without_release_policy() {
         assert!(snapshot.tracked("absent".as_ref()).is_err());
         fixture.write("Cargo.toml", b"[workspace]\nresolver = '3'\n");
         assert!(!snapshot.status().unwrap().is_empty());
+    });
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Queries literal membership from a real Git index")]
+fn batched_membership_requires_every_exact_file_without_expanding_patterns() {
+    with_io_test(|| {
+        let fixture = Repository::new();
+        fixture.write("Cargo.toml", b"[workspace]\n");
+        fixture.write("package/file[one].toml", b"tracked");
+        fixture.command(&["add", "."]);
+        let snapshot = SourceSnapshot::discover(&fixture.path().join("Cargo.toml")).unwrap();
+        snapshot
+            .tracked_paths(&[
+                PathBuf::from("Cargo.toml"),
+                PathBuf::from("package/file[one].toml"),
+                PathBuf::from("Cargo.toml"),
+            ])
+            .unwrap();
+        fixture.write("untracked.toml", b"untracked");
+        let error = snapshot
+            .tracked_paths(&[PathBuf::from("Cargo.toml"), PathBuf::from("untracked.toml")])
+            .unwrap_err();
+        assert!(error.to_string().contains("untracked.toml"));
+        assert!(
+            snapshot
+                .tracked_paths(&[PathBuf::from("package/file*.toml")])
+                .is_err()
+        );
     });
 }

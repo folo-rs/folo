@@ -1,7 +1,8 @@
 // Git access via `git` subprocesses.
 //
 // The design forbids git2/gix; every read of history, trees, and diffs goes
-// through this type. Ref: docs/implementation.md, "Subprocess boundaries".
+// through this type. Ref: packages/cargo-release-plan/docs/implementation.md, "Subprocess
+// boundaries".
 
 #![allow(
     clippy::self_named_module_files,
@@ -47,7 +48,7 @@ const SYMLINK_TREE_MODE: &str = "120000";
 ///
 /// Cargo copies the bit into the archive it builds, so the mode is part of a
 /// package's released content rather than a local detail.
-/// Ref: docs/design.md, "Released content".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Released content".
 const EXECUTABLE_TREE_MODE: &str = "100755";
 
 /// Tree mode Git records for a regular file without the executable bit.
@@ -120,7 +121,7 @@ fn decode_default_base(recorded: Option<String>) -> DefaultBase {
 /// first-parent line, the manifests and file contents at a commit, the tracked
 /// state of the work tree — is read through this type by spawning `git`, so it
 /// is the single place where repository state enters classification
-/// (implementation.md, "Subprocess boundaries").
+/// (packages/cargo-release-plan/docs/implementation.md, "Subprocess boundaries").
 ///
 /// It also owns the translation between the two path spaces the tool works in:
 /// commands run at the repository root, while packages are addressed relative
@@ -368,7 +369,7 @@ impl GitRepo {
     /// executable-bit change when `core.fileMode` is active. With that setting
     /// disabled, as it normally is on Windows, Git reports no mode change and
     /// the index remains the portable fallback.
-    /// Ref: docs/implementation.md, "Classification".
+    /// Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
     ///
     /// An empty input answers without invoking Git, because `git ls-files` with
     /// no pathspec lists the whole repository.
@@ -611,7 +612,7 @@ impl TreeEntry {
 /// Executable paths provide the mode Cargo copies into the archive. Symlink
 /// paths must be rejected before hashing because `core.symlinks=false` can
 /// materialize an indexed link as an ordinary work-tree file.
-/// Ref: docs/implementation.md, "Content identity and file modes".
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Content identity and file modes".
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct WorkTreeModes {
     pub executable: HashSet<String>,

@@ -10,7 +10,8 @@ use ohno::AppError;
 use serde_json::Value;
 
 use crate::PublicationOutput;
-use crate::publication::binaries::model::{Asset, Binary, Release};
+use crate::publication::binaries::model::Release;
+use crate::publication::binaries::{Asset, Binary};
 use crate::publication::github::peel_tag;
 
 // Retry idempotent GitHub commands briefly within their caller's deadline. Tag reconciliation
@@ -19,21 +20,15 @@ const GITHUB_ATTEMPTS: usize = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 // Initial discovery is a short operation with a conservative allowance for slow native startup.
 const QUERY_BUDGET: Duration = Duration::from_secs(300);
-/// The upload token is kept separate from the environment supplied to build children.
+/// Observes and delivers GitHub assets and acquires exact release-source commits.
+///
+/// Upload credentials are scoped to forge and repository acquisition operations, not builds.
 #[derive(Clone)]
 pub struct Github {
     repository: String,
     executable: PathBuf,
     token: Option<OsString>,
     pub(crate) output: PublicationOutput,
-}
-
-/// A remote tag observation cannot establish the requested frozen source.
-#[ohno::error]
-#[display("Cannot verify tag {tag}: {message}")]
-struct TagVerificationFailed {
-    tag: String,
-    message: String,
 }
 
 impl fmt::Debug for Github {
@@ -222,10 +217,16 @@ impl Github {
 
 impl SourceProvider for Github {
     fn fetch(&self, controller: &Path, commit: &str, deadline: Instant) -> Result<(), AppError> {
+        // Fetch only the requested immutable commit from the configured repository, not
+        // unrelated tag refs. Reset persistent credential helpers before installing the
+        // invocation helper, and scope its token to this command rather than build children.
+        // The LFS setting prevents incidental smudge activity in acquisition tooling; fetch
+        // itself does not populate a working tree and this flag is not process isolation.
         let mut environment = vec![("GIT_LFS_SKIP_SMUDGE", OsStr::new("1"))];
         if let Some(token) = self.token.as_deref() {
             environment.push(("GH_TOKEN", token));
         }
+
         capture(
             OsStr::new("git"),
             &crp_native::command::strings(&[
@@ -246,6 +247,14 @@ impl SourceProvider for Github {
         Ok(())
     }
 }
+/// A remote tag observation cannot establish the requested frozen source.
+#[ohno::error]
+#[display("Cannot verify tag {tag}: {message}")]
+struct TagVerificationFailed {
+    tag: String,
+    message: String,
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {

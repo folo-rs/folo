@@ -25,6 +25,7 @@ pub fn run() -> ExitCode {
 }
 
 fn dispatch() -> Result<Option<String>, AppError> {
+    // The bootstrap protocol has no quiet-mode flag; shared explanatory notes belong in its job log.
     let diagnostics = PublicationOutput::new(env!("CARGO_PKG_VERSION"), true, Arc::new(Stderr));
     let summary = env::var_os("GITHUB_STEP_SUMMARY").map(PathBuf::from);
     run_binaries(

@@ -9,9 +9,10 @@
 )]
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf, absolute};
+use std::{fs, io};
 
+use crp_diag::Quotable as _;
 use ohno::AppError;
 use semver::{Op, Version, VersionReq};
 use serde::Deserialize;
@@ -113,11 +114,11 @@ pub struct WorkPackage {
     ///
     /// This is reported as evidence; what to do with it is the consumer's
     /// decision.
-    /// Ref: docs/design.md, "Consumer contracts".
+    /// Ref: packages/cargo-release-plan/docs/design.md, "Consumer contracts".
     pub consumer_contract: bool,
     /// Whether an installable binary makes the package's locked closure relevant.
     ///
-    /// Ref: docs/design.md, "Relevant lockfile closures".
+    /// Ref: packages/cargo-release-plan/docs/design.md, "Relevant lockfile closures".
     pub has_lockfile_target: bool,
     /// Files Cargo packs because a manifest key names them.
     ///
@@ -150,7 +151,8 @@ pub struct ReportedDep {
     /// Erring wide is the safe direction here: a dependency wrongly called
     /// public over-states a change level, while a missed one would publish a
     /// broken contract.
-    /// Ref: docs/external-types.md; docs/design.md, "Public dependencies".
+    /// Ref: docs/external-types.md; packages/cargo-release-plan/docs/design.md, "Public
+    /// dependencies".
     pub public: bool,
 }
 
@@ -202,6 +204,69 @@ pub struct MetadataPackage {
     pub targets: Vec<MetadataTarget>,
     #[serde(default)]
     pub metadata: Value,
+}
+
+/// Interprets Cargo's publish allow-list for a particular registry name.
+///
+/// Absence permits any registry, an empty list disables publication, and a nonempty list
+/// permits only its named destinations. This does not choose the application's destination.
+#[must_use]
+pub fn permits_publication_to(publish: Option<&[String]>, registry: &str) -> bool {
+    publish.is_none_or(|registries| registries.iter().any(|name| name == registry))
+}
+
+/// Validates the reserved package release-plan namespace without interpreting publication policy.
+///
+/// Other metadata namespaces are unaffected. Native target support and configured target
+/// selection remain publication decisions, not workspace-observation rules.
+pub fn validate_release_plan_metadata(package: &str, metadata: &Value) -> Result<(), AppError> {
+    let Some(value) = metadata.get("release-plan") else {
+        return Ok(());
+    };
+    let fields = value
+        .as_object()
+        .ok_or_else(|| ReleasePlanMetadataNotTable::new(package))?;
+    for (key, value) in fields {
+        match key.as_str() {
+            "private-api" => {
+                if !value.is_boolean() {
+                    return Err(MalformedPrivateApiError::new(package, value.to_string()).into());
+                }
+            }
+            "release-targets" => {
+                if !value
+                    .as_array()
+                    .is_some_and(|targets| targets.iter().all(Value::is_string))
+                {
+                    return Err(MalformedReleaseTargets::new(package).into());
+                }
+            }
+            _ => return Err(UnknownReleasePlanMetadata::new(package, key).into()),
+        }
+    }
+    Ok(())
+}
+
+/// Package release metadata is a reserved table, not an arbitrary scalar value.
+#[ohno::error]
+#[display("package {} metadata.release-plan must be a table", package.quoted())]
+struct ReleasePlanMetadataNotTable {
+    package: String,
+}
+
+/// A misspelled reserved key must not silently select the omitted-field default.
+#[ohno::error]
+#[display("package {} has unknown metadata.release-plan key {}", package.quoted(), key.quoted())]
+struct UnknownReleasePlanMetadata {
+    package: String,
+    key: String,
+}
+
+/// Target restrictions have a shared representation independent of supported native triples.
+#[ohno::error]
+#[display("package {} metadata.release-plan.release-targets must be an array of strings", package.quoted())]
+struct MalformedReleaseTargets {
+    package: String,
 }
 
 /// One build target from the metadata document.
@@ -331,7 +396,7 @@ impl ManifestSnapshot {
 /// Cargo still supplies manifest normalization and dependency relationships,
 /// while this scope prevents untracked manifests and auto-discovered targets
 /// from entering the released-content model.
-/// Ref: docs/implementation.md, "Workspace snapshots".
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Workspace snapshots".
 #[derive(Debug)]
 pub struct TrackedMetadata<'a> {
     pub git: &'a GitRepo,
@@ -369,7 +434,7 @@ impl TrackedMetadata<'_> {
             match fs::symlink_metadata(self.git.root().join(path)) {
                 Ok(metadata) if metadata.is_file() => present.push(relative),
                 Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => {
                     return Err(ReadFileError::caused_by(self.git.root().join(path), error).into());
                 }
@@ -466,6 +531,11 @@ pub fn work_tree_from_metadata(
         .collect();
 
     reject_legacy_groups(&metadata.metadata)?;
+    for package in &metadata.packages {
+        if selected_member_ids.contains(package.id.as_str()) {
+            validate_release_plan_metadata(&package.name, &package.metadata)?;
+        }
+    }
     let tracked_members_by_dir: BTreeMap<PathBuf, String> = metadata
         .packages
         .iter()
@@ -476,11 +546,11 @@ pub fn work_tree_from_metadata(
                 .map(|dir| (dir.to_path_buf(), package.name.clone()))
         })
         .collect();
-    let canonical_tracked_members_by_dir = canonical_members_by_dir(&tracked_members_by_dir);
+    let canonical_tracked_members_by_dir = canonical_members_by_dir(&tracked_members_by_dir)?;
     // Apply visits every member Cargo can see so an untracked or ignored
     // dependent cannot retain a stale exact pin. This set is deliberately wider
     // than the tracked package set accepted as plan targets.
-    // Ref: docs/implementation.md, "Plan resolution and application".
+    // Ref: packages/cargo-release-plan/docs/implementation.md, "Plan resolution and application".
     let members_by_dir: BTreeMap<PathBuf, String> = metadata
         .packages
         .iter()
@@ -579,42 +649,39 @@ pub fn work_tree_from_metadata(
         manifest.name.clone_from(&package.name);
 
         let exposed_crates = allowed_external_crates(&package.metadata);
-        let dependencies = package
-            .dependencies
-            .iter()
-            .filter(|dep| {
-                is_intra_workspace_released(
-                    dep,
-                    |path| {
-                        // Cargo can spell dependency paths differently from member manifests
-                        // (including Windows verbatim prefixes). Resolve against the same
-                        // acquired member index used by exact-dependency discovery.
-                        resolved_member(
-                            &workspace_root,
-                            path,
-                            &tracked_members_by_dir,
-                            &canonical_tracked_members_by_dir,
-                        ) == Some(dep.name.as_str())
-                    },
-                    manifest_doc,
-                    root_manifest,
-                )
-            })
-            .map(|dep| ReportedDep {
+        let mut dependencies = Vec::new();
+        for dep in &package.dependencies {
+            // Use the same lexical and filesystem-resolved member lookup as exact dependencies.
+            // An observation failure is not evidence that the dependency is outside the workspace.
+            let member = match dep.path.as_deref() {
+                Some(path) => {
+                    resolved_member(
+                        &workspace_root,
+                        path,
+                        &tracked_members_by_dir,
+                        &canonical_tracked_members_by_dir,
+                    )? == Some(dep.name.as_str())
+                }
+                None => false,
+            };
+            if !is_intra_workspace_released(dep, |_| member, manifest_doc, root_manifest) {
+                continue;
+            }
+            dependencies.push(ReportedDep {
                 name: dep.name.clone(),
                 req: dep.req.clone(),
                 exact_pin: dep.req.starts_with('='),
                 kind: DepKind::from_metadata(dep.kind.as_deref()),
                 // Resolved once every package's allow-list is known, below.
                 public: false,
-            })
-            .collect();
+            });
+        }
 
         exposed_crates_by_package.insert(package.name.clone(), exposed_crates);
 
         packages.push(WorkPackage {
             has_lockfile_target: tracked.has_lockfile_target(&manifest)?,
-            consumer_contract: is_consumer_contract(package)?,
+            consumer_contract: is_consumer_contract(package),
             manifest,
             manifest_path: path,
             dependencies,
@@ -709,7 +776,7 @@ pub fn resolve_installation_paths(
             let absolute = tracked.git.root().join(path);
             let document = match fs::read_to_string(&absolute) {
                 Ok(content) => Some(parse_document(&absolute, &content)?),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(ReadFileError::caused_by(&absolute, error).into()),
             };
             documents.insert(path.clone(), document.clone());
@@ -782,7 +849,7 @@ pub fn work_tree_registry_indices(
                     collect_registry_indices(&parse_document(&path, &content)?, &mut registries);
                     break;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(ReadFileError::caused_by(&path, error).into()),
             }
         }
@@ -790,7 +857,8 @@ pub fn work_tree_registry_indices(
     Ok(registries)
 }
 
-fn reject_legacy_groups(metadata: &Value) -> Result<(), AppError> {
+/// Rejects obsolete group declarations from Cargo's workspace metadata observation.
+pub fn reject_legacy_groups(metadata: &Value) -> Result<(), AppError> {
     if metadata
         .get("release-plan")
         .and_then(|plan| plan.get("groups"))
@@ -846,13 +914,18 @@ fn discover_exact_dependencies(
                     let Some(path) = dependency_field(effective.item, "path") else {
                         continue;
                     };
-                    let Some(target) = resolved_member(
+                    let target = match resolved_member(
                         effective.path_base,
                         path,
                         tracked_members_by_dir,
                         canonical_tracked_members_by_dir,
-                    ) else {
-                        continue;
+                    ) {
+                        Ok(Some(target)) => target,
+                        Ok(None) => continue,
+                        Err(cause) => {
+                            error = Some(cause);
+                            return;
+                        }
                     };
                     let package_name = dependency_field(effective.item, "package").unwrap_or(alias);
                     if package_name != target {
@@ -942,27 +1015,54 @@ pub fn resolved_member<'a>(
     dependency_path: &str,
     members_by_dir: &'a BTreeMap<PathBuf, String>,
     canonical_members_by_dir: &'a BTreeMap<PathBuf, String>,
-) -> Option<&'a str> {
+) -> Result<Option<&'a str>, AppError> {
+    resolved_member_with(
+        base,
+        dependency_path,
+        members_by_dir,
+        canonical_members_by_dir,
+        |path| fs::canonicalize(path),
+    )
+}
+
+fn resolved_member_with<'a>(
+    base: &Path,
+    dependency_path: &str,
+    members_by_dir: &'a BTreeMap<PathBuf, String>,
+    canonical_members_by_dir: &'a BTreeMap<PathBuf, String>,
+    canonicalize: impl FnOnce(&Path) -> io::Result<PathBuf>,
+) -> Result<Option<&'a str>, AppError> {
     let joined = normalize_path(&base.join(dependency_path));
     if let Some(name) = members_by_dir.get(&joined) {
-        return Some(name);
+        return Ok(Some(name));
     }
-    let resolved = fs::canonicalize(&joined).ok()?;
-    canonical_members_by_dir.get(&resolved).map(String::as_str)
+    let resolved = canonicalize(&joined)
+        .map_err(|error| MemberIdentityUnavailable::caused_by(&joined, error))?;
+    Ok(canonical_members_by_dir.get(&resolved).map(String::as_str))
 }
 
 /// Indexes workspace members by their filesystem-resolved directories.
 ///
 /// Building the fallback index once per metadata snapshot keeps alias resolution
 /// to one filesystem query per dependency edge rather than one per candidate member.
-#[must_use]
 pub fn canonical_members_by_dir(
     members_by_dir: &BTreeMap<PathBuf, String>,
-) -> BTreeMap<PathBuf, String> {
+) -> Result<BTreeMap<PathBuf, String>, AppError> {
     members_by_dir
         .iter()
-        .filter_map(|(dir, name)| fs::canonicalize(dir).ok().map(|dir| (dir, name.clone())))
+        .map(|(dir, name)| {
+            fs::canonicalize(dir)
+                .map(|dir| (dir, name.clone()))
+                .map_err(|error| MemberIdentityUnavailable::caused_by(dir, error).into())
+        })
         .collect()
+}
+
+/// A member identity cannot be acquired, so the dependency graph cannot be complete.
+#[ohno::error]
+#[display("cannot resolve workspace member identity at '{}'", path.quoted())]
+struct MemberIdentityUnavailable {
+    path: PathBuf,
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -1043,7 +1143,7 @@ fn contains_exact_comparator(requirement: &str) -> bool {
 /// package is assessed by default, and a package wrongly assessed reports a
 /// finding a maintainer can see, while a package wrongly skipped reports
 /// nothing at all.
-fn is_consumer_contract(package: &MetadataPackage) -> Result<bool, AppError> {
+fn is_consumer_contract(package: &MetadataPackage) -> bool {
     let has_library = package.targets.iter().any(|target| {
         target
             .kind
@@ -1051,19 +1151,18 @@ fn is_consumer_contract(package: &MetadataPackage) -> Result<bool, AppError> {
             .any(|kind| LIBRARY_TARGET_KINDS.contains(&kind.as_str()))
     });
     if !has_library {
-        return Ok(false);
+        return false;
     }
     let Some(declared) = package
         .metadata
         .get("release-plan")
         .and_then(|value| value.get("private-api"))
     else {
-        return Ok(true);
+        return true;
     };
-    declared
+    !declared
         .as_bool()
-        .map(|private| !private)
-        .ok_or_else(|| MalformedPrivateApiError::new(&package.name, declared.to_string()).into())
+        .expect("reserved metadata is validated before projecting workspace packages")
 }
 
 /// The identifier a Rust path uses for a package's library, if it has one.
@@ -1172,7 +1271,7 @@ fn glob_matches(pattern: &str, candidate: &str) -> bool {
 ///
 /// Only a normal dependency can supply types to a library's public API, so a
 /// build or development dependency is never public however the allow-lists read.
-/// Ref: docs/design.md, "Public dependencies".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Public dependencies".
 fn mark_public_dependencies(
     packages: &mut [WorkPackage],
     exposed_crates_by_package: &BTreeMap<String, Vec<String>>,
@@ -1793,7 +1892,7 @@ mod tests {
     }
 
     #[test]
-    fn released_dependency_membership_uses_acquired_path_resolution() {
+    fn released_dependency_membership_uses_the_resolved_member_result() {
         let dependency = MetadataDep {
             source: None,
             name: "member".to_owned(),
@@ -2067,23 +2166,35 @@ mod tests {
         }
 
         // A library is a contract unless the package declares itself private.
-        assert!(is_consumer_contract(&metadata_package(&["lib"], Value::Null)).unwrap());
-        assert!(is_consumer_contract(&metadata_package(&["proc-macro"], Value::Null)).unwrap());
-        assert!(is_consumer_contract(&metadata_package(&["lib"], declaring(false))).unwrap());
+        assert!(is_consumer_contract(&metadata_package(
+            &["lib"],
+            Value::Null
+        )));
+        assert!(is_consumer_contract(&metadata_package(
+            &["proc-macro"],
+            Value::Null
+        )));
+        assert!(is_consumer_contract(&metadata_package(
+            &["lib"],
+            declaring(false)
+        )));
 
         // A private library is not, and neither is a package with no library at all.
-        assert!(!is_consumer_contract(&metadata_package(&["lib"], declaring(true))).unwrap());
-        assert!(!is_consumer_contract(&metadata_package(&["bin"], Value::Null)).unwrap());
-        assert!(!is_consumer_contract(&metadata_package(&[], Value::Null)).unwrap());
+        assert!(!is_consumer_contract(&metadata_package(
+            &["lib"],
+            declaring(true)
+        )));
+        assert!(!is_consumer_contract(&metadata_package(
+            &["bin"],
+            Value::Null
+        )));
+        assert!(!is_consumer_contract(&metadata_package(&[], Value::Null)));
 
         // Unrelated package metadata leaves the default alone.
-        assert!(
-            is_consumer_contract(&metadata_package(
-                &["lib"],
-                serde_json::json!({ "binstall": { "pkg-fmt": "zip" } })
-            ))
-            .unwrap()
-        );
+        assert!(is_consumer_contract(&metadata_package(
+            &["lib"],
+            serde_json::json!({ "binstall": { "pkg-fmt": "zip" } })
+        )));
     }
 
     /// A malformed declaration fails rather than falling back to the default.
@@ -2105,7 +2216,7 @@ mod tests {
             metadata: serde_json::json!({ "release-plan": { "private-api": "true" } }),
         };
 
-        let error = is_consumer_contract(&package).unwrap_err();
+        let error = validate_release_plan_metadata(&package.name, &package.metadata).unwrap_err();
 
         assert_eq!(
             error
@@ -2114,6 +2225,62 @@ mod tests {
                 .package(),
             "demo"
         );
+    }
+
+    #[test]
+    fn publication_permission_keeps_generic_publishability_destination_aware() {
+        assert!(permits_publication_to(None, "crates-io"));
+        assert!(!permits_publication_to(Some(&[]), "crates-io"));
+        let private = ["private".to_owned()];
+        assert!(!permits_publication_to(Some(&private), "crates-io"));
+        assert!(permits_publication_to(Some(&private), "private"));
+        let inclusive = ["private".to_owned(), "crates-io".to_owned()];
+        assert!(permits_publication_to(Some(&inclusive), "crates-io"));
+        assert!(permits_publication_to(Some(&inclusive), "private"));
+        assert!(!permits_publication_to(Some(&inclusive), "other"));
+    }
+
+    #[test]
+    fn reserved_release_metadata_rejects_unknown_keys_and_malformed_field_shapes() {
+        for metadata in [
+            serde_json::json!({"release-plan": true}),
+            serde_json::json!({"release-plan": null}),
+        ] {
+            let error = validate_release_plan_metadata("package", &metadata).unwrap_err();
+            assert!(error.find_source::<ReleasePlanMetadataNotTable>().is_some());
+        }
+        for key in ["release-targtes", "private_api", "future-option"] {
+            let metadata = serde_json::json!({"release-plan": {key: true}});
+            let error = validate_release_plan_metadata("package", &metadata).unwrap_err();
+            let cause = error.find_source::<UnknownReleasePlanMetadata>().unwrap();
+            assert_eq!(cause.package, "package");
+            assert_eq!(cause.key, key);
+        }
+        for targets in [
+            Value::Null,
+            serde_json::json!(true),
+            serde_json::json!("target"),
+            serde_json::json!([1]),
+        ] {
+            let metadata = serde_json::json!({"release-plan": {"release-targets": targets}});
+            let error = validate_release_plan_metadata("package", &metadata).unwrap_err();
+            assert!(error.find_source::<MalformedReleaseTargets>().is_some());
+        }
+    }
+
+    #[test]
+    fn reserved_release_metadata_preserves_other_namespaces_and_publication_policy() {
+        for metadata in [
+            Value::Null,
+            serde_json::json!({"other-tool": {"anything": true}}),
+            serde_json::json!({"release-plan": {}}),
+            serde_json::json!({"release-plan": {"private-api": false}}),
+            serde_json::json!({"release-plan": {"private-api": true, "release-targets": []}}),
+            // Supported triples, duplicate restrictions and nonempty selection belong to publication.
+            serde_json::json!({"release-plan": {"release-targets": ["some-target", "some-target"]}}),
+        ] {
+            validate_release_plan_metadata("package", &metadata).unwrap();
+        }
     }
 
     #[test]
@@ -2156,4 +2323,56 @@ mod tests {
         let foo = package("foo", Vec::new());
         assert_eq!(dependents_of(&[foo, bar], "foo"), vec!["bar".to_string()]);
     }
+}
+#[test]
+fn member_lookup_preserves_acquisition_errors_and_lexical_fast_path() {
+    let members = BTreeMap::from([(PathBuf::from("workspace/member"), "member".to_owned())]);
+    let canonical = BTreeMap::from([(PathBuf::from("resolved/member"), "member".to_owned())]);
+    assert_eq!(
+        resolved_member_with(
+            Path::new("workspace"),
+            "member",
+            &members,
+            &canonical,
+            |_| panic!("lexical membership requires no filesystem fallback")
+        )
+        .unwrap(),
+        Some("member")
+    );
+    let error = resolved_member_with(
+        Path::new("workspace"),
+        "alias",
+        &members,
+        &canonical,
+        |_| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+    )
+    .unwrap_err();
+    let cause = error.find_source::<MemberIdentityUnavailable>().unwrap();
+    assert_eq!(cause.path, Path::new("workspace/alias"));
+    assert_eq!(
+        error.find_source::<io::Error>().unwrap().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(
+        resolved_member_with(
+            Path::new("workspace"),
+            "alias",
+            &members,
+            &canonical,
+            |_| Ok(PathBuf::from("resolved/member"))
+        )
+        .unwrap(),
+        Some("member")
+    );
+    assert_eq!(
+        resolved_member_with(
+            Path::new("workspace"),
+            "outside",
+            &members,
+            &canonical,
+            |_| Ok(PathBuf::from("resolved/outside"))
+        )
+        .unwrap(),
+        None
+    );
 }

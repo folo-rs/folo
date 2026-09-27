@@ -2,9 +2,17 @@ use std::fmt;
 use std::io::{self, Write};
 use std::panic::RefUnwindSafe;
 
-/// Receives diagnostic bytes without choosing a process stream.
+/// Receives diagnostic text without choosing a process stream.
+///
+/// Sinks are shared with process-output reader threads and may be borrowed across cleanup-time
+/// unwind handling. Interior state must be synchronized and preserve ref-unwind-safe invariants.
 pub trait DiagnosticSink: fmt::Debug + Send + Sync + RefUnwindSafe {
     fn write(&self, text: &str) -> io::Result<()>;
+}
+
+/// Receives lazy notes so decision tests need no process-global stream capture.
+pub trait NoteSink {
+    fn note(&self, message: impl FnOnce() -> String);
 }
 
 /// Writes an unconditional diagnostic using ordinary process-output failure behavior.
@@ -61,6 +69,9 @@ impl<'a> Verbose<'a> {
         self.enabled
     }
 
+    /// Builds a note only when enabled, avoiding formatting work on the nonverbose path.
+    ///
+    /// The tool prefix attributes notes among interleaved subprocess output.
     pub fn note(self, message: impl FnOnce() -> String) {
         if self.enabled {
             // Notes are advisory: a closed destination must not abort otherwise successful work.
@@ -70,11 +81,6 @@ impl<'a> Verbose<'a> {
             drop(self.sink.write(&line));
         }
     }
-}
-
-/// Receives lazy notes so decision tests need no process-global stream capture.
-pub trait NoteSink {
-    fn note(&self, message: impl FnOnce() -> String);
 }
 
 impl NoteSink for Verbose<'_> {
@@ -94,15 +100,19 @@ impl NoteSink for std::cell::RefCell<Vec<String>> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::UnwindSafe;
     use std::sync::Mutex;
 
     use static_assertions::assert_impl_all;
 
     use super::*;
 
-    assert_impl_all!(Verbose<'static>: Send, Sync, std::panic::UnwindSafe);
+    assert_impl_all!(Verbose<'static>: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Stderr: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Discard: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(&'static dyn DiagnosticSink: Send, Sync, UnwindSafe, RefUnwindSafe);
 
-    /// Captures the bytes given to a destination without opening a process stream.
+    /// Captures diagnostic text without opening a process stream.
     #[derive(Debug, Default)]
     struct Recording(Mutex<Vec<String>>);
 
@@ -130,6 +140,20 @@ mod tests {
             panic!("disabled notes must not evaluate their closure");
         });
         assert!(recording.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn verbose_accessors_preserve_policy_and_selected_destination() {
+        let first = Recording::default();
+        let second = Recording::default();
+        let enabled = Verbose::new(true, &first);
+        let disabled = Verbose::new(false, &second);
+        assert!(enabled.enabled());
+        assert!(!disabled.enabled());
+        enabled.sink().write("first canary").unwrap();
+        disabled.sink().write("second canary").unwrap();
+        assert_eq!(*first.0.lock().unwrap(), ["first canary"]);
+        assert_eq!(*second.0.lock().unwrap(), ["second canary"]);
     }
 
     #[test]

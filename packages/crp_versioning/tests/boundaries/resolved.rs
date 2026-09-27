@@ -163,9 +163,11 @@ fn evidence_must_name_the_recorded_candidate_and_never_the_live_workspace() {
         versions: BTreeMap::new(),
         evidence_manifest_path: candidate,
     };
-    let _error = state.verify_candidate(&other).unwrap_err();
+    let error = state.verify_candidate(&other).unwrap_err();
+    assert!(error.to_string().contains("evidence"));
     state.evidence_manifest_path = live.clone();
-    let _error = state.verify_candidate(&live).unwrap_err();
+    let error = state.verify_candidate(&live).unwrap_err();
+    assert!(error.to_string().contains("evidence"));
     let error = state
         .verify_candidate(&directory.path().join("absent.toml"))
         .unwrap_err();

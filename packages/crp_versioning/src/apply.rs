@@ -91,7 +91,8 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 }
 
 // Connects the unit-tested orchestration to real artifact, Git and filesystem operations.
-// Integration tests own these adapters. See docs/implementation.md, "Test boundaries".
+// Integration tests own these adapters. See packages/cargo-release-plan/docs/implementation.md,
+// "Test boundaries".
 #[cfg_attr(test, mutants::skip)]
 pub fn run_apply(
     plan_path: &Path,
@@ -131,7 +132,7 @@ fn apply_plan(
     // Git-tracked members decide which plan targets are valid and supply their
     // increment bases. All Cargo-visible member manifests remain
     // available below for dependent-pin rewrites.
-    // Ref: docs/implementation.md, "Plan resolution and application".
+    // Ref: packages/cargo-release-plan/docs/implementation.md, "Plan resolution and application".
     let target_versions = work_tree.target_versions();
     let resolved = resolve_plan(
         plan,
@@ -450,7 +451,8 @@ fn set_package_version_item(table: &mut dyn TableLike, new_version: &Version) ->
         // than having the shared workspace value changed: the plan increments
         // one package, while the shared value governs every member that
         // inherits it, so editing it would silently increment them all.
-        // Ref: docs/implementation.md, "Plan resolution and application".
+        // Ref: packages/cargo-release-plan/docs/implementation.md, "Plan resolution and
+        // application".
         Some(item) if is_workspace_inherit(item) => {
             *item = Item::Value(Value::from(new_version.to_string()));
             true
@@ -501,7 +503,7 @@ fn set_formatted(formatted: &mut Formatted<String>, rewritten: String) -> bool {
 /// requirement between two version-group members, is left for `check` to
 /// report rather than silently corrected here: that is a manifest defect, not
 /// a consequence of the version moving.
-/// Ref: docs/implementation.md, "Plan resolution and application".
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Plan resolution and application".
 fn rewrite_req(old: &str, new_version: &Version) -> String {
     if requirement_names_version(old, new_version) {
         return old.to_string();

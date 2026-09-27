@@ -1,20 +1,21 @@
 use std::any::type_name;
 use std::ffi::{OsStr, OsString};
 use std::panic::catch_unwind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, fs, io};
 
-use crp_diag::{DiagnosticSink, diagnostic};
-use crp_workspace::git::GitRepo;
+use crp_diag::{DiagnosticSink, Quotable, diagnostic};
+use crp_workspace::git::{GitRepo, TreeEntry, tree_mode};
 use ohno::AppError;
 use tempfile::TempDir;
 
 use crate::archive::Staging;
 use crate::command::{cancelled, capture, capture_cleanup};
-use crate::request::{Artifacts, BuildRequest, ExecutionContext, InvalidPlan, SourceProvider};
+use crate::request::InvalidPlan;
 use crate::source::{Metadata, executable};
+use crate::{Artifacts, BuildRequest, ExecutionContext, SourceProvider};
 
 /// Owns source worktrees and staged artifacts for sequential native execution.
 ///
@@ -45,19 +46,6 @@ impl fmt::Debug for Native {
             .finish_non_exhaustive()
     }
 }
-
-/// Retains a directory cleanup failure alongside the original Git cleanup error.
-#[ohno::error]
-#[display("Source directory cleanup also failed: {directory}")]
-struct CleanupFailed {
-    directory: io::Error,
-}
-
-// Discovery and owned cleanup are short operations, with a conservative last-chance allowance
-// for loaded machines. Cleanup receives a fresh allowance even after item cancellation.
-const QUERY_BUDGET: Duration = Duration::from_secs(300);
-// A conservative per-item hang guard, not a reservation within the workflow's separate ceiling.
-const ITEM_BUDGET: Duration = Duration::from_hours(1);
 
 impl Native {
     /// Carries the current item budget unchanged into delivery and its postcondition query.
@@ -163,9 +151,7 @@ impl Native {
             self.deadline,
         )
     }
-}
 
-impl Native {
     #[must_use]
     pub fn cancelled(&self) -> bool {
         cancelled()
@@ -174,6 +160,8 @@ impl Native {
     pub fn prepare(&mut self, binary: &BuildRequest) -> Result<(), AppError> {
         self.deadline = deadline_after(ITEM_BUDGET);
         self.first_in_source = true;
+        // Source acquisition does not automatically hydrate LFS pointers or add an LFS
+        // authentication/download phase. Builds use their ordinary declared prerequisites.
         let environment = [("GIT_LFS_SKIP_SMUDGE", OsStr::new("1"))];
         let object = format!("{}^{{commit}}", binary.source_sha);
         // Try the exact object locally before a bounded fetch; never replace it with moving main.
@@ -235,15 +223,7 @@ impl Native {
             .ok_or_else(|| InvalidPlan::new(
                 "The source workspace requires a tracked rust-toolchain.toml within its repository".to_owned()
             ))?;
-        self.source_command(
-            "git",
-            &[
-                "ls-files".into(),
-                "--error-unmatch".into(),
-                "--".into(),
-                source_toolchain.as_os_str().to_owned(),
-            ],
-        )?;
+        self.verify_toolchain(&path, &source_toolchain, &binary.source_sha)?;
         // Rustup reads the tracked source manifest, including its component selection.
         // No controller-repository script is needed by an installed release tool.
         self.source_command(
@@ -266,6 +246,58 @@ impl Native {
             &strings(&["metadata", "--locked", "--no-deps", "--format-version", "1"]),
         )?;
         self.metadata = Some(serde_json::from_str(&metadata)?);
+        Ok(())
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Filesystem and committed-tree observations are native boundaries.
+    fn verify_toolchain(
+        &self,
+        source: &Path,
+        toolchain: &Path,
+        commit: &str,
+    ) -> Result<(), AppError> {
+        let relative = toolchain.strip_prefix(source).map_err(|error| {
+            InvalidToolchain::caused_by(toolchain.to_owned(), "outside the source worktree", error)
+        })?;
+        // Git mode is authoritative even when core.symlinks=false materializes a link as text.
+        // Literal paths also prevent valid workspace characters from becoming pathspec operators.
+        let tree = self.source_command(
+            "git",
+            &[
+                "--literal-pathspecs".into(),
+                "-C".into(),
+                source.as_os_str().to_owned(),
+                "ls-tree".into(),
+                "-z".into(),
+                commit.into(),
+                "--".into(),
+                relative.as_os_str().to_owned(),
+            ],
+        )?;
+        let metadata = fs::symlink_metadata(toolchain).map_err(|error| {
+            InvalidToolchain::caused_by(toolchain.to_owned(), "cannot inspect source input", error)
+        })?;
+        let root = dunce::canonicalize(source).map_err(|error| {
+            InvalidToolchain::caused_by(
+                toolchain.to_owned(),
+                "cannot resolve source worktree",
+                error,
+            )
+        })?;
+        let resolved = dunce::canonicalize(toolchain).map_err(|error| {
+            InvalidToolchain::caused_by(toolchain.to_owned(), "cannot resolve source input", error)
+        })?;
+        if !regular_toolchain_input(
+            &tree,
+            metadata.file_type().is_file(),
+            resolved.starts_with(root),
+        ) {
+            return Err(InvalidToolchain::new(
+                toolchain.to_owned(),
+                "requires a committed regular file contained in the source worktree",
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -304,6 +336,7 @@ impl Native {
             binary,
             &self.triple,
             &executable,
+            self.deadline,
         )?);
         Ok(())
     }
@@ -356,6 +389,37 @@ impl Drop for Native {
     }
 }
 
+/// Retains a directory cleanup failure alongside the original Git cleanup error.
+#[ohno::error]
+#[display("Source directory cleanup also failed: {directory}")]
+struct CleanupFailed {
+    directory: io::Error,
+}
+
+/// A selected toolchain input must be fixed by the source commit, not a mutable link target.
+#[ohno::error]
+#[display("Invalid source toolchain {}: {reason}", path.quoted())]
+struct InvalidToolchain {
+    path: PathBuf,
+    reason: &'static str,
+}
+
+// Discovery and owned cleanup are short operations, with a conservative last-chance allowance
+// for loaded machines. Cleanup receives a fresh allowance even after item cancellation.
+const QUERY_BUDGET: Duration = Duration::from_secs(300);
+// A conservative per-item hang guard, not a reservation within the workflow's separate ceiling.
+const ITEM_BUDGET: Duration = Duration::from_hours(1);
+
+fn regular_toolchain_input(tree: &str, regular: bool, contained: bool) -> bool {
+    let mut records = tree.trim_end_matches(['\r', '\n']).split_terminator('\0');
+    let entry = records.next().and_then(TreeEntry::parse);
+    regular
+        && contained
+        && entry
+            .is_some_and(|entry| entry.mode == tree_mode(false) || entry.mode == tree_mode(true))
+        && records.next().is_none()
+}
+
 fn finish_cleanup(
     operation: Result<String, AppError>,
     directory: Result<(), io::Error>,
@@ -406,5 +470,40 @@ mod tests {
         let diagnostic = error.to_string();
         assert!(diagnostic.contains("operation canary"));
         assert!(diagnostic.contains("directory canary"));
+    }
+
+    #[test]
+    fn toolchain_tree_requires_one_regular_entry() {
+        for executable in [false, true] {
+            let record = format!(
+                "{} blob {}\trust-toolchain.toml\0\n",
+                tree_mode(executable),
+                "a".repeat(40)
+            );
+            for regular in [false, true] {
+                for contained in [false, true] {
+                    assert_eq!(
+                        regular_toolchain_input(&record, regular, contained),
+                        regular && contained
+                    );
+                }
+            }
+        }
+        // Git's symlink and submodule modes must not be accepted as toolchain file contents.
+        for mode in ["120000", "160000"] {
+            assert!(!regular_toolchain_input(
+                &format!("{mode} blob a\trust-toolchain.toml\0"),
+                true,
+                true
+            ));
+        }
+        for value in ["", "malformed"] {
+            assert!(!regular_toolchain_input(value, true, true));
+        }
+        assert!(!regular_toolchain_input(
+            concat!("100644 blob a\tone\0", "100644 blob b\ttwo\0",),
+            true,
+            true
+        ));
     }
 }

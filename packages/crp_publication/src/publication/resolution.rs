@@ -15,6 +15,7 @@ use tar::Archive;
 use crate::ReadFileError;
 
 /// Checks archive bytes without extracting files or changing the source workspace.
+#[cfg_attr(test, mutants::skip)] // Workspace/Git/file acquisition is integration-tested; archive and comparison decisions are unit-tested.
 pub fn verify_packaged_closure(
     manifest: &Path,
     archive: &[u8],
@@ -136,8 +137,55 @@ struct PackagedResolutionChanged {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use crp_workspace::manifest::{DependencySource, InstallationDependency};
+    use flate2::{Compression, write::GzEncoder};
+    use tar::{Builder, Header};
 
     use super::*;
+
+    fn package_archive(path: &str, contents: &[u8]) -> Vec<u8> {
+        let mut archive = Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        let mut header = Header::new_gnu();
+        header.set_size(contents.len().try_into().unwrap());
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive.append_data(&mut header, path, contents).unwrap();
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn packaged_lockfile_requires_the_exact_archive_member_and_readable_contents() {
+        let contents = b"version = 4\n";
+        let archive = package_archive("tool-1.0.0/Cargo.lock", contents);
+        assert_eq!(
+            packaged_lockfile(&archive, "tool", "1.0.0").unwrap(),
+            "version = 4\n"
+        );
+        assert!(
+            packaged_lockfile(&archive, "other", "1.0.0")
+                .unwrap_err()
+                .find_source::<PackageLockfileMissing>()
+                .is_some()
+        );
+        assert!(
+            packaged_lockfile(&archive, "tool", "2.0.0")
+                .unwrap_err()
+                .find_source::<PackageLockfileMissing>()
+                .is_some()
+        );
+        let invalid = package_archive("tool-1.0.0/Cargo.lock", &[0xff]);
+        assert!(
+            packaged_lockfile(&invalid, "tool", "1.0.0")
+                .unwrap_err()
+                .find_source::<PackageArchiveError>()
+                .is_some()
+        );
+        assert!(
+            packaged_lockfile(b"not an archive", "tool", "1.0.0")
+                .unwrap_err()
+                .find_source::<PackageArchiveError>()
+                .is_some()
+        );
+    }
 
     fn lockfile(dependency: &str, source: &str) -> Lockfile {
         let source = if source.is_empty() {

@@ -14,7 +14,7 @@ use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::publication::candidate::Repository;
 use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
-use crate::publication::manifest::{InvalidManifest, PublicationManifest};
+use crate::publication::manifest::PublicationManifest;
 use crate::publication::resolution::verify_packaged_closure;
 use crate::{PublicationOutput, ReadFileError, WriteFileError};
 
@@ -62,9 +62,9 @@ impl CredentialSession {
 
     /// Routes only the Cargo credential protocol through the selected executable.
     pub fn configure(&self, command: &mut Command, executable: &Path) -> Result<(), AppError> {
-        let executable = executable.to_str().ok_or_else(|| {
-            InvalidManifest::new("credential provider executable path must be UTF-8".to_owned())
-        })?;
+        let executable = executable
+            .to_str()
+            .ok_or_else(|| ProviderConfigurationError::new("executable path must be UTF-8"))?;
         let provider = serde_json::to_string(&[executable])?;
         command
             .arg("--config")
@@ -153,6 +153,8 @@ fn strip_credentials(command: &mut Command, names: impl Iterator<Item = OsString
 
 fn registry_token(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
+    #[cfg(windows)]
+    let name = name.to_ascii_uppercase();
     name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_TOKEN")
 }
 
@@ -163,12 +165,12 @@ pub fn provide(
     diagnostics: &PublicationOutput,
 ) -> Result<(), AppError> {
     let path = env::var_os(CONTEXT_ENV).map(PathBuf::from).ok_or_else(|| {
-        InvalidManifest::new("credential provider requires its publication session".to_owned())
+        ProviderConfigurationError::new("provider requires its publication session")
     })?;
     serve_credential(&path, input, output, diagnostics)
 }
 
-/// Serves the same private provider protocol over supplied streams for native boundary tests.
+/// Serves Cargo's credential protocol over supplied streams for boundary tests.
 pub fn serve_credential(
     path: &Path,
     input: &mut impl BufRead,
@@ -189,10 +191,12 @@ pub fn serve_credential(
     let mut line = String::new();
     input.read_line(&mut line)?;
     let request: CredentialRequest =
-        serde_json::from_str(&line).map_err(CredentialStateError::caused_by)?;
+        serde_json::from_str(&line).map_err(CredentialRequestDecodeError::caused_by)?;
     validate_request(&request, &context.publication)?;
     let repository =
         Repository::discover(&context.manifest, &context.publication.publication.source)?;
+    // These clean-source checks bracket archive hashing and dependency inspection.
+    // The final check remains before authority is issued, not merely before reading inputs.
     repository.ensure_clean_head()?;
     let package = context
         .publication
@@ -213,9 +217,9 @@ pub fn serve_credential(
             write!(checksum, "{byte:02x}")?;
         }
         if checksum != request.checksum {
-            return Err(InvalidManifest::new(
-                "Cargo upload checksum differs from the inspected binary package archive"
-                    .to_owned(),
+            return Err(PackageChecksumMismatch::new(
+                request.name.clone(),
+                request.version.clone(),
             )
             .into());
         }
@@ -279,10 +283,7 @@ fn validate_request(
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(InvalidManifest::new(
-            "credential request does not identify a requested crates.io publication".to_owned(),
-        )
-        .into());
+        return Err(CredentialRequestRejected::new().into());
     }
     Ok(())
 }
@@ -358,6 +359,29 @@ fn record_cleanup_failure(
 struct CredentialStateError;
 
 #[ohno::error]
+#[display("cannot decode Cargo's credential request")]
+struct CredentialRequestDecodeError;
+
+#[ohno::error]
+#[display("credential request does not identify a requested crates.io publication")]
+struct CredentialRequestRejected;
+
+#[ohno::error]
+#[display("credential provider configuration is invalid: {reason}")]
+struct ProviderConfigurationError {
+    reason: &'static str,
+}
+
+#[ohno::error]
+#[display(
+    "Cargo upload checksum differs from the inspected package archive for {package}@{version}"
+)]
+struct PackageChecksumMismatch {
+    package: String,
+    version: String,
+}
+
+#[ohno::error]
 #[display("credential cleanup also failed: {cleanup}")]
 struct CredentialCleanupFailed {
     cleanup: AppError,
@@ -369,7 +393,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::publication::manifest::Publication;
+    use crate::publication::manifest::{InvalidManifest, Publication};
+
+    #[test]
+    fn registry_token_spelling_follows_the_platform_environment() {
+        assert!(registry_token(OsStr::new("CARGO_REGISTRIES_PRIVATE_TOKEN")));
+        assert_eq!(
+            registry_token(OsStr::new("Cargo_Registries_Private_Token")),
+            cfg!(windows)
+        );
+        assert!(!registry_token(OsStr::new(
+            "CARGO_REGISTRIES_PRIVATE_INDEX"
+        )));
+    }
 
     #[test]
     fn cleanup_accumulation_retains_independent_failure_causes() {

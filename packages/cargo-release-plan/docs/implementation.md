@@ -81,10 +81,12 @@ checks do not need to inspect a consumer repository to identify the executable.
 The publication subject validates committed policy independently of remote state.
 Its configuration owns supported native targets but no runner assignments.
 Package discovery shares the unresolved Cargo-metadata acquisition boundary with
-classification, projecting the binary names, required features, registry
+classification, projecting the binary names, registry
 eligibility and archive metadata needed by publication. The optional configured
 `check` composes this validation with ordinary version readiness; unconfigured
-assessment performs no publication discovery.
+assessment performs no publication discovery. Discovery does not implement a
+feature resolver or buildability preflight; the explicit native Cargo build owns
+those checks. See [validation responsibilities](design.md#validation-stays-proportional-to-its-purpose).
 
 Publication preparation composes that policy with the candidate verifier under
 `publication::candidate`. The verifier owns clean-head/index checks, tracked
@@ -100,7 +102,8 @@ groups and their verdicts from those facts without an upward workspace dependenc
 The preparation boundary fetches the configured GitHub branch through a
 per-invocation Git credential helper and captures its resolved commit. It does not
 depend on a local remote nickname or modify global authentication configuration.
-Full locked metadata verifies resolution without changing it. The publication
+Preparation preserves the recorded lockfile without a full Cargo resolution.
+The actual publication and native build commands use `--locked`. The publication
 manifest then contains repository-relative paths and all exact package requests.
 Canonical serde serialization supplies its SHA-256 content identity; schema,
 paths, configuration and identities are revalidated on read and before writes.
@@ -205,7 +208,10 @@ hashing. The component guide owns the codec and buffering details.
 That command consumes frozen manifest-linked batches; runner assignments
 and workflow timeouts belong to the shared action. It supplies validated, non-wire
 build requests to `crp_native`. Batch/delivery decisions stay in publication;
-source/artifact execution validation stays in native's unit tests.
+`crp_native` owns source and artifact execution validation. Pure decisions are
+unit tested in the component; real filesystem and process behavior belongs in its
+boundary tests, and executable-connected contracts belong in the application's
+native integration suite.
 
 Folo's `release.yml` also uses the nonpublished `release-binaries`
 and `release-target-check` executables. Their private command protocols are

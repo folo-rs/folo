@@ -1,10 +1,10 @@
-//! Schedules source-verification I/O before starting last-chance watchdogs.
+//! Schedules native-I/O cases before starting last-chance watchdogs.
 
 #[cfg(any(windows, test))]
 use std::sync::Mutex;
 
 // Nextest serializes owning binaries through their shared group; libtest needs a per-process slot.
-// See cargo-release-plan/docs/implementation.md, "Test boundaries".
+// See packages/cargo-release-plan/docs/implementation.md, "Test boundaries".
 #[cfg(windows)]
 static IO_TEST: Mutex<()> = Mutex::new(());
 

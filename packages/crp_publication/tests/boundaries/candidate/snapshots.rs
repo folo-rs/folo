@@ -26,7 +26,7 @@ fn accepts_later_library_snapshot_without_generating_a_lockfile() {
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git and Cargo against filesystem fixtures")]
-fn rejects_changed_inherited_value_using_the_release_checker() {
+fn rejects_changed_inherited_value_using_the_candidate_verifier() {
     with_io_test(|| {
         let fixture = Fixture::new();
         fixture.write_workspace("Apache-2.0");

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, absolute};
+use std::path::{Path, PathBuf, absolute};
 
 use crp_diag::Verbose;
 use crp_workspace::artifact_path::{resolve_path, same_path};
@@ -13,9 +13,8 @@ use ohno::AppError;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::WriteFileError;
 use crate::apply::{ManifestEdit, compute_edits};
-use crate::check::{CheckFormat, CheckRequest, check, releases_breaking_change};
+use crate::check::releases_breaking_change;
 use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify};
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
@@ -25,8 +24,9 @@ use crate::plan::{
 use crate::prospective::Prospective;
 use crate::report::write_report;
 use crate::resolved::{Artifact, Inputs, ResolvedState, canonical, read_json, write_json};
+use crate::{CheckFormat, CheckRequest, WriteFileError, check};
 
-/// Post-refresh workspace inputs captured before semantic grading.
+/// Post-refresh workspace inputs captured before semantic assessment.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Prepared {
@@ -36,7 +36,8 @@ pub struct Prepared {
 
 // Preparation owns real clone/resolver lifetimes and publication of captured files. Its
 // end-to-end side effects and output belong in integration tests; file admission remains
-// unit-tested by validate_preparation_files. See docs/implementation.md, "Test boundaries".
+// unit-tested by validate_preparation_files. See
+// packages/cargo-release-plan/docs/implementation.md, "Test boundaries".
 #[cfg_attr(test, mutants::skip)]
 pub fn run_prepare(
     output: &Path,
@@ -97,7 +98,7 @@ pub fn run_preview(
     let mut classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
     let resolved = resolve_plan(
         &plan,
-        &Groups::from_workspace(&classification.work_tree),
+        &classification.membership,
         &classification.work_tree.target_versions(),
         verbose,
     )?;
@@ -119,6 +120,7 @@ pub fn run_preview(
             add_consequences(
                 &classification.packages,
                 &classification.groups,
+                &classification.membership,
                 &classification.work_tree,
                 &mut expanded,
             )?;
@@ -179,7 +181,8 @@ fn resolve_until_stable(
     mut pass: impl FnMut(&ResolvedVersions) -> Result<(ResolvedVersions, Vec<Artifact>), AppError>,
 ) -> Result<(ResolvedVersions, Vec<Artifact>), AppError> {
     // The callback owns rewriting, offline resolution and recapture; this loop owns convergence.
-    // Ref: docs/implementation.md, "Prepared and prospective resolution".
+    // Ref: packages/cargo-release-plan/docs/implementation.md, "Prepared and prospective
+    // resolution".
     let mut visited = BTreeSet::new();
     let mut previous_files = Vec::new();
     loop {
@@ -280,21 +283,21 @@ fn require_semantic_decisions(
 fn add_consequences(
     packages: &[PackageClass],
     groups: &BTreeMap<String, GroupVerdict>,
+    membership: &Groups,
     work_tree: &WorkTree,
     resolved: &mut ResolvedVersions,
 ) -> Result<(), AppError> {
     let versions = work_tree.target_versions();
-    let membership = Groups::from_workspace(work_tree);
     for (name, group) in groups {
         if !group.is_consistent() {
-            raise(&membership, &versions, resolved, name, group.version());
+            raise(membership, &versions, resolved, name, group.version());
         }
     }
     for package in packages {
         if package.status() == PackageStatus::NeedsIncrement {
             let anchor = package.anchor().expect("needs-increment has an anchor");
             raise(
-                &membership,
+                membership,
                 &versions,
                 resolved,
                 &package.name,
@@ -307,7 +310,7 @@ fn add_consequences(
             };
             if !requirement_names_version(&dependency.req, version) {
                 // Explicitly retaining the target version also schedules its requirement rewrites.
-                raise(&membership, &versions, resolved, &dependency.name, version);
+                raise(membership, &versions, resolved, &dependency.name, version);
             }
             if !dependency.public || releases_breaking_change(package) {
                 continue;
@@ -325,7 +328,7 @@ fn add_consequences(
                     IncrementLevel::Major
                 };
                 raise(
-                    &membership,
+                    membership,
                     &versions,
                     resolved,
                     &package.name,
@@ -338,13 +341,7 @@ fn add_consequences(
         if let Some(version) = versions.get(&dependency.target)
             && !requirement_names_version(&dependency.requirement, version)
         {
-            raise(
-                &membership,
-                &versions,
-                resolved,
-                &dependency.target,
-                version,
-            );
+            raise(membership, &versions, resolved, &dependency.target, version);
         }
     }
     Ok(())
@@ -398,18 +395,23 @@ pub(crate) fn remove_marker(path: &Path) -> Result<(), AppError> {
 
 fn guard_output_inputs(output: &Path, inputs: &[&Path]) -> Result<(), AppError> {
     let output = resolve_path(output)?;
+    let files = ["report.json", "report.json.tmp"].map(|name| resolve_path(&output.join(name)));
+    let [report, temporary] = files;
+    let files = [report?, temporary?];
     for input in inputs {
-        for name in ["report.json", "report.json.tmp"] {
-            if same_path(input, &output.join(name))? {
-                return Err(OutputInputCollision::new().into());
-            }
-        }
         let input = resolve_path(input)?;
-        for directory in ["diffs", "workspace", ".prospective"] {
-            if input.starts_with(output.join(directory)) {
-                return Err(OutputInputCollision::new().into());
-            }
-        }
+        validate_output_input(&output, &input, &files)?;
+    }
+    Ok(())
+}
+
+fn validate_output_input(output: &Path, input: &Path, files: &[PathBuf]) -> Result<(), AppError> {
+    if files.iter().any(|file| file == input)
+        || ["diffs", "workspace", ".prospective"]
+            .iter()
+            .any(|directory| input.starts_with(output.join(directory)))
+    {
+        return Err(OutputInputCollision::new().into());
     }
     Ok(())
 }
@@ -419,14 +421,14 @@ fn guard_output_inputs(output: &Path, inputs: &[&Path]) -> Result<(), AppError> 
 #[display("preview output overlaps an input; choose a separate output location")]
 pub(crate) struct OutputInputCollision;
 
-/// Source-level release grading belongs to the caller, not the resolver.
+/// Source-level semantic decisions belong to the caller, not the resolver.
 #[ohno::error]
 #[display("package {package} needs a semantic release decision in the proposed plan")]
 struct SemanticDecisionRequired {
     package: String,
 }
 
-/// Prepared bytes must remain the state captured before grading.
+/// Prepared bytes must remain the state captured before semantic assessment.
 #[ohno::error]
 #[display("prepared resolution artifacts changed; prepare and assess the report again")]
 struct InvalidPreparation;
@@ -478,7 +480,11 @@ mod tests {
             let result = install_preview_edits(edits, |edit| {
                 writes.push((edit.path.clone(), edit.updated.clone()));
                 if fail {
-                    Err(InvalidPreparation::new().into())
+                    Err(WriteFileError::caused_by(
+                        &edit.path,
+                        std::io::Error::other("write failure"),
+                    )
+                    .into())
                 } else {
                     Ok(())
                 }
@@ -496,9 +502,27 @@ mod tests {
             );
             assert_eq!(result.is_err(), fail);
             if let Err(error) = result {
-                assert!(error.find_source::<InvalidPreparation>().is_some());
+                assert!(error.find_source::<WriteFileError>().is_some());
+                assert!(error.find_source::<std::io::Error>().is_some());
             }
         }
+    }
+
+    #[test]
+    fn resolved_output_paths_reject_each_owned_input_location() {
+        let output = Path::new("output");
+        let files = ["report.json", "report.json.tmp"].map(|name| output.join(name));
+        for path in [
+            "report.json",
+            "report.json.tmp",
+            "diffs/plan",
+            "workspace/plan",
+            ".prospective/plan",
+        ] {
+            let error = validate_output_input(output, &output.join(path), &files).unwrap_err();
+            assert!(error.find_source::<OutputInputCollision>().is_some());
+        }
+        validate_output_input(output, Path::new("other/plan"), &files).unwrap();
     }
 
     #[test]
@@ -725,6 +749,7 @@ mod tests {
             add_consequences(
                 &packages,
                 &BTreeMap::new(),
+                &Groups::from_workspace(&work_tree(&packages)),
                 &work_tree(&packages),
                 &mut resolved,
             )
@@ -766,7 +791,14 @@ mod tests {
         let mut resolved = ResolvedVersions {
             packages: BTreeMap::new(),
         };
-        add_consequences(&packages[..1], &groups, &work_tree, &mut resolved).unwrap();
+        add_consequences(
+            &packages[..1],
+            &groups,
+            &Groups::from_workspace(&work_tree),
+            &work_tree,
+            &mut resolved,
+        )
+        .unwrap();
         assert_eq!(
             resolved.packages,
             BTreeMap::from([
@@ -777,7 +809,14 @@ mod tests {
         resolved
             .packages
             .insert("helper".to_owned(), Version::new(0, 3, 0));
-        add_consequences(&packages[..1], &groups, &work_tree, &mut resolved).unwrap();
+        add_consequences(
+            &packages[..1],
+            &groups,
+            &Groups::from_workspace(&work_tree),
+            &work_tree,
+            &mut resolved,
+        )
+        .unwrap();
         assert!(
             resolved
                 .packages
@@ -816,7 +855,14 @@ mod tests {
 
         // Unpublished members have no release assessments, but their exact requirements
         // must still be rewritten. Matching requirements must not invent plan entries.
-        add_consequences(&[], &groups, &work_tree, &mut resolved).unwrap();
+        add_consequences(
+            &[],
+            &groups,
+            &Groups::from_workspace(&work_tree),
+            &work_tree,
+            &mut resolved,
+        )
+        .unwrap();
         assert!(resolved.packages.is_empty());
 
         work_tree
@@ -824,7 +870,14 @@ mod tests {
             .first_mut()
             .unwrap()
             .requirement = "=0.1.0".to_owned();
-        add_consequences(&[], &groups, &work_tree, &mut resolved).unwrap();
+        add_consequences(
+            &[],
+            &groups,
+            &Groups::from_workspace(&work_tree),
+            &work_tree,
+            &mut resolved,
+        )
+        .unwrap();
         assert_eq!(
             resolved.packages,
             BTreeMap::from([
@@ -925,6 +978,7 @@ mod tests {
         add_consequences(
             &initial,
             &BTreeMap::new(),
+            &Groups::from_workspace(&work_tree(&initial)),
             &work_tree(&initial),
             &mut resolved,
         )
@@ -952,6 +1006,7 @@ mod tests {
         add_consequences(
             &after_rewrite,
             &BTreeMap::new(),
+            &Groups::from_workspace(&work_tree(&after_rewrite)),
             &work_tree(&after_rewrite),
             &mut resolved,
         )
@@ -984,6 +1039,7 @@ mod tests {
         add_consequences(
             &packages,
             &BTreeMap::new(),
+            &Groups::from_workspace(&work_tree(&packages)),
             &work_tree(&packages),
             &mut resolved,
         )

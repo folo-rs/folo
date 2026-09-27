@@ -14,3 +14,6 @@ pub mod prepare;
 pub mod registry;
 pub mod report;
 pub mod resolution;
+
+mod artifact;
+mod source;

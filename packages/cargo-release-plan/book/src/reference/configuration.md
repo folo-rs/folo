@@ -103,9 +103,10 @@ list allows no external exposure. See the
 
 ## Binary metadata and naming
 
-Each publishable binary package declares one executable whose required features
-are enabled by its default feature selection. The offline metadata check does not
-compile that executable; normal build validation establishes buildability.
+Each publishable binary package declares one executable that builds with Cargo's
+default features. Authors are responsible for checking that build selection.
+The offline metadata check validates binary selection and archive declarations,
+not feature eligibility or buildability; Cargo checks those during the native build.
 Its Cargo `repository` is exactly `https://github.com/<owner>/<repository>` using
 the configured destination, without a trailing slash or `.git` suffix, and
 its binstall metadata describes the standard ZIP layout:

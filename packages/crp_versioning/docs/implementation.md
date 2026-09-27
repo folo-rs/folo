@@ -9,7 +9,7 @@ here. Exact dependency edges are acquired by workspace; the owning versioning op
 derives group membership once and uses that model for its decisions. Inherited-value
 change attribution is release policy, distinct from discovering inheritance syntax.
 
-Plans, proposals, preparation, prospective workspaces, resolved captures, preview
+Plans, proposals, preparation, prospective workspaces, resolved state, preview
 and application stay together. Their captured-input and no-late-resolution invariants
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
@@ -21,6 +21,6 @@ inner operations receive acquired values and narrow ports.
 
 Unit tests stay in process. Boundary integrations exercise real Git/Cargo and
 filesystem behavior without depending on the application binary. Patch-rendering
-benchmarks use an opt-in private driver. Versioning-only tests do not compile HTTP,
-TLS, upload, native-delivery or application command parsing. Criterion's development
+benchmarks use an opt-in private driver. Versioning-only tests compile only this
+component and its intended lower-level dependencies. Criterion's development
 dependencies remain part of benchmark-enabled builds.

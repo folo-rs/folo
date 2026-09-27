@@ -25,6 +25,36 @@ use crate::http_fixture::HttpService;
 // assertion; normal failures are reported synchronously. Ref: docs/testing.md.
 const PUBLICATION_WATCHDOG: Duration = Duration::from_mins(5);
 
+/// Implements only the sparse-index, upload and download boundaries used by this fixture.
+struct Registry {
+    http: HttpService,
+    state: Arc<Mutex<RegistryState>>,
+}
+
+impl Registry {
+    fn new() -> Self {
+        let state = Arc::new(Mutex::new(RegistryState::default()));
+        let http = HttpService::new({
+            let state = Arc::clone(&state);
+            move |url, request| respond(request, url, &state)
+        });
+        Self { http, state }
+    }
+}
+
+/// Keeps uploaded bytes and index entries together so Cargo observes publication immediately.
+#[derive(Default)]
+struct RegistryState {
+    packages: BTreeMap<String, Published>,
+    order: Vec<String>,
+}
+
+/// An uploaded package and its corresponding sparse-index record.
+struct Published {
+    archive: Vec<u8>,
+    index: Value,
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "Runs Cargo and an isolated HTTP registry")]
 fn cargo_orders_workspace_publication_and_preserves_locked_binary_dependencies() {
@@ -281,6 +311,8 @@ fn publication_workspace(registry: &Registry) -> Repository {
         format!("[package]\nname = 'publication-core'\n{metadata}").as_bytes(),
     );
     fixture.write("core/src/lib.rs", b"pub fn value() -> u8 { 7 }\n");
+    // Model the application's synchronized package group with an exact dependency,
+    // while this scenario checks Cargo publication order and packaged resolution.
     fixture.write(
         "cli/Cargo.toml",
         format!(
@@ -346,36 +378,6 @@ fn archive_files(bytes: &[u8]) -> BTreeMap<String, String> {
             (path, contents)
         })
         .collect()
-}
-
-/// Implements only the sparse-index, upload and download boundaries used by this fixture.
-struct Registry {
-    http: HttpService,
-    state: Arc<Mutex<RegistryState>>,
-}
-
-impl Registry {
-    fn new() -> Self {
-        let state = Arc::new(Mutex::new(RegistryState::default()));
-        let http = HttpService::new({
-            let state = Arc::clone(&state);
-            move |url, request| respond(request, url, &state)
-        });
-        Self { http, state }
-    }
-}
-
-/// Keeps uploaded bytes and index entries together so Cargo observes publication immediately.
-#[derive(Default)]
-struct RegistryState {
-    packages: BTreeMap<String, Published>,
-    order: Vec<String>,
-}
-
-/// An uploaded package and its corresponding sparse-index record.
-struct Published {
-    archive: Vec<u8>,
-    index: Value,
 }
 
 fn respond(mut request: Request, url: &str, state: &Mutex<RegistryState>) {

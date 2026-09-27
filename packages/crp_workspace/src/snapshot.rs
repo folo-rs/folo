@@ -1,12 +1,17 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use crp_diag::Quotable as _;
 use ohno::AppError;
 
 use crate::ReadFileError;
 use crate::snapshot_command::{capture, git};
 
 /// Acquires repository facts for a caller's fixed source verification.
+///
+/// Each operation performs a live query. The caller binds observations to its source
+/// identity and verifies immutability around the acquisition window.
 #[derive(Debug)]
 pub struct SourceSnapshot {
     root: PathBuf,
@@ -92,11 +97,119 @@ impl SourceSnapshot {
         )?;
         Ok(())
     }
+
+    /// Verifies exact repository-relative files with one live index query.
+    ///
+    /// The caller resolves containment and verifies source immutability around this phase.
+    /// Paths must not be absolute or contain parent components; duplicates are harmless.
+    /// Index membership does not establish worktree presence or publication eligibility.
+    #[cfg_attr(test, mutants::skip)] // The index query is covered by real Git boundary tests.
+    pub fn tracked_paths(&self, relatives: &[PathBuf]) -> Result<(), AppError> {
+        if relatives.is_empty() {
+            return Ok(());
+        }
+        // Reading the index once avoids both per-file processes and native argv size limits.
+        let index = capture("git", ["ls-files", "-z"], &self.root)?;
+        require_tracked_paths(&index, relatives)
+    }
 }
+
+fn require_tracked_paths(index: &[u8], relatives: &[PathBuf]) -> Result<(), AppError> {
+    if !index.is_empty() && !index.ends_with(b"\0") {
+        return Err(MalformedTrackedIndex::new().into());
+    }
+    let tracked: BTreeSet<_> = index
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .collect();
+    let mut checked = BTreeSet::new();
+    for path in relatives {
+        let key = tracked_path_key(path)?;
+        if checked.contains(&key) {
+            continue;
+        }
+        if !tracked.contains(key.as_slice()) {
+            return Err(UntrackedSourcePath::new(path).into());
+        }
+        _ = checked.insert(key);
+    }
+    Ok(())
+}
+
+fn tracked_path_key(path: &Path) -> Result<Vec<u8>, AppError> {
+    let mut key = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => {
+                if !key.is_empty() {
+                    key.push(b'/');
+                }
+                key.extend_from_slice(part.as_encoded_bytes());
+            }
+            Component::CurDir => {}
+            _ => return Err(InvalidTrackedSourcePath::new(path).into()),
+        }
+    }
+    if key.is_empty() {
+        return Err(InvalidTrackedSourcePath::new(path).into());
+    }
+    Ok(key)
+}
+
+/// One of the caller's required source files is absent from the observed index.
+#[ohno::error]
+#[display("required source path is not tracked: '{}'", path.quoted())]
+struct UntrackedSourcePath {
+    path: PathBuf,
+}
+
+/// Batch membership checks accept normalized file paths within the repository.
+#[ohno::error]
+#[display("tracked source path must be a nonempty repository-relative file: '{}'", path.quoted())]
+struct InvalidTrackedSourcePath {
+    path: PathBuf,
+}
+
+/// Truncated index output cannot establish complete membership.
+#[ohno::error]
+#[display("Git supplied an incomplete NUL-delimited tracked-file index")]
+struct MalformedTrackedIndex;
 
 /// A source location has no containing directory for repository discovery.
 #[ohno::error]
 #[display("{reason}")]
 struct SnapshotLocationError {
     reason: String,
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracked_membership_is_literal_complete_and_duplicate_tolerant() {
+        let paths = ["Cargo.toml", "package/file[one].toml", "Cargo.toml"].map(PathBuf::from);
+        require_tracked_paths(b"Cargo.toml\0package/file[one].toml\0", &paths).unwrap();
+        let error = require_tracked_paths(b"Cargo.toml\0", &paths).unwrap_err();
+        assert!(error.find_source::<UntrackedSourcePath>().is_some());
+        let error = require_tracked_paths(
+            b"package/file-one.toml\0",
+            &[PathBuf::from("package/file*.toml")],
+        )
+        .unwrap_err();
+        assert!(error.find_source::<UntrackedSourcePath>().is_some());
+        require_tracked_paths(b"", &[]).unwrap();
+    }
+
+    #[test]
+    fn tracked_membership_rejects_invalid_paths_and_truncated_output() {
+        for path in ["", ".", "../Cargo.toml", "package/../Cargo.toml"] {
+            let error = require_tracked_paths(b"Cargo.toml\0", &[PathBuf::from(path)]).unwrap_err();
+            assert!(error.find_source::<InvalidTrackedSourcePath>().is_some());
+        }
+        let error =
+            require_tracked_paths(b"Cargo.toml", &[PathBuf::from("Cargo.toml")]).unwrap_err();
+        assert!(error.find_source::<MalformedTrackedIndex>().is_some());
+    }
 }

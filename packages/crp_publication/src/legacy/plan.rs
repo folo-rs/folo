@@ -4,7 +4,8 @@ use ohno::AppError;
 
 use crate::PublicationOutput;
 use crate::legacy::model::{Batch, Plan, runner_label, timeout_minutes};
-use crate::publication::binaries::model::{Asset, Binary, InvalidPlan, identifier};
+use crate::publication::binaries::model::{InvalidPlan, identifier};
+use crate::publication::binaries::{Asset, Binary};
 
 pub(crate) fn plan(
     input: Plan,

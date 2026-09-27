@@ -109,7 +109,7 @@ fn assert_failed_build(fixture: &Fixture, result: &Output, name: &str) {
     assert_eq!(outcomes.as_array().unwrap().len(), 1);
     assert_eq!(outcomes[0]["status"], "failed");
     assert_eq!(outcomes[0]["stage"], "build");
-    let base = format!("alpha-v1.0.0-{}", fixture.triple);
+    let base = fixture.archive_base("alpha");
     assert!(
         !output
             .join("artifacts")

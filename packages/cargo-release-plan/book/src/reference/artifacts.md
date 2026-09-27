@@ -113,6 +113,24 @@ Each `check-compatibility` invocation uses a new output directory and writes
 `compatibility.json`, `semver-checks.log` and a regenerated read-only report.
 The evidence retains checker identity and exact published comparison versions.
 
+Compatibility evidence uses schema `1`:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Compatibility-evidence format revision. |
+| `checker` | Identified checker version, or an explanation when no identity was established. |
+| `report` | Location of the source-bound report generated for this comparison. |
+| `completed` | Whether the required comparisons and source verification completed. |
+| `findings` | Whether completed comparisons found an insufficient increment. |
+| `packages` | Comparison records containing the fields below. |
+
+Each comparison record contains `name`, `compared`, nullable `baseline_version`,
+and nullable `required_level`. A compared package has a published baseline.
+An unavailable comparison has `compared: false` and no baseline or required level.
+An operational failure can leave only earlier completed records; inspect the
+overall completion flag and retained diagnostics rather than treating absent
+records as passes.
+
 Require `completed: true` before using the result. A package's `compared: false`
 means no comparison was available, not proof of compatibility.
 `required_level` is a semantic `breaking` or `nonbreaking` floor; `null`
@@ -257,6 +275,63 @@ A dry run never sets the outcome's `complete` field to true. A live complete
 GitHub outcome does not imply that its binary archives are uploaded.
 Each batch `path` is relative to the separately emitted batch directory; retain
 those files and the parent publication manifest alongside the outcome.
+
+## Platform batch
+
+`publish github` produces a separate schema `1` platform-batch file for each
+selected native target. Its shape is:
+
+```text
+{
+  schema_version: 1, publication_id, repository, target, batch_id,
+  binaries: [{name, bin, version, tag, source_sha}]
+}
+```
+
+This is a field-shape sketch, not caller-authored JSON. `name` identifies the Cargo
+package and `bin` its executable. `source_sha` is the frozen peeled package-tag
+commit. `publication_id` identifies the parent manifest; `batch_id` identifies the
+batch's exact work, including those source commits. `repository` and `target`
+retain their configured identities.
+
+## Binary outcome
+
+`publish binaries` produces a schema `1` outcome:
+
+```text
+{
+  schema_version: 1, publication_id, phase: "binaries",
+  target, no_upload, complete, batch_id,
+  github?: {run_id, run_attempt},
+  items: [
+    {
+      binary: {name, bin, version, tag, source_sha},
+      status, stage, diagnostic, cleanup_error
+    }
+  ]
+}
+```
+
+`github` is omitted outside GitHub Actions. Item `diagnostic` and `cleanup_error`
+values are nullable strings. The supported status/stage combinations are:
+
+| Status | Stage | Execution mode |
+| --- | --- | --- |
+| `published` | `upload` | Upload |
+| `skipped-complete` | `refresh` | Upload |
+| `staged-only` | `package` | No upload |
+| `failed` | `refresh` or `upload` | Upload |
+| `failed` | `source`, `build`, `package` or `cancelled` | Either |
+| `unattempted` | `cancelled` | Either |
+
+A failed item includes a diagnostic. Cleanup failure is recorded separately
+without replacing the item's operation status. `complete` requires successful
+upload-mode results for every requested binary and no cleanup failures.
+`no_upload` staging never establishes delivery completion.
+
+Retain the original manifest and platform batch with these outcomes. Consume the
+tool-produced artifacts rather than synthesizing them; their identities and
+attempt ordering are required evidence for reporting.
 
 ## Derived batches and later outcomes
 

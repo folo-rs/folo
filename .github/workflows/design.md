@@ -856,7 +856,9 @@ tag and immutable source commit; batching never combines package feature selecti
 or changes which source a release represents.
 
 Recovery refreshes each binary release's archive/checksum completeness before doing
-build work. Independent failures do not suppress remaining work, and any failed
+build work. Structural and frozen tag-identity validation admit the batch before
+execution begins. After that preflight succeeds, independent execution failures
+do not suppress remaining work, and any failed
 binary release fails the job. Standard validation runs the selected binary smoke
 path without release queries or writes, retaining source, build and archive
 verification. See [release binary batches](implementation.md#release-binary-batches)

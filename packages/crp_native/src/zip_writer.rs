@@ -28,23 +28,32 @@ pub(crate) fn write_archive(
     }
     let mut archive = ZipWriter::new(output);
     archive.start_file(name, options)?;
+    copy_artifact(input, &mut archive, &mut checkpoint)?;
+    checkpoint()?;
+    let mut output = archive.finish()?;
+    output.flush()?;
+    checkpoint()
+}
+
+/// Streams artifact bytes without bypassing the caller's cancellation/deadline checkpoints.
+pub(crate) fn copy_artifact(
+    input: impl Read,
+    output: &mut impl Write,
+    checkpoint: &mut impl FnMut() -> Result<(), AppError>,
+) -> Result<(), AppError> {
     let mut input = BufReader::new(input);
     loop {
-        // Do not use an uninterrupted io::copy: compression must share the item's
-        // cancellation/deadline checks without retaining the executable in memory.
+        // Both staging and compression use bounded buffers rather than an uninterrupted copy.
         checkpoint()?;
         let bytes = input.fill_buf()?;
         if bytes.is_empty() {
             break;
         }
-        archive.write_all(bytes)?;
+        output.write_all(bytes)?;
         let length = bytes.len();
         input.consume(length);
     }
-    checkpoint()?;
-    let mut output = archive.finish()?;
-    output.flush()?;
-    checkpoint()
+    Ok(())
 }
 
 /// Exercises the production writer without filesystem or clock noise.
@@ -156,6 +165,23 @@ mod tests {
         .unwrap_err();
         assert!(read.get());
         assert!(!output.get_ref().is_empty());
+    }
+
+    #[test]
+    fn copying_checks_between_completed_input_buffers() {
+        let read = Cell::new(false);
+        let input = TrackingReader { read: &read };
+        let mut output = Vec::new();
+        copy_artifact(input, &mut output, &mut || {
+            if read.get() {
+                Err(io::Error::other("copy interruption").into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        // The reader supplies one arbitrary byte before the following checkpoint interrupts.
+        assert_eq!(output, [42]);
     }
 
     #[test]

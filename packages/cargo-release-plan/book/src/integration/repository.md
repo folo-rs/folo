@@ -171,10 +171,11 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 ```
 
-Binary packages must declare one executable whose required features are enabled
-by the default feature selection. The offline check validates this metadata, not
-whether compilation succeeds; normal builds and native publication smoke checks
-cover buildability. Repository and binstall layout must match publication configuration.
+Binary packages must declare one executable that builds with Cargo's default
+features. Check that selection in your own build validation; the offline release
+check does not resolve features or compile. Publication uses the explicit native
+Cargo build to check feature requirements and buildability.
+Repository and binstall layout must match publication configuration.
 Package `release-targets` can narrow the workspace selection:
 
 ```toml

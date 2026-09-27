@@ -4,7 +4,7 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::PublicationOutput;
-use crate::publication::binaries::model::{Asset, Binary, InvalidPlan};
+use crate::publication::binaries::{Asset, Binary};
 
 /// Native operations used by the in-process batch sequence.
 pub trait Executor {
@@ -35,7 +35,7 @@ pub fn execute_items(
     executor: &mut impl Executor,
     diagnostics: &PublicationOutput,
 ) -> Result<Vec<Outcome>, AppError> {
-    let mut outcomes = Vec::new();
+    let mut outcomes = Vec::with_capacity(binaries.len());
     let mut sources = BTreeMap::<&str, Vec<&Binary>>::new();
     for binary in binaries {
         binary.validate()?;
@@ -133,13 +133,14 @@ fn execute_item(
 
 fn check_cancellation(executor: &impl Executor) -> Result<(), (&'static str, AppError)> {
     if executor.cancelled() {
-        return Err((
-            "cancelled",
-            InvalidPlan::new("Release batch cancelled".to_owned()).into(),
-        ));
+        return Err(("cancelled", ExecutionCancelled::new().into()));
     }
     Ok(())
 }
+
+#[ohno::error]
+#[display("release batch execution was cancelled")]
+struct ExecutionCancelled;
 
 fn failure(
     binary: &Binary,

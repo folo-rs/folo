@@ -218,33 +218,34 @@ fn either_publication_source_can_withhold_a_version_target_from_release() {
 
 #[test]
 #[cfg_attr(miri, ignore = "canonicalizes real filesystem directories")]
-fn canonical_member_index_retains_only_resolvable_member_identities() {
+fn member_identity_failures_do_not_become_negative_membership() {
     let directory = tempdir().unwrap();
     for name in ["member", "outside", "via"] {
         fs::create_dir_all(directory.path().join(name)).unwrap();
     }
     let member = directory.path().join("member");
-    let members = BTreeMap::from([
-        (directory.path().join("via/../member"), "member".to_string()),
-        (directory.path().join("missing"), "missing".to_string()),
-    ]);
-    let canonical = canonical_members_by_dir(&members);
+    let mut members =
+        BTreeMap::from([(directory.path().join("via/../member"), "member".to_string())]);
+    let canonical = canonical_members_by_dir(&members).unwrap();
     assert_eq!(
         canonical,
         BTreeMap::from([(fs::canonicalize(&member).unwrap(), "member".to_string())])
     );
     assert_eq!(
-        resolved_member(directory.path(), "member", &members, &canonical),
+        resolved_member(directory.path(), "member", &members, &canonical).unwrap(),
         Some("member")
     );
     assert_eq!(
-        resolved_member(directory.path(), "outside", &members, &canonical),
+        resolved_member(directory.path(), "outside", &members, &canonical).unwrap(),
         None
     );
-    assert_eq!(
-        resolved_member(directory.path(), "absent", &members, &canonical),
-        None
-    );
+    let error = resolved_member(directory.path(), "absent", &members, &canonical).unwrap_err();
+    assert!(error.to_string().contains("absent"));
+    assert!(error.find_source::<std::io::Error>().is_some());
+    members.insert(directory.path().join("missing"), "missing".to_owned());
+    let error = canonical_members_by_dir(&members).unwrap_err();
+    assert!(error.to_string().contains("missing"));
+    assert!(error.find_source::<std::io::Error>().is_some());
 }
 
 #[test]

@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::native_binaries::{
-    Fixture, SMOKE_WATCHDOG, assert_success, command, compile_tool, run, write,
+    FIXTURE_VERSION, Fixture, SMOKE_WATCHDOG, assert_success, command, compile_tool, run, write,
 };
 
 #[test]
@@ -51,7 +51,7 @@ fn stages_tagged_binaries() {
         assert_eq!(outcome["binary"]["source_sha"], fixture.source);
     }
     for name in ["alpha", "beta"] {
-        let base = format!("{name}-v1.0.0-{}", fixture.triple);
+        let base = fixture.archive_base(name);
         let staging = fixture.root.path().join("out/artifacts").join(&base);
         let archive = staging.join(format!("{base}.zip"));
         let checksum = fs::read_to_string(staging.join(format!("{base}.sha256"))).unwrap();
@@ -165,13 +165,15 @@ fn failed_item_does_not_publish_or_prevent_independent_staging() {
 }
 
 fn stages_after_item_failure() {
+    // Only inequality with the source identity matters, not a semantic-version boundary.
+    const MISMATCHED_VERSION: &str = "9.0.0";
     let fixture = Fixture::new();
     // Intent requests the current version, but the frozen tag still points at the old source.
     // Source identity failure must not suppress an independent package in the same batch.
     let manifest = fixture.root.path().join("alpha/Cargo.toml");
     let contents = fs::read_to_string(&manifest)
         .unwrap()
-        .replace("1.0.0", "9.0.0");
+        .replace(FIXTURE_VERSION, MISMATCHED_VERSION);
     fs::write(manifest, contents).unwrap();
     run(
         fixture.root.path(),
@@ -185,8 +187,8 @@ fn stages_after_item_failure() {
         &["commit", "--quiet", "-m", "New alpha version"],
     );
     let mut invalid = fixture.binary("alpha");
-    invalid["version"] = "9.0.0".into();
-    invalid["tag"] = "alpha-v9.0.0".into();
+    invalid["version"] = MISMATCHED_VERSION.into();
+    invalid["tag"] = format!("alpha-v{MISMATCHED_VERSION}").into();
     let result = fixture.execute(&json!([invalid, fixture.binary("beta")]), "out");
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("Binary staging failed"));
@@ -213,14 +215,16 @@ fn package_features_do_not_leak_across_separate_builds() {
         write(
             fixture.root.path(),
             "shared/Cargo.toml",
-            r#"
+            &format!(
+                r#"
 [package]
 name = "shared"
-version = "1.0.0"
+version = "{FIXTURE_VERSION}"
 edition = "2024"
 [features]
 extra = []
-"#,
+"#
+            ),
         );
         write(
             fixture.root.path(),
@@ -240,7 +244,7 @@ extra = []
         );
         assert_success(&result);
         for (name, expected) in [("alpha", "extra"), ("beta", "base")] {
-            let base = format!("{name}-v1.0.0-{}", fixture.triple);
+            let base = fixture.archive_base(name);
             let filename = format!("{name}-bin{EXE_SUFFIX}");
             let staged = fixture.root.path().join("out/artifacts").join(base);
             assert_eq!(run(&staged, staged.join(filename), &[]).trim(), expected);

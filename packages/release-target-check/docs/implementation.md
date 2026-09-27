@@ -3,10 +3,11 @@
 This nonpublished executable retains the command interface used by
 `ReleasePublication.psm1`: a manifest path, full candidate and release-line
 commits, repeated exact package/version requests, and optional verbose output.
+The [design](design.md) defines those source identities and their distinct roles.
 Successful verification writes its result to stdout; failure writes diagnostics
 to stderr and returns failure. Quiet successful checks do not emit verbose notes.
 
-The shell selects stderr as the diagnostic destination.
+The shell supplies stderr as the diagnostic destination; the parsed CLI selects verbosity.
 `crp_publication::legacy::verify_candidate` parses the private bootstrap grammar
 and invokes `crp_publication::publication::candidate::verify` using a typed
 `CandidateRequest`. Candidate policy calls `crp_versioning` directly and obtains

@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn zero_timeout_is_rejected_synchronously() {
-        assert_panics(|| validate_timeout(Duration::ZERO));
+        assert_panics(|| with_watchdog_timeout(Duration::ZERO, || ()));
         // Any nonzero duration is a valid argument; this pure check starts no timer or worker.
         validate_timeout(Duration::from_secs(1));
     }

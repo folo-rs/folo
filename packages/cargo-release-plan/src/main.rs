@@ -53,6 +53,8 @@ fn main() -> ExitCode {
             | RunOutcome::Report { message }
             | RunOutcome::Expand { message }
             | RunOutcome::Apply { message } => {
+                // The credential provider has already written its protocol stream and returns
+                // an empty summary; no extra newline or generic success text may follow it.
                 if !message.is_empty() {
                     println!("{message}");
                 }

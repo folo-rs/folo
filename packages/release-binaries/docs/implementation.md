@@ -26,9 +26,9 @@ source object is missing. Successful, failed, unattempted and cleanup outcomes
 remain visible; a cleanup failure prevents a successful command exit even when
 an item uploaded successfully.
 
-The executable-connected smoke suite retains the original bootstrap protocol
-coverage. Permanent native, publication and application tests stay with their
-owning packages. Do not copy their implementations into this shell.
+The executable-connected smoke suite covers the private protocol, GitHub adapter
+behavior and a representative native wiring path. Full source, archive, feature-isolation
+and cancellation scenarios stay with the permanent application and component owners.
 A native fake `gh` executable exercises tag and asset process boundaries without
 contacting GitHub; in-process tests cover parsing and deterministic decisions.
 

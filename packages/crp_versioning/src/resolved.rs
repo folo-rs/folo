@@ -297,12 +297,23 @@ pub struct ResolvedState {
 impl ResolvedState {
     pub fn verify_candidate(&self, manifest: &Path) -> Result<(), AppError> {
         let manifest = canonical(manifest)?;
-        if manifest != canonical(&self.evidence_manifest_path)?
-            || manifest == canonical(&self.inputs.root.join(&self.inputs.manifest))?
-        {
+        Self::validate_candidate_location(
+            &manifest,
+            &canonical(&self.evidence_manifest_path)?,
+            &canonical(&self.inputs.root.join(&self.inputs.manifest))?,
+        )?;
+        self.inputs.verify_candidate(&manifest, &self.final_digest)
+    }
+
+    fn validate_candidate_location(
+        actual: &Path,
+        evidence: &Path,
+        live: &Path,
+    ) -> Result<(), AppError> {
+        if actual != evidence || actual == live {
             return Err(WrongEvidenceWorkspace::new().into());
         }
-        self.inputs.verify_candidate(&manifest, &self.final_digest)
+        Ok(())
     }
 
     pub fn validate_artifacts(
@@ -634,6 +645,18 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn candidate_location_requires_recorded_evidence_and_excludes_live_source() {
+        let evidence = Path::new("candidate/Cargo.toml");
+        let live = Path::new("source/Cargo.toml");
+        ResolvedState::validate_candidate_location(evidence, evidence, live).unwrap();
+        for (actual, recorded) in [(Path::new("other/Cargo.toml"), evidence), (live, live)] {
+            let error =
+                ResolvedState::validate_candidate_location(actual, recorded, live).unwrap_err();
+            assert!(error.find_source::<WrongEvidenceWorkspace>().is_some());
+        }
+    }
 
     // A real empty file supports Git for Windows on ARM64, unlike the NUL device.
     // Keep it outside fixtures so it cannot enter their captured or committed inputs.

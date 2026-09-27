@@ -261,7 +261,9 @@ enum Command {
     /// Workspace discovery is advisory. With --plan, missing or unknown results fail the check.
     /// This does not verify Trusted Publisher administration.
     CheckPublished(PublishedArgs),
-    /// Collect supported external API comparisons without choosing semantic change levels.
+    /// Collect supported external API comparisons without making semantic decisions.
+    ///
+    /// Without --prepared or --plan, classify the current workspace against --base or its default.
     CheckCompatibility(CompatibilityArgs),
     /// Resolve configured release-branch history and a workspace-scoped concurrency identity.
     ReleaseContext(ContextArgs),
@@ -272,7 +274,7 @@ enum Command {
     Publish(PublishCommand),
     #[command(hide = true)]
     CredentialProvider(CredentialProviderArgs),
-    /// Validate clean merged source and capture its immutable publication requests.
+    /// Validate clean merged source and capture an immutable publication manifest.
     PreparePublish(PreparePublishArgs),
     /// Validate an expanded plan and print publication and evidence facts as JSON.
     InspectPlan(InspectPlanArgs),
@@ -280,9 +282,9 @@ enum Command {
     AnalysisOrder(ArtifactReportArgs),
     /// Print affected consumer-contract package names as a JSON array.
     SemverTargets(ArtifactReportArgs),
-    /// Complete mechanical version decisions without inspecting a workspace.
+    /// Translate supplied semantic decisions into a proposed version plan without inspecting a workspace.
     Propose(ProposeArgs),
-    /// Refresh the live lockfile offline and capture evidence before semantic grading.
+    /// Refresh the live lockfile offline and capture prepared evidence before semantic assessment.
     Prepare(PrepareArgs),
     /// Resolve all prospective plan effects offline and capture the state for application.
     Preview(PreviewArgs),
@@ -355,10 +357,13 @@ struct PublishedArgs {
 struct CompatibilityArgs {
     #[arg(long)]
     manifest_path: Option<PathBuf>,
+    /// Check the captured original prepared inputs.
     #[arg(long,conflicts_with_all=["plan","base"])]
     prepared: Option<PathBuf>,
+    /// Check a resolved preview's retained prospective workspace.
     #[arg(long,conflicts_with_all=["prepared","base"])]
     plan: Option<PathBuf>,
+    /// Baseline for fresh read-only classification when no evidence artifact is selected.
     #[arg(long)]
     base: Option<String>,
     /// Evidence directory; must not already exist.
@@ -374,6 +379,7 @@ struct CompatibilityArgs {
 /// Failure reporting can proceed even when preparation supplied no usable manifest.
 #[derive(Debug, Parser)]
 struct PublicationReportArgs {
+    /// GitHub repository for the report; must match valid supplied publication intent.
     #[arg(long)]
     repository: String,
     #[arg(long)]
@@ -478,7 +484,7 @@ struct PreparePublishArgs {
     #[arg(long)]
     source: String,
 
-    /// Manifest output file; an existing file must contain identical publication intent.
+    /// Publication-manifest output file; an existing file must contain identical intent.
     #[arg(long)]
     output: PathBuf,
 
@@ -532,7 +538,7 @@ struct InspectPlanArgs {
     verbose: bool,
 }
 
-/// Arguments for explicit pre-grading preparation.
+/// Arguments for preparation before semantic assessment.
 #[derive(Debug, Parser)]
 struct PrepareArgs {
     /// Directory receiving report.json, diffs/, and prepared.json.
@@ -1035,6 +1041,118 @@ mod tests {
                 assert_eq!(dry_run, explicit);
                 assert_eq!(verbose, explicit);
             }
+        }
+    }
+
+    #[test]
+    fn identity_probe_preserves_verbose_selection() {
+        for verbose in [false, true] {
+            let mut args = vec!["cargo-release-plan", "check-publishing-identity"];
+            if verbose {
+                args.push("--verbose");
+            }
+            assert!(matches!(Cli::from_args_os(args).unwrap().into_input(),
+                RunInput::CheckPublishingIdentity { verbose: actual } if actual == verbose));
+        }
+    }
+
+    #[test]
+    fn publication_report_preserves_inputs_and_issue_selection() {
+        let required = [
+            ("--repository", "example/repository"),
+            ("--outcomes", "receipts"),
+            ("--jobs", "job-results"),
+            ("--output", "report"),
+        ];
+        for missing in 0..required.len() {
+            let mut args = vec!["cargo-release-plan", "publish", "report"];
+            for (index, (flag, value)) in required.iter().enumerate() {
+                if index != missing {
+                    args.extend([*flag, *value]);
+                }
+            }
+            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+        }
+        for explicit in [false, true] {
+            let mut args = vec!["cargo-release-plan", "publish", "report"];
+            for pair in required {
+                args.extend(<[&str; 2]>::from(pair));
+            }
+            if explicit {
+                args.extend(["--publication", "intent", "--no-issue"]);
+            }
+            let RunInput::PublicationReport {
+                repository,
+                publication,
+                outcomes,
+                jobs,
+                output,
+                no_issue,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(repository, "example/repository");
+            assert_eq!(
+                publication.as_deref(),
+                explicit.then_some(Path::new("intent"))
+            );
+            assert_eq!(outcomes, Path::new("receipts"));
+            assert_eq!(jobs, Path::new("job-results"));
+            assert_eq!(output, Path::new("report"));
+            assert_eq!(no_issue, explicit);
+        }
+    }
+
+    #[test]
+    fn binary_publication_preserves_paths_manifest_and_upload_selection() {
+        let required = [
+            ("--publication", "intent"),
+            ("--batch", "platform-batch"),
+            ("--output", "outcome"),
+            ("--artifacts", "artifacts"),
+        ];
+        for missing in 0..required.len() {
+            let mut args = vec!["cargo-release-plan", "publish", "binaries"];
+            for (index, (flag, value)) in required.iter().enumerate() {
+                if index != missing {
+                    args.extend([*flag, *value]);
+                }
+            }
+            assert!(Cli::from_args_os(args).unwrap_err().status.is_err());
+        }
+        for explicit in [false, true] {
+            let mut args = vec!["cargo-release-plan", "publish", "binaries"];
+            for pair in required {
+                args.extend(<[&str; 2]>::from(pair));
+            }
+            if explicit {
+                args.extend(["--manifest-path", "source/Cargo.toml", "--no-upload"]);
+            }
+            let RunInput::PublishBinaries {
+                publication,
+                batch,
+                manifest_path,
+                output,
+                artifacts,
+                no_upload,
+            } = Cli::from_args_os(args).unwrap().into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(publication, Path::new("intent"));
+            assert_eq!(batch, Path::new("platform-batch"));
+            assert_eq!(
+                manifest_path,
+                Path::new(if explicit {
+                    "source/Cargo.toml"
+                } else {
+                    "Cargo.toml"
+                })
+            );
+            assert_eq!(output, Path::new("outcome"));
+            assert_eq!(artifacts, Path::new("artifacts"));
+            assert_eq!(no_upload, explicit);
         }
     }
 

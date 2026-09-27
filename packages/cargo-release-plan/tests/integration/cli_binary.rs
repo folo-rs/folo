@@ -4,6 +4,8 @@
 //! outcome is written to and which exit status it produces. Classification and
 //! plan semantics are covered in-process by the other modules of this suite.
 
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use std::fs;
 use std::process::{Command, Output};
 

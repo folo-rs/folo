@@ -27,6 +27,127 @@ use crate::git_fixture::Repository;
 use crate::http_fixture::HttpService;
 use crate::identity_fixture::IdentityService;
 
+/// Observes the real configured command without executing a registry upload.
+struct UploadRuntime<'a> {
+    repository: &'a Repository,
+    identity: &'a IdentityService,
+    available: Arc<Mutex<BTreeSet<String>>>,
+    mode: UploadMode,
+    uploads: Cell<usize>,
+    pauses: Cell<usize>,
+    context: RefCell<Option<PathBuf>>,
+    target: RefCell<Option<PathBuf>>,
+}
+
+impl RegistryRuntime for UploadRuntime<'_> {
+    fn credentials(
+        &self,
+        publication: &PublicationManifest,
+        manifest: &Path,
+        target: &Path,
+    ) -> Result<CredentialSession, AppError> {
+        _ = self.target.replace(Some(target.to_owned()));
+        CredentialSession::new(
+            serde_json::from_value::<ActionsIdentity>(json!({
+                "request_url":format!("{}/identity",self.identity.url()),
+                "request_token":"identity-credential-canary"
+            }))?,
+            publication.clone(),
+            manifest.to_owned(),
+            target.to_owned(),
+            TrustedPublisher::with_endpoint(
+                &format!("{}/tokens", self.identity.url()),
+                crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    Arc::new(crp_diag::Discard),
+                ),
+            )?,
+        )
+    }
+
+    fn upload(&self, command: &mut Command) -> io::Result<Output> {
+        self.uploads.set(self.uploads.get().checked_add(1).unwrap());
+        assert_eq!(
+            command.get_current_dir().unwrap().canonicalize().unwrap(),
+            self.repository.path().canonicalize().unwrap()
+        );
+        let arguments = command.get_args().collect::<Vec<_>>();
+        assert_eq!(
+            arguments.get(..4).unwrap(),
+            ["publish", "--registry", "crates-io", "--locked"]
+        );
+        let packages = arguments
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [argument, value] if *argument == "--package" => Some(*value),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(packages, ["beta"]);
+        let context = PathBuf::from(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT")
+                .unwrap()
+                .1
+                .unwrap(),
+        );
+        _ = self.context.replace(Some(context.clone()));
+        if matches!(self.mode, UploadMode::SpawnFailure) {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        }
+        let request = json!({
+            "v":1,"kind":"get","operation":"publish","name":"beta","vers":"1.0.0",
+            "cksum":"b".repeat(64),
+            "registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}
+        });
+        serve_credential(
+            &context,
+            &mut Cursor::new(request.to_string()),
+            &mut Vec::new(),
+            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
+        if !matches!(self.mode, UploadMode::PartialFailure) {
+            self.available.lock().unwrap().insert("beta".to_owned());
+        }
+        if matches!(self.mode, UploadMode::SourceChanged) {
+            self.repository
+                .write("beta/src/lib.rs", b"pub fn changed() {}\n");
+        }
+        Ok(Output {
+            // Supply a native successful or unsuccessful status without launching an upload.
+            status: ExitStatus::from_raw(
+                if matches!(
+                    self.mode,
+                    UploadMode::PartialFailure | UploadMode::CompletedDespiteFailure
+                ) {
+                    1
+                } else {
+                    0
+                },
+            ),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        })
+    }
+
+    fn pause(&self, _delay: Duration) {
+        self.pauses.set(self.pauses.get().checked_add(1).unwrap());
+    }
+}
+
+/// Supplies independent process, registry and source observations after the attempted upload.
+#[derive(Clone, Copy)]
+enum UploadMode {
+    Success,
+    PartialFailure,
+    CompletedDespiteFailure,
+    SpawnFailure,
+    SourceChanged,
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "Uses a loopback HTTP service")]
 fn absence_is_distinct_from_query_failure_or_mismatched_identity() {
@@ -67,6 +188,7 @@ fn absence_is_distinct_from_query_failure_or_mismatched_identity() {
             pauses = pauses.checked_add(1).unwrap();
         })
         .unwrap_err();
+    // An exhausted transport-query budget pauses only between its observations.
     assert_eq!(pauses, 2);
 }
 
@@ -92,20 +214,23 @@ fn identity_and_comparison_queries_refresh_evidence_and_use_the_shell_identity()
                         .as_str(),
                     "cargo-release-plan/9.8.7",
                 );
-                let mut count = requests.lock().unwrap();
-                let (status, body) = if *count < 2 {
-                    (
-                        200,
-                        concat!(
-                            "{\"name\":\"library\",\"vers\":\"1.2.3\",\"yanked\":false}\n",
-                            "{\"name\":\"library\",\"vers\":\"9.0.0\",\"yanked\":true}\n",
-                            "{\"name\":\"library\",\"vers\":\"2.0.0-alpha\",\"yanked\":false}\n",
-                        ),
-                    )
-                } else {
-                    (404, "")
+                let (status, body) = {
+                    let mut count = requests.lock().unwrap();
+                    let response = if *count < 2 {
+                        (
+                            200,
+                            concat!(
+                                "{\"name\":\"library\",\"vers\":\"1.2.3\",\"yanked\":false}\n",
+                                "{\"name\":\"library\",\"vers\":\"9.0.0\",\"yanked\":true}\n",
+                                "{\"name\":\"library\",\"vers\":\"2.0.0-alpha\",\"yanked\":false}\n",
+                            ),
+                        )
+                    } else {
+                        (404, "")
+                    };
+                    *count += 1;
+                    response
                 };
-                *count += 1;
                 request
                     .respond(Response::from_string(body).with_status_code(StatusCode(status)))
                     .unwrap();
@@ -192,6 +317,8 @@ fn registry_orchestration_retains_completed_work_and_reconciles_upload_results()
             !matches!(mode, UploadMode::CompletedDespiteFailure)
         );
         assert_eq!(runtime.uploads.get(), 1);
+        // Only a still-missing upload exhausts the independent propagation budget;
+        // pauses occur between observations, not after the terminal one.
         assert_eq!(
             runtime.pauses.get(),
             if matches!(mode, UploadMode::PartialFailure) {
@@ -346,127 +473,6 @@ fn mismatched_source_configuration_and_requests_fail_before_registry_or_credenti
     assert_eq!(runtime.uploads.get(), 0);
     assert!(runtime.target.borrow().is_none());
     assert!(identity.operations().is_empty());
-}
-
-/// Observes the real configured command without executing a registry upload.
-struct UploadRuntime<'a> {
-    repository: &'a Repository,
-    identity: &'a IdentityService,
-    available: Arc<Mutex<BTreeSet<String>>>,
-    mode: UploadMode,
-    uploads: Cell<usize>,
-    pauses: Cell<usize>,
-    context: RefCell<Option<PathBuf>>,
-    target: RefCell<Option<PathBuf>>,
-}
-
-impl RegistryRuntime for UploadRuntime<'_> {
-    fn credentials(
-        &self,
-        publication: &PublicationManifest,
-        manifest: &Path,
-        target: &Path,
-    ) -> Result<CredentialSession, AppError> {
-        _ = self.target.replace(Some(target.to_owned()));
-        CredentialSession::new(
-            serde_json::from_value::<ActionsIdentity>(json!({
-                "request_url":format!("{}/identity",self.identity.url()),
-                "request_token":"identity-credential-canary"
-            }))?,
-            publication.clone(),
-            manifest.to_owned(),
-            target.to_owned(),
-            TrustedPublisher::with_endpoint(
-                &format!("{}/tokens", self.identity.url()),
-                crp_publication::PublicationOutput::new(
-                    "1.2.3",
-                    false,
-                    Arc::new(crp_diag::Discard),
-                ),
-            )?,
-        )
-    }
-
-    fn upload(&self, command: &mut Command) -> io::Result<Output> {
-        self.uploads.set(self.uploads.get().checked_add(1).unwrap());
-        assert_eq!(
-            command.get_current_dir().unwrap().canonicalize().unwrap(),
-            self.repository.path().canonicalize().unwrap()
-        );
-        let arguments = command.get_args().collect::<Vec<_>>();
-        assert_eq!(
-            arguments.get(..4).unwrap(),
-            ["publish", "--registry", "crates-io", "--locked"]
-        );
-        let packages = arguments
-            .windows(2)
-            .filter_map(|pair| match pair {
-                [argument, value] if *argument == "--package" => Some(*value),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(packages, ["beta"]);
-        let context = PathBuf::from(
-            command
-                .get_envs()
-                .find(|(name, _)| *name == "CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT")
-                .unwrap()
-                .1
-                .unwrap(),
-        );
-        _ = self.context.replace(Some(context.clone()));
-        if matches!(self.mode, UploadMode::SpawnFailure) {
-            return Err(io::Error::from(io::ErrorKind::NotFound));
-        }
-        let request = json!({
-            "v":1,"kind":"get","operation":"publish","name":"beta","vers":"1.0.0",
-            "cksum":"b".repeat(64),
-            "registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}
-        });
-        serve_credential(
-            &context,
-            &mut Cursor::new(request.to_string()),
-            &mut Vec::new(),
-            &crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
-        )
-        .unwrap();
-        if !matches!(self.mode, UploadMode::PartialFailure) {
-            self.available.lock().unwrap().insert("beta".to_owned());
-        }
-        if matches!(self.mode, UploadMode::SourceChanged) {
-            self.repository
-                .write("beta/src/lib.rs", b"pub fn changed() {}\n");
-        }
-        Ok(Output {
-            // Supply a native successful or unsuccessful status without launching an upload.
-            status: ExitStatus::from_raw(
-                if matches!(
-                    self.mode,
-                    UploadMode::PartialFailure | UploadMode::CompletedDespiteFailure
-                ) {
-                    1
-                } else {
-                    0
-                },
-            ),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        })
-    }
-
-    fn pause(&self, _delay: Duration) {
-        self.pauses.set(self.pauses.get().checked_add(1).unwrap());
-    }
-}
-
-/// Supplies independent process, registry and source observations after the attempted upload.
-#[derive(Clone, Copy)]
-enum UploadMode {
-    Success,
-    PartialFailure,
-    CompletedDespiteFailure,
-    SpawnFailure,
-    SourceChanged,
 }
 
 fn registry_service(available: &Arc<Mutex<BTreeSet<String>>>) -> HttpService {

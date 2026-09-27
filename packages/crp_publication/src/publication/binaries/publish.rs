@@ -8,18 +8,18 @@ use crp_native::command::install_cancellation_handler;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
-use crate::publication::binaries::batch::{Outcome, execute_items};
-use crate::publication::binaries::{BinaryPublisher, Github};
+use crate::publication::artifact::{require_separate_outputs, write_outcome};
+use crate::publication::binaries::{BinaryPublisher, Github, Outcome, execute_items};
 use crate::publication::context::WorkflowRun;
 use crate::publication::github::{PLATFORM_BATCH_SCHEMA_VERSION, PlatformBatch, verify_batch_tags};
 use crate::publication::manifest::{InvalidManifest, PublicationManifest};
-use crate::publication::registry::{verify_source, write_outcome};
+use crate::publication::source::verify_source;
 use crate::{PublicationOutput, ReadFileError};
 
 /// The input identity and native item results from one target attempt.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BinaryReceipt {
+pub(crate) struct BinaryOutcome {
     pub(crate) schema_version: u32,
     pub(crate) publication_id: String,
     pub(crate) phase: String,
@@ -45,6 +45,7 @@ pub fn publish(
     no_upload: bool,
     diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
+    require_separate_outputs(output, artifacts)?;
     for path in [output, artifacts] {
         if path
             .try_exists()
@@ -85,7 +86,7 @@ pub fn publish(
         diagnostics,
     )?;
     let passed = successful(&items, batch.binaries.len(), no_upload);
-    let outcome = BinaryReceipt {
+    let outcome = BinaryOutcome {
         schema_version: BINARY_OUTCOME_SCHEMA_VERSION,
         publication_id: publication.id,
         phase: "binaries".to_owned(),

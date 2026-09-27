@@ -1,9 +1,8 @@
-//! Temporary adapters for the bootstrap publisher's private executable protocols.
+//! Adapters for the private release-binaries and release-target-check executable protocols.
 //!
-//! Keep these only while the old workflow calls `release-binaries` and
-//! `release-target-check`. The operational cutover removes this module and both
-//! nonpublished shells. Native execution and publication decisions use their
-//! ordinary owners; this module does not implement another delivery engine.
+//! These translate command and batch inputs for their publication and native owners.
+//! The selected release workflow consumes these protocols; the module does not implement
+//! another delivery engine or choose release policy.
 
 pub use binaries::run_binaries;
 pub use candidate::verify_candidate;

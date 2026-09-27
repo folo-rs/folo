@@ -4,7 +4,7 @@
 // the library in their own dependency graph and do not use that file. For a
 // package with an installable binary target, the package-specific resolution is
 // operationally relevant and therefore released content.
-// Ref: docs/design.md, "Relevant lockfile closures".
+// Ref: packages/cargo-release-plan/docs/design.md, "Relevant lockfile closures".
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 #[cfg(any(test, feature = "private-test-util"))]
@@ -33,7 +33,8 @@ pub type Closure = BTreeMap<String, BTreeSet<String>>;
 /// Non-publishable members are included: Cargo.lock also merges their development
 /// edges, which must not enter a binary's transitive installation closure.
 /// A version is retained so a same-named path dependency cannot borrow another
-/// package's declarations. Ref: docs/implementation.md, "Lockfile closures".
+/// package's declarations. Ref: packages/cargo-release-plan/docs/implementation.md, "Lockfile
+/// closures".
 #[derive(Clone, Debug, Default)]
 pub struct InstallationGraph {
     pub members: BTreeMap<String, (Version, InstallationDependencies)>,
@@ -60,6 +61,10 @@ impl InstallationGraph {
     /// Unavailable targets retain their unresolved state and any original error.
     /// Only a closure that needs such a declaration fails, not an unrelated
     /// library assessment.
+    ///
+    /// A same-named identity resolves an edge; absence or a name mismatch leaves it unresolved.
+    /// A retry replaces any retained error for unresolved edges. Already resolved edges are
+    /// not queried again.
     pub fn resolve_paths(
         &mut self,
         mut identify: impl FnMut(&DependencyPath) -> Result<Option<PackageIdentity>, AppError>,
@@ -225,7 +230,7 @@ impl InstallationGraph {
 ///
 /// Only what a closure walk needs is retained: which entries exist, how each is
 /// identified, and which entries each names as a dependency. Ref:
-/// docs/implementation.md, "Lockfile closures".
+/// packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
 #[derive(Debug)]
 pub struct Lockfile {
     pub entries: Vec<LockEntry>,
@@ -621,6 +626,54 @@ mod tests {
             .closure(root, version, &InstallationGraph::default())
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn registry_optional_edges_remain_a_conservative_workspace_superset() {
+        // Another workspace member enables a registry feature. The lockfile does not record
+        // per-root feature provenance, so both binary roots conservatively retain that edge.
+        let text = r#"
+[[package]]
+name = "plain"
+version = "1.0.0"
+dependencies = ["dependency"]
+[[package]]
+name = "feature-user"
+version = "1.0.0"
+dependencies = ["dependency"]
+[[package]]
+name = "dependency"
+version = "1.0.0"
+source = "registry+https://example.invalid"
+dependencies = ["optional-leaf"]
+[[package]]
+name = "optional-leaf"
+version = "1.0.0"
+source = "registry+https://example.invalid"
+"#;
+        let lockfile = Lockfile::parse(text, LABEL).unwrap();
+        let mut installation = InstallationGraph::default();
+        for root in ["plain", "feature-user"] {
+            installation.insert(
+                root.to_owned(),
+                Version::new(1, 0, 0),
+                vec![InstallationDependency {
+                    name: "dependency".to_owned(),
+                    requirement: Some("1.0.0".parse().unwrap()),
+                    source: DependencySource::Registry("https://example.invalid".to_owned()),
+                }],
+            );
+        }
+        for root in ["plain", "feature-user"] {
+            let closure = lockfile
+                .closure(root, "1.0.0", &installation)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                closure.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["dependency", "optional-leaf"]
+            );
+        }
     }
 
     #[test]

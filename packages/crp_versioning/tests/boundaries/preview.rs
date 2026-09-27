@@ -97,22 +97,32 @@ fn preview_collisions_preserve_inputs_and_never_acquire_repository_state() {
             let unrelated = directory.path().join("unrelated");
             let mut inputs = [&unrelated, &unrelated, &unrelated];
             *inputs.get_mut(position).unwrap() = &input;
-            let _error = preview_inputs(inputs[0], inputs[1], &output, inputs[2], |_| {
+            let error = preview_inputs(inputs[0], inputs[1], &output, inputs[2], |_| {
                 panic!("input collisions must be rejected before repository acquisition")
             })
             .err()
             .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("preview output overlaps an input")
+            );
             assert_eq!(fs::read_to_string(&input).unwrap(), "input document");
         }
     }
     let input = output.join("plan.json");
     fs::write(&input, "input document").unwrap();
     let alias = directory.path().join("missing/../preview");
-    let _error = preview_inputs(&input, &input, &alias, &input, |_| {
+    let error = preview_inputs(&input, &input, &alias, &input, |_| {
         panic!("output aliases must be rejected before repository acquisition")
     })
     .err()
     .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("preview output overlaps an input")
+    );
     assert_eq!(fs::read_to_string(input).unwrap(), "input document");
 }
 

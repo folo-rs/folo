@@ -35,7 +35,7 @@ use crate::compatibility::check as check_compatibility;
     reason = "Application code and maintainer tests exhaustively match internal command inputs"
 )]
 pub enum RunInput {
-    /// Check first-publication prerequisites without uploading or changing source.
+    /// Check crates.io publication identities without uploading or changing source.
     CheckPublished {
         manifest_path: PathBuf,
         plan: Option<PathBuf>,
@@ -154,7 +154,7 @@ pub enum RunInput {
         /// Print explanatory version-resolution decisions.
         verbose: bool,
     },
-    /// Refresh the live workspace lockfile offline before semantic grading.
+    /// Capture prepared evidence after refreshing the live lockfile offline.
     Prepare {
         /// Directory receiving report evidence and prepared.json.
         output: PathBuf,
@@ -169,7 +169,7 @@ pub enum RunInput {
     Preview {
         /// Semantic release proposal.
         plan: PathBuf,
-        /// Prepared artifact whose report supplied semantic grading evidence.
+        /// Prepared artifact whose report supplied semantic-assessment evidence.
         prepared: PathBuf,
         /// Directory receiving the final report, plan, and compatibility workspace.
         output: PathBuf,
@@ -200,12 +200,7 @@ pub enum RunInput {
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
     },
-    /// `check` — fail on a release the workspace's manifests cannot support.
-    ///
-    /// Covers a package needing an increment, a version group disagreeing with
-    /// itself, a requirement not naming the version its target declares, malformed
-    /// exact workspace requirements, and a package that exposes a public dependency
-    /// releasing a breaking change without one of its own.
+    /// Validate workspace version support and optional publication configuration.
     Check {
         /// Release baseline whose first-parent line supplies anchors.
         ///
@@ -255,7 +250,7 @@ pub enum RunInput {
     reason = "Application code and maintainer tests exhaustively match internal command outcomes"
 )]
 pub enum RunOutcome {
-    /// OIDC exchange and immediate revocation completed without publication.
+    /// Exchanged GitHub OIDC identity and revoked the resulting crates.io credential.
     IdentityCheck { message: String },
     /// A publication-related operation wrote its outcome or final Markdown report.
     Publication {
@@ -267,6 +262,8 @@ pub enum RunOutcome {
     /// A JSON-producing query completed.
     ArtifactQuery {
         /// JSON document for stdout.
+        ///
+        /// Empty only when the credential provider has already written its protocol stream.
         message: String,
     },
     /// A proposed release plan was written.
@@ -274,12 +271,12 @@ pub enum RunOutcome {
         /// Human-readable summary.
         message: String,
     },
-    /// Preparation completed and wrote frozen evidence.
+    /// Preparation completed and wrote prepared evidence.
     Prepare {
         /// Human-readable summary.
         message: String,
     },
-    /// Preview completed and wrote the resolved release artifact.
+    /// Preview completed and wrote the resolved plan.
     Preview {
         /// Human-readable summary.
         message: String,
@@ -294,9 +291,9 @@ pub enum RunOutcome {
         /// Human-readable summary for stdout. Empty when there is nothing to say.
         message: String,
     },
-    /// `check` finished. `passed` is the process-level verdict.
+    /// A requested check finished with its process-level verdict.
     Check {
-        /// Whether every release and workspace-version check passed.
+        /// Whether the requested check passed under its selected gating mode.
         passed: bool,
         /// Rendered gating diagnostics or a success summary.
         message: String,
@@ -359,7 +356,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 base.as_deref(),
                 output,
                 *deny_findings,
-                &publication_output(*verbose),
+                *verbose,
             )?;
             Ok(RunOutcome::Check {
                 passed,
@@ -463,6 +460,8 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 &mut io::stdout().lock(),
                 &publication_output(false),
             )?;
+            // The provider owns stdout's line-oriented protocol. An empty summary prevents
+            // the ordinary entry-point dispatcher from appending any unrelated bytes.
             Ok(RunOutcome::ArtifactQuery {
                 message: String::new(),
             })

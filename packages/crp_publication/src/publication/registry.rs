@@ -1,13 +1,12 @@
 //! Registry availability reconciliation and Cargo-owned workspace uploads.
 
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 use std::{env, io, thread};
 
 use crp_diag::Verbose;
-use crp_workspace::artifact_path::write_new;
 use crp_workspace::command::run_capture;
 use ohno::AppError;
 use reqwest::StatusCode;
@@ -16,15 +15,14 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tempfile::Builder;
 
-use crate::publication::candidate::{Repository, package_identifier};
-use crate::publication::config::Configuration;
+use crate::PublicationOutput;
+use crate::publication::artifact::{require_new, write_outcome};
+use crate::publication::candidate::package_identifier;
 use crate::publication::context::WorkflowRun;
 use crate::publication::credentials::CredentialSession;
 use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
 use crate::publication::manifest::{InvalidManifest, PublicationManifest};
-use crate::publication::packages::PublicationWorkspace;
-use crate::publication::prepare::capture_requests;
-use crate::{PublicationOutput, WriteFileError};
+use crate::publication::source::verify_source;
 
 /// Observations for the exact version set in one immutable publication manifest.
 #[derive(Debug, Deserialize, Serialize)]
@@ -295,6 +293,7 @@ struct ComparisonBaselineUnavailable {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn latest_version(entries: Vec<RegistryVersion>) -> Result<Option<Version>, AppError> {
     entries
         .into_iter()
@@ -308,7 +307,7 @@ fn query_with_retry<T>(
     diagnostics: &PublicationOutput,
 ) -> Result<T, AppError> {
     // This is a small operational retry allowance, not a crates.io service guarantee.
-    // Space control-plane attempts to avoid immediate repeated throttling; keep the count
+    // Space registry-query attempts apart to avoid immediate repeated throttling; keep the count
     // independent of upload propagation, whose purpose and query cost differ.
     const ATTEMPTS: usize = 3;
     const RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -388,15 +387,7 @@ pub fn publish(
     dry_run: bool,
     diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
-    if output
-        .try_exists()
-        .map_err(|error| WriteFileError::caused_by(output, error))?
-    {
-        return Err(InvalidManifest::new(
-            "each publication attempt requires a new outcome destination".to_owned(),
-        )
-        .into());
-    }
+    require_new(output)?;
     let publication = PublicationManifest::read(publication_path)?;
     let client = RegistryClient::new(diagnostics.clone())?;
     let mut outcome = RegistryOutcome {
@@ -463,7 +454,7 @@ pub fn execute_with(
     verbose: Verbose<'_>,
     runtime: &impl RegistryRuntime,
 ) -> Result<(), AppError> {
-    let repository = verify_source(publication, manifest_path)?;
+    let source = verify_source(publication, manifest_path)?;
     let mut missing = Vec::new();
     for package in &mut outcome.packages {
         if client.contains_with_wait(&package.name, &package.version, |delay| {
@@ -489,22 +480,27 @@ pub fn execute_with(
             ));
         }
     }
-    verbose.note(|| format!(
-        "Registry presence was checked for every exact manifest request; {} versions need upload. \
-         Existing versions are retained independently of tags or version-assessment status.",
-        missing.len()
-    ));
+    verbose.note(|| {
+        "Registry presence was checked for every exact manifest request. \
+        Absent versions require upload; existing versions are retained independently of \
+        tags or version-assessment status."
+            .to_owned()
+    });
     if missing.is_empty() || outcome.dry_run {
         return Ok(());
     }
-    let workspace = PublicationWorkspace::load(manifest_path)?;
-    require_workspace_publication(&run_capture("cargo", &["--version"], workspace.root())?)?;
-    let source_manifest = workspace.root().join("Cargo.toml");
+    let source_manifest = source.manifest;
+    let workspace = source_manifest
+        .parent()
+        .expect("verified workspace manifest has a parent");
+    require_workspace_publication(&run_capture("cargo", &["--version"], workspace)?)?;
     // Cargo packaging output is not source. Keep even repositories without a target ignore
     // clean, while sharing one build directory across all requests in this invocation.
     let target = Builder::new()
         .prefix("cargo-release-plan-publish-")
-        .tempdir()?;
+        .tempdir()
+        .map_err(RegistryBuildStateCreationFailed::caused_by)?;
+    let target_path = target.path().to_path_buf();
     let session = runtime.credentials(publication, &source_manifest, target.path())?;
     let mut command = Command::new("cargo");
     command
@@ -516,7 +512,7 @@ pub fn execute_with(
             "--manifest-path",
         ])
         .arg(&source_manifest)
-        .current_dir(workspace.root())
+        .current_dir(workspace)
         .env("CARGO_TARGET_DIR", target.path());
     for package in &missing {
         command.args(["--package", package]);
@@ -538,34 +534,73 @@ pub fn execute_with(
         client
             .output
             .best_effort_line(format_args!("{}", String::from_utf8_lossy(&upload.stdout)));
-        observe_uploads(
+        let confirmation = observe_uploads(
             &mut outcome.packages,
             |name, version| client.contains_with_wait(name, version, |delay| runtime.pause(delay)),
             |delay| runtime.pause(delay),
+        );
+        let publication_complete = outcome.packages.iter().all(|package| {
+            matches!(
+                package.state,
+                RegistryState::AlreadyPresent | RegistryState::Published
+            )
+        });
+        confirm_upload(
+            upload.status.success(),
+            &upload.status.to_string(),
+            confirmation,
+            publication_complete,
         )?;
-        repository.ensure_clean_head()?;
-        if !upload.status.success()
-            && outcome.packages.iter().all(|package| {
-                matches!(
-                    package.state,
-                    RegistryState::AlreadyPresent | RegistryState::Published
-                )
-            })
-        {
+        source.repository.ensure_clean_head()?;
+        if !upload.status.success() {
             outcome.notes.push(format!(
                 "Cargo exited {}, but fresh registry observations confirm every requested version is available.",
                 upload.status
             ));
-        } else if !upload.status.success() {
-            return Err(RegistryUploadFailed::new(upload.status.to_string()).into());
         }
         Ok(())
     })();
     let result = retain_cleanup(result, cleanup);
     retain_cleanup(
         result,
-        build_cleanup.map_err(|error| RegistryUploadError::caused_by(error).into()),
+        build_cleanup
+            .map_err(|error| RegistryBuildStateCleanupFailed::caused_by(target_path, error).into()),
     )
+}
+
+fn confirm_upload(
+    success: bool,
+    status: &str,
+    confirmation: Result<(), AppError>,
+    complete: bool,
+) -> Result<(), AppError> {
+    match confirmation {
+        Ok(()) if success || complete => Ok(()),
+        Ok(()) => Err(RegistryUploadFailed::new(status.to_owned()).into()),
+        Err(error) if success => Err(error),
+        Err(confirmation) => Err(RegistryConfirmationFailed::caused_by(
+            confirmation,
+            RegistryUploadFailed::new(status.to_owned()),
+        )
+        .into()),
+    }
+}
+
+/// Confirmation cannot erase the failed upload whose remote result remains unknown.
+#[ohno::error]
+#[display("registry upload confirmation also failed: {confirmation}")]
+struct RegistryConfirmationFailed {
+    confirmation: AppError,
+}
+
+#[ohno::error]
+#[display("cannot create temporary registry build state")]
+struct RegistryBuildStateCreationFailed;
+
+#[ohno::error]
+#[display("cannot remove temporary registry build state {}", path.display())]
+struct RegistryBuildStateCleanupFailed {
+    path: PathBuf,
 }
 
 fn retain_cleanup(
@@ -598,6 +633,7 @@ fn observe_uploads(
     const DELAY: Duration = Duration::from_secs(5);
     for attempt in 1..=ATTEMPTS {
         let mut missing = false;
+        let mut failure = None;
         for package in packages
             .iter_mut()
             .filter(|package| package.state == RegistryState::Missing)
@@ -606,7 +642,18 @@ fn observe_uploads(
                 Ok(available) => available,
                 Err(error) => {
                     package.state = RegistryState::Unknown;
-                    return Err(error);
+                    let error = RegistryPackageObservationFailed::caused_by(
+                        package.name.clone(),
+                        package.version.clone(),
+                        error,
+                    );
+                    failure = Some(match failure {
+                        None => AppError::from(error),
+                        Some(previous) => {
+                            RegistryObservationFailures::caused_by(error, previous).into()
+                        }
+                    });
+                    continue;
                 }
             };
             if available {
@@ -614,6 +661,9 @@ fn observe_uploads(
             } else {
                 missing = true;
             }
+        }
+        if let Some(error) = failure {
+            return Err(error);
         }
         if !missing || attempt == ATTEMPTS {
             return Ok(());
@@ -623,50 +673,18 @@ fn observe_uploads(
     unreachable!("the last index-observation attempt returns")
 }
 
-pub(crate) fn verify_source(
-    publication: &PublicationManifest,
-    manifest: &Path,
-) -> Result<Repository, AppError> {
-    let repository = Repository::discover(manifest, &publication.publication.source)?;
-    repository.ensure_clean_head()?;
-    let workspace = PublicationWorkspace::load(manifest)?;
-    let workspace_manifest = repository.require_tracked(&workspace.root().join("Cargo.toml"))?;
-    let expected = repository.require_tracked(
-        &repository
-            .root()
-            .join(&publication.publication.workspace_manifest),
-    )?;
-    if workspace_manifest != expected {
-        return Err(InvalidManifest::new(
-            "selected workspace differs from publication intent".to_owned(),
-        )
-        .into());
-    }
-    let (_, config) = Configuration::load(
-        workspace.root(),
-        Some(&repository.root().join(&publication.publication.config_path)),
-    )?;
-    if config != publication.publication.configuration {
-        return Err(InvalidManifest::new(
-            "source configuration differs from publication intent".to_owned(),
-        )
-        .into());
-    }
-    let requests = capture_requests(&repository, workspace.requests(&config)?)?;
-    if requests != publication.publication.packages {
-        return Err(InvalidManifest::new(
-            "source packages differ from publication intent".to_owned(),
-        )
-        .into());
-    }
-    Ok(repository)
+/// Independent package observations remain available even if another lookup fails.
+#[ohno::error]
+#[display("cannot confirm post-upload availability of {package}@{version}")]
+struct RegistryPackageObservationFailed {
+    package: String,
+    version: String,
 }
 
-pub(crate) fn write_outcome(path: &Path, outcome: &impl Serialize) -> Result<(), AppError> {
-    write_new(path, |file| {
-        serde_json::to_writer_pretty(file, outcome)
-            .map_err(|error| WriteFileError::caused_by(path, error).into())
-    })
+#[ohno::error]
+#[display("another post-upload observation failed: {additional}")]
+struct RegistryObservationFailures {
+    additional: AppError,
 }
 
 fn require_workspace_publication(reported: &str) -> Result<(), AppError> {
@@ -716,6 +734,101 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn failed_post_upload_query_does_not_leave_later_results_unobserved() {
+        let mut packages: Vec<_> = ["first", "second", "third", "fourth"]
+            .into_iter()
+            .map(|name| RegistryPackage {
+                name: name.to_owned(),
+                version: "1.0.0".to_owned(),
+                state: RegistryState::Missing,
+            })
+            .collect();
+        let mut queries = Vec::new();
+        let error = observe_uploads(
+            &mut packages,
+            |name, _| {
+                queries.push(name.to_owned());
+                match name {
+                    "first" | "fourth" => Err(RegistryQueryError::new().into()),
+                    "second" => Ok(true),
+                    "third" => Ok(false),
+                    _ => panic!("unexpected package"),
+                }
+            },
+            |_| panic!("a failed observation pass must not start another retry"),
+        )
+        .unwrap_err();
+        assert_eq!(queries, ["first", "second", "third", "fourth"]);
+        assert_eq!(
+            packages
+                .iter()
+                .map(|package| &package.state)
+                .collect::<Vec<_>>(),
+            [
+                &RegistryState::Unknown,
+                &RegistryState::Published,
+                &RegistryState::Missing,
+                &RegistryState::Unknown
+            ]
+        );
+        assert_eq!(
+            error
+                .find_source::<RegistryPackageObservationFailed>()
+                .unwrap()
+                .package,
+            "first"
+        );
+        assert_eq!(
+            error
+                .find_source::<RegistryObservationFailures>()
+                .unwrap()
+                .additional
+                .find_source::<RegistryPackageObservationFailed>()
+                .unwrap()
+                .package,
+            "fourth"
+        );
+    }
+
+    #[test]
+    fn failed_upload_keeps_its_status_when_confirmation_also_fails() {
+        let error = confirm_upload(
+            false,
+            "failure",
+            Err(RegistryQueryError::new().into()),
+            false,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<RegistryUploadFailed>().is_some());
+        assert!(
+            error
+                .find_source::<RegistryConfirmationFailed>()
+                .unwrap()
+                .confirmation
+                .find_source::<RegistryQueryError>()
+                .is_some()
+        );
+        confirm_upload(false, "failure", Ok(()), true).unwrap();
+        assert!(
+            confirm_upload(false, "failure", Ok(()), false)
+                .unwrap_err()
+                .find_source::<RegistryUploadFailed>()
+                .is_some()
+        );
+        assert!(
+            confirm_upload(
+                true,
+                "success",
+                Err(RegistryQueryError::new().into()),
+                false
+            )
+            .unwrap_err()
+            .find_source::<RegistryQueryError>()
+            .is_some()
+        );
+    }
 
     #[test]
     fn finalization_keeps_primary_and_cleanup_failures() {

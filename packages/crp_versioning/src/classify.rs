@@ -12,7 +12,7 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::rc::Rc;
 use std::{fs, io, str};
 
-use crp_diag::{NoteSink, Verbose, plural, quote_path, short_type_name};
+use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
 use crp_workspace::git::{DefaultBase, GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
@@ -39,7 +39,7 @@ use crate::groups::{GroupVerdict, Groups};
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::{
     LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
-    VersionRegressionError, short_commit,
+    VersionRegressionError,
 };
 
 #[cfg(test)]
@@ -65,6 +65,8 @@ pub struct Classification {
     pub base: String,
     pub packages: Vec<PackageClass>,
     pub groups: BTreeMap<String, GroupVerdict>,
+    /// Membership derived for this same workspace state, reused by preview and report projection.
+    pub membership: Groups,
     pub work_tree: WorkTree,
     pub git: GitRepo,
     /// The case rules probed for the volume hosting the work tree.
@@ -84,7 +86,7 @@ pub struct Classification {
 /// [`Verdict`] rather than as separately writable fields. `check` gates the
 /// process exit on the status while `report` emits the anchor and evidence
 /// beside it, and the two must never disagree.
-/// Ref: `docs/design.md`, "Package status".
+/// Ref: `packages/cargo-release-plan/docs/design.md`, "Package status".
 #[derive(Clone, Debug)]
 pub struct PackageClass {
     pub name: String,
@@ -248,7 +250,7 @@ impl PackageClass {
 ///
 /// Each alternative carries exactly what that outcome can be justified by, so
 /// there is no way to express an anchorless failure or an unchanged package that
-/// still holds a patch. Ref: `docs/design.md`, "Package status".
+/// still holds a patch. Ref: `packages/cargo-release-plan/docs/design.md`, "Package status".
 #[derive(Clone, Debug)]
 pub enum Verdict {
     /// The package was created on this branch.
@@ -283,7 +285,7 @@ impl Verdict {
         patch: String,
     ) -> Result<Self, AppError> {
         // The release anchor bounds every declared version, independently of content changes.
-        // Ref: docs/design.md, "Version monotonicity".
+        // Ref: packages/cargo-release-plan/docs/design.md, "Version monotonicity".
         if *declared < anchor.version {
             return Err(VersionRegressionError::new(
                 name,
@@ -514,6 +516,7 @@ pub fn classify(
         base,
         packages: classes,
         groups: group_verdicts,
+        membership: groups,
         work_tree,
         git,
         case: cache.case(),
@@ -539,7 +542,7 @@ fn classify_one(
 ) -> Result<PackageClass, AppError> {
     let name = &package.manifest.name;
     // Diagnostics never render a repository-controlled name raw.
-    // Ref: docs/implementation.md, "Diagnostics".
+    // Ref: packages/cargo-release-plan/docs/implementation.md, "Diagnostics".
     let shown = quote_path(name);
     let group = groups.group_of(name).map(ToOwned::to_owned);
     let dependents = dependents_of(&work_tree.packages, name);
@@ -554,7 +557,8 @@ fn classify_one(
         // whoever restores it: guessing which older release a restored
         // directory continues would make the tool's verdict depend on history
         // a fetch may not even carry.
-        // Ref: docs/design.md, "Packages the baseline does not publish".
+        // Ref: packages/cargo-release-plan/docs/design.md, "Packages the baseline does not
+        // publish".
         verbose.note(|| {
             format!(
                 "{shown}: not published by the baseline {base_sha}, so it is treated as a new \
@@ -769,7 +773,7 @@ pub struct PackageSide<'a> {
 /// directory nor fully described by its packaging rules: a workspace-level
 /// README that several members inherit is released content for every one of
 /// them, and so is a README the package's own `include` leaves out.
-/// Ref: docs/design.md, "Released content".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Released content".
 ///
 /// A resource that already lives inside the package directory keeps its own
 /// package-relative path, matching where Cargo puts it. `package_dir`,
@@ -826,7 +830,7 @@ pub fn diff_package(
     // resource may sit outside the package directory or outside its packaging
     // rules, so the directory listing does not cover it. Querying Git for those
     // paths keeps an untracked README from being read off disk and reported as
-    // a content change. Ref: docs/design.md, "Released content".
+    // a content change. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
     let resource_paths: Vec<&str> = work_side.resources.values().map(String::as_str).collect();
     let tracked_paths = git.tracked_paths(&resource_paths, work_side.case)?;
     let tracked_resources = tracked_resources(work_side, &tracked_paths);
@@ -843,7 +847,7 @@ pub fn diff_package(
     // content identity rather than raw bytes puts both ends in the one
     // representation Git itself compares by, which is what keeps an LFS-tracked
     // asset or a line-ending rule from making an untouched package look
-    // changed. Ref: docs/implementation.md, "Classification".
+    // changed. Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
     let anchor_ids: HashMap<&str, &str> = anchor_tree
         .iter()
         .map(|entry| (entry.path.as_str(), entry.id.as_str()))
@@ -853,7 +857,7 @@ pub fn diff_package(
 
     // Cargo copies the executable bit into the archive, so a file made
     // executable without an edit is released content that changed even though
-    // its blob is untouched. Ref: docs/design.md, "Released content".
+    // its blob is untouched. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
     let anchor_exec: HashSet<&str> = anchor_tree
         .iter()
         .filter(|entry| entry.is_executable())
@@ -1137,7 +1141,8 @@ pub fn tracked_resources(
 /// Paths are package-relative.
 ///
 /// These are advisory only: released content is defined from git-tracked files,
-/// so an untracked path is never a change. Ref: docs/design.md, "Released
+/// so an untracked path is never a change. Ref: packages/cargo-release-plan/docs/design.md,
+/// "Released
 /// content".
 pub fn untracked_released(
     git: &GitRepo,
@@ -1251,7 +1256,8 @@ fn released_in_work_tree(
 /// The exemption is base membership, not anchor presence: a reintroduced package
 /// is absent from the base yet still resolves an older anchor, and the documented
 /// rule exempts every member that does not exist on the base revision from
-/// matching its group (docs/design.md, "Version groups"). A member the base
+/// matching its group (packages/cargo-release-plan/docs/design.md, "Version groups"). A member the
+/// base
 /// carries but does not publish does exist there, and may well have been released
 /// before it was withdrawn, so it stays bound to its group.
 fn is_new_on_base(base: &CommitSnapshot, name: &str) -> bool {
@@ -1271,7 +1277,7 @@ fn is_new_on_base(base: &CommitSnapshot, name: &str) -> bool {
 /// An untracked nested manifest draws no boundary because untracked paths never
 /// enter the release verdict. The optional packaging probe still reports when
 /// Cargo would treat one as structural input under `--allow-dirty`.
-/// Ref: docs/design.md, "Released content".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Released content".
 /// Only a path that is not there is absent; any other failure stops the run,
 /// because reading it as a deletion would silently change what the package
 /// releases.
@@ -1337,7 +1343,7 @@ fn released_from_paths(
 /// `README.md` candidate and the probed case rules decide the match; the key is
 /// the tracked spelling, which keeps a re-spelling of the file visible as the
 /// content change it is.
-/// Ref: docs/design.md, "Released content".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Released content".
 fn detected_readme(dir: &str, present: &HashSet<&str>, case: PathCase) -> Option<(String, String)> {
     DEFAULT_README_FILES.iter().find_map(|name| {
         let candidate = join_relative(dir, name)?;
@@ -1407,7 +1413,7 @@ struct CommitSnapshot {
     ///
     /// Nothing could be released from them, so they carry no packaging facts,
     /// but the anchor walk still has to tell "withdrawn here" from "absent
-    /// here". Ref: docs/implementation.md, "Anchor and change set".
+    /// here". Ref: packages/cargo-release-plan/docs/implementation.md, "Anchor and change set".
     unpublished: BTreeSet<String>,
     root_doc: DocumentMut,
     installation: InstallationGraph,
@@ -1625,7 +1631,8 @@ pub fn historical_registries(
 /// workspace, so resolution pulls manifests through this abstraction instead of
 /// parsing every `Cargo.toml` in the tree up front. An unrelated or excluded
 /// nested workspace holding a manifest Cargo would never read must not be able
-/// to fail classification. Ref: docs/implementation.md, "Classification".
+/// to fail classification. Ref: packages/cargo-release-plan/docs/implementation.md,
+/// "Classification".
 pub trait ManifestSource {
     /// Workspace-relative directories that hold a manifest, none of them parsed yet.
     fn candidate_dirs(&self) -> Vec<String>;
@@ -1792,7 +1799,7 @@ fn join_relative(base: &str, relative: &str) -> Option<String> {
 /// The work-tree endpoint is common to every package, while packages that share
 /// an anchor commit also share its historical endpoint. Retaining both avoids
 /// reparsing workspace-sized lockfiles for every binary package.
-/// Ref: docs/implementation.md, "Lockfile closures".
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
 #[derive(Debug)]
 pub struct LockfileCache {
     pub work: Option<Lockfile>,
@@ -1862,7 +1869,7 @@ impl LockfileCache {
 /// Each endpoint that has an installable binary target must have a lockfile that
 /// resolves the package at its corresponding declared version. An endpoint without
 /// that target releases no closure and therefore contributes an empty closure.
-/// Ref: docs/design.md, "Relevant lockfile closures".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Relevant lockfile closures".
 #[expect(
     clippy::too_many_arguments,
     reason = "each endpoint supplies its target, lockfile and installation declarations"
@@ -1880,41 +1887,41 @@ pub fn lockfile_closure_changes(
     let git_path = join_git_rel(git.prefix(), LOCKFILE_FILE_NAME);
     let anchor = if anchor_package.has_lockfile_target {
         let lockfile = cache.anchor(git, name, anchor_commit, &git_path)?;
-        let Some(closure) = lockfile.closure(
-            name,
-            &anchor_package.version.to_string(),
-            anchor_installation,
-        )?
-        else {
-            return Err(LockfileClosureUnavailableError::new(
+        required_closure(
+            lockfile.closure(
                 name,
-                "the anchor Cargo.lock does not identify an installation closure at the declared version and configured sources",
-            )
-            .into());
-        };
-        closure
+                &anchor_package.version.to_string(),
+                anchor_installation,
+            )?,
+            name,
+            "the anchor Cargo.lock does not identify an installation closure at the declared version and configured sources",
+        )?
     } else {
         Closure::new()
     };
     let work = if work_package.has_lockfile_target {
         let lockfile = cache.work(work_tree, name, &git_path)?;
-        let Some(closure) = lockfile.closure(
-            name,
-            &work_package.manifest.version.to_string(),
-            &work_tree.installation,
-        )?
-        else {
-            return Err(LockfileClosureUnavailableError::new(
+        required_closure(
+            lockfile.closure(
                 name,
-                "the work-tree Cargo.lock does not identify an installation closure at the declared version and configured sources; refresh Cargo.lock",
-            )
-            .into());
-        };
-        closure
+                &work_package.manifest.version.to_string(),
+                &work_tree.installation,
+            )?,
+            name,
+            "the work-tree Cargo.lock does not identify an installation closure at the declared version and configured sources; refresh Cargo.lock",
+        )?
     } else {
         Closure::new()
     };
     Ok(closure_changes(&anchor, &work))
+}
+
+fn required_closure(
+    closure: Option<Closure>,
+    package: &str,
+    reason: &str,
+) -> Result<Closure, AppError> {
+    closure.ok_or_else(|| LockfileClosureUnavailableError::new(package, reason).into())
 }
 
 /// Reads lockfile bytes as text, naming `path` if they are not text at all.
@@ -1966,7 +1973,7 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
 /// A symbolic link stops the run rather than being compared. Cargo dereferences
 /// a link when it builds a package archive, while Git stores the link as a blob holding
 /// the target path, so neither reading the target text nor following the link
-/// yields a comparison that is right at both ends. Ref: docs/design.md,
+/// yields a comparison that is right at both ends. Ref: packages/cargo-release-plan/docs/design.md,
 /// "Released content".
 pub fn read_optional_bytes(
     path: &Path,
@@ -2018,7 +2025,7 @@ fn is_not_found(error: &io::Error) -> bool {
 /// `workspace_root` from the repository root, because the two tools can spell
 /// the same directory differently and a failed subtraction would silently pick
 /// the repository-root manifest for a nested workspace. Ref:
-/// docs/implementation.md, "Classification".
+/// packages/cargo-release-plan/docs/implementation.md, "Classification".
 #[must_use]
 pub fn root_manifest_rel(git: &GitRepo) -> String {
     let prefix = git.prefix();
@@ -2071,6 +2078,20 @@ mod installation_tests;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[test]
+    fn absent_binary_closure_is_not_an_empty_successful_assessment() {
+        let error = required_closure(None, "binary", "missing endpoint").unwrap_err();
+        assert!(
+            error
+                .find_source::<LockfileClosureUnavailableError>()
+                .is_some()
+        );
+        assert!(
+            required_closure(Some(Closure::new()), "binary", "unused")
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     use crp_workspace::inherited::InheritedKeys;
     use crp_workspace::manifest::{InstallationDependencies, TargetDiscovery};

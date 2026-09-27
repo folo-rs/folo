@@ -1,4 +1,6 @@
-//! Immutable publication preparation using a local Git transport, never a live forge.
+//! Publication command integration over hermetic Git and process fixtures, without live services.
+
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::env::consts::EXE_SUFFIX;
 use std::fs;
@@ -16,6 +18,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::fixture::{Fixture, write_binary_package, write_package};
+use crate::harness::resolved_plan;
 
 #[test]
 #[cfg_attr(
@@ -60,11 +63,11 @@ fn publication_configuration_is_explicit_and_does_not_replace_version_checks() {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Builds a real Cargo binary and compares publication discovery"
+    ignore = "Uses Git and Cargo metadata for offline publication checks"
 )]
-fn configured_binary_check_matches_cargos_default_feature_selection() {
+fn offline_check_accepts_a_feature_gated_binary_with_restricted_targets() {
     let fixture = Fixture::new("");
-    // Representative compatible versions keep dependency resolution unrelated to feature selection.
+    // Representative compatible versions keep the case focused on metadata and target restrictions.
     write_package(
         &fixture,
         "optional-core",
@@ -98,12 +101,10 @@ pkg-fmt = "zip"
         "schema-version = 1\nrepository = 'example/tools'\nrelease-branch = 'main'\n\
          targets = ['x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc']",
     );
-    fixture.write(".gitignore", "/target\n");
-    // Cargo is the independent feature-selection oracle and also materializes the fixture lockfile.
+    // Offline checking needs the lockfile, not a build or a second feature-selection oracle.
     let output = Command::new("cargo")
-        .args(["build", "--bins", "--offline"])
+        .args(["generate-lockfile", "--offline"])
         .current_dir(fixture.path())
-        .env("CARGO_TARGET_DIR", fixture.path().join("target"))
         .output()
         .unwrap();
     assert!(
@@ -111,14 +112,7 @@ pkg-fmt = "zip"
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        fixture
-            .path()
-            .join("target")
-            .join("debug")
-            .join(format!("tool{EXE_SUFFIX}"))
-            .is_file()
-    );
+    assert!(fixture.path().join("Cargo.lock").is_file());
     fixture.commit("configured binary source");
     assert!(matches!(
         run(&RunInput::Check {
@@ -132,6 +126,43 @@ pkg-fmt = "zip"
         .unwrap(),
         RunOutcome::Check { passed: true, .. }
     ));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Discovers and previews real nonpublishable Cargo/Git members"
+)]
+fn publication_preflight_does_not_query_or_change_nonpublishable_members() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "helper", "1.0.0", "publish = false\n");
+    fixture.commit("local-only workspace");
+    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
+    let manifest = fs::read(fixture.manifest()).unwrap();
+    let lockfile = fixture.read("Cargo.lock");
+    let status = fixture.git(&["status", "--porcelain"]);
+    for plan in [None, Some(plan)] {
+        let RunOutcome::Check {
+            passed,
+            message,
+            warnings,
+        } = run(&RunInput::CheckPublished {
+            manifest_path: fixture.manifest(),
+            plan,
+            verbose: true,
+        })
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert!(passed);
+        assert!(!message.is_empty());
+        assert!(warnings.is_empty());
+    }
+    assert_eq!(fs::read(fixture.manifest()).unwrap(), manifest);
+    assert_eq!(fixture.read("Cargo.lock"), lockfile);
+    assert_eq!(fixture.git(&["status", "--porcelain"]), status);
 }
 
 #[test]
@@ -194,11 +225,13 @@ fn unified_binary_command_stages_a_frozen_batch_without_github() {
     // As in native_binaries::SMOKE_WATCHDOG, allow orders of magnitude more than ordinary
     // seconds-long toolchain/archive runs. This watchdog is not a test failure assertion.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
+        // Ordinary successor identity; manifest, batch, tag and archive names must agree.
+        const VERSION: &str = "1.0.1";
         let fixture = publication_source();
         write_binary_package(
             &fixture,
             "library",
-            "1.0.1",
+            VERSION,
             r#"
 repository = "https://github.com/example/publication-fixture"
 [[bin]]
@@ -255,8 +288,8 @@ pkg-fmt = "zip"
             "schema_version":1,"publication_id":parsed.get("id").unwrap(),
             "repository":"example/publication-fixture","target":target,"batch_id":"",
             "binaries":[{
-                "name":"library","bin":"different-executable","version":"1.0.1",
-                "tag":"library-v1.0.1","source_sha":fixture.sha("HEAD")
+                "name":"library","bin":"different-executable","version":VERSION,
+                "tag":format!("library-v{VERSION}"),"source_sha":fixture.sha("HEAD")
             }]
         }))
         .unwrap();
@@ -289,22 +322,15 @@ pkg-fmt = "zip"
         assert_eq!(outcome.get("complete").unwrap(), false);
         assert_eq!(outcome.get("batch_id").unwrap(), &input_batch.batch_id);
         assert_eq!(outcome.pointer("/items/0/status").unwrap(), "staged-only");
-        let staging = artifacts.join(format!("library-v1.0.1-{target}"));
+        let base = format!("library-v{VERSION}-{target}");
+        let staging = artifacts.join(&base);
         assert!(
             staging
                 .join(format!("different-executable{EXE_SUFFIX}"))
                 .is_file()
         );
-        assert!(
-            staging
-                .join(format!("library-v1.0.1-{target}.zip"))
-                .is_file()
-        );
-        assert!(
-            staging
-                .join(format!("library-v1.0.1-{target}.sha256"))
-                .is_file()
-        );
+        assert!(staging.join(format!("{base}.zip")).is_file());
+        assert!(staging.join(format!("{base}.sha256")).is_file());
         assert_eq!(fs::read(publication).unwrap(), intent);
         assert!(fixture.git(&["status", "--porcelain"]).is_empty());
     });
@@ -539,7 +565,10 @@ fn empty_publication_phases_need_no_identity_and_never_overwrite_intent() {
 #[test]
 #[cfg_attr(miri, ignore = "Executes the reporter with isolated workflow identity")]
 fn reporter_preserves_job_failures_when_publication_artifacts_are_missing_or_invalid() {
+    let fixture = publication_source();
     let directory = TempDir::new().unwrap();
+    let publication = directory.path().join("publication.json");
+    run(&preparation(&fixture, publication.clone())).unwrap();
     let jobs = directory.path().join("jobs.json");
     fs::write(
         &jobs,
@@ -550,19 +579,23 @@ fn reporter_preserves_job_failures_when_publication_artifacts_are_missing_or_inv
     let invalid = directory.path().join("invalid-outcomes");
     fs::create_dir_all(&invalid).unwrap();
     fs::write(invalid.join("outcome.json"), b"{").unwrap();
-    for outcomes in [missing, invalid] {
+    for (outcomes, has_intent) in [(missing, false), (invalid, true)] {
         let output = outcomes.with_extension("md");
         let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
             .args([
                 "publish",
                 "report",
                 "--repository",
-                "example/tool",
+                "example/publication-fixture",
                 "--outcomes",
             ])
-            .arg(outcomes)
+            .arg(&outcomes)
             .arg("--publication")
-            .arg(directory.path().join("missing-publication.json"))
+            .arg(if has_intent {
+                publication.clone()
+            } else {
+                directory.path().join("missing-publication.json")
+            })
             .arg("--jobs")
             .arg(&jobs)
             .arg("--output")
@@ -575,11 +608,16 @@ fn reporter_preserves_job_failures_when_publication_artifacts_are_missing_or_inv
             .unwrap();
         assert!(!result.status.success());
         let body = fs::read_to_string(output).unwrap();
-        assert!(body.contains("https://github.com/example/tool/actions/runs/123"));
+        assert!(body.contains("https://github.com/example/publication-fixture/actions/runs/123"));
         assert!(body.contains("unavailable"));
         assert!(body.contains("original failed workflow"));
         assert!(body.contains("registry job"));
         assert!(body.contains("github job"));
+        if has_intent {
+            let diagnostic = String::from_utf8_lossy(&result.stderr);
+            assert!(diagnostic.contains("outcome.json"));
+            assert!(diagnostic.contains("cannot read publication evidence"));
+        }
     }
 }
 
@@ -697,28 +735,51 @@ fn reporter_completes_valid_delivery_and_rejects_ambiguous_receipts_and_destinat
     assert!(!wrong.exists());
 
     fs::create_dir_all(outcomes.join("duplicate")).unwrap();
-    for schema in [1, 2] {
+    let current_schema = registry.get("schema_version").unwrap().as_u64().unwrap();
+    // Duplicate valid receipts and unsupported schemas are distinct rejection paths.
+    for (label, schema) in [
+        ("duplicate", current_schema),
+        ("unsupported", current_schema + 1),
+    ] {
         let mut duplicate = registry.clone();
         *duplicate.get_mut("schema_version").unwrap() = json!(schema);
-        fs::write(
-            outcomes.join("duplicate/outcome.json"),
-            serde_json::to_vec(&duplicate).unwrap(),
-        )
-        .unwrap();
-        let output = directory.path().join(format!("invalid-{schema}.md"));
-        assert!(
-            !command(&output, "example/publication-fixture")
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
-        assert!(
-            fs::read_to_string(output)
-                .unwrap()
-                .contains("Release incomplete")
-        );
+        let receipt = if label == "duplicate" {
+            outcomes.join("duplicate").join("outcome.json")
+        } else {
+            outcomes.join("registry").join("outcome.json")
+        };
+        fs::write(&receipt, serde_json::to_vec(&duplicate).unwrap()).unwrap();
+        let output = directory.path().join(format!("{label}.md"));
+        let result = command(&output, "example/publication-fixture")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let body = fs::read_to_string(output).unwrap();
+        assert!(body.contains("Release incomplete"));
+        if label == "duplicate" {
+            assert!(body.contains("Duplicate registry outcomes"));
+            assert!(body.contains(&receipt.display().to_string()));
+            assert!(
+                body.contains(
+                    &outcomes
+                        .join("registry")
+                        .join("outcome.json")
+                        .display()
+                        .to_string()
+                )
+            );
+        } else {
+            assert!(String::from_utf8_lossy(&result.stderr).contains("registry schema"));
+        }
+        if label == "duplicate" {
+            fs::remove_file(receipt).unwrap();
+        }
     }
+    fs::write(
+        outcomes.join("registry/outcome.json"),
+        serde_json::to_vec(&registry).unwrap(),
+    )
+    .unwrap();
     fs::write(&publication, b"{").unwrap();
     let malformed = directory.path().join("malformed-manifest.md");
     assert!(
@@ -753,6 +814,8 @@ fn reporter_completes_valid_delivery_and_rejects_ambiguous_receipts_and_destinat
     ignore = "Exercises private credential protocol routing in an isolated process"
 )]
 fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() {
+    // This finite protocol normally finishes in seconds; the large budget is only a last-chance
+    // guard for loaded/instrumented hosts, never an expected protocol-failure timeout.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
         let directory = TempDir::new().unwrap();
         let publication = PublicationManifest::new(serde_json::from_value(json!({
@@ -807,6 +870,9 @@ fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() 
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+        // Independently check Cargo's credential-provider wire protocol rather than importing
+        // the producer's revision constant. Keep this request and the advertised hello paired.
+        // Ref: https://doc.rust-lang.org/cargo/reference/credential-provider-protocol.html
         let request = json!({
             "v":1,"kind":"get","operation":"publish","name":"unrequested","vers":"1.0.0",
             "cksum":"b".repeat(64),"registry":{"index-url":"sparse+https://index.crates.io/"}
@@ -846,20 +912,41 @@ fn identity_probe_rejects_missing_or_empty_job_identity_without_network_access()
             .args(["check-publishing-identity", "--verbose"])
             .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
             .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
-        if scenario == "empty-url" {
-            command.env("ACTIONS_ID_TOKEN_REQUEST_URL", "");
-        } else if scenario != "missing-url" {
-            command.env("ACTIONS_ID_TOKEN_REQUEST_URL", "not an identity URL");
-            if scenario == "empty-token" {
-                command.env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "");
-            } else if scenario == "invalid-url" {
-                command.env(
-                    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-                    "identity-credential-canary",
-                );
+        // Every case has exactly one invalid input. Validation must fail before transport.
+        command
+            .env("ACTIONS_ID_TOKEN_REQUEST_URL", "http://127.0.0.1:0/unused")
+            .env(
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+                "identity-credential-canary",
+            );
+        let expected = match scenario {
+            "missing-url" => {
+                command.env_remove("ACTIONS_ID_TOKEN_REQUEST_URL");
+                "ACTIONS_ID_TOKEN_REQUEST_URL"
             }
-        }
-        assert!(!command.output().unwrap().status.success());
+            "empty-url" => {
+                command.env("ACTIONS_ID_TOKEN_REQUEST_URL", "");
+                "ACTIONS_ID_TOKEN_REQUEST_URL"
+            }
+            "missing-token" => {
+                command.env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+            }
+            "empty-token" => {
+                command.env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "");
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+            }
+            "invalid-url" => {
+                command.env("ACTIONS_ID_TOKEN_REQUEST_URL", "not an identity URL");
+                "GitHub OIDC endpoint"
+            }
+            _ => unreachable!(),
+        };
+        let result = command.output().unwrap();
+        assert!(!result.status.success());
+        let diagnostic = String::from_utf8_lossy(&result.stderr);
+        assert!(diagnostic.contains(expected));
+        assert!(!diagnostic.contains("identity-credential-canary"));
     }
 }
 
@@ -900,7 +987,7 @@ fn publication_preparation_rejects_symbolic_or_abbreviated_source_identities() {
     let directory = TempDir::new().unwrap();
     for source in ["HEAD", "abc123", ""] {
         let output = directory.path().join("publication.json");
-        run(&RunInput::PreparePublish {
+        let error = run(&RunInput::PreparePublish {
             manifest_path: directory.path().join("unused/Cargo.toml"),
             config: None,
             source: source.to_owned(),
@@ -908,6 +995,11 @@ fn publication_preparation_rejects_symbolic_or_abbreviated_source_identities() {
             verbose: true,
         })
         .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("source must be a full immutable commit ID")
+        );
         assert!(!output.exists());
     }
 }

@@ -9,7 +9,7 @@
     reason = "Private application and maintainer-test wiring has no supported Rust API."
 )]
 
-//! Release assessment, version planning and captured application.
+//! Version assessment, version planning and application of captured state.
 
 pub use check::*;
 pub(crate) use crp_diag::{quote_path, short_commit};

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use crate::publication::artifact::DestinationOccupied;
 use crate::publication::candidate::package_identifier;
 use crate::publication::config::{Configuration, NativeTarget};
 use crate::{ReadFileError, WriteFileError};
@@ -62,10 +63,7 @@ impl PublicationManifest {
             if Self::read(path)?.id == self.id {
                 return Ok(());
             }
-            return Err(InvalidManifest::new(
-                "publication output already contains different intent".to_owned(),
-            )
-            .into());
+            return Err(DestinationOccupied::new(path).into());
         }
         let parent = path
             .parent()

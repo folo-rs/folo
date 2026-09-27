@@ -1,7 +1,7 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Protects the local and CI validation gates: injected Cargo output is authoritative, failed
-# commands cannot emit targets, and compatibility execution retains its exit and environment rules.
+# commands cannot emit targets, and compatibility execution preserves exit codes and environment rules.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true

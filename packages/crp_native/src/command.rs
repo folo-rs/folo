@@ -1,5 +1,6 @@
+use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -9,7 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use command_group::CommandGroup;
-use crp_diag::{DiagnosticSink, diagnostic};
+use crp_diag::{DiagnosticSink, diagnostic, quote_path};
 use ohno::AppError;
 
 /// Native command failures retain command identity and process diagnostics.
@@ -36,6 +37,13 @@ struct CapturedOutput {
     stderr: String,
 }
 
+/// Retains pipe contents even when their secondary diagnostic destination fails.
+#[derive(Debug)]
+struct CapturedStream {
+    text: String,
+    error: Option<AppError>,
+}
+
 /// Commands inherit the build environment but never inherit the upload credential.
 pub(crate) const TOKEN_VARIABLES: &[&str] = &[
     "GH_TOKEN",
@@ -52,8 +60,29 @@ pub(crate) const TOKEN_VARIABLES: &[&str] = &[
 // limits routine wakeups, not end-to-end cleanup latency, which also depends on the OS scheduler.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Signal or supervision failure stops later work even when an item failure is recoverable.
+/// A one-way stop notification, with no accompanying state published through it.
+///
+/// Relaxed ordering suffices because observing cancellation does not authorize reading any
+/// other memory; adding associated cancellation data would require revisiting that invariant.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+fn strip_build_credentials(command: &mut Command, names: impl Iterator<Item = OsString>) {
+    for name in TOKEN_VARIABLES {
+        command.env_remove(name);
+    }
+    for name in names {
+        if registry_token_variable(&name) {
+            command.env_remove(name);
+        }
+    }
+}
+
+fn registry_token_variable(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        let name = name.to_ascii_uppercase();
+        name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_TOKEN")
+    })
+}
 
 pub fn cancelled() -> bool {
     CANCELLED.load(Ordering::Relaxed)
@@ -118,14 +147,15 @@ fn capture_controlled(
     deadline: Instant,
     cancellable: bool,
 ) -> Result<String, AppError> {
+    let operation = quote_path(&program.to_string_lossy()).into_owned();
     if let Some(reason) = interruption(Instant::now() >= deadline, cancellable && cancelled()) {
-        return Err(CommandFailed::new(program.display().to_string(), reason.to_owned()).into());
+        return Err(CommandFailed::new(operation, reason.to_owned()).into());
     }
     let message = format!(
         "Running {} {:?} in {}\n",
-        program.display(),
+        operation,
         arguments,
-        directory.display()
+        quote_path(&directory.to_string_lossy())
     );
     if cancellable {
         diagnostic(diagnostics.as_ref(), &message);
@@ -140,14 +170,13 @@ fn capture_controlled(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for name in TOKEN_VARIABLES {
-        command.env_remove(name);
-    }
+    strip_build_credentials(&mut command, env::vars_os().map(|(name, _)| name));
     for (name, value) in environment {
         command.env(name, value);
     }
-    // Rustup must resolve the source's pin from cwd, not a controller-selected override.
-    command.env_remove("RUSTUP_TOOLCHAIN");
+    // Cargo launchers set both variables. Source commands must select their own tracked
+    // toolchain, while preserving caller build settings and Cargo/rustup homes.
+    command.env_remove("RUSTUP_TOOLCHAIN").env_remove("CARGO");
     // The ecosystem adapter owns Windows job objects and Unix process groups; no PID discovery
     // or platform-specific tree-killing implementation belongs in release automation.
     let mut child = command.group_spawn()?;
@@ -173,7 +202,7 @@ fn capture_controlled(
                 Err(error) => {
                     CANCELLED.store(true, Ordering::Relaxed);
                     break Err(CommandFailed::caused_by(
-                        program.display().to_string(),
+                        operation.clone(),
                         "polling the owned process failed".to_owned(),
                         error,
                     )
@@ -188,7 +217,7 @@ fn capture_controlled(
             break Ok(status);
         }
         if let Some(reason) = interruption(Instant::now() >= deadline, cancellable && cancelled()) {
-            break Err(CommandFailed::new(program.display().to_string(), reason.to_owned()).into());
+            break Err(CommandFailed::new(operation.clone(), reason.to_owned()).into());
         }
         thread::sleep(POLL_INTERVAL);
     };
@@ -226,20 +255,16 @@ fn capture_controlled(
     let stdout = join_reader(stdout);
     let stderr = join_reader(stderr);
     match (stdout, stderr) {
-        (Ok(stdout), Ok(_)) if status.success() => Ok(stdout),
-        (Ok(stdout), Ok(stderr)) => Err(CommandFailed::new(
-            program.display().to_string(),
-            format!("exit {status}\n{stdout}\n{stderr}"),
-        )
-        .into()),
+        (Ok(stdout), Ok(stderr))
+            if status.success() && stdout.error.is_none() && stderr.error.is_none() =>
+        {
+            Ok(stdout.text)
+        }
         (stdout, stderr) => {
-            let mut error = CommandFailed::new(
-                program.display().to_string(),
-                format!("output capture failed; exit {status}"),
-            )
-            .into();
-            error = retain_cleanup(error, "reading stdout", stdout.map(|_| ()));
-            Err(retain_cleanup(error, "reading stderr", stderr.map(|_| ())))
+            let error = CommandFailed::new(operation, format!("exit {status}")).into();
+            let (error, stdout) = retain_reader_result(error, "stdout", stdout);
+            let (error, stderr) = retain_reader_result(error, "stderr", stderr);
+            Err(CapturedOutput::caused_by(stdout, stderr, error).into())
         }
     }
 }
@@ -261,7 +286,7 @@ fn retain_cleanup(
 fn finish_reader(
     operation: AppError,
     stream: &'static str,
-    reader: JoinHandle<io::Result<String>>,
+    reader: JoinHandle<CapturedStream>,
     terminated: bool,
 ) -> (AppError, String) {
     let result = if terminated || reader.is_finished() {
@@ -273,8 +298,19 @@ fn finish_reader(
         )
         .into())
     };
+    retain_reader_result(operation, stream, result)
+}
+
+fn retain_reader_result(
+    operation: AppError,
+    stream: &'static str,
+    result: Result<CapturedStream, AppError>,
+) -> (AppError, String) {
     match result {
-        Ok(output) => (operation, output),
+        Ok(CapturedStream { text, error }) => match error {
+            Some(error) => (retain_cleanup(operation, stream, Err(error)), text),
+            None => (operation, text),
+        },
         Err(error) => (retain_cleanup(operation, stream, Err(error)), String::new()),
     }
 }
@@ -283,7 +319,7 @@ pub(crate) fn interruption(deadline_reached: bool, cancelled: bool) -> Option<&'
     if cancelled {
         Some("batch cancelled")
     } else if deadline_reached {
-        Some("item deadline exhausted")
+        Some("operation deadline reached")
     } else {
         None
     }
@@ -294,23 +330,53 @@ pub(crate) fn interruption(deadline_reached: bool, cancelled: bool) -> Option<&'
 fn reader(
     pipe: impl Read + Send + 'static,
     stream: Option<Arc<dyn DiagnosticSink>>,
-) -> JoinHandle<io::Result<String>> {
-    thread::spawn(move || {
-        let mut output = String::new();
-        for line in BufReader::new(pipe).lines() {
-            let line = line?;
-            if let Some(sink) = &stream {
-                sink.write(&format!("{line}\n"))?;
+) -> JoinHandle<CapturedStream> {
+    thread::spawn(move || read_output(pipe, stream.as_deref()))
+}
+
+fn read_output(pipe: impl Read, stream: Option<&dyn DiagnosticSink>) -> CapturedStream {
+    let mut output = CapturedStream {
+        text: String::new(),
+        error: None,
+    };
+    for line in BufReader::new(pipe).lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                output.error = Some(match output.error.take() {
+                    Some(primary) => {
+                        retain_cleanup(primary, "reading process output", Err(error.into()))
+                    }
+                    None => error.into(),
+                });
+                break;
             }
-            output.push_str(&line);
-            output.push('\n');
+        };
+        output.text.push_str(&line);
+        output.text.push('\n');
+        if output.error.is_none()
+            && let Some(sink) = stream
+        {
+            // Mirroring is secondary to draining the pipe. Retain its first failure and stop
+            // mirroring, not reading; otherwise a closed pipe can change the child's own result.
+            output.error = match catch_unwind(|| sink.write(&format!("{line}\n"))) {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error.into()),
+                Err(_) => Some(
+                    CommandFailed::new(
+                        "stream diagnostics".to_owned(),
+                        "diagnostic sink panicked".to_owned(),
+                    )
+                    .into(),
+                ),
+            };
         }
-        Ok(output)
-    })
+    }
+    output
 }
 
 // Reader failures remain errors, including unexpected reader-thread panics.
-fn join_reader(reader: JoinHandle<io::Result<String>>) -> Result<String, AppError> {
+fn join_reader(reader: JoinHandle<CapturedStream>) -> Result<CapturedStream, AppError> {
     reader
         .join()
         .map_err(|_panic_payload| {
@@ -318,7 +384,7 @@ fn join_reader(reader: JoinHandle<io::Result<String>>) -> Result<String, AppErro
                 "read process output".to_owned(),
                 "reader thread panicked".to_owned(),
             )
-        })?
+        })
         .map_err(Into::into)
 }
 
@@ -330,7 +396,8 @@ pub fn strings(values: &[&str]) -> Vec<OsString> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::io::{Error, ErrorKind};
+    use std::io::{self, Error, ErrorKind};
+    use std::sync::atomic::AtomicUsize;
 
     use super::*;
 
@@ -341,6 +408,109 @@ mod tests {
         assert!(interruption(false, true).is_some());
         assert_eq!(interruption(true, true), interruption(false, true));
         assert_ne!(interruption(true, false), interruption(false, true));
+    }
+
+    #[test]
+    fn credential_aliases_do_not_remove_build_configuration() {
+        let mut command = Command::new("cargo");
+        let names = [
+            ("CARGO_REGISTRIES_CRATES_IO_TOKEN", true),
+            ("CARGO_REGISTRIES_PRIVATE_TOKEN", true),
+            ("cargo_registries_private_token", true),
+            ("CARGO_REGISTRIES_PRIVATE_INDEX", false),
+            ("CARGO_HOME", false),
+            ("RUSTUP_HOME", false),
+        ];
+        strip_build_credentials(
+            &mut command,
+            names.iter().map(|(name, _)| OsString::from(name)),
+        );
+        let removed = command
+            .get_envs()
+            .map(|(name, value)| {
+                assert!(value.is_none());
+                name.to_owned()
+            })
+            .collect::<Vec<_>>();
+        for (name, credential) in names {
+            assert_eq!(registry_token_variable(OsStr::new(name)), credential);
+            // Command normalizes environment keys on some hosts; use the filter's name policy.
+            assert_eq!(
+                removed
+                    .iter()
+                    .any(|removed| removed.to_string_lossy().eq_ignore_ascii_case(name)),
+                credential,
+            );
+        }
+        for name in TOKEN_VARIABLES {
+            assert!(removed.contains(&OsString::from(name)));
+        }
+    }
+
+    /// Rejects the mirror while leaving the in-memory pipe readable.
+    #[derive(Debug)]
+    struct RejectingSink {
+        calls: AtomicUsize,
+        panic: bool,
+    }
+
+    impl DiagnosticSink for RejectingSink {
+        fn write(&self, _text: &str) -> io::Result<()> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            assert!(!self.panic, "mirror panic canary");
+            Err(ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn failed_mirroring_does_not_stop_draining_or_lose_text() {
+        for panic in [false, true] {
+            let sink = RejectingSink {
+                calls: AtomicUsize::new(0),
+                panic,
+            };
+            let result = read_output(&b"first\nsecond\nlast"[..], Some(&sink));
+            assert_eq!(result.text, "first\nsecond\nlast\n");
+            let error = result.error.unwrap();
+            if panic {
+                assert!(error.find_source::<CommandFailed>().is_some());
+            } else {
+                assert_eq!(
+                    error.find_source::<Error>().unwrap().kind(),
+                    ErrorKind::BrokenPipe
+                );
+            }
+            assert_eq!(sink.calls.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    /// Ends an otherwise readable in-memory stream with an independent read failure.
+    struct BrokenReader;
+
+    impl Read for BrokenReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(ErrorKind::UnexpectedEof.into())
+        }
+    }
+
+    #[test]
+    fn read_failure_retains_earlier_delivery_failure_and_available_text() {
+        let sink = RejectingSink {
+            calls: AtomicUsize::new(0),
+            panic: false,
+        };
+        let output = read_output(b"retained\n".as_slice().chain(BrokenReader), Some(&sink));
+        assert_eq!(output.text, "retained\n");
+        let error = output.error.unwrap();
+        assert_eq!(
+            error.find_source::<Error>().unwrap().kind(),
+            ErrorKind::BrokenPipe
+        );
+        let later = error.find_source::<FinalizationFailed>().unwrap();
+        assert_eq!(
+            later.cleanup.find_source::<Error>().unwrap().kind(),
+            ErrorKind::UnexpectedEof
+        );
     }
 
     #[test]
@@ -376,10 +546,15 @@ mod tests {
     fn reader_results_preserve_text_and_propagate_errors() {
         testing::with_watchdog(|| {
             assert_eq!(
-                join_reader(reader(&b"first\nsecond"[..], None)).unwrap(),
+                join_reader(reader(&b"first\nsecond"[..], None))
+                    .unwrap()
+                    .text,
                 "first\nsecond\n"
             );
-            let error = join_reader(reader(&b"\xff"[..], None)).unwrap_err();
+            let error = join_reader(reader(&b"\xff"[..], None))
+                .unwrap()
+                .error
+                .unwrap();
             assert_eq!(
                 error.find_source::<Error>().unwrap().kind(),
                 ErrorKind::InvalidData

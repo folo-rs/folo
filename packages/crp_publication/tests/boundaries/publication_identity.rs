@@ -1,4 +1,4 @@
-//! OIDC exchange/revocation transport against a local service with fixture credentials.
+//! GitHub assertion exchange and crates.io credential revocation against a local service.
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use crate::identity_fixture::IdentityService;
 
 #[test]
 #[cfg_attr(miri, ignore = "Uses a loopback HTTP service")]
-fn exchanges_fresh_oidc_identity_and_revokes_without_exposing_credentials() {
+fn exchanges_fresh_oidc_identity_and_revokes_crates_io_credentials_without_exposing_them() {
     let service = IdentityService::new(false);
     let identity: ActionsIdentity = serde_json::from_value(json!({
         "request_url": format!("{}/identity?request=fixture", service.url()),

@@ -65,6 +65,24 @@ BeforeAll {
         return [regex]::Match($FanIn, '(?m)^\s+MUST_SUCCEED_JOBS: ([^\r\n]+)').Groups[1].Value -split '\s+'
     }
 
+    function Get-ReleaseSmokeStep([string] $Workflow) {
+        $job = Get-WorkflowJob $Workflow 'clippy-dev-docs'
+        return @([regex]::Matches($job, '(?ms)^      - .*?(?=^      - |\z)') |
+            ForEach-Object { $_.Value } |
+            Where-Object { $_ -match '(?m)^\s+just release-binary-smoke\s*$' })
+    }
+
+    function Assert-ReleaseSmokeRelationship([string] $Workflow) {
+        $steps = @(Get-ReleaseSmokeStep $Workflow)
+        $steps.Count | Should -Be 1
+        $condition = [regex]::Match($steps[0], '(?m)^\s+if:\s*(?<condition>[^\r\n]+)').Groups['condition'].Value
+        $condition | Should -Match '!\s*cancelled\(\)'
+        $condition | Should -Match 'steps\.setup\.outcome\s*==\s*''success'''
+        $condition | Should -Match 'needs\.prepare\.outputs\.release_binary_smoke\s*==\s*''true'''
+        @(Get-WorkflowJobDependency (Get-WorkflowJob $Workflow 'clippy-dev-docs')) | Should -Contain 'prepare'
+        @(Get-WorkflowJobDependency (Get-WorkflowJob $Workflow 'required-checks')) | Should -Contain 'clippy-dev-docs'
+    }
+
     function Assert-WorkflowIdentityHandoff([string] $Workflow) {
         foreach ($name in @(Get-WorkflowJobName $Workflow)) {
             $job = Get-WorkflowJob $Workflow $name
@@ -108,6 +126,19 @@ Describe 'Workflow dependency extraction' {
                 $revision | Should -Match '^[0-9a-f]{40}$'
                 $revision | Should -BeExactly $references[0]
             }
+        }
+    }
+
+    Describe 'Release smoke execution relationship' {
+        It 'connects the selected smoke command to its hosting job and required fan-in' {
+            Assert-ReleaseSmokeRelationship $standard
+        }
+
+        It 'rejects a removed or disabled smoke step' {
+            $step = @(Get-ReleaseSmokeStep $standard)[0]
+            { Assert-ReleaseSmokeRelationship ($standard.Replace($step, '')) } | Should -Throw
+            $disabled = [regex]::Replace($step, '(?m)^(\s+)if:[^\r\n]+', '$1if: false')
+            { Assert-ReleaseSmokeRelationship ($standard.Replace($step, $disabled)) } | Should -Throw
         }
     }
 

@@ -51,10 +51,10 @@ fn member_resolution_follows_filesystem_aliases() {
     fs::create_dir_all(&member).unwrap();
     symlink(&member, root.path().join("alias")).unwrap();
     let members = BTreeMap::from([(member, "member".to_string())]);
-    let canonical_members = canonical_members_by_dir(&members);
+    let canonical_members = canonical_members_by_dir(&members).unwrap();
 
     assert_eq!(
-        resolved_member(root.path(), "alias", &members, &canonical_members),
+        resolved_member(root.path(), "alias", &members, &canonical_members).unwrap(),
         Some("member")
     );
 }

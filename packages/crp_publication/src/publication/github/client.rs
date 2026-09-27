@@ -30,7 +30,9 @@ impl Github {
     // The run is the issue identity; attempts replace and reopen its latest recovery handoff.
     #[cfg_attr(test, mutants::skip)] // Issue transport is exercised by a loopback boundary test.
     pub fn report_failure(&self, context: WorkflowRun, body: &str) -> Result<(), AppError> {
-        // Bound discovery to a small part of the REST quota. Exceeding the budget is an error,
+        // This deliberately chosen allowance balances useful discovery with quota consumption;
+        // it is not derived from a guaranteed issue count or the caller's job timeout.
+        // Exceeding the budget is an error,
         // never permission to create a duplicate report after incomplete discovery.
         const MAX_PAGES: usize = 10;
         let title = format!("Release failed: workflow run {}", context.run_id);
@@ -58,10 +60,18 @@ impl Github {
                 return Err(FailureReportSearchIncomplete::new().into());
             }
         }
-        let body = format!(
-            "{body}\n<!-- cargo-release-plan:{}:{} -->",
+        let marker = format!(
+            "<!-- cargo-release-plan:{}:{} -->",
             context.run_id, context.run_attempt
         );
+        let body = issue_body(
+            body,
+            &marker,
+            &format!(
+                "https://github.com/{}/actions/runs/{}",
+                self.repository, context.run_id,
+            ),
+        )?;
         match issue {
             Some(number) => {
                 self.request(
@@ -104,7 +114,7 @@ impl Github {
         Ok(identity.login)
     }
 
-    #[cfg_attr(test, mutants::skip)] // Environment and HTTP setup are native integration boundaries.
+    #[cfg_attr(test, mutants::skip)] // Environment and HTTP setup are integration boundaries.
     pub fn new(repository: &str, output: &PublicationOutput) -> Result<Self, AppError> {
         Self::with_endpoint(
             "https://api.github.com",
@@ -219,20 +229,16 @@ impl Github {
                 "prerelease": !Version::parse(version)?.pre.is_empty()
             })),
         );
-        if let Err(error) = result {
-            if let Some(value) = self.get(&format!("/releases/tags/{tag}"))? {
-                return Ok(Some(Release::parse(value, tag, version)?));
-            }
-            return Err(error);
-        }
-        Ok(Some(Release::parse(
-            result?.ok_or_else(|| GithubResourceMissing::new(tag.to_owned()))?,
-            tag,
-            version,
-        )?))
+        // Creation can succeed despite a lost response, or another writer can create the
+        // release. Only a validated observation recovers success; failed confirmation must
+        // retain the original write failure as well as its own cause.
+        confirm_release(result, tag, version, || {
+            self.get(&format!("/releases/tags/{tag}"))
+        })
+        .map(Some)
     }
 
-    #[cfg_attr(test, mutants::skip)] // Native pagination is exercised with a full first-page fixture.
+    #[cfg_attr(test, mutants::skip)] // HTTP pagination is exercised with a full first-page fixture.
     fn assets(&self, release: &Release) -> Result<Vec<Asset>, AppError> {
         // GitHub's asset-list endpoint is paginated; unrelated manually uploaded assets
         // must not hide one of the archive/checksum pairs this process owns.
@@ -260,7 +266,7 @@ impl Github {
 }
 
 impl Debug for Github {
-    #[cfg_attr(test, mutants::skip)] // Redaction is checked on the native client fixture.
+    #[cfg_attr(test, mutants::skip)] // Redaction is checked on the loopback client fixture.
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("repository", &self.repository)
@@ -349,11 +355,17 @@ pub(crate) fn peel_tag(
     let mut object = reference.object;
     let mut seen = BTreeSet::new();
     while object.kind == "tag" {
-        if !immutable_commit(&object.sha) || !seen.insert(object.sha.clone()) {
-            return Err(
-                InvalidTagIdentity::new(tag.to_owned(), "invalid or repeated tag object").into(),
-            );
+        if !immutable_commit(&object.sha) {
+            return Err(InvalidTagIdentity::new(tag.to_owned(), "invalid tag object").into());
         }
+        let previous = seen.len();
+        if !seen.insert(object.sha.clone()) {
+            return Err(InvalidTagIdentity::new(tag.to_owned(), "repeated tag object").into());
+        }
+        debug_assert!(
+            seen.len() > previous,
+            "another lookup requires a newly visited tag object"
+        );
         let value = get(&format!("/git/tags/{}", object.sha))?
             .ok_or_else(|| GithubResourceMissing::new(tag.to_owned()))?;
         object =
@@ -370,8 +382,76 @@ pub(crate) fn peel_tag(
 // Use the REST maximum to minimize requests; full pages require a subsequent observation.
 const PAGE_SIZE: usize = 100;
 // An operational allowance for control-plane reads and writes, not native asset uploads.
-// Slow requests fail with enough job time left for retained diagnostics and an explicit retry.
+// This is a deliberately chosen latency allowance, not a guaranteed total job-time reserve:
+// sequential requests can consume multiple allowances.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+// GitHub limits issue bodies by character count. A UTF-8 byte limit is conservative for
+// non-ASCII diagnostics and leaves the exact full report in the workflow artifact.
+const ISSUE_BODY_BYTES: usize = 65_536;
+
+fn issue_body(body: &str, marker: &str, run: &str) -> Result<String, AppError> {
+    let suffix = format!("\n{marker}");
+    if body
+        .len()
+        .checked_add(suffix.len())
+        .is_some_and(|length| length <= ISSUE_BODY_BYTES)
+    {
+        return Ok(format!("{body}{suffix}"));
+    }
+    let notice = format!(
+        "\n\nFurther report details were omitted from this issue. Keep the original publication artifacts, correct the observed blocker and retry the original run. The complete publication report is retained with the workflow artifacts: {run}\n{marker}",
+    );
+    let available = ISSUE_BODY_BYTES
+        .checked_sub(notice.len())
+        .ok_or_else(IssueSummaryTooLarge::new)?;
+    let end = body.floor_char_boundary(available.min(body.len()));
+    let prefix = body
+        .get(..end)
+        .expect("the prefix ends at a UTF-8 boundary within the body");
+    Ok(format!("{prefix}{notice}"))
+}
+
+fn confirm_release(
+    operation: Result<Option<Value>, AppError>,
+    tag: &str,
+    version: &str,
+    observe: impl FnOnce() -> Result<Option<Value>, AppError>,
+) -> Result<Release, AppError> {
+    match operation {
+        Ok(value) => Release::parse(
+            value.ok_or_else(|| GithubResourceMissing::new(tag.to_owned()))?,
+            tag,
+            version,
+        ),
+        Err(operation) => match observe().and_then(|value| {
+            value
+                .map(|value| Release::parse(value, tag, version))
+                .transpose()
+        }) {
+            Ok(Some(release)) => Ok(release),
+            Ok(None) => Err(operation),
+            Err(confirmation) => {
+                Err(
+                    ReleaseConfirmationFailed::caused_by(tag.to_owned(), confirmation, operation)
+                        .into(),
+                )
+            }
+        },
+    }
+}
+
+/// A failed write has an unknown result when its validating read-back also fails.
+#[ohno::error]
+#[display("release {tag} confirmation also failed: {confirmation}")]
+struct ReleaseConfirmationFailed {
+    tag: String,
+    confirmation: AppError,
+}
+
+#[ohno::error]
+#[display("publication issue identity and omission notice exceed GitHub's body limit")]
+struct IssueSummaryTooLarge;
 
 fn select_token(primary: Option<String>, fallback: Option<String>) -> Option<String> {
     primary
@@ -494,6 +574,58 @@ struct GithubTokenMissing;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issue_summary_preserves_identity_and_bounds_many_or_large_unicode_details() {
+        let marker = "<!-- cargo-release-plan:123:1 -->";
+        let run = "https://github.com/example/tools/actions/runs/123";
+        let small = "failure details";
+        assert_eq!(
+            issue_body(small, marker, run).unwrap(),
+            format!("{small}\n{marker}")
+        );
+        for body in [
+            "- package failure\n".repeat(10_000),
+            format!("Important failure: {}", "é".repeat(ISSUE_BODY_BYTES)),
+        ] {
+            let result = issue_body(&body, marker, run).unwrap();
+            assert!(result.len() <= ISSUE_BODY_BYTES);
+            assert!(result.starts_with(body.lines().next().unwrap().get(..16).unwrap()));
+            assert!(result.ends_with(marker));
+            assert!(result.contains(run));
+            assert!(result.contains("omitted"));
+        }
+    }
+
+    #[test]
+    fn failed_release_creation_keeps_both_causes_unless_observation_proves_success() {
+        let operation = || Err(GithubResourceMissing::new("write".to_owned()).into());
+        let error = confirm_release(operation(), "tag", "1.0.0", || {
+            Err(IssueSummaryTooLarge::new().into())
+        })
+        .unwrap_err();
+        assert!(error.find_source::<GithubResourceMissing>().is_some());
+        assert!(
+            error
+                .find_source::<ReleaseConfirmationFailed>()
+                .unwrap()
+                .confirmation
+                .find_source::<IssueSummaryTooLarge>()
+                .is_some()
+        );
+        confirm_release(operation(), "tag", "1.0.0", || {
+            Ok(Some(json!({
+                "id":1,"tag_name":"tag","draft":false,"prerelease":false,
+            })))
+        })
+        .unwrap();
+        assert!(
+            confirm_release(operation(), "tag", "1.0.0", || Ok(None))
+                .unwrap_err()
+                .find_source::<GithubResourceMissing>()
+                .is_some()
+        );
+    }
 
     #[test]
     fn tag_peeling_requires_a_commit_and_rejects_cycles_and_missing_objects() {

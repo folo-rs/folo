@@ -75,7 +75,7 @@ impl PackageManifest {
 /// Historical snapshots cannot ask Cargo about an old tree, so they combine
 /// these controls with that tree's paths to reconstruct whether the packaged
 /// lockfile's dependency closure is operationally relevant.
-/// Ref: docs/design.md, "Relevant lockfile closures".
+/// Ref: packages/cargo-release-plan/docs/design.md, "Relevant lockfile closures".
 #[derive(Clone, Copy, Debug)]
 pub struct TargetDiscovery {
     pub explicit: bool,
@@ -113,7 +113,7 @@ impl Default for TargetDiscovery {
 /// Cargo.lock merges workspace members' development dependencies into their
 /// edges. Matching normal and build declarations by package name, requirement,
 /// and source recovers installation edges without resolving dependencies.
-/// Ref: docs/implementation.md, "Lockfile closures".
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Lockfile closures".
 #[derive(Clone, Debug)]
 pub struct InstallationDependency {
     pub name: String,
@@ -1169,10 +1169,11 @@ fn path_dependencies(doc: &DocumentMut) -> Vec<String> {
     paths
 }
 
-/// Visits every table in `manifest` that Cargo reads dependencies from.
+/// Visits package dependency tables rooted at the supplied table.
 ///
 /// Cargo recognises dependency tables at the manifest root and one level below
-/// `[target.<spec>]`, and nowhere else. Matching on the table name at any depth
+/// `[target.<spec>]`. Visit `[workspace.dependencies]` separately by supplying the
+/// `[workspace]` table. Matching on the table name at any depth
 /// would also collect look-alikes such as `[package.metadata.dependencies]`,
 /// which carry no dependency semantics, and would then attribute workspace
 /// membership and inherited keys to entries that are not dependencies at all.
@@ -1187,7 +1188,10 @@ pub fn for_each_dependency_table(
     });
 }
 
-/// Visits every dependency table with its manifest location.
+/// Visits dependency tables rooted at the supplied table, retaining their locations.
+///
+/// A full document does not recursively visit `[workspace.dependencies]`; supply its
+/// `[workspace]` table separately.
 pub fn for_each_dependency_table_with_context(
     manifest: &dyn TableLike,
     visit: &mut dyn FnMut(&str, &str, &dyn TableLike),

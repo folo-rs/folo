@@ -16,6 +16,8 @@ pub(crate) struct HttpService {
 
 impl HttpService {
     pub(crate) fn new(mut respond: impl FnMut(&str, Request) + Send + 'static) -> Self {
+        // Stay on IPv4 loopback and ask the OS for a free port so concurrent fixtures
+        // remain local without fixed-port collisions.
         let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
         let url = format!("http://{}", server.server_addr());
         let stopped = Arc::new(AtomicBool::new(false));

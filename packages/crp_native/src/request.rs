@@ -25,6 +25,8 @@ impl BuildRequest {
         source_sha: String,
         archive_base: String,
     ) -> Result<Self, AppError> {
+        // Publication combines Cargo identifiers, semantic versions and target names. Their
+        // punctuation is retained, but staging still requires one non-special path component.
         if !identifier(&name)
             || !identifier(&bin)
             || Version::parse(&version)?.to_string() != version

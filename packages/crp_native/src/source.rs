@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use ohno::AppError;
 use serde::Deserialize;
 
-use crate::request::{BuildRequest, InvalidPlan};
+use crate::BuildRequest;
+use crate::request::InvalidPlan;
 
 /// Only Cargo fields needed to check the frozen package identity are decoded.
 #[derive(Debug, Deserialize)]
@@ -11,6 +12,26 @@ pub(crate) struct Metadata {
     pub(crate) packages: Vec<Package>,
     pub(crate) workspace_members: Vec<String>,
     pub(crate) target_directory: PathBuf,
+}
+
+impl Metadata {
+    pub(crate) fn package(&self, binary: &BuildRequest) -> Result<&Package, AppError> {
+        let mut packages = self.packages.iter().filter(|package| {
+            package.name == binary.name
+                && package.version == binary.version
+                && self.workspace_members.contains(&package.id)
+                && package.targets.iter().any(|target| {
+                    target.name == binary.bin && target.kind.iter().any(|kind| kind == "bin")
+                })
+        });
+        if let (Some(package), None) = (packages.next(), packages.next()) {
+            return Ok(package);
+        }
+        Err(InvalidPlan::new(format!(
+            "{} does not identify exactly one workspace package and binary target in its tagged source",
+            binary.label
+        )).into())
+    }
 }
 
 /// The source's Cargo package, including its unambiguous artifact identifier.
@@ -38,31 +59,6 @@ struct Artifact {
     executable: Option<PathBuf>,
 }
 
-impl Metadata {
-    pub(crate) fn package(&self, binary: &BuildRequest) -> Result<&Package, AppError> {
-        let packages = self
-            .packages
-            .iter()
-            .filter(|package| {
-                package.name == binary.name
-                    && package.version == binary.version
-                    && self.workspace_members.contains(&package.id)
-                    && package.targets.iter().any(|target| {
-                        target.name == binary.bin && target.kind.iter().any(|kind| kind == "bin")
-                    })
-            })
-            .collect::<Vec<_>>();
-        if let [package] = packages.as_slice() {
-            return Ok(package);
-        }
-        Err(InvalidPlan::new(format!(
-            "{} does not identify exactly one workspace package/bin in its tagged source",
-            binary.label
-        ))
-        .into())
-    }
-}
-
 pub(crate) fn executable(
     messages: &str,
     package_id: &str,
@@ -86,7 +82,7 @@ pub(crate) fn executable(
     }
     executable.ok_or_else(|| {
         InvalidPlan::new(format!(
-            "Successful Cargo build did not report executable for {package_id} / {binary}"
+            "Successful Cargo build did not report an executable for Cargo package {package_id}, binary target {binary}"
         ))
         .into()
     })
@@ -113,6 +109,22 @@ mod tests {
         wrong = binary("tool");
         wrong.bin = "wrong".into();
         metadata.package(&wrong).unwrap_err();
+    }
+
+    #[test]
+    fn source_package_selection_rejects_missing_and_duplicate_matches() {
+        let package = serde_json::json!({"id":"pkg","name":"tool","version":"1.2.3",
+            "targets":[{"name":"tool-bin","kind":["bin"]}]});
+        for packages in [
+            serde_json::json!([]),
+            serde_json::json!([package.clone(), package]),
+        ] {
+            let metadata: Metadata = serde_json::from_value(serde_json::json!({
+                "workspace_members":["pkg"],"target_directory":"target","packages":packages
+            }))
+            .unwrap();
+            metadata.package(&binary("tool")).unwrap_err();
+        }
     }
 
     #[test]

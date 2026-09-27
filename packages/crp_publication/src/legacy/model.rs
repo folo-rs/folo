@@ -28,7 +28,7 @@ pub(crate) struct Request {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Target {
     pub(crate) triple: String,
-    // The bootstrap workflow's private wire key remains `os`; its value is a runner label.
+    // The private protocol's `os` key carries the runner label.
     #[serde(rename = "os")]
     pub(crate) runner: String,
 }

@@ -130,6 +130,9 @@ jobs:
         with:
           # The controller and candidate verifier need first-parent release history.
           fetch-depth: 0
+          # Controller compilation must not inherit checkout-managed write credentials.
+          # Reconciliation receives GH_TOKEN explicitly on its own step.
+          persist-credentials: false
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment

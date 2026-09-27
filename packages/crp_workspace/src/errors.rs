@@ -2,6 +2,7 @@
 // The immutable ohno source chains permit shared observation across unwind boundaries.
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 use crp_diag::Quotable as _;
 /// An OS-level failure prevented starting or communicating with a helper process.
@@ -19,7 +20,7 @@ impl RefUnwindSafe for CommandIoError {}
 #[display("`{program}` exited with status {status}: {stderr}")]
 pub(crate) struct CommandFailedError {
     program: String,
-    status: String,
+    status: ExitStatus,
     stderr: String,
 }
 
@@ -27,6 +28,10 @@ impl UnwindSafe for CommandFailedError {}
 impl RefUnwindSafe for CommandFailedError {}
 
 impl CommandFailedError {
+    pub(crate) fn is_nonzero_exit(&self) -> bool {
+        self.status.code().is_some_and(|code| code != 0)
+    }
+
     #[must_use]
     pub(crate) fn stderr(&self) -> &str {
         &self.stderr

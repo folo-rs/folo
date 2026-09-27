@@ -1,12 +1,17 @@
 //! Explicit external API evidence, kept separate from offline classification and semantic decisions.
 
+use std::env::consts::EXE_SUFFIX;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::{env, fs};
+use std::sync::{Arc, Mutex};
+use std::{env, fs, io};
 
-use crp_diag::{Quotable as _, Verbose};
+use crp_diag::{DiagnosticSink, Quotable as _, Stderr, Verbose};
 use crp_publication::PublicationOutput;
 use crp_publication::publication::registry::RegistryClient;
 use crp_versioning::inspect_plan::read_resolved_preview;
@@ -77,7 +82,7 @@ impl CompatibilityOutcome {
         targets: impl IntoIterator<Item = String>,
         mut baseline: impl FnMut(&str) -> Result<Option<Version>, AppError>,
         mut compare: impl FnMut(&str, &Version) -> Result<Output, AppError>,
-        log: &mut impl Write,
+        output: &mut CheckerOutput<impl Write, impl Write>,
         verbose: Verbose<'_>,
     ) -> Result<(), AppError> {
         for name in targets {
@@ -86,7 +91,7 @@ impl CompatibilityOutcome {
                 &name,
                 baseline,
                 |baseline| compare(&name, baseline),
-                log,
+                output,
                 verbose,
             )?;
         }
@@ -101,7 +106,7 @@ impl CompatibilityOutcome {
         name: &str,
         baseline: Option<Version>,
         compare: impl FnOnce(&Version) -> Result<Output, AppError>,
-        log: &mut impl Write,
+        output: &mut CheckerOutput<impl Write, impl Write>,
         verbose: Verbose<'_>,
     ) -> Result<(), AppError> {
         let Some(baseline) = baseline else {
@@ -116,7 +121,7 @@ impl CompatibilityOutcome {
         };
         verbose.note(||format!("Comparing {name} against published {baseline} with all features from the captured source workspace."));
         let result = compare(&baseline)?;
-        let text = record(&result, log)?;
+        let text = output.record(&result)?;
         let floor = interpret(result.status.code(), &text)?;
         self.findings |= result.status.code() == Some(100);
         self.packages.push(Comparison {
@@ -163,10 +168,17 @@ impl CompatibilityOutcome {
         if unchanged.is_err() {
             self.completed = false;
         }
-        persist(self)?;
-        match (comparison, unchanged) {
+        let persistence = persist(self);
+        let operation = match (comparison, unchanged) {
             (Err(comparison), Err(verification)) => {
                 Err(ComparisonAndSourceFailed::caused_by(verification, comparison).into())
+            }
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        };
+        match (operation, persistence) {
+            (Err(operation), Err(persistence)) => {
+                Err(EvidencePersistenceAlsoFailed::caused_by(persistence, operation).into())
             }
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
             (Ok(()), Ok(())) => Ok(()),
@@ -190,7 +202,142 @@ struct Comparison {
 /// Current compatibility.json layout; independent of the report and plan schemas.
 const COMPATIBILITY_SCHEMA_VERSION: u32 = 1;
 
+/// Persists critical checker evidence while deferring secondary diagnostic-delivery failures.
+struct CheckerOutput<L, M> {
+    log: L,
+    mirror: M,
+    delivery_error: Option<AppError>,
+}
+
+impl<L: Write, M: Write> CheckerOutput<L, M> {
+    fn new(log: L, mirror: M) -> Self {
+        Self {
+            log,
+            mirror,
+            delivery_error: None,
+        }
+    }
+
+    fn record(&mut self, result: &Output) -> Result<String, AppError> {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let persisted = self
+            .log
+            .write_all(text.as_bytes())
+            .map_err(CheckerLogFailed::caused_by);
+        // Once delivery fails, keep collecting the critical log rather than repeatedly writing
+        // to a broken secondary stream. Its original failure is returned only after finalization.
+        if self.delivery_error.is_none()
+            && let Err(error) = self.mirror.write_all(text.as_bytes())
+        {
+            self.delivery_error = Some(CheckerMirrorFailed::caused_by(error).into());
+        }
+        persisted?;
+        Ok(text)
+    }
+
+    fn finish(self, operation: Result<(), AppError>) -> Result<(), AppError> {
+        finish_delivery(operation, self.delivery_error)
+    }
+}
+
+/// Defers errors from supporting diagnostics so retry/report notes cannot unwind checker cleanup.
+///
+/// The compatibility invocation owns final error propagation. This adapter does not change the
+/// diagnostic component's general policy or hide its failure from that final result.
+#[derive(Debug)]
+struct DeferredDiagnostics {
+    destination: Arc<dyn DiagnosticSink>,
+    failure: Mutex<Option<AppError>>,
+}
+
+impl DeferredDiagnostics {
+    fn new(destination: Arc<dyn DiagnosticSink>) -> Self {
+        Self {
+            destination,
+            failure: Mutex::new(None),
+        }
+    }
+
+    fn take_failure(&self) -> Option<AppError> {
+        self.failure
+            .lock()
+            .expect("diagnostic state has no callbacks under its lock")
+            .take()
+    }
+}
+
+impl DiagnosticSink for DeferredDiagnostics {
+    fn write(&self, text: &str) -> io::Result<()> {
+        if self
+            .failure
+            .lock()
+            .expect("diagnostic state has no callbacks under its lock")
+            .is_some()
+        {
+            return Ok(());
+        }
+        if let Err(error) = self.destination.write(text) {
+            let error = CheckerMirrorFailed::caused_by(error).into();
+            let mut failure = self
+                .failure
+                .lock()
+                .expect("diagnostic state has no callbacks under its lock");
+            if failure.is_none() {
+                *failure = Some(error);
+            } else {
+                drop(failure);
+                drop(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn finish_delivery<T>(
+    operation: Result<T, AppError>,
+    delivery: Option<AppError>,
+) -> Result<T, AppError> {
+    match (operation, delivery) {
+        (Err(operation), Some(delivery)) => {
+            Err(CheckerDeliveryAlsoFailed::caused_by(delivery, operation).into())
+        }
+        (Err(error), None) | (Ok(_), Some(error)) => Err(error),
+        (Ok(value), None) => Ok(value),
+    }
+}
+
 pub(crate) fn check(
+    manifest: &Path,
+    prepared: Option<&Path>,
+    plan: Option<&Path>,
+    base: Option<&str>,
+    output: &Path,
+    deny_findings: bool,
+    verbose: bool,
+) -> Result<(bool, String), AppError> {
+    let deferred = Arc::new(DeferredDiagnostics::new(Arc::new(Stderr)));
+    let diagnostics = PublicationOutput::new(
+        env!("CARGO_PKG_VERSION"),
+        verbose,
+        Arc::<DeferredDiagnostics>::clone(&deferred),
+    );
+    let result = check_with_output(
+        manifest,
+        prepared,
+        plan,
+        base,
+        output,
+        deny_findings,
+        &diagnostics,
+    );
+    finish_delivery(result, deferred.take_failure())
+}
+
+fn check_with_output(
     manifest: &Path,
     prepared: Option<&Path>,
     plan: Option<&Path>,
@@ -216,7 +363,6 @@ pub(crate) fn check(
     } else {
         let manifest = manifest.canonicalize()?;
         let inputs = Inputs::capture(&manifest, base)?;
-        inputs.verify(&manifest, None)?;
         (Evidence::Source(inputs), manifest)
     };
     // Derive target selection from the bound source rather than trusting an adjacent report
@@ -228,33 +374,58 @@ pub(crate) fn check(
     let cache = cache_path(&env::temp_dir(), evidence.root())?;
     fs::create_dir_all(&cache)?;
     let log = output.join("semver-checks.log");
-    let mut log = fs::File::create(log)?;
+    let log = fs::File::create(log).map_err(CheckerLogFailed::caused_by)?;
+    let mut checker_output = CheckerOutput::new(log, io::stderr());
     let mut outcome = CompatibilityOutcome {
         schema_version: COMPATIBILITY_SCHEMA_VERSION,
-        checker: "not invoked: no consumer contracts selected".to_owned(),
+        checker: if targets.is_empty() {
+            "not invoked: no consumer contracts selected"
+        } else {
+            "selected: checker identity unavailable"
+        }
+        .to_owned(),
         report,
         completed: false,
         findings: false,
         packages: Vec::new(),
     };
     let result = (|| {
-        if !targets.is_empty() {
-            let checker = invoke(&manifest, &cache, &["--version"])?;
-            outcome.identify(&checker)?;
-            canary(&cache, &mut log)?;
+        // Resolve once outside the assessed Cargo configuration. An alias in that configuration
+        // must not select a different checker for identity, canary or comparison.
+        let checker = if targets.is_empty() {
+            None
+        } else {
+            Some(resolve_checker()?)
+        };
+        if let Some(checker) = &checker {
+            let identity = invoke(checker, &manifest, &cache, &["--version"])?;
+            outcome.identify(&identity)?;
+            canary(checker, &cache, &mut checker_output)?;
         }
         let registry = RegistryClient::new(diagnostics.clone())?;
         outcome.assess(
             targets,
             |name| registry.comparison_baseline(name),
-            |name, baseline| execute_checker(comparison_command(&manifest, name, baseline), &cache),
-            &mut log,
+            |name, baseline| {
+                execute_checker(
+                    comparison_command(
+                        checker
+                            .as_deref()
+                            .expect("nonempty comparison targets resolved the checker"),
+                        &manifest,
+                        name,
+                        baseline,
+                    ),
+                    &cache,
+                )
+            },
+            &mut checker_output,
             verbose,
         )
     })();
     let unchanged = evidence.verify(&manifest);
     let destination = output.join("compatibility.json");
-    outcome.finish(result, unchanged, |outcome| {
+    outcome.finish(checker_output.finish(result), unchanged, |outcome| {
         write_new(&destination, |file| {
             serde_json::to_writer_pretty(file, outcome)
                 .map_err(|error| CompatibilityWriteError::caused_by(&destination, error).into())
@@ -263,8 +434,9 @@ pub(crate) fn check(
     Ok(outcome.conclusion(output, deny_findings))
 }
 
-fn comparison_command(manifest: &Path, name: &str, baseline: &Version) -> Command {
+fn comparison_command(checker: &Path, manifest: &Path, name: &str, baseline: &Version) -> Command {
     checker_command(
+        checker,
         manifest,
         &[
             "--all-features",
@@ -292,12 +464,17 @@ fn cache_path(temporary: &Path, root: &Path) -> Result<PathBuf, AppError> {
     Ok(temporary.join(format!("crp-semver-{id}")))
 }
 
-fn invoke(manifest: &Path, cache: &Path, args: &[&str]) -> Result<Output, AppError> {
-    execute_checker(checker_command(manifest, args), cache)
+fn invoke(
+    checker: &Path,
+    manifest: &Path,
+    cache: &Path,
+    args: &[&str],
+) -> Result<Output, AppError> {
+    execute_checker(checker_command(checker, manifest, args), cache)
 }
 
-fn checker_command(manifest: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new("cargo");
+fn checker_command(checker: &Path, manifest: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(checker);
     command
         .arg("semver-checks")
         .args(args)
@@ -305,12 +482,35 @@ fn checker_command(manifest: &Path, args: &[&str]) -> Command {
     command
 }
 
-fn execute_checker(mut command: Command, cache: &Path) -> Result<Output, AppError> {
-    // Windows environment-key ordering calls the OS even before a process starts,
-    // so environment configuration belongs to this native execution boundary.
-    command
-        .env("CARGO_TARGET_DIR", cache)
-        .env("CARGO_TERM_COLOR", "never");
+fn resolve_checker() -> Result<PathBuf, AppError> {
+    let paths = env::var_os("PATH").ok_or_else(CheckerUnavailable::new)?;
+    let filename = format!("cargo-semver-checks{EXE_SUFFIX}");
+    for directory in env::split_paths(&paths) {
+        let candidate = directory.join(&filename);
+        let metadata = match fs::metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(CheckerLocationFailed::caused_by(&candidate, error).into()),
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            if metadata.permissions().mode() & 0o111 == 0 {
+                continue;
+            }
+        }
+        return candidate
+            .canonicalize()
+            .map_err(|error| CheckerLocationFailed::caused_by(&candidate, error).into());
+    }
+    Err(CheckerUnavailable::new().into())
+}
+
+// Compatibility compilation needs source-download access, not inherited upload or OIDC tokens.
+// This controls the child environment, not same-user filesystem access or build-code isolation.
+fn strip_checker_credentials(command: &mut Command, names: impl Iterator<Item = OsString>) {
     for name in [
         "GH_TOKEN",
         "GITHUB_TOKEN",
@@ -319,12 +519,38 @@ fn execute_checker(mut command: Command, cache: &Path) -> Result<Output, AppErro
     ] {
         command.env_remove(name);
     }
+    for name in names {
+        if is_registry_token(&name) {
+            command.env_remove(name);
+        }
+    }
+}
+
+fn is_registry_token(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        let name = name.to_ascii_uppercase();
+        name == "CARGO_REGISTRY_TOKEN"
+            || (name.starts_with("CARGO_REGISTRIES_") && name.ends_with("_TOKEN"))
+    })
+}
+
+fn execute_checker(mut command: Command, cache: &Path) -> Result<Output, AppError> {
+    // Windows environment-key ordering calls the OS even before a process starts,
+    // so environment configuration belongs to this native execution boundary.
+    command
+        .env("CARGO_TARGET_DIR", cache)
+        .env("CARGO_TERM_COLOR", "never");
+    strip_checker_credentials(&mut command, env::vars_os().map(|(name, _)| name));
     command
         .output()
         .map_err(|error| CheckerStartFailed::caused_by(error).into())
 }
 
-fn canary(cache: &Path, log: &mut fs::File) -> Result<(), AppError> {
+fn canary(
+    checker: &Path,
+    cache: &Path,
+    output: &mut CheckerOutput<impl Write, impl Write>,
+) -> Result<(), AppError> {
     let fixture = tempfile::Builder::new()
         .prefix("crp-semver-canary-")
         .tempdir()?;
@@ -335,6 +561,7 @@ fn canary(cache: &Path, log: &mut fs::File) -> Result<(), AppError> {
     fs::write(fixture.path().join("lib.rs"), "pub fn canary() {}\n")?;
     let manifest = fixture.path().join("Cargo.toml");
     let result = invoke(
+        checker,
         &manifest,
         cache,
         &[
@@ -345,7 +572,7 @@ fn canary(cache: &Path, log: &mut fs::File) -> Result<(), AppError> {
             "--all-features",
         ],
     )?;
-    let text = record(&result, log)?;
+    let text = output.record(&result)?;
     validate_canary(result.status.code(), &text)
 }
 
@@ -357,17 +584,6 @@ fn validate_canary(code: Option<i32>, text: &str) -> Result<(), AppError> {
         return Err(CanaryComparisonChanged::new().into());
     }
     Ok(())
-}
-
-fn record(result: &Output, log: &mut impl Write) -> Result<String, AppError> {
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    log.write_all(text.as_bytes())?;
-    eprint!("{text}");
-    Ok(text)
 }
 
 // The supported integration is tested against CARGO_SEMVER_CHECKS_VERSION in constants.env.
@@ -413,6 +629,18 @@ struct CompatibilityDestinationExists {
 #[display("failed to start cargo-semver-checks")]
 struct CheckerStartFailed;
 
+/// An installed checker could not be located without consulting candidate Cargo aliases.
+#[ohno::error]
+#[display("cargo-semver-checks executable is unavailable in PATH")]
+struct CheckerUnavailable;
+
+/// Preserves the failed filesystem observation while locating the checker.
+#[ohno::error]
+#[display("cannot inspect checker executable '{}'", path.quoted())]
+struct CheckerLocationFailed {
+    path: PathBuf,
+}
+
 /// Identifies which checker operation failed and its observed exit status.
 #[ohno::error]
 #[display("cargo-semver-checks failed to {operation} with status {status:?}")]
@@ -426,6 +654,23 @@ struct CheckerFailed {
 #[display("compatibility checker supplied no recognized complete summary")]
 struct CheckerSummaryMissing;
 
+/// Failure to retain the critical checker log prevents accepting a comparison.
+#[ohno::error]
+#[display("failed to write the compatibility checker log")]
+struct CheckerLogFailed;
+
+/// A secondary output stream failed after the checker output was captured.
+#[ohno::error]
+#[display("failed to mirror compatibility checker diagnostics")]
+struct CheckerMirrorFailed;
+
+/// Retains secondary delivery failure alongside an independent checker or log failure.
+#[ohno::error]
+#[display("checker diagnostic delivery also failed: {delivery}")]
+struct CheckerDeliveryAlsoFailed {
+    delivery: AppError,
+}
+
 /// The identical-source canary cannot establish a semantic change requirement.
 #[ohno::error]
 #[display("compatibility checker reported a change in its identical-source canary")]
@@ -436,6 +681,13 @@ struct CanaryComparisonChanged;
 #[display("source verification also failed: {verification}")]
 struct ComparisonAndSourceFailed {
     verification: AppError,
+}
+
+/// Preserves an artifact-write failure alongside prior comparison or source failures.
+#[ohno::error]
+#[display("compatibility evidence persistence also failed: {persistence}")]
+struct EvidencePersistenceAlsoFailed {
+    persistence: AppError,
 }
 
 /// Identifies failure to serialize the application's compatibility evidence.
@@ -456,6 +708,7 @@ mod tests {
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
     use std::process::ExitStatus;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use serde_json::json;
 
@@ -473,6 +726,7 @@ mod tests {
     }
 
     fn checker_output(code: u8, stdout: &[u8], stderr: &[u8]) -> Output {
+        // Unix from_raw consumes a wait status, whose exit-code field is the shifted byte.
         #[cfg(unix)]
         let status = ExitStatus::from_raw(i32::from(code) << 8);
         #[cfg(windows)]
@@ -545,7 +799,7 @@ mod tests {
                 "new-library",
                 None,
                 |_| panic!("an unpublished package cannot be compared"),
-                &mut log,
+                &mut CheckerOutput::new(&mut log, io::sink()),
                 Verbose::new(true, &crp_diag::Discard),
             )
             .unwrap();
@@ -586,7 +840,7 @@ mod tests {
                             assert_eq!(baseline, &Version::new(1, 2, 3));
                             Ok(checker_output(code, b"comparison\n", summary.as_bytes()))
                         },
-                        &mut log,
+                        &mut CheckerOutput::new(&mut log, io::sink()),
                         Verbose::new(true, &crp_diag::Discard),
                     )
                     .unwrap();
@@ -607,7 +861,7 @@ mod tests {
                             b"",
                         ))
                     },
-                    &mut log,
+                    &mut CheckerOutput::new(&mut log, io::sink()),
                     Verbose::new(false, &crp_diag::Discard),
                 )
                 .unwrap();
@@ -652,7 +906,7 @@ mod tests {
                         b"",
                     ))
                 },
-                &mut log,
+                &mut CheckerOutput::new(&mut log, io::sink()),
                 Verbose::new(false, &crp_diag::Discard),
             )
             .unwrap();
@@ -667,7 +921,7 @@ mod tests {
                     "library",
                     Some(Version::new(1, 0, 0)),
                     |_| Ok(checker_output(code, text.as_bytes(), b"")),
-                    &mut log,
+                    &mut CheckerOutput::new(&mut log, io::sink()),
                     Verbose::new(false, &crp_diag::Discard),
                 )
                 .unwrap_err();
@@ -681,7 +935,7 @@ mod tests {
                 "library",
                 Some(Version::new(1, 0, 0)),
                 |_| Err(Error::other("unavailable checker").into()),
-                &mut log,
+                &mut CheckerOutput::new(&mut log, io::sink()),
                 Verbose::new(false, &crp_diag::Discard),
             )
             .unwrap_err();
@@ -709,7 +963,7 @@ mod tests {
                         b"",
                     ))
                 },
-                &mut Vec::new(),
+                &mut CheckerOutput::new(Vec::new(), io::sink()),
                 Verbose::new(true, &crp_diag::Discard),
             )
             .unwrap();
@@ -753,7 +1007,7 @@ mod tests {
                             b"",
                         ))
                     },
-                    &mut Vec::new(),
+                    &mut CheckerOutput::new(Vec::new(), io::sink()),
                     Verbose::new(false, &crp_diag::Discard),
                 )
                 .unwrap_err();
@@ -790,7 +1044,7 @@ mod tests {
                         b"",
                     ))
                 },
-                &mut full_log,
+                &mut CheckerOutput::new(&mut full_log, io::sink()),
                 Verbose::new(false, &crp_diag::Discard),
             )
             .unwrap_err();
@@ -799,59 +1053,281 @@ mod tests {
     }
 
     #[test]
-    fn finish_persists_evidence_before_returning_both_failures() {
+    fn supporting_diagnostic_failures_are_deferred_until_evidence_finalization() {
+        let destination = Arc::new(ClosedDiagnostics(AtomicUsize::new(0)));
+        let deferred = Arc::new(DeferredDiagnostics::new(Arc::<ClosedDiagnostics>::clone(
+            &destination,
+        )));
+        let diagnostics = PublicationOutput::new(
+            "fixture-version",
+            true,
+            Arc::<DeferredDiagnostics>::clone(&deferred),
+        );
+        diagnostics.line(format_args!("registry retry"));
+        diagnostics.notes().note(|| "later comparison".to_owned());
+        assert_eq!(destination.0.load(Ordering::Relaxed), 1);
+        let persisted = Cell::new(false);
+        let result = outcome().finish(
+            Err(ComparisonFailure::new().into()),
+            Err(SourceFailure::new().into()),
+            |_| {
+                persisted.set(true);
+                Err(PersistenceFailure::new().into())
+            },
+        );
+        let error = finish_delivery(result, deferred.take_failure()).unwrap_err();
+        assert!(persisted.get());
+        let text = error.to_string();
+        for marker in [
+            "comparison canary",
+            "source canary",
+            "persistence canary",
+            "supporting mirror canary",
+        ] {
+            assert!(text.contains(marker));
+        }
+        assert!(deferred.take_failure().is_none());
+    }
+
+    /// Counts attempted delivery to an unavailable supporting diagnostic destination.
+    #[derive(Debug)]
+    struct ClosedDiagnostics(AtomicUsize);
+
+    impl DiagnosticSink for ClosedDiagnostics {
+        fn write(&self, _text: &str) -> io::Result<()> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Err(Error::other("supporting mirror canary"))
+        }
+    }
+
+    #[test]
+    fn mirror_failure_does_not_interrupt_comparisons_or_critical_logging() {
+        let mut outcome = outcome();
+        let mut output = CheckerOutput::new(Vec::new(), TestWriter::failing("mirror canary"));
+        let result = outcome.assess(
+            vec!["first".to_owned(), "second".to_owned()],
+            |_| Ok(Some(Version::new(1, 0, 0))),
+            |name, _| {
+                Ok(checker_output(
+                    0,
+                    name.as_bytes(),
+                    b"\n Summary no semver update required\n",
+                ))
+            },
+            &mut output,
+            Verbose::new(false, &crp_diag::Discard),
+        );
+        assert!(result.is_ok());
+        assert!(outcome.completed);
+        assert_eq!(outcome.packages.len(), 2);
+        let log = String::from_utf8(output.log.clone()).unwrap();
+        assert!(log.contains("first"));
+        assert!(log.contains("second"));
+        assert_eq!(output.mirror.writes, 1);
+        let persisted = Cell::new(false);
+        let error = outcome
+            .finish(output.finish(result), Ok(()), |outcome| {
+                assert!(outcome.completed);
+                assert_eq!(outcome.packages.len(), 2);
+                persisted.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(persisted.get());
+        assert!(error.find_source::<CheckerMirrorFailed>().is_some());
+    }
+
+    #[test]
+    fn finalization_retains_log_or_checker_mirror_source_and_persistence_failures() {
+        for log_fails in [false, true] {
+            for source_fails in [false, true] {
+                for persistence_fails in [false, true] {
+                    let mut outcome = outcome();
+                    let mut output = CheckerOutput::new(
+                        TestWriter {
+                            fails: log_fails,
+                            ..TestWriter::failing("log canary")
+                        },
+                        TestWriter::failing("mirror canary"),
+                    );
+                    let result = outcome.compare(
+                        "library",
+                        Some(Version::new(1, 0, 0)),
+                        |_| {
+                            Ok(checker_output(
+                                1,
+                                b"captured stdout\n",
+                                b"captured stderr\n",
+                            ))
+                        },
+                        &mut output,
+                        Verbose::new(false, &crp_diag::Discard),
+                    );
+                    assert!(result.is_err());
+                    assert!(outcome.packages.is_empty());
+                    let persisted = Cell::new(false);
+                    let error = outcome
+                        .finish(
+                            output.finish(result),
+                            if source_fails {
+                                Err(SourceFailure::new().into())
+                            } else {
+                                Ok(())
+                            },
+                            |outcome| {
+                                assert!(!outcome.completed);
+                                persisted.set(true);
+                                if persistence_fails {
+                                    Err(PersistenceFailure::new().into())
+                                } else {
+                                    Ok(())
+                                }
+                            },
+                        )
+                        .unwrap_err();
+                    assert!(persisted.get());
+                    assert_eq!(error.find_source::<CheckerLogFailed>().is_some(), log_fails);
+                    assert_eq!(error.find_source::<CheckerFailed>().is_some(), !log_fails);
+                    let delivery = error.find_source::<CheckerDeliveryAlsoFailed>().unwrap();
+                    assert!(
+                        delivery
+                            .delivery
+                            .find_source::<CheckerMirrorFailed>()
+                            .is_some()
+                    );
+                    let diagnostic = error.to_string();
+                    assert!(diagnostic.contains("mirror canary"));
+                    assert_eq!(diagnostic.contains("log canary"), log_fails);
+                    assert_eq!(diagnostic.contains("source canary"), source_fails);
+                    assert_eq!(diagnostic.contains("persistence canary"), persistence_fails);
+                }
+            }
+        }
+    }
+
+    /// Records successful writes or injects one attributable output failure without OS I/O.
+    struct TestWriter {
+        fails: bool,
+        marker: &'static str,
+        writes: usize,
+        bytes: Vec<u8>,
+    }
+
+    impl TestWriter {
+        fn failing(marker: &'static str) -> Self {
+            Self {
+                fails: true,
+                marker,
+                writes: 0,
+                bytes: Vec::new(),
+            }
+        }
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes = self.writes.checked_add(1).unwrap();
+            if self.fails {
+                Err(Error::other(self.marker))
+            } else {
+                self.bytes.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finish_preserves_comparison_source_and_persistence_failures() {
         for comparison_fails in [false, true] {
             for source_fails in [false, true] {
-                let mut outcome = outcome();
-                outcome.completed = !comparison_fails;
-                let persisted = Cell::new(false);
-                let result = outcome.finish(
-                    if comparison_fails {
-                        Err(ComparisonFailure::new().into())
-                    } else {
-                        Ok(())
-                    },
-                    if source_fails {
-                        Err(SourceFailure::new().into())
-                    } else {
-                        Ok(())
-                    },
-                    |outcome| {
-                        assert_eq!(outcome.completed, !comparison_fails && !source_fails);
-                        assert_eq!(
-                            serde_json::to_value(outcome)
-                                .unwrap()
-                                .get("schema_version")
-                                .unwrap(),
-                            COMPATIBILITY_SCHEMA_VERSION
-                        );
-                        persisted.set(true);
-                        Ok(())
-                    },
-                );
-                assert!(persisted.get());
-                if comparison_fails || source_fails {
-                    let error = result.unwrap_err();
-                    assert_eq!(
-                        error.find_source::<ComparisonFailure>().is_some(),
-                        comparison_fails
+                for persistence_fails in [false, true] {
+                    let mut outcome = outcome();
+                    outcome.completed = !comparison_fails;
+                    let persisted = Cell::new(false);
+                    let result = outcome.finish(
+                        if comparison_fails {
+                            Err(ComparisonFailure::new().into())
+                        } else {
+                            Ok(())
+                        },
+                        if source_fails {
+                            Err(SourceFailure::new().into())
+                        } else {
+                            Ok(())
+                        },
+                        |outcome| {
+                            assert_eq!(outcome.completed, !comparison_fails && !source_fails);
+                            assert_eq!(
+                                serde_json::to_value(outcome)
+                                    .unwrap()
+                                    .get("schema_version")
+                                    .unwrap(),
+                                COMPATIBILITY_SCHEMA_VERSION
+                            );
+                            persisted.set(true);
+                            if persistence_fails {
+                                Err(PersistenceFailure::new().into())
+                            } else {
+                                Ok(())
+                            }
+                        },
                     );
-                    if comparison_fails && source_fails {
-                        let combined = error.find_source::<ComparisonAndSourceFailed>().unwrap();
-                        assert!(
-                            combined
-                                .verification
-                                .find_source::<SourceFailure>()
-                                .is_some()
-                        );
+                    assert!(persisted.get());
+                    if comparison_fails || source_fails || persistence_fails {
+                        let error = result.unwrap_err();
                         let diagnostic = error.to_string();
-                        assert!(diagnostic.contains("comparison canary"));
-                        assert!(diagnostic.contains("source canary"));
+                        for (failed, marker) in [
+                            (comparison_fails, "comparison canary"),
+                            (source_fails, "source canary"),
+                            (persistence_fails, "persistence canary"),
+                        ] {
+                            assert_eq!(diagnostic.contains(marker), failed);
+                        }
+                        if persistence_fails && (comparison_fails || source_fails) {
+                            let combined = error
+                                .find_source::<EvidencePersistenceAlsoFailed>()
+                                .unwrap();
+                            assert!(
+                                combined
+                                    .persistence
+                                    .find_source::<PersistenceFailure>()
+                                    .is_some()
+                            );
+                        } else {
+                            assert_eq!(
+                                error.find_source::<PersistenceFailure>().is_some(),
+                                persistence_fails
+                            );
+                        }
+                        assert_eq!(
+                            error.find_source::<ComparisonFailure>().is_some(),
+                            comparison_fails
+                        );
+                        if comparison_fails && source_fails {
+                            let combined =
+                                error.find_source::<ComparisonAndSourceFailed>().unwrap();
+                            assert!(
+                                combined
+                                    .verification
+                                    .find_source::<SourceFailure>()
+                                    .is_some()
+                            );
+                            let diagnostic = error.to_string();
+                            assert!(diagnostic.contains("comparison canary"));
+                            assert!(diagnostic.contains("source canary"));
+                        } else {
+                            assert_eq!(
+                                error.find_source::<SourceFailure>().is_some(),
+                                source_fails
+                            );
+                        }
                     } else {
-                        assert_eq!(error.find_source::<SourceFailure>().is_some(), source_fails);
+                        result.unwrap();
                     }
-                } else {
-                    result.unwrap();
                 }
             }
         }
@@ -882,11 +1358,36 @@ mod tests {
     #[display("source canary")]
     struct SourceFailure;
 
+    /// A separate write failure must not erase the operation that required the evidence.
+    #[ohno::error]
+    #[display("persistence canary")]
+    struct PersistenceFailure;
+
+    #[test]
+    fn registry_upload_token_family_excludes_noncredential_configuration() {
+        for name in [
+            "CARGO_REGISTRY_TOKEN",
+            "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+            "CARGO_REGISTRIES_PRIVATE_TOKEN",
+            "cargo_registries_private_token",
+        ] {
+            assert!(is_registry_token(OsStr::new(name)));
+        }
+        for name in [
+            "CARGO_REGISTRIES_PRIVATE_INDEX",
+            "CARGO_HOME",
+            "RUSTUP_TOOLCHAIN",
+        ] {
+            assert!(!is_registry_token(OsStr::new(name)));
+        }
+    }
+
     #[test]
     fn checker_arguments_bind_package_baseline_features_and_source() {
         let manifest = Path::new("candidate").join("Cargo.toml");
-        let command = comparison_command(&manifest, "library", &Version::new(1, 2, 3));
-        assert_eq!(command.get_program(), "cargo");
+        let checker = Path::new("installed-checker");
+        let command = comparison_command(checker, &manifest, "library", &Version::new(1, 2, 3));
+        assert_eq!(command.get_program(), checker);
         assert_eq!(command.get_current_dir(), Some(Path::new("candidate")));
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(
@@ -903,7 +1404,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            checker_command(Path::new(""), &["--version"]).get_current_dir(),
+            checker_command(checker, Path::new(""), &["--version"]).get_current_dir(),
             Some(Path::new("."))
         );
     }
@@ -911,7 +1412,9 @@ mod tests {
     #[test]
     fn record_keeps_both_streams_readable_when_checker_output_is_not_utf8() {
         let mut log = Vec::new();
-        let text = record(&checker_output(1, b"stdout\xff", b"stderr\n"), &mut log).unwrap();
+        let text = CheckerOutput::new(&mut log, io::sink())
+            .record(&checker_output(1, b"stdout\xff", b"stderr\n"))
+            .unwrap();
         assert_eq!(text, "stdout\u{fffd}stderr\n");
         assert_eq!(log, text.as_bytes());
     }

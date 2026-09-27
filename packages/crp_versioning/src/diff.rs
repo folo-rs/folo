@@ -21,7 +21,7 @@ pub(crate) struct FileDiff {
 /// The mode travels with the content because Cargo carries a packaged file's
 /// executable bit into the archive, so a patch that recreates the file has to
 /// recreate its mode too. Pairing the two inside an `Option` means an absent
-/// side cannot carry a mode. Ref: `docs/design.md`, "Released content".
+/// side cannot carry a mode. Ref: `packages/cargo-release-plan/docs/design.md`, "Released content".
 #[derive(Clone, Copy)]
 pub(crate) struct FileVersion<'a> {
     pub(crate) content: &'a [u8],
@@ -279,7 +279,7 @@ const MAX_EDIT_DISTANCE: usize = 1024;
 ///
 /// Falls back to replacing the whole file when the sides differ by more than
 /// `max_distance` edits; the result is still a valid unified diff, just a
-/// coarser one. Ref: docs/implementation.md, "Patch rendering".
+/// coarser one. Ref: packages/cargo-release-plan/docs/implementation.md, "Patch rendering".
 fn edit_script(old: &[&str], new: &[&str], max_distance: usize) -> Vec<Edit> {
     // Deleting every old line and inserting every new one is always an edit
     // script, so the distance never exceeds that; searching further is wasted.

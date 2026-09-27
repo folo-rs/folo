@@ -281,6 +281,16 @@ tags remain authoritative; recovery does not overwrite them to make a run appear
 complete. Cargo owns package construction and registry upload mechanics, while
 the application enforces the release model and reconciles delivery.
 
+### Validation stays proportional to its purpose
+
+Package authors own buildability and the prerequisites of their selected releases.
+Cheap input checks can explain mistakes, but the application does not reproduce
+Cargo, Git or remote-service behavior merely to report a failure earlier.
+Nontrivial validation must protect a release-specific guarantee, such as the
+correspondence between source and published content, safe application of reviewed
+edits, or accurate delivery and recovery state. It is not a promise that every
+unsuccessful release can be rejected before publication starts.
+
 ### Rejected plans do not edit manifests
 
 Plan targets, version direction, and group expansion are validated before any
@@ -929,8 +939,10 @@ merely relaxed metadata validation.
 `prepare-publish` pins a clean source commit on the configured release branch's
 first-parent history. It verifies the tracked Cargo inputs, package identities,
 version groups, dependency requirements and released-content invariant against
-that commit's own anchors. The required lockfile must be present and consistent;
-publication does not repair it. Ignored build output is not a source change.
+that commit's own anchors. The required lockfile must be tracked and unchanged.
+Preparation preserves it without resolving dependencies; Cargo enforces locked
+resolution during publication and native builds. Publication does not repair the
+lockfile. Ignored build output is not a source change.
 Preparation repeats the merge gate's publication-input checks, including target
 selection and the tag/archive URLs in `cargo-binstall` metadata, before any upload.
 
@@ -1176,14 +1188,17 @@ memory proportional to executable size and remains subject to item cancellation.
 
 The standard binary build uses Cargo's release profile and default features.
 Publication configuration does not accept arbitrary Cargo arguments or silently
-enable features to reach a binary. Preparation verifies that the selected binary's
-required features are enabled by that selection before publishing its package.
-The guide distinguishes this build selection from the external library API
-checker's all-features comparison.
+enable features to reach a binary. Package authors are responsible for making
+their selected executable build under that selection. Cargo checks feature
+requirements during the native build; the offline publication-input check does
+not simulate feature resolution or compilation. The guide distinguishes this
+build selection from the external library API checker's all-features comparison.
 
 A release/target pair is complete only when both assets are uploaded. Execution
 refreshes completeness before building, repairs both members of an incomplete
-pair, and verifies upload completion afterward. Independent package or target
+pair, and verifies upload completion afterward. Batch structure and frozen tag
+identities are validated before execution; this preflight admits the complete
+batch rather than a silently narrowed subset. After admission, independent package or target
 failures do not suppress the remaining work, but any required failure makes the
 run fail. Cancellation stops further work and publication while retaining
 diagnostics for operations already attempted.

@@ -35,7 +35,7 @@ impl GithubOutcome {
     }
 }
 
-/// Per-package tag/release disposition; failures retain exact operator recovery identity.
+/// Per-package reconciliation with state-dependent source and recovery evidence.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubPackage {
@@ -57,7 +57,7 @@ pub struct GithubPackage {
 pub enum GithubState {
     /// The attempt has not established a terminal disposition for this package.
     Pending,
-    /// Tag and release reconciliation completed; separate binary work may remain.
+    /// Required tag and binary-only release reconciliation completed; asset work may remain.
     Complete,
     /// A dry run found missing tag work without performing it.
     WouldCreateTag,

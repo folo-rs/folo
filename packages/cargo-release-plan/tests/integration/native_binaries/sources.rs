@@ -30,10 +30,8 @@ fn builds_a_nested_workspace_without_controller_scripts() {
         assert_success(&result);
         assert!(
             output
-                .join(format!(
-                    "alpha-v1.0.0-{}/alpha-bin{}",
-                    fixture.triple, EXE_SUFFIX
-                ))
+                .join(fixture.archive_base("alpha"))
+                .join(format!("alpha-bin{EXE_SUFFIX}"))
                 .is_file()
         );
         assert!(!fixture.root.path().join("scripts").exists());
@@ -95,7 +93,7 @@ fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
                 .root
                 .path()
                 .join("out/artifacts")
-                .join(format!("{name}-v1.0.0-{}", fixture.triple));
+                .join(fixture.archive_base(name));
             assert_eq!(
                 run(&staged, staged.join(format!("{name}-bin{EXE_SUFFIX}")), &[]).trim(),
                 expected
@@ -119,7 +117,7 @@ fn fetches_the_exact_missing_source_without_using_the_remote_tip() {
 }
 
 #[test]
-fn rejects_a_foreign_compiler_host_and_cleans_the_prepared_source() {
+fn rejects_a_target_different_from_the_compiler_host_and_cleans_the_source_worktree() {
     testing::with_watchdog_timeout(SMOKE_WATCHDOG, || {
         let mut fixture = Fixture::new();
         // The actual compiler host is checked before installing a foreign target.

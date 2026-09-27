@@ -1,8 +1,8 @@
 #requires -Version 7.6
 
 # Version-readiness and compatibility gates called by justfiles/just_release.just from local
-# validation, Standard validation and merge-queue validation. Rust owns release decisions and
-# target selection; this module invokes Cargo, emits CI targets and checks compatibility exits.
+# validation, Standard validation and Merge queue validation. Rust owns release decisions and
+# target selection; this module invokes Cargo, emits CI targets and checks compatibility exit codes.
 # Version planning uses the self-contained increment-versions skill or the documented CLI.
 # Ref: docs/build-and-tooling.md, "Automation language and boundaries", and
 # .github/workflows/implementation.md.

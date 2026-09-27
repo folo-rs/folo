@@ -8,56 +8,15 @@ use crate::with_io_test;
 
 #[test]
 #[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-fn rejects_evidence_changed_during_successful_or_failed_operations() {
+fn rejects_head_changed_since_candidate_capture() {
     with_io_test(|| {
         let (_directory, repository) = fixture();
-        repository.checked(|| Ok(())).unwrap();
-        for succeeds in [true, false] {
-            let result = repository.checked(|| {
-                fs::write(repository.root().join("Cargo.toml"), "changed input").unwrap();
-                if succeeds {
-                    Ok(())
-                } else {
-                    Err(OperationError::new().into())
-                }
-            });
-            let error = result.unwrap_err();
-            assert!(error.find_source::<OperationError>().is_none());
-            fs::write(repository.root().join("Cargo.toml"), "tracked input").unwrap();
-        }
-    });
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-fn rejects_head_changed_during_verification() {
-    with_io_test(|| {
-        let (directory, repository) = fixture();
-        _ = repository
-            .checked(|| {
-                command(
-                    &directory.path().join("repository"),
-                    &["commit", "--allow-empty", "-m", "new head"],
-                );
-                Ok(())
-            })
-            .unwrap_err();
-    });
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-fn rejects_dirty_inputs_before_invoking_the_operation() {
-    with_io_test(|| {
-        let (_directory, repository) = fixture();
-        fs::write(repository.root().join("Cargo.toml"), "changed input").unwrap();
-        let mut invoked = false;
-        let result = repository.checked(|| {
-            invoked = true;
-            Ok(())
-        });
-        assert!(result.is_err());
-        assert!(!invoked);
+        repository.ensure_clean_head().unwrap();
+        command(
+            repository.root(),
+            &["commit", "--allow-empty", "-m", "new head"],
+        );
+        repository.ensure_clean_head().unwrap_err();
     });
 }
 
@@ -67,6 +26,7 @@ fn rejects_staged_and_untracked_inputs() {
     with_io_test(|| {
         let (_directory, repository) = fixture();
         fs::write(repository.root().join("Cargo.toml"), "staged input").unwrap();
+        repository.ensure_clean_head().unwrap_err();
         command(repository.root(), &["add", "Cargo.toml"]);
         _ = repository.ensure_clean_head().unwrap_err();
 
@@ -114,18 +74,6 @@ fn rejects_noncommit_object_ids_for_either_history_endpoint() {
         let tagged =
             Repository::discover(&repository.root().join("Cargo.toml"), tag.trim()).unwrap();
         _ = tagged.ensure_first_parent(head.trim()).unwrap_err();
-    });
-}
-
-#[test]
-#[cfg_attr(miri, ignore = "Executes Git against filesystem fixtures")]
-fn preserves_operation_errors_when_evidence_is_unchanged() {
-    with_io_test(|| {
-        let (_directory, repository) = fixture();
-        let error = repository
-            .checked(|| Err::<(), _>(OperationError::new().into()))
-            .unwrap_err();
-        assert!(error.find_source::<OperationError>().is_some());
     });
 }
 
@@ -228,7 +176,3 @@ fn propagates_an_unavailable_parent_in_release_history() {
         _ = repository.ensure_first_parent(&head).unwrap_err();
     });
 }
-
-/// Models a failed verification subprocess without running or replacing Cargo.
-#[ohno::error]
-struct OperationError;

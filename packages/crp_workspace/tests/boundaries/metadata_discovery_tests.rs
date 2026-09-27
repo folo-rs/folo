@@ -10,6 +10,28 @@ use crp_workspace::metadata::*;
 use crate::git_fixture::Repository;
 
 #[test]
+#[cfg_attr(miri, ignore = "Reads Cargo metadata from tracked package fixtures")]
+fn tracked_packages_reject_reserved_metadata_typos_before_projection() {
+    for (source, publish) in [("lib.rs", true), ("main.rs", true), ("lib.rs", false)] {
+        let fixture = Repository::new();
+        fixture.write(
+            "Cargo.toml",
+            format!(
+                "[package]\nname='package'\nversion='1.0.0'\npublish={publish}\n\
+                 [package.metadata.release-plan]\nrelease-targtes=['x86_64-pc-windows-msvc']\n"
+            )
+            .as_bytes(),
+        );
+        fixture.write(&format!("src/{source}"), b"fn main() {}\n");
+        fixture.command(&["add", "."]);
+        let error = load_tracked_work_tree(&fixture.path().join("Cargo.toml")).unwrap_err();
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("unknown metadata.release-plan key"));
+        assert!(diagnostic.contains("release-targtes"));
+    }
+}
+
+#[test]
 #[cfg_attr(miri, ignore = "changes real filesystem target presence and type")]
 fn automatic_installable_targets_require_tracked_present_regular_files() {
     let fixture = Repository::new();

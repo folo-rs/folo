@@ -14,6 +14,10 @@ use crate::legacy::plan::plan;
 use crate::publication::binaries::model::InvalidPlan;
 use crate::publication::binaries::{BinaryPublisher, Github, Outcome, execute_items};
 
+// Private item-array artifact used by release-binaries consumers and executable smoke tests.
+// Ref: packages/release-binaries/docs/implementation.md, "Bootstrap binary command adapter".
+const OUTCOMES_FILE: &str = "outcomes.json";
+
 /// Preserves the bootstrap executable's JSON, receipt and summary protocols.
 ///
 /// The shell supplies its current directory, optional summary destination and diagnostics.
@@ -63,7 +67,7 @@ pub fn run_binaries(
                 diagnostics,
             )?;
             fs::write(
-                output.join("outcomes.json"),
+                output.join(OUTCOMES_FILE),
                 serde_json::to_vec_pretty(&outcomes)?,
             )?;
             let summary = summary(&batch.triple, &outcomes)?;
@@ -84,10 +88,9 @@ pub fn run_binaries(
                     .write_all(summary.as_bytes())?;
             }
             if !complete(&outcomes) {
-                return Err(InvalidPlan::new(
-                    "Release batch contains failed items; see outcomes.json and the job summary"
-                        .to_owned(),
-                )
+                return Err(InvalidPlan::new(format!(
+                    "Release batch contains failed items; see {OUTCOMES_FILE} and the job summary"
+                ))
                 .into());
             }
             Ok(None)

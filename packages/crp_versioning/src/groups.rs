@@ -14,6 +14,10 @@ pub struct Groups {
 
 impl Groups {
     /// Derives version-group policy from the acquired exact dependency facts.
+    ///
+    /// Every tracked target participates, including nonpublishable helpers whose exact pins
+    /// require alignment. Publication eligibility does not restrict group membership.
+    /// Ref: packages/cargo-release-plan/docs/design.md, "Version groups".
     #[must_use]
     pub fn from_workspace(workspace: &WorkTree) -> Self {
         Self::from_edges(
@@ -130,7 +134,7 @@ impl Groups {
 /// those facts. That matters because `check` gates the process exit on
 /// consistency while `report` and `apply` use the group version as the
 /// increment base, so a verdict that reported one without the other would let
-/// the two disagree. Ref: `docs/design.md`, "Version groups".
+/// the two disagree. Ref: `packages/cargo-release-plan/docs/design.md`, "Version groups".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupVerdict {
     pub members: Vec<String>,

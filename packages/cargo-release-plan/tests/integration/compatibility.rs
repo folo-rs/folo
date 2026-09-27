@@ -1,4 +1,9 @@
 //! Captured-source binding and checker failures without production registry access.
+//!
+//! Fixture versions are ordinary valid releases; exact dependency fixtures retain matching
+//! declarations to exercise group propagation, while `private_library` supports patch planning.
+
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::env::consts::EXE_SUFFIX;
 use std::path::{Path, PathBuf};
@@ -13,6 +18,10 @@ use tempfile::TempDir;
 
 use crate::fixture::{Fixture, write_package};
 use crate::harness::resolved_plan;
+
+// Git/Cargo startup and checker-fixture compilation normally finish in seconds. This deliberately
+// conservative budget protects infrastructure hangs, never determines an expected failure.
+const CHECKER_WATCHDOG: Duration = Duration::from_mins(5);
 
 #[test]
 #[cfg_attr(miri, ignore = "Reads real captured source and runs Cargo metadata")]
@@ -97,6 +106,11 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
         .find(|package| package.get("name").unwrap() == "dependency")
         .unwrap();
     assert_eq!(dependency.get("dependents").unwrap(), &json!(["consumer"]));
+    assert_eq!(consumer.get("group").unwrap(), "consumer");
+    assert_eq!(
+        expected.pointer("/groups/consumer/members").unwrap(),
+        &json!(["consumer", "dependency"])
+    );
 
     for (label, prepared_path, base) in [
         ("fresh", None, Some(fixture.sha("HEAD"))),
@@ -353,50 +367,17 @@ fn compatibility_requires_resolved_plan_evidence() {
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "Discovers and previews real nonpublishable Cargo/Git members"
-)]
-fn publication_preflight_does_not_query_or_change_nonpublishable_members() {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "helper", "1.0.0", "publish = false\n");
-    fixture.commit("local-only workspace");
-    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
-    let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
-    let manifest = fs::read(fixture.manifest()).unwrap();
-    let lockfile = fixture.read("Cargo.lock");
-    let status = fixture.git(&["status", "--porcelain"]);
-    for plan in [None, Some(plan)] {
-        let RunOutcome::Check {
-            passed,
-            message,
-            warnings,
-        } = run(&RunInput::CheckPublished {
-            manifest_path: fixture.manifest(),
-            plan,
-            verbose: true,
-        })
-        .unwrap()
-        else {
-            panic!()
-        };
-        assert!(passed);
-        assert!(!message.is_empty());
-        assert!(warnings.is_empty());
-    }
-    assert_eq!(fs::read(fixture.manifest()).unwrap(), manifest);
-    assert_eq!(fixture.read("Cargo.lock"), lockfile);
-    assert_eq!(fixture.git(&["status", "--porcelain"]), status);
-}
-
-#[test]
-#[cfg_attr(
-    miri,
     ignore = "Starts Cargo with a controlled external checker executable"
 )]
 fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
-    // Toolchain startup and child-process failures need a last-chance integration watchdog.
-    testing::with_watchdog_timeout(Duration::from_mins(5), || {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
         let fixture = Fixture::new("");
         write_package(&fixture, "library", "1.0.0", "");
+        // A candidate's Cargo alias must not substitute the installed checker at any phase.
+        fixture.write(
+            ".cargo/config.toml",
+            "[alias]\nsemver-checks = 'not-the-installed-checker'\n",
+        );
         fixture.commit("released library");
         fixture.write(
             "packages/library/src/lib.rs",
@@ -424,6 +405,8 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
                 "GH_TOKEN",
                 "GITHUB_TOKEN",
                 "CARGO_REGISTRY_TOKEN",
+                "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+                "CARGO_REGISTRIES_PRIVATE_TOKEN",
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
             ] {
                 command.env(credential, "must-not-reach-checker");
@@ -437,6 +420,10 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
             assert_eq!(outcome.get("packages").unwrap(), &json!([]));
             assert!(evidence.join("report.json").is_file());
             if scenario == "identity-failure" {
+                assert_eq!(
+                    outcome.get("checker").unwrap(),
+                    "selected: checker identity unavailable"
+                );
                 assert_eq!(fs::read_to_string(invocations).unwrap(), "version\n");
                 assert!(
                     fs::read(evidence.join("semver-checks.log"))
@@ -467,6 +454,122 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
                 assert_eq!(fixture.read("packages/library/src/lib.rs"), original);
             }
         }
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Runs the application with a non-executable checker fixture"
+)]
+fn checker_start_failure_retains_selected_but_unidentified_state() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        let fixture = Fixture::new("");
+        write_package(&fixture, "library", "1.0.0", "");
+        fixture.commit("released library");
+        fixture.write(
+            "packages/library/src/lib.rs",
+            "pub fn pending_change() {}\n",
+        );
+        let output = TempDir::new().unwrap();
+        let tools = output.path().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let checker = tools.join(format!("cargo-semver-checks{EXE_SUFFIX}"));
+        fs::write(&checker, b"not an executable image").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&checker, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = env::join_paths(
+            iter::once(tools).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let evidence = output.path().join("evidence");
+        let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args(["check-compatibility", "--manifest-path"])
+            .arg(fixture.manifest())
+            .args(["--base", &fixture.sha("HEAD"), "--output"])
+            .arg(&evidence)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("failed to start cargo-semver-checks")
+        );
+        let outcome = read_outcome(&evidence);
+        assert_eq!(outcome.get("completed").unwrap(), false);
+        assert_eq!(
+            outcome.get("checker").unwrap(),
+            "selected: checker identity unavailable"
+        );
+        assert_eq!(outcome.get("packages").unwrap(), &json!([]));
+    });
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Mutates tracked source during real report history acquisition"
+)]
+fn fresh_source_drift_during_report_prevents_checker_invocation_and_evidence_acceptance() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        let fixture = Fixture::new("");
+        write_package(&fixture, "library", "1.0.0", "");
+        fixture.commit("captured source");
+        let output = TempDir::new().unwrap();
+        let tools = output.path().join("git-shim");
+        fs::create_dir_all(&tools).unwrap();
+        let real_git = env::split_paths(&env::var_os("PATH").unwrap())
+            .map(|directory| directory.join(format!("git{EXE_SUFFIX}")))
+            .find(|candidate| candidate.is_file())
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        fs::copy(
+            CHECKER
+                .path()
+                .join(format!("cargo-semver-checks{EXE_SUFFIX}")),
+            tools.join(format!("git{EXE_SUFFIX}")),
+        )
+        .unwrap();
+        let path = env::join_paths(
+            [tools, CHECKER.path().to_path_buf()]
+                .into_iter()
+                .chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let calls = output.path().join("checker-calls");
+        let marker = output.path().join("report-drift");
+        let evidence = output.path().join("evidence");
+        let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args(["check-compatibility", "--manifest-path"])
+            .arg(fixture.manifest())
+            .args(["--base", &fixture.sha("HEAD"), "--output"])
+            .arg(&evidence)
+            .env("PATH", path)
+            .env("CRP_REAL_GIT", real_git)
+            .env("CRP_REPORT_DRIFT_MARKER", &marker)
+            .env(
+                "CRP_FIXTURE_SOURCE",
+                fixture.path().join("packages/library/src/lib.rs"),
+            )
+            .env("CRP_FIXTURE_SCENARIO", "canary-failure")
+            .env("CRP_FIXTURE_CALLS", &calls)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(marker.is_file());
+        assert!(evidence.join("report.json").is_file());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("inputs are stale"));
+        assert!(!calls.exists());
+        assert!(!evidence.join("compatibility.json").exists());
+        assert!(
+            fixture
+                .read("packages/library/src/lib.rs")
+                .contains("report_drift")
+        );
     });
 }
 
@@ -512,12 +615,30 @@ use std::path::Path;
 use std::process;
 
 fn main() {
+    let os_args: Vec<_> = env::args_os().collect();
+    if Path::new(&os_args[0]).file_stem().is_some_and(|name| name == "git") {
+        // Forward actual Git output unchanged. Historical tree acquisition belongs to report,
+        // not Inputs::capture; this event injects drift without invocation counts or clocks.
+        let status = process::Command::new(env::var_os("CRP_REAL_GIT").unwrap())
+            .args(&os_args[1..]).status().unwrap();
+        if status.success() && os_args.iter().any(|arg| arg == "ls-tree") {
+            match OpenOptions::new().write(true).create_new(true)
+                .open(env::var_os("CRP_REPORT_DRIFT_MARKER").unwrap()) {
+                Ok(_) => fs::write(env::var_os("CRP_FIXTURE_SOURCE").unwrap(),
+                    "pub fn report_drift() {}\n").unwrap(),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+        process::exit(status.code().unwrap_or(1));
+    }
     let args: Vec<_> = env::args().collect();
     if env::var_os("CRP_FIXTURE_PROBE").is_some() {
         println!("cargo-semver-checks 0.50.0 (fixture)");
         return;
     }
-    for name in ["GH_TOKEN", "GITHUB_TOKEN", "CARGO_REGISTRY_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"] {
+    for name in ["GH_TOKEN", "GITHUB_TOKEN", "CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        "CARGO_REGISTRIES_PRIVATE_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"] {
         assert!(env::var_os(name).is_none());
     }
     assert_eq!(env::var("CARGO_TERM_COLOR").unwrap(), "never");
@@ -570,12 +691,16 @@ fn main() {
             .chain(env::split_paths(&env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    let result = Command::new("cargo")
-        .args(["semver-checks", "--version"])
-        .env("PATH", path)
-        .env("CRP_FIXTURE_PROBE", "1")
-        .output()
-        .unwrap();
+    let result = Command::new(
+        directory
+            .path()
+            .join(format!("cargo-semver-checks{EXE_SUFFIX}")),
+    )
+    .arg("--version")
+    .env("PATH", path)
+    .env("CRP_FIXTURE_PROBE", "1")
+    .output()
+    .unwrap();
     assert!(
         result.status.success(),
         "{}",

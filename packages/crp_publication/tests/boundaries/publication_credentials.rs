@@ -1,4 +1,4 @@
-//! Full private credential protocol and lease cleanup against an isolated identity service.
+//! Cargo's credential protocol and private lease cleanup against an isolated identity service.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -16,7 +16,16 @@ use sha2::{Digest, Sha256};
 use tar::{Builder, Header};
 
 use crate::git_fixture::Repository;
-use crate::identity_fixture::IdentityService;
+use crate::identity_fixture::{IdentityService, LeaseService};
+
+/// Independent archive failures must reject credential issuance before any exchange.
+#[derive(Clone, Copy)]
+enum ArchiveCase {
+    Missing,
+    WrongChecksum,
+    WrongResolution,
+    Valid,
+}
 
 #[test]
 #[cfg_attr(
@@ -261,15 +270,6 @@ fn binary_credentials_require_the_exact_archive_and_assessed_lockfile() {
     }
 }
 
-/// Independent archive failures must reject credential issuance before any exchange.
-#[derive(Clone, Copy)]
-enum ArchiveCase {
-    Missing,
-    WrongChecksum,
-    WrongResolution,
-    Valid,
-}
-
 fn package_archive(lockfile: &[u8]) -> Vec<u8> {
     let mut archive = Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
     let mut header = Header::new_gnu();
@@ -281,4 +281,92 @@ fn package_archive(lockfile: &[u8]) -> Vec<u8> {
         .append_data(&mut header, "tool-1.0.0/Cargo.lock", lockfile)
         .unwrap();
     archive.into_inner().unwrap().finish().unwrap()
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Uses owned credential files, Git and loopback HTTP")]
+fn every_upload_gets_a_fresh_lease_and_cleanup_continues_after_revocation_failure() {
+    for reject_first in [false, true] {
+        let service = LeaseService::new(reject_first);
+        let repository = Repository::new();
+        repository.write(
+            "Cargo.toml",
+            b"[workspace]\nmembers=['alpha','beta']\nresolver='3'\n",
+        );
+        for name in ["alpha", "beta"] {
+            repository.write(
+                &format!("{name}/Cargo.toml"),
+                format!("[package]\nname='{name}'\nversion='1.0.0'\nedition='2024'\n").as_bytes(),
+            );
+            repository.write(&format!("{name}/src/lib.rs"), b"pub fn ready() {}\n");
+        }
+        repository.write(
+            ".cargo/release_plan.toml",
+            b"schema-version=1\nrepository='example/library'\nrelease-branch='main'\ntargets=[]\n",
+        );
+        repository.command(&["add", "."]);
+        repository.command(&["commit", "--quiet", "-m", "credential source"]);
+        let source = repository.command(&["rev-parse", "HEAD"]).trim().to_owned();
+        let publication = PublicationManifest::new(serde_json::from_value(json!({
+            "schema_version":1,"tool_version":"1.0.0","source":source,
+            "workspace_manifest":"Cargo.toml","config_path":".cargo/release_plan.toml",
+            "configuration":{"schema-version":1,"repository":"example/library","release-branch":"main","targets":[]},
+            "packages":(["alpha","beta"].map(|name| json!({"name":name,"version":"1.0.0","manifest":format!("{name}/Cargo.toml"),"binary":null})))
+        })).unwrap()).unwrap();
+        let diagnostics = crp_publication::PublicationOutput::new(
+            "1.0.0",
+            false,
+            std::sync::Arc::new(crp_diag::Discard),
+        );
+        let session = CredentialSession::new(
+            serde_json::from_value(json!({"request_url":format!("{}/identity",service.url()),"request_token":"fixture"})).unwrap(),
+            publication, repository.path().join("Cargo.toml"), repository.path().join("target"),
+            TrustedPublisher::with_endpoint(&format!("{}/tokens", service.url()), diagnostics.clone()).unwrap(),
+        ).unwrap();
+        let mut command = Command::new("cargo");
+        session
+            .configure(&mut command, Path::new("provider"))
+            .unwrap();
+        let context = PathBuf::from(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT")
+                .unwrap()
+                .1
+                .unwrap(),
+        );
+        let mut issued = Vec::new();
+        for name in ["alpha", "beta"] {
+            let request = json!({"v":1,"kind":"get","operation":"publish","name":name,"vers":"1.0.0",
+                "cksum":"b".repeat(64),"registry":{"index-url":"sparse+https://index.crates.io/"}});
+            let mut output = Vec::new();
+            serve_credential(
+                &context,
+                &mut Cursor::new(request.to_string()),
+                &mut output,
+                &diagnostics,
+            )
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            let response: Value = serde_json::from_str(output.lines().last().unwrap()).unwrap();
+            issued.push(
+                response
+                    .pointer("/Ok/token")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        assert_ne!(issued.first(), issued.last());
+        let result = session.finish();
+        assert_eq!(result.is_ok(), !reject_first);
+        let (assertions, tokens, mut revoked) = service.observations();
+        assert_eq!(assertions, 2);
+        assert_eq!(tokens, issued);
+        revoked.sort();
+        issued.sort();
+        assert_eq!(revoked, issued);
+        assert!(!context.parent().unwrap().exists());
+    }
 }

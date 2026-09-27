@@ -13,6 +13,18 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ReleasePublication.psm1') -Force
 }
 
+Describe 'Candidate verifier controller compilation' {
+    It 'uses the same credential-filtered compiler boundary as the binary controller' {
+        InModuleScope ReleasePublication {
+            Mock Get-ReleaseControllerExecutable { 'verifier.exe' }
+            Get-ReleaseTargetVerifier | Should -Be 'verifier.exe'
+            Should -Invoke Get-ReleaseControllerExecutable -Times 1 -Exactly -ParameterFilter {
+                $Package -ceq 'release-target-check'
+            }
+        }
+    }
+}
+
 Describe 'Release-equivalent GitHub publication' {
     BeforeEach {
         $script:state = @{

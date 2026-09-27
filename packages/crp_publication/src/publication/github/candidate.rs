@@ -12,7 +12,7 @@ use crate::publication::packages::PublicationWorkspace;
 use crate::publication::prepare::fetch_release_line;
 use crate::{PublicationOutput, WriteFileError};
 
-/// Owned release-tip facts, independent of the worktree used to acquire them.
+/// Owned release-branch-tip facts used to select a release-equivalent tag target.
 pub(crate) struct Candidate {
     pub(crate) source: String,
     pub(crate) packages: BTreeMap<String, CandidatePackage>,
@@ -45,7 +45,7 @@ impl Candidate {
             .any(|line| line == boundary)
         {
             return Err(InvalidManifest::new(
-                "release candidate no longer descends from the original publication source"
+                "release-branch tip no longer descends from the original publication source"
                     .to_owned(),
             )
             .into());
@@ -156,7 +156,7 @@ impl Worktree {
 }
 
 impl Drop for Worktree {
-    #[cfg_attr(test, mutants::skip)] // Fallback for native worktree cleanup on early returns.
+    #[cfg_attr(test, mutants::skip)] // Fallback for real Git worktree cleanup on early returns.
     fn drop(&mut self) {
         // Cleanup is also needed after classification failure; failures remain visible.
         if let Err(error) = self.finish() {
@@ -179,7 +179,7 @@ struct SourceAndCleanupFailed {
     cleanup: AppError,
 }
 
-#[cfg_attr(test, mutants::skip)] // Native historical checkout; identity predicate is unit-tested.
+#[cfg_attr(test, mutants::skip)] // Real historical checkout; identity predicate is unit-tested.
 pub(crate) fn tag_workspace(
     root: &Path,
     publication: &PublicationManifest,

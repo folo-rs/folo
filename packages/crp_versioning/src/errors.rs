@@ -1,5 +1,7 @@
 // Failure conditions owned by this application's component. Leaves remain implementation details.
 // The immutable ohno source chains permit shared observation across unwind boundaries.
+// Repository, plan and command values use Quotable so control characters cannot create
+// extra diagnostic lines. Ref: packages/cargo-release-plan/docs/implementation.md, "Diagnostics".
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 
@@ -303,7 +305,7 @@ impl PlanVersionRegressionError {
 /// file it points at, and reconstructing the target's historical content is only
 /// possible when the link stays inside the repository at both ends. A refusal is
 /// preferred over a release verdict that can be silently wrong. Ref:
-/// docs/design.md, "Released content".
+/// packages/cargo-release-plan/docs/design.md, "Released content".
 #[ohno::error]
 #[display(
     "Package '{}' releases '{}', which is a symbolic link",
@@ -438,7 +440,7 @@ mod tests {
         assert_eq!(error.package(), "nm");
     }
 
-    /// The same protection applies to the paths the file-access errors name.
+    /// File-access paths follow the module's diagnostic escaping rule.
     #[test]
     fn a_repository_controlled_path_is_escaped_in_the_message() {
         let error = ReadFileError::caused_by(Path::new("a\nb"), io::Error::other("x"));

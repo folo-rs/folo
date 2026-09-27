@@ -7,6 +7,103 @@ use tiny_http::{Method, Request, Response, StatusCode};
 
 use crate::http_fixture::HttpService;
 
+/// Records distinct exchanges and exact revocations for one multi-upload session.
+#[derive(Default)]
+struct LeaseState {
+    assertions: usize,
+    tokens: Vec<String>,
+    revoked: Vec<String>,
+}
+
+/// Owns an exact-token lease fixture without sharing production credential values.
+pub(crate) struct LeaseService {
+    http: HttpService,
+    state: Arc<Mutex<LeaseState>>,
+}
+
+impl LeaseService {
+    pub(crate) fn new(reject_first: bool) -> Self {
+        let state = Arc::new(Mutex::new(LeaseState::default()));
+        let http = HttpService::new({
+            let state = Arc::clone(&state);
+            move |_, mut request| {
+                let (status, response) = match request.method() {
+                    Method::Get => {
+                        let ordinal = {
+                            let mut state = state.lock().unwrap();
+                            state.assertions = state.assertions.checked_add(1).unwrap();
+                            state.assertions
+                        };
+                        (
+                            200,
+                            serde_json::json!({"value":format!("assertion-{ordinal}")}),
+                        )
+                    }
+                    Method::Post => {
+                        let mut body = String::new();
+                        request.as_reader().read_to_string(&mut body).unwrap();
+                        let body: Value = serde_json::from_str(&body).unwrap();
+                        let (ordinal, token) = {
+                            let mut state = state.lock().unwrap();
+                            let ordinal = state.tokens.len().checked_add(1).unwrap();
+                            let token = format!("lease-{ordinal}");
+                            state.tokens.push(token.clone());
+                            (ordinal, token)
+                        };
+                        assert_eq!(body.get("jwt").unwrap(), &format!("assertion-{ordinal}"));
+                        (200, serde_json::json!({"token":token}))
+                    }
+                    Method::Delete => {
+                        let token = request
+                            .headers()
+                            .iter()
+                            .find(|header| header.field.equiv("Authorization"))
+                            .unwrap()
+                            .value
+                            .as_str()
+                            .strip_prefix("Bearer ")
+                            .unwrap()
+                            .to_owned();
+                        let (known, first) = {
+                            let mut state = state.lock().unwrap();
+                            let known = state.tokens.contains(&token);
+                            let first = state.revoked.is_empty();
+                            state.revoked.push(token);
+                            (known, first)
+                        };
+                        assert!(known);
+                        (
+                            if reject_first && first { 403 } else { 204 },
+                            serde_json::json!({}),
+                        )
+                    }
+                    _ => panic!("unexpected lease operation"),
+                };
+                request
+                    .respond(
+                        Response::from_string(response.to_string())
+                            .with_status_code(StatusCode(status)),
+                    )
+                    .unwrap();
+            }
+        });
+        Self { http, state }
+    }
+
+    pub(crate) fn url(&self) -> &str {
+        self.http.url()
+    }
+
+    pub(crate) fn observations(&self) -> (usize, Vec<String>, Vec<String>) {
+        let state = self.state.lock().unwrap();
+        (
+            state.assertions,
+            state.tokens.clone(),
+            state.revoked.clone(),
+        )
+    }
+}
+
 /// A disposable identity endpoint; stopping it wakes a blocked receiver without a timer.
 pub(crate) struct IdentityService {
     http: HttpService,

@@ -97,6 +97,8 @@ pub(crate) fn work_tree() -> WorkTree {
                 publishable: name != "helper",
             })
             .collect(),
+        // Mirror the helper manifest's exact path dependency in manifests() and its path
+        // slot in unique_paths(); acquired metadata and editable text must describe one edge.
         exact_dependencies: vec![ExactDependency {
             source: "helper".to_owned(),
             target: "api".to_owned(),

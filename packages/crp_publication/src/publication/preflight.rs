@@ -2,36 +2,32 @@
 
 use std::path::Path;
 
-use crp_versioning::inspect_plan::run_inspect_plan;
+use crp_versioning::inspect_plan::read_plan_inspection;
 use crp_workspace::metadata::load_tracked_work_tree;
 use ohno::AppError;
-use serde::Deserialize;
 
 use crate::PublicationOutput;
+use crate::publication::packages::PublicationWorkspace;
 use crate::publication::registry::RegistryClient;
 
-#[derive(Deserialize)]
-struct PlanTargets {
-    publication_targets: Vec<String>,
-}
-
+#[cfg_attr(test, mutants::skip)] // Source/plan/registry acquisition uses boundary tests; selection and verdicts are pure.
 pub fn check(
     manifest: &Path,
     plan: Option<&Path>,
     diagnostics: &PublicationOutput,
 ) -> Result<(bool, String), AppError> {
     let verbose = diagnostics.notes();
-    let targets = if let Some(plan) = plan {
-        serde_json::from_str::<PlanTargets>(&run_inspect_plan(plan, true, manifest, verbose)?)?
-            .publication_targets
-    } else {
-        load_tracked_work_tree(manifest)?
+    let selected = match plan {
+        Some(plan) => read_plan_inspection(plan, true, manifest, verbose)?.publication_targets,
+        None => load_tracked_work_tree(manifest)?
             .0
             .packages
             .into_iter()
             .map(|package| package.manifest.name)
-            .collect()
+            .collect(),
     };
+    let workspace = PublicationWorkspace::load(manifest)?;
+    let targets = workspace.registry_targets(Some(&selected))?;
     let client = RegistryClient::new(diagnostics.clone())?;
     Ok(observe(
         targets,

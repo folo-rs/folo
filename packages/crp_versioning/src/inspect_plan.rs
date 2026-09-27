@@ -37,14 +37,17 @@ fn resolved_preview(
 }
 
 /// Publication eligibility comes from tracked Cargo members, not package naming.
-#[derive(Serialize)]
-struct PlanInspection {
-    publication_targets: Vec<String>,
-    evidence_manifest_path: Option<PathBuf>,
+#[derive(Debug, Serialize)]
+pub struct PlanInspection {
+    /// Publishable targets selected by the validated expanded plan.
+    pub publication_targets: Vec<String>,
+    /// Verified retained preview manifest when the plan contains resolved state.
+    pub evidence_manifest_path: Option<PathBuf>,
 }
 
 // Only the real filesystem/Git adapters are excluded; inspection decisions and serialization
-// run in the unit-tested core. See docs/implementation.md, "Test boundaries".
+// run in the unit-tested core. See packages/cargo-release-plan/docs/implementation.md, "Test
+// boundaries".
 #[cfg_attr(test, mutants::skip)]
 pub fn run_inspect_plan(
     path: &Path,
@@ -52,6 +55,19 @@ pub fn run_inspect_plan(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
+    let inspection = read_plan_inspection(path, require_resolved, manifest, verbose)?;
+    Ok(serde_json::to_string(&inspection)
+        .expect("plan inspection contains only JSON-compatible artifact fields"))
+}
+
+/// Acquires the same validated inspection used by the CLI without a JSON round trip.
+#[cfg_attr(test, mutants::skip)] // Real input acquisition and validation have boundary coverage.
+pub fn read_plan_inspection(
+    path: &Path,
+    require_resolved: bool,
+    manifest: &Path,
+    verbose: Verbose<'_>,
+) -> Result<PlanInspection, AppError> {
     let plan: PlanFile = read_json(path)?;
     inspect_plan(
         plan,
@@ -74,7 +90,7 @@ fn inspect_plan(
     validate_resolved: impl FnOnce(&PlanFile) -> Result<(), AppError>,
     verify_candidate: impl FnOnce(&ResolvedState) -> Result<(), AppError>,
     load_work_tree: impl FnOnce() -> Result<WorkTree, AppError>,
-) -> Result<String, AppError> {
+) -> Result<PlanInspection, AppError> {
     validate_inputs(&plan, require_resolved, validate_resolved, verify_candidate)?;
     let work_tree = load_work_tree()?;
     let resolved = resolve_plan(
@@ -91,12 +107,10 @@ fn inspect_plan(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let inspection = PlanInspection {
+    Ok(PlanInspection {
         publication_targets,
         evidence_manifest_path: plan.resolved.map(|state| state.evidence_manifest_path),
-    };
-    Ok(serde_json::to_string(&inspection)
-        .expect("plan inspection contains only JSON-compatible artifact fields"))
+    })
 }
 
 fn validate_inputs(
@@ -145,7 +159,7 @@ mod tests {
     use crp_workspace::lockfile::InstallationGraph;
     use crp_workspace::metadata::VersionTarget;
     use semver::Version;
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use super::*;
     use crate::plan::PlanIncrement;
@@ -220,7 +234,7 @@ mod tests {
                     (false, false) => {
                         assert!(!validated.get());
                         assert_eq!(
-                            serde_json::from_str::<Value>(&result.unwrap()).unwrap(),
+                            serde_json::to_value(result.unwrap()).unwrap(),
                             json!({
                                 "publication_targets": [],
                                 "evidence_manifest_path": null
@@ -275,7 +289,7 @@ mod tests {
         .unwrap();
         assert_eq!(order.get(), 3);
         assert_eq!(
-            serde_json::from_str::<Value>(&output).unwrap(),
+            serde_json::to_value(output).unwrap(),
             json!({
                 "publication_targets": ["api", "zeta"],
                 "evidence_manifest_path": expected.resolved.unwrap().evidence_manifest_path

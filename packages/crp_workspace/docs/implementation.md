@@ -5,8 +5,9 @@ and is composed as described by its [implementation guide](../../cargo-release-p
 It owns Git/Cargo observations and the representations needed to interpret them.
 
 Git subprocesses, manifest/member/dependency discovery, inherited-key acquisition,
-tracked package contents, installation lock graphs and source/path identity share
-this boundary. Git and manifest interpretation may depend on each other inside
+tracked package contents, installation declaration graphs, lockfile parsing and
+closure calculation, and source/path identity share this boundary.
+Git and manifest interpretation may depend on each other inside
 the package. Classification, version-group decisions and publication eligibility
 belong to callers. Workspace observations retain validated exact dependency edges;
 versioning derives their groups.

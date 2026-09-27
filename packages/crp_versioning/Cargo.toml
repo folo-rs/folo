@@ -8,8 +8,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-# Cargo retains the explicit benchmark target in the packaged manifest.
-include = ["src/**", "benches/crp_versioning.rs"]
+# Cargo omits excluded benchmark targets from the published manifest; local benches stay available.
+include.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
@@ -47,13 +47,12 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
-toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
+toml_edit = { workspace = true, features = ["parse", "display"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
 crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 crp_workspace = { path = "../crp_workspace", features = ["private-test-util"] }
-mimalloc = { workspace = true }
 mutants = { workspace = true }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }

@@ -86,13 +86,7 @@ function Get-ReleaseTargetVerifier {
     [OutputType([string])]
     param()
 
-    Push-Location (Join-Path $PSScriptRoot '..' '..')
-    try {
-        $messages = @(cargo build --package release-target-check --locked --message-format=json-render-diagnostics)
-    } finally {
-        Pop-Location
-    }
-    return Resolve-CargoExecutable -CargoMessage $messages -TargetName 'release-target-check'
+    Get-ReleaseControllerExecutable -Package release-target-check
 }
 
 function Invoke-ReleaseTargetCheck {

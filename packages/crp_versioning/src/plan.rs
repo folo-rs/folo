@@ -24,12 +24,13 @@ use crate::{
 /// Shared plan and report schema revision.
 ///
 /// Plan and report formats advance together. Incompatible field, enum, or
-/// path-layout changes increment this constant. Contract: package README
-/// "Plan and report schema".
+/// path-layout changes increment this constant. Contract:
+/// packages/cargo-release-plan/book/src/reference/artifacts.md,
+/// "Local decisions and plans" and "Reports".
 ///
 /// The resolved-state revision distinguishes read-only group expansion from
 /// captured previews; only a captured preview is an applicable expanded plan.
-/// Command and JSON incompatibilities require breaking release grading even
+/// Command and JSON incompatibilities require a breaking semantic decision even
 /// when comparison of the public Rust API finds no incompatible signatures.
 pub const SCHEMA_VERSION: u32 = 4;
 
@@ -207,7 +208,7 @@ pub(crate) fn resolve_plan(
                 // re-publish a released version with different content. Equality
                 // is accepted because exact realignment leaves the member that
                 // already declares the highest version unchanged.
-                // Ref: docs/design.md, "Version monotonicity".
+                // Ref: packages/cargo-release-plan/docs/design.md, "Version monotonicity".
                 if version < &highest {
                     return Err(
                         PlanVersionRegressionError::new(&key, version.clone(), highest).into(),

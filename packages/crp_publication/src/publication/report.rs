@@ -5,7 +5,7 @@
     reason = "The report subject owns its evidence-validation child module."
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
@@ -43,6 +43,7 @@ enum JobResult {
 /// Validated phase evidence projected for attempt selection without losing human results.
 #[derive(Debug)]
 struct Receipt {
+    path: PathBuf,
     publication_id: String,
     phase: String,
     complete: bool,
@@ -67,6 +68,16 @@ struct Assessment {
     details: Vec<String>,
 }
 
+/// Keeps per-file acquisition failures alongside independently usable outcomes.
+#[derive(Default)]
+struct LoadedEvidence {
+    receipts: Vec<Receipt>,
+    failures: Vec<(PathBuf, AppError)>,
+}
+
+// Filesystem collection and issue delivery are covered by boundary tests; selection/rendering
+// use the in-process helpers below.
+#[cfg_attr(test, mutants::skip)]
 pub fn report(
     repository: &str,
     publication_path: Option<&Path>,
@@ -103,27 +114,53 @@ pub fn report(
         )
         .into());
     }
-    let result = load_receipts(outcomes, publication.as_ref())
-        .and_then(|receipts| assess(publication.as_ref(), &receipts, &jobs, context));
-    let mut assessment = match result {
-        Ok(assessment) => assessment,
-        Err(error) => {
-            diagnostics.line(format_args!("{error}"));
-            let mut details = job_failures(&jobs);
-            details.push(
-                "Publication evidence is invalid or unavailable; inspect the reporter diagnostics."
-                    .to_owned(),
-            );
-            Assessment {
-                complete: false,
-                details,
-            }
-        }
-    };
+    let loaded = load_receipts(outcomes, publication.as_ref());
+    let mut assessment = assess_loaded(publication.as_ref(), &loaded, &jobs, context);
+    for (_, error) in &loaded.failures {
+        diagnostics.line(format_args!("{error}"));
+    }
     if !evidence_errors.is_empty() {
         assessment.complete = false;
-        assessment.details.extend(evidence_errors);
+        evidence_errors.extend(assessment.details);
+        assessment.details = evidence_errors;
     }
+    let body = render_report(repository, context, &assessment)?;
+    write_new(output, |file| {
+        file.write_all(body.as_bytes())
+            .map_err(|error| WriteFileError::caused_by(output, error).into())
+    })?;
+    if !assessment.complete && !no_issue {
+        Github::new(repository, diagnostics)?.report_failure(context, &body)?;
+    }
+    Ok((
+        assessment.complete,
+        format!("Publication report: {}.", output.display()),
+    ))
+}
+
+fn assess_loaded(
+    publication: Option<&PublicationManifest>,
+    loaded: &LoadedEvidence,
+    jobs: &JobResults,
+    context: WorkflowRun,
+) -> Assessment {
+    let mut assessment = assess(publication, &loaded.receipts, jobs, context);
+    if !loaded.failures.is_empty() {
+        assessment.complete = false;
+        let mut failures: Vec<_> = loaded.failures.iter().map(|(path, _)| {
+            format!("Publication outcome {} is invalid or unavailable; inspect the reporter diagnostics.", path.display())
+        }).collect();
+        failures.extend(assessment.details);
+        assessment.details = failures;
+    }
+    assessment
+}
+
+fn render_report(
+    repository: &str,
+    context: WorkflowRun,
+    assessment: &Assessment,
+) -> Result<String, AppError> {
     let url = format!(
         "https://github.com/{repository}/actions/runs/{}",
         context.run_id
@@ -143,56 +180,84 @@ pub fn report(
     if !assessment.complete {
         body.push_str("\nKeep the original manifest and attempt artifacts. Retry the original failed workflow after correcting the observed blocker; if its artifacts expired, use explicit-source recovery.\n");
     }
-    write_new(output, |file| {
-        file.write_all(body.as_bytes())
-            .map_err(|error| WriteFileError::caused_by(output, error).into())
-    })?;
-    if !assessment.complete && !no_issue {
-        Github::new(repository, diagnostics)?.report_failure(context, &body)?;
-    }
-    Ok((
-        assessment.complete,
-        format!("Publication report: {}.", output.display()),
-    ))
+    Ok(body)
 }
 
-fn load_receipts(
-    root: &Path,
-    publication: Option<&PublicationManifest>,
-) -> Result<Vec<Receipt>, AppError> {
-    if !root
-        .try_exists()
-        .map_err(|error| ReadFileError::caused_by(root, error))?
-    {
-        return Ok(Vec::new());
+#[cfg_attr(test, mutants::skip)] // Real directory traversal and file reads belong to boundary tests.
+fn load_receipts(root: &Path, publication: Option<&PublicationManifest>) -> LoadedEvidence {
+    let mut loaded = LoadedEvidence::default();
+    match root.try_exists() {
+        Ok(false) => return loaded,
+        Ok(true) => {}
+        Err(error) => {
+            loaded.failures.push((
+                root.to_path_buf(),
+                ReadFileError::caused_by(root, error).into(),
+            ));
+            return loaded;
+        }
     }
     let mut pending = vec![root.to_path_buf()];
-    let mut receipts = Vec::new();
     while let Some(directory) = pending.pop() {
-        for entry in
-            fs::read_dir(&directory).map_err(|error| ReadFileError::caused_by(&directory, error))?
-        {
-            let entry = entry.map_err(|error| ReadFileError::caused_by(&directory, error))?;
-            let kind = entry
-                .file_type()
-                .map_err(|error| ReadFileError::caused_by(entry.path(), error))?;
-            if kind.is_dir() {
-                pending.push(entry.path());
-            } else if kind.is_file() && entry.file_name() == "outcome.json" {
-                // The shared workflow stages phase receipts under this filename.
-                // Ref: book/src/integration/publication.md, artifact layout.
-                let path = entry.path();
-                let bytes =
-                    fs::read(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
-                if let Some(receipt) = parse_receipt(&bytes, publication)
-                    .map_err(|error| ReceiptReadError::caused_by(&path, error))?
-                {
-                    receipts.push(receipt);
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                loaded.failures.push((
+                    directory.clone(),
+                    ReadFileError::caused_by(&directory, error).into(),
+                ));
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    loaded.failures.push((
+                        directory.clone(),
+                        ReadFileError::caused_by(&directory, error).into(),
+                    ));
+                    continue;
                 }
+            };
+            let path = entry.path();
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(error) => {
+                    loaded
+                        .failures
+                        .push((path.clone(), ReadFileError::caused_by(&path, error).into()));
+                    continue;
+                }
+            };
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file() && entry.file_name() == "outcome.json" {
+                // The shared workflow stages phase outcomes under this filename.
+                // Ref: book/src/integration/publication.md, artifact layout.
+                let result = fs::read(&path)
+                    .map_err(|error| ReadFileError::caused_by(&path, error).into())
+                    .and_then(|bytes| parse_receipt(&bytes, publication, &path));
+                collect_receipt(&mut loaded, path, result);
             }
         }
     }
-    Ok(receipts)
+    loaded
+}
+
+fn collect_receipt(
+    loaded: &mut LoadedEvidence,
+    path: PathBuf,
+    result: Result<Option<Receipt>, AppError>,
+) {
+    match result {
+        Ok(Some(receipt)) => loaded.receipts.push(receipt),
+        Ok(None) => {}
+        Err(error) => loaded.failures.push((
+            path.clone(),
+            ReceiptReadError::caused_by(path, error).into(),
+        )),
+    }
 }
 
 fn job_failures(jobs: &JobResults) -> Vec<String> {
@@ -215,7 +280,8 @@ fn job_failures(jobs: &JobResults) -> Vec<String> {
     details
 }
 
-/// Selects each execution unit's newest non-future receipt for this publication and run.
+/// Selects the latest eligible outcome for each publication execution unit.
+///
 /// Current job failures remain authoritative; binary evidence must follow its reconciliation.
 /// Informational partial-success summaries never participate in the failure verdict.
 fn assess(
@@ -223,52 +289,34 @@ fn assess(
     receipts: &[Receipt],
     jobs: &JobResults,
     context: WorkflowRun,
-) -> Result<Assessment, AppError> {
+) -> Assessment {
     let mut details = job_failures(jobs);
     let mut summaries = Vec::new();
     let Some(publication) = publication else {
         details.push("The original immutable publication manifest is unavailable.".to_owned());
-        return Ok(Assessment {
+        return Assessment {
             complete: false,
             details,
-        });
+        };
     };
-    let select = |phase: &str,
-                  target: Option<&str>,
-                  batch: Option<&str>|
-     -> Result<Option<&Receipt>, AppError> {
-        let candidates = receipts.iter().filter(|receipt| {
-            receipt.publication_id == publication.id
-                && receipt.github.run_id == context.run_id
-                && receipt.github.run_attempt <= context.run_attempt
-                && receipt.phase == phase
-                && receipt.target.as_deref() == target
-                && receipt.batch_id.as_deref() == batch
-        });
-        let mut selected: Option<&Receipt> = None;
-        let mut attempts = BTreeSet::new();
-        for receipt in candidates {
-            // Two receipts for one attempt cannot establish an unambiguous latest result.
-            if !attempts.insert(receipt.github.run_attempt) {
-                return Err(InvalidManifest::new(
-                    "duplicate outcomes for the same publication execution unit".to_owned(),
-                )
-                .into());
-            }
-            if selected
-                .is_none_or(|previous| previous.github.run_attempt < receipt.github.run_attempt)
-            {
-                selected = Some(receipt);
-            }
-        }
-        Ok(selected)
-    };
+    let mut github_outcome = None;
     for phase in ["registry", "github"] {
-        match select(phase, None, None)? {
+        match select_receipt(
+            receipts,
+            &publication.id,
+            context,
+            phase,
+            None,
+            None,
+            &mut details,
+        ) {
             Some(receipt) => {
+                if phase == "github" {
+                    github_outcome = Some(receipt);
+                }
                 summaries.extend(receipt.summaries.iter().cloned());
                 if !receipt.complete {
-                    details.push(format!("{phase} receipt reports incomplete delivery."));
+                    details.push(format!("{phase} outcome reports incomplete delivery."));
                     details.extend(receipt.errors.iter().cloned());
                 }
             }
@@ -277,16 +325,18 @@ fn assess(
             )),
         }
     }
-    if let Some(github) = select("github", None, None)? {
+    if let Some(github) = github_outcome {
         let mut expected = BTreeMap::new();
         for batch in &github.batches {
             if expected.insert(&batch.target, &batch.batch_id).is_some() {
-                return Err(InvalidManifest::new(
-                    "GitHub outcome repeats a native target".to_owned(),
-                )
-                .into());
+                details.push(format!(
+                    "GitHub outcome {} repeats target {}.",
+                    github.path.display(),
+                    batch.target
+                ));
+                continue;
             }
-            match select("binaries", Some(&batch.target), Some(&batch.batch_id))? {
+            match select_receipt(receipts, &publication.id, context, "binaries", Some(&batch.target), Some(&batch.batch_id), &mut details) {
                 // An older success cannot override a newer observation of missing assets.
                 Some(receipt) if receipt.github.run_attempt >= github.github.run_attempt => {
                     summaries.extend(receipt.summaries.iter().cloned());
@@ -295,17 +345,55 @@ fn assess(
                         details.extend(receipt.errors.iter().cloned());
                     }
                 }
-                _ => details.push(format!("No completed binary receipt satisfies {} batch {} from reconciliation attempt {}.",
+                _ => details.push(format!("No completed binary outcome satisfies {} batch {} from reconciliation attempt {}.",
                     batch.target, batch.batch_id, github.github.run_attempt)),
             }
         }
-        if !github.batches.is_empty() && jobs.binaries != JobResult::Success {
-            details.push("Expected binary jobs did not all succeed; older receipts cannot override that result.".to_owned());
+        if !github.batches.is_empty() && jobs.binaries == JobResult::Skipped {
+            details.push(
+                "Required binary jobs were skipped; older outcomes cannot override that result."
+                    .to_owned(),
+            );
         }
     }
     let complete = details.is_empty();
     details.extend(summaries);
-    Ok(Assessment { complete, details })
+    Assessment { complete, details }
+}
+
+fn select_receipt<'a>(
+    receipts: &'a [Receipt],
+    publication_id: &str,
+    context: WorkflowRun,
+    phase: &str,
+    target: Option<&str>,
+    batch: Option<&str>,
+    failures: &mut Vec<String>,
+) -> Option<&'a Receipt> {
+    let mut selected: Option<&Receipt> = None;
+    let mut attempts = BTreeMap::new();
+    let mut ambiguous = false;
+    for receipt in receipts.iter().filter(|receipt| {
+        receipt.publication_id == publication_id
+            && receipt.github.run_id == context.run_id
+            && receipt.github.run_attempt <= context.run_attempt
+            && receipt.phase == phase
+            && receipt.target.as_deref() == target
+            && receipt.batch_id.as_deref() == batch
+    }) {
+        if let Some(previous) = attempts.insert(receipt.github.run_attempt, &receipt.path) {
+            ambiguous = true;
+            failures.push(format!(
+                "Duplicate {phase} outcomes for publication {publication_id}, run {}, attempt {}, target {target:?}, batch {batch:?}: {} and {}.",
+                context.run_id, receipt.github.run_attempt, previous.display(), receipt.path.display(),
+            ));
+        }
+        if selected.is_none_or(|previous| previous.github.run_attempt < receipt.github.run_attempt)
+        {
+            selected = Some(receipt);
+        }
+    }
+    if ambiguous { None } else { selected }
 }
 
 /// Retains the particular jobs/receipt file when decoding or validation fails.
@@ -353,6 +441,7 @@ mod tests {
         complete: bool,
     ) -> Receipt {
         Receipt {
+            path: PathBuf::from(format!("{phase}-{attempt}/outcome.json")),
             publication_id: publication.id.clone(),
             phase: phase.to_owned(),
             complete,
@@ -405,7 +494,6 @@ mod tests {
                 &jobs(JobResult::Failure),
                 context(2)
             )
-            .unwrap()
             .complete
         );
         receipts.push(binary(&publication, "b", "b-id", 3, true));
@@ -416,7 +504,6 @@ mod tests {
                 &jobs(JobResult::Success),
                 context(3)
             )
-            .unwrap()
             .complete
         );
         assert!(
@@ -426,7 +513,6 @@ mod tests {
                 &jobs(JobResult::Cancelled),
                 context(3)
             )
-            .unwrap()
             .complete
         );
     }
@@ -452,7 +538,6 @@ mod tests {
                     &jobs(JobResult::Success),
                     context(2)
                 )
-                .unwrap()
                 .complete
             );
         }
@@ -462,21 +547,13 @@ mod tests {
     fn requires_manifest_and_phase_receipts_even_when_workflow_jobs_succeed() {
         let publication = publication();
         let jobs = jobs(JobResult::Skipped);
-        assert!(!assess(None, &[], &jobs, context(1)).unwrap().complete);
-        assert!(
-            !assess(Some(&publication), &[], &jobs, context(1))
-                .unwrap()
-                .complete
-        );
+        assert!(!assess(None, &[], &jobs, context(1)).complete);
+        assert!(!assess(Some(&publication), &[], &jobs, context(1)).complete);
         let receipts = vec![
             receipt(&publication, "registry", 1, true),
             receipt(&publication, "github", 1, true),
         ];
-        assert!(
-            assess(Some(&publication), &receipts, &jobs, context(1))
-                .unwrap()
-                .complete
-        );
+        assert!(assess(Some(&publication), &receipts, &jobs, context(1)).complete);
     }
 
     #[test]
@@ -492,7 +569,6 @@ mod tests {
                 &jobs(JobResult::Skipped),
                 context(1)
             )
-            .unwrap()
             .complete
         );
         receipts.push(receipt(&publication, "registry", 2, true));
@@ -503,17 +579,18 @@ mod tests {
                 &jobs(JobResult::Skipped),
                 context(1)
             )
-            .unwrap()
             .complete
         );
         receipts.push(receipt(&publication, "registry", 2, true));
-        assess(
-            Some(&publication),
-            &receipts,
-            &jobs(JobResult::Skipped),
-            context(2),
-        )
-        .unwrap_err();
+        assert!(
+            !assess(
+                Some(&publication),
+                &receipts,
+                &jobs(JobResult::Skipped),
+                context(2),
+            )
+            .complete
+        );
     }
 
     #[test]
@@ -530,8 +607,7 @@ mod tests {
             &[receipt(&publication, "registry", 1, true), github],
             &workflow,
             context(1),
-        )
-        .unwrap();
+        );
         assert!(!report.complete);
         assert!(
             report
@@ -553,9 +629,104 @@ mod tests {
             &[registry, receipt(&publication, "github", 1, true)],
             &jobs(JobResult::Skipped),
             context(1),
-        )
-        .unwrap();
+        );
         assert!(report.complete);
         assert_eq!(report.details, ["An independently completed package."]);
+    }
+
+    #[test]
+    fn duplicate_outcomes_name_both_paths_without_discarding_independent_results() {
+        let publication = publication();
+        let first = receipt(&publication, "registry", 1, true);
+        let mut duplicate = receipt(&publication, "registry", 1, true);
+        duplicate.path = PathBuf::from("copied/outcome.json");
+        let mut github = receipt(&publication, "github", 1, true);
+        github.summaries.push("independent tag result".to_owned());
+        let result = assess(
+            Some(&publication),
+            &[first, duplicate, github],
+            &jobs(JobResult::Skipped),
+            context(1),
+        );
+        assert!(!result.complete);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line.contains("registry-1") && line.contains("copied"))
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line == "independent tag result")
+        );
+    }
+
+    #[test]
+    fn a_bad_file_does_not_discard_a_valid_collected_outcome() {
+        let publication = publication();
+        let mut loaded = LoadedEvidence::default();
+        collect_receipt(
+            &mut loaded,
+            PathBuf::from("good/outcome.json"),
+            Ok(Some(receipt(&publication, "registry", 1, true))),
+        );
+        collect_receipt(
+            &mut loaded,
+            PathBuf::from("bad/outcome.json"),
+            Err(InvalidManifest::new("fixture".to_owned()).into()),
+        );
+        assert_eq!(loaded.receipts.len(), 1);
+        assert_eq!(loaded.failures.len(), 1);
+        assert_eq!(
+            loaded.failures.first().unwrap().0,
+            Path::new("bad/outcome.json")
+        );
+        assert!(
+            loaded
+                .failures
+                .first()
+                .unwrap()
+                .1
+                .find_source::<InvalidManifest>()
+                .is_some()
+        );
+        let mut github = receipt(&publication, "github", 1, true);
+        github.summaries.push("independent result".to_owned());
+        loaded.receipts.push(github);
+        let report = assess_loaded(
+            Some(&publication),
+            &loaded,
+            &jobs(JobResult::Skipped),
+            context(1),
+        );
+        assert!(!report.complete);
+        assert!(report.details.first().unwrap().contains("bad/outcome.json"));
+        assert!(
+            report
+                .details
+                .iter()
+                .any(|detail| detail == "independent result")
+        );
+    }
+
+    #[test]
+    fn report_rendering_preserves_each_detail_and_the_run_identity() {
+        let report = render_report(
+            "example/tools",
+            context(2),
+            &Assessment {
+                complete: false,
+                details: vec![
+                    "package failure".to_owned(),
+                    "independent success".to_owned(),
+                ],
+            },
+        )
+        .unwrap();
+        assert!(report.contains("example/tools/actions/runs/123"));
+        assert!(report.contains("package failure"));
+        assert!(report.contains("independent success"));
     }
 }

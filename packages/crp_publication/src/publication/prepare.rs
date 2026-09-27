@@ -1,7 +1,7 @@
 //! Captures publication intent after validating a clean immutable release snapshot.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crp_workspace::command::run_capture;
 use crp_workspace::git::GitRepo;
@@ -40,15 +40,27 @@ pub fn prepare(
         config.repository(),
         config.release_branch()
     ));
-    let config_path = repository.require_tracked(&config_path)?;
-    let manifest = repository.require_tracked(&workspace.root().join("Cargo.toml"))?;
-    _ = repository.require_tracked(&workspace.root().join("Cargo.lock"))?;
-    let requests = workspace.requests(&config)?;
+    let (packages, inputs) = capture_requests(
+        &repository,
+        workspace.requests(&config)?,
+        &[
+            config_path,
+            workspace.root().join("Cargo.toml"),
+            workspace.root().join("Cargo.lock"),
+        ],
+    )?;
+    let mut inputs = inputs.into_iter();
+    let config_path = inputs
+        .next()
+        .expect("the first requested input is the configuration");
+    let manifest = inputs
+        .next()
+        .expect("the second requested input is the workspace manifest");
     let line = fetch_release_line(repository.root(), &config)?;
     verbose.note(|| format!(
         "Fetched release branch at {line}; checking that source {source} belongs to its first-parent history."
     ));
-    let requested: BTreeMap<_, _> = requests
+    let requested: BTreeMap<_, _> = packages
         .iter()
         .map(|request| Ok((request.name.clone(), Version::parse(&request.version)?)))
         .collect::<Result<_, AppError>>()?;
@@ -62,30 +74,12 @@ pub fn prepare(
         },
         verbose,
     )?;
-    repository.checked(|| {
-        // Full-graph validation enforces the committed resolution; no repair is allowed here.
-        verbose.note(|| "Validating the complete committed Cargo.lock with locked metadata before capturing publication requests.".to_owned());
-        run_capture(
-            "cargo",
-            &[
-                "metadata",
-                "--locked",
-                "--format-version",
-                "1",
-                "--manifest-path",
-                &manifest.to_string_lossy(),
-            ],
-            workspace.root(),
-        )
-        .map_err(Into::into)
-    })?;
-    let packages = capture_requests(&repository, requests)?;
     let publication = PublicationManifest::new(Publication {
         schema_version: PUBLICATION_SCHEMA_VERSION,
         tool_version: diagnostics.tool_version().to_owned(),
         source: source.to_owned(),
-        workspace_manifest: tracked_relative(&repository, &manifest)?,
-        config_path: tracked_relative(&repository, &config_path)?,
+        workspace_manifest: repository_relative(repository.root(), &manifest)?,
+        config_path: repository_relative(repository.root(), &config_path)?,
         configuration: config,
         packages,
     })?;
@@ -102,26 +96,39 @@ pub fn prepare(
 pub(crate) fn capture_requests(
     repository: &Repository,
     requests: Vec<PackageRequest>,
-) -> Result<Vec<Package>, AppError> {
-    requests
+    inputs: &[PathBuf],
+) -> Result<(Vec<Package>, Vec<PathBuf>), AppError> {
+    // One phase-local index observation covers both intent inputs and package manifests.
+    // Preserve canonical input paths for later serialization without repeating membership work.
+    let input_count = inputs.len();
+    let paths: Vec<_> = inputs
+        .iter()
+        .cloned()
+        .chain(requests.iter().map(|request| request.manifest.clone()))
+        .collect();
+    let mut inputs = repository.require_tracked_paths(&paths)?;
+    let paths = inputs.split_off(input_count);
+    debug_assert_eq!(requests.len(), paths.len());
+    let packages = requests
         .into_iter()
-        .map(|request| {
+        .zip(paths)
+        .map(|(request, manifest)| {
             Ok(Package {
                 name: request.name,
                 version: request.version,
-                manifest: tracked_relative(repository, &request.manifest)?,
+                manifest: repository_relative(repository.root(), &manifest)?,
                 binary: request.binary.map(|binary| Binary {
                     name: binary.name,
                     targets: binary.targets,
                 }),
             })
         })
-        .collect()
+        .collect::<Result<_, AppError>>()?;
+    Ok((packages, inputs))
 }
 
-fn tracked_relative(repository: &Repository, path: &Path) -> Result<String, AppError> {
-    let path = repository.require_tracked(path)?;
-    let relative = path.strip_prefix(repository.root()).map_err(|error| {
+fn repository_relative(root: &Path, path: &Path) -> Result<String, AppError> {
+    let relative = path.strip_prefix(root).map_err(|error| {
         InvalidManifest::caused_by(
             "publication input is outside its repository".to_owned(),
             error,

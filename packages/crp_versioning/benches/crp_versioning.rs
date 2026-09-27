@@ -11,10 +11,7 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use crp_versioning::__private::benchmark_patch_rendering;
 
-// This explicit target ships, so its allocator cannot depend on the unpublished testing helper.
-#[cfg(not(miri))]
-#[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+::testing::set_allocator!();
 
 /// Keeps the low case above trivial fixed-cost behavior.
 const LOW_LINE_COUNT: usize = 16;
