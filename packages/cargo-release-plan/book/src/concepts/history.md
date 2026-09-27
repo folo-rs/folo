@@ -27,9 +27,9 @@ An unrelated change at `E` does not reset these anchors. Comparing only the
 baseline's files with the work tree would miss accumulated changes since a
 package's own version decision.
 
-First-parent history follows the release line rather than the commits made while
+First-parent history follows the release branch rather than the commits made while
 authoring a topic branch. For a merge commit, the anchor is where the version
-reaches that line. Reformatting a version declaration does not change its parsed
+reaches that history. Reformatting a version declaration does not change its parsed
 value and does not create an anchor. Adding a package does.
 
 Full history is required. An anchor hidden by a shallow or truncated checkout
@@ -37,14 +37,20 @@ cannot establish version readiness.
 
 ## What the assessment says
 
+**Released content** is the package content relevant to consumers, including
+Cargo's packaging inputs and an installable binary's locked dependencies.
+The [next chapter](released-content.md) defines that boundary in detail.
+
 | Status in `report.json` | Meaning |
 | --- | --- |
 | `pending-release` | The declared version is above its anchor, or the package is preparing its first release. |
 | `needs-increment` | Released content changed without advancing the version beyond its anchor. |
 | `unchanged` | Released content and version still match the anchor. |
 
-`needs-increment` fails the release-readiness check. Group consistency, dependency
-requirements and public-dependency compatibility are independent checks. A version
+`needs-increment` fails the version-readiness check. Group consistency and dependency
+requirements are independent checks. A **public dependency** supplies types exposed
+through a library's API; its [compatibility obligations](versions.md#private-apis-and-public-dependencies)
+are checked separately too. A version
 below its anchor is an error, not another status.
 
 Pending increments remain valid while a contribution develops: all of its
@@ -97,5 +103,5 @@ than assigning old evidence a new baseline. See
 [stale-plan recovery](../operations/recovery.md#release-branch-movement).
 
 Maintenance series can use their own release branches and baselines. Version
-monotonicity is relative to the selected release line; registry identity still
+monotonicity is relative to the selected release branch's history; registry identity still
 has to be reconciled before publication.

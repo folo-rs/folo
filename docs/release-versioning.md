@@ -46,8 +46,8 @@ may be undone automatically. Refresh the release baseline and the PR section.
 
 Follow the [version-group model](https://folo-rs.github.io/folo/cargo-release-plan/concepts/versions.html)
 and [workspace dependency conventions](dependencies.md). Folo's exact
-intra-workspace dependencies declare shared versions, including private
-alignment-only helpers. Do not widen an exact requirement merely to evade group
+intra-workspace dependencies declare shared versions, including non-publishable
+version targets. Do not widen an exact requirement merely to evade group
 membership.
 
 ## Conservative breaking-change propagation
@@ -56,6 +56,10 @@ Folo validates its external-type allow-lists through
 [the external-types gate](external-types.md). Those declarations support the
 book's [public-dependency propagation rule](https://folo-rs.github.io/folo/cargo-release-plan/concepts/versions.html).
 An unchecked allow-list is not evidence that a public dependency exposes no types.
+Whole-group over-propagation is an accepted safety trade-off: safely exempting
+unaffected exports requires complete, validated, item-specific transitive exposure
+evidence. Its implementation and maintenance cost is not justified here.
+See the [recorded decision](https://github.com/folo-rs/folo/issues/531).
 
 ## Repository CI
 
@@ -73,5 +77,5 @@ job wiring. Generic caller setup is in the book's
 ## Publication and first releases
 
 See [Folo release operations](release-automation.md) and [RELEASING.md](../RELEASING.md).
-New crates require the explicit pre-merge maintainer bootstrap described in the
+New packages require the explicit pre-merge maintainer bootstrap described in the
 [first-publication guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html).

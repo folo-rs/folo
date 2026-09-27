@@ -70,10 +70,11 @@ before and after comparison. `--prepared` instead checks the original prepared
 inputs; without either selector, it acquires fresh evidence against the chosen
 baseline.
 
-A detached report does not establish that a checkout is still current, so there
-is no `check-compatibility --report` mode. The report/plan schema remains `4`.
-For additional external analysis, use the recorded
-`resolved.evidence_manifest_path` and follow it with `verify-preview`.
+A detached report does not establish that a checkout is still current.
+Additional analysis uses the preview's recorded prospective workspace and is
+followed by preview verification. The
+[planning walkthrough](../integration/local-planning.md) supplies the commands;
+the [artifact reference](../reference/artifacts.md) owns exact fields and schemas.
 
 The expanded target set includes non-publishable version targets. Dependents
 whose requirements are rewritten without receiving another version are reflected

@@ -134,4 +134,4 @@ an adoption shortcut. Mutation privileges belong only in the separately gated
 Before making the check required, exercise a passing change, an intentionally
 missing increment, a group/dependency violation and the queue event. Confirm the
 external-type gate covers your supported public API surfaces and that
-compatibility execution failures remain failures in the final status.
+API compatibility checker execution failures remain failures in the final status.

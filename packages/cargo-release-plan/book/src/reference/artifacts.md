@@ -19,7 +19,7 @@ A decisions document is caller-authored literal JSON:
 ```
 
 `changes[].level` is semantic: `breaking`, `nonbreaking` or `patch`.
-Nonpublishable targets have no semantic decisions.
+Non-publishable version targets have no semantic decisions.
 
 The proposed-plan format uses report/plan schema revision `4`. This is a literal
 example of that format:
@@ -75,8 +75,8 @@ Dependencies record `name`, `req`, `exact_pin` and `public`. Consumer-contract
 flags select public library comparisons; they do not claim that binaries or
 private implementation changes lack behavioral consequences.
 
-Nonpublishable entries carry `name`, `declared_version` and an optional group,
-not a status or semantic change level. Group records include complete sorted
+Non-publishable version targets carry `name`, `declared_version` and an optional group,
+not a status or semantic decision. Group records include complete sorted
 members and their highest declared version.
 
 Patch paths are relative to the report directory. Patches are zero-context
@@ -283,8 +283,9 @@ recovery; they are not a valid empty work set.
 
 ## Reporter job results
 
-`publish report --jobs` reads a JSON object with fixed keys and GitHub job-result
-strings:
+`publish report --jobs` reads a JSON object with fixed keys. Each value is one of
+`success`, `failure`, `cancelled` or `skipped`, taken from GitHub's workflow job-result
+context rather than the broader check-run conclusion vocabulary:
 
 ```json
 {
@@ -297,6 +298,8 @@ strings:
 
 This demonstrates the format, not a default successful state. Supply observed
 results from the current workflow; `binaries` is the binary matrix job result.
+Skipped required phases are incomplete. A skipped binary matrix is acceptable
+only when the selected GitHub outcome requires no platform batches.
 Do not omit failed/skipped jobs, rename keys after your caller's display names,
 or synthesize success from existing assets.
 

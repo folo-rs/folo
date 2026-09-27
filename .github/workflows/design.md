@@ -784,7 +784,7 @@ A package's version anchor identifies the main commit that introduced its versio
 remains the comparison baseline for version validation, not a mandatory release-tag target.
 A release tag identifies an immutable main snapshot containing the package's released
 content at that version. A later main commit is equally valid when the package version
-and its release-relevant content remain unchanged.
+and its released content remain unchanged.
 
 This follows from the merge gate: released-content changes require a version increment.
 Equivalence uses the same package-content model as that gate, including inherited manifest
@@ -801,11 +801,11 @@ unattended recovery depend on a permission the workflow does not possess. Select
 verified current-main snapshot preserves package identity without adding credentials or
 blocking unrelated merges.
 
-### Publication identity verification
+### Publishing identity probe
 
 A manual `verify-publishing-identity` dispatch on `release.yml` verifies the
 registered caller through the reusable release action. The controller is built
-without granting installation code publishing identity authority. The probe
+without granting installation code OIDC credential-request authority. The probe
 exchanges and immediately revokes a temporary crates.io credential without
 package upload, tag/release writes or binary publication. The
 [implementation guide](implementation.md#release-publication) owns job isolation
@@ -857,8 +857,10 @@ or changes which source a release represents.
 
 Recovery refreshes each binary release's archive/checksum completeness before doing
 build work. Independent failures do not suppress remaining work, and any failed
-binary release fails the job. A nonpublishing mode retains source and archive
-verification without release queries or writes.
+binary release fails the job. Standard validation runs the selected binary smoke
+path without release queries or writes, retaining source, build and archive
+verification. See [release binary batches](implementation.md#release-binary-batches)
+for the command boundary.
 
 ## Cache warmup
 

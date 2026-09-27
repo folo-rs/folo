@@ -12,7 +12,7 @@ A maintainer performs the first publication from the feature branch **before
 the package's first merge**.
 
 1. Review and validate the new package and its publication dependencies.
-2. Publish its bootstrap version manually, in dependency order.
+2. Publish the related bootstrap packages manually, letting Cargo order their dependencies.
 3. Configure its crates.io Trusted Publisher for the consuming repository's
    calling workflow and optional environment.
 4. Prepare a strictly higher version for the first merge, including exact-group
@@ -36,8 +36,12 @@ to the actual new packages. The helper needs no registry account or publisher.
 The manual operation is ordinary Cargo publication, for example:
 
 ```powershell
-cargo publish --package widget_impl --registry crates-io
+cargo publish --package widget_impl --package widget --package widget-cli --registry crates-io --locked
 ```
+
+Use the [supported Cargo publication runtime](../reference/commands.md#prepare-and-publish-exact-versions)
+and the reviewed, current lockfile. Select the complete related package set;
+separate invocations are needed only when packages must be handled independently.
 
 It belongs to an authorized maintainer, not tests, the local skill or an
 unprivileged workflow. Follow crates.io's supported maintainer authentication

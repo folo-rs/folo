@@ -136,10 +136,10 @@ regardless of the display names in your graph.
 
 Use `--verbose` to see selection inputs and reasons without mixing diagnostics
 into machine-readable output. Identify whether a failure occurred in offline
-assessment, explicit resolution, external compilation, source validation,
+assessment, explicit resolution, API compatibility checker execution, source validation,
 registry observation or GitHub publication.
 
 Do not fix an offline classification issue by adding registry lookups, a
-compatibility execution failure by suppressing its result, or an artifact
+API compatibility checker execution failure by suppressing its result, or an artifact
 mismatch by overwriting the artifact. Resolve the relevant input or tool
 combination and regenerate evidence where required.

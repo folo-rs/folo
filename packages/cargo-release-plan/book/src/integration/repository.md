@@ -93,16 +93,22 @@ $PSNativeCommandUseErrorActionPreference = $true
 $ExternalTypesRevision = "705a0941997ebeb3bfb1a7f14070ba342f79d879"
 $ExternalTypesNightly = "nightly-2026-03-20"
 rustup toolchain install $ExternalTypesNightly --profile minimal
-cargo install cargo-check-external-types --locked `
+cargo install cargo-check-external-types --locked --force `
     --git https://github.com/awslabs/cargo-check-external-types `
     --rev $ExternalTypesRevision
-$WidgetManifest = Join-Path "packages" "widget" "Cargo.toml"
-cargo "+$ExternalTypesNightly" check-external-types --all-features `
-    --manifest-path $WidgetManifest
+cargo "+$ExternalTypesNightly" check-external-types --all-features --skip-unsupported `
+    --manifest-path Cargo.toml
 ```
 
-Run the check for each library that can expose external types, including
-implementation packages. Cover the relevant feature and platform surfaces; an
+The explicit reinstall establishes the selected revision even when another build
+has the same package version; it costs a rebuild rather than relying on version-only
+reuse. An automated installer can avoid that cost by verifying Cargo's recorded
+source revision before deciding whether to reinstall.
+
+The workspace invocation checks each eligible library using its own allow-list,
+including implementation packages. A dynamically discovered package subset is an
+optional CI optimization, not a manually maintained library list.
+Cover the relevant feature and platform surfaces; an
 all-features run on Linux cannot prove a Windows-only signature. Review unused
 entries in context because some are needed only on another target. Avoid
 overlapping patterns.

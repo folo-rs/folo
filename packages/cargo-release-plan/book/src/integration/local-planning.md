@@ -45,9 +45,12 @@ remote nickname or a branch named `main`:
 ```powershell
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
-$Work = ".release-plan-work"
+$EvidenceRoot = ".release-plan-work"
 $Configuration = Join-Path ".cargo" "release_plan.toml"
 $Branch = (git symbolic-ref --quiet --short HEAD).Trim()
+git check-ignore --quiet -- $EvidenceRoot
+New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
+$Work = Join-Path $EvidenceRoot ([guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Work | Out-Null
 $ContextPath = Join-Path $Work "context.json"
 cargo release-plan release-context --config $Configuration > $ContextPath
@@ -64,7 +67,9 @@ cargo release-plan check-compatibility `
     --output (Join-Path $Work "compatibility")
 ```
 
-Use a fresh output location for a new assessment. Preparation performs the
+The evidence root must already be covered by an ignore rule; an external root is
+also suitable and does not need `git check-ignore`. Each assessment gets a new
+child directory while retaining earlier evidence. Preparation performs the
 intended offline workspace dependency refresh before capturing evidence. It can
 modify `Cargo.lock`; it does not request blanket third-party upgrades. Missing
 offline dependencies are a setup problem to resolve explicitly, not permission
@@ -114,7 +119,7 @@ For the running example, save this literal decisions document as
 ```
 
 These names and judgments are examples, not a default policy. Omit packages
-requiring no semantic increment. Nonpublishable alignment helpers receive no
+requiring no semantic increment. Non-publishable version targets receive no
 decision.
 
 ```powershell
@@ -175,7 +180,7 @@ cargo release-plan check-published --plan $Plan
 ```
 
 Every publishable target must already be established on crates.io; missing or
-unknown registry state blocks application. Alignment-only helpers require no
+unknown registry state blocks application. Non-publishable version targets require no
 query. This does not verify Trusted Publisher administration, which the
 maintainer completes separately.
 

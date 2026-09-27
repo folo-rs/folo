@@ -30,7 +30,7 @@ development dependencies.
 
 Every library target is marked `private-api = true` and disables library
 documentation. Exact normal dependencies declare the application's version group;
-user-facing contracts are the CLI and documented artifacts.
+user-facing contracts are the CLI and documented configuration and artifact formats.
 The [implementation package release prerequisites](package-bootstrap.md) describe
 publication ordering and the verification obligations for this family.
 The selected command drives command-specific paths through shared components:
@@ -69,10 +69,14 @@ build the work-tree model, `git` owns repository facts, `anchor` resolves releas
 history, `classify` combines those inputs, `groups` and `plan` expand release
 decisions, and the command-specific modules own preparation, preview, application, and reporting.
 
+## Executable identity
+
 Executable identity is handled by CLI parsing before workspace acquisition.
 The application supplies its compiled version to publication producer and HTTP
 adapter wiring, independently of component bootstrap versions. Installation
 checks do not need to inspect a consumer repository to identify the executable.
+
+## Publication preparation
 
 The publication subject validates committed policy independently of remote state.
 Its configuration owns supported native targets but no runner assignments.
@@ -102,6 +106,8 @@ Canonical serde serialization supplies its SHA-256 content identity; schema,
 paths, configuration and identities are revalidated on read and before writes.
 Atomic no-clobber promotion prevents a different intent from replacing an existing
 handoff. Outcomes are not part of that identity and belong to separate artifacts.
+
+## Planning report validation
 
 Artifact-only planning shares the report producer's serde model. Report loading
 validates the schema and cross-package identities before consumers build dependency
@@ -201,12 +207,14 @@ and workflow timeouts belong to the shared action. It supplies validated, non-wi
 build requests to `crp_native`. Batch/delivery decisions stay in publication;
 source/artifact execution validation stays in native's unit tests.
 
-The selected bootstrap workflow also uses the nonpublished `release-binaries`
+Folo's `release.yml` also uses the nonpublished `release-binaries`
 and `release-target-check` executables. Their private command protocols are
 adapted by `crp_publication::legacy`, reusing the same native executor, publication
 operations and typed candidate verifier. They are legacy workflow adapters, not
 API compatibility checkers or a second release engine. Wrapper-connected tests
-remain beside those executables until operational cutover removes their callers.
+belong beside those executables; the owning
+[workflow guide](../../../.github/workflows/implementation.md#release-publication)
+describes their invocation.
 
 The controller repository supplies Git objects and the shared target directory,
 while each release tag selects a disposable immutable source worktree.
@@ -284,7 +292,7 @@ belong to that repository; the public book owns the consumer contract.
 
 The action manifest selects its tools and supported native runners. Released
 executable cache identities include the tool version, operating system and
-architecture. Source installation builds the selected checkout instead of
+architecture. Path installation builds the selected checkout instead of
 restoring a released executable. The installation compiler is selected separately
 from the consumer's or a tagged source's toolchain.
 
@@ -329,25 +337,16 @@ manifest on a sensitive filesystem. Git lookups continue to use recorded spellin
 
 ### Test boundaries
 
-`cargo-release-plan/tests/integration/native_binaries/` drives the unified
-executable with publication manifests and sealed batches. It covers historical
-and nested sources, exact missing-source acquisition, independent package
-failures and feature selection, shared build output, native archive permissions
-and checksums, rejected artifact paths, and process-tree cancellation. The native
-GitHub upload boundary runs in `crp_publication/tests/boundaries/native_binaries.rs`,
-including incomplete uploads, retries and source cleanup failure.
-`crp_native/tests/boundaries/` independently exercises supervised process capture.
-`just release-binary-smoke` selects these owners on the native platform.
-Ordinary test and coverage selection includes their integration targets.
+`cargo-release-plan/tests/integration/native_binaries/` owns the unified executable's
+source, build, archive and cancellation contracts. Publication's native boundary
+tests own GitHub asset delivery and recovery; `crp_native/tests/boundaries/` owns
+filesystem and supervised-process adapters. `just release-binary-smoke` and ordinary
+test/coverage selection reach these owners.
 
 Candidate-boundary tests in `crp_publication/tests/boundaries/candidate/` cover actual
-Git index, history and tracked-input semantics and real Cargo verification.
-Workspace snapshot acquisition has its own boundary tests. Windows snapshot and
-candidate cases share a nextest group and each process uses a libtest slot
-before starting their watchdog, so queued cases do not consume that budget.
-Other platforms retain normal parallelism.
-The candidate watchdog is a last-chance native-process guard, accommodating
-instrumented Git/Cargo startup without making elapsed time a test assertion.
+Git history, tracked-input semantics and real Cargo verification.
+Workspace snapshot acquisition has its own boundary tests. Native scheduling and
+last-chance watchdog policy are maintained by the fixtures and nextest configuration.
 
 Registry-publication boundary tests exercise real Cargo and its credential-provider
 protocol against an isolated sparse registry. They cover verification ordering,
@@ -356,11 +355,9 @@ publication without production registry access. Protocol and fixture mechanics
 are documented beside the helpers that depend on them.
 
 The registry runtime boundary supplies credential sessions, Cargo process results
-and retry delays. The CLI binds it to native operations. Additional integration
-tests retain real Git/source checks and loopback registry observations while
-controlling process completion, covering partial uploads, lost success responses
-and changed source without publishing packages. This is an internal testing
-boundary, not a selectable registry or publication backend.
+and retry delays, bound to native operations by the CLI. Its integration tests
+exercise source and registry recovery through owned local services, not production
+publication. This is a testing boundary, not a selectable publication backend.
 
 The [workspace in-process boundary](../../../docs/testing.md#unit-tests-stay-inside-the-process)
 applies to every fixture and acquisition call. Avoiding Cargo metadata or keeping

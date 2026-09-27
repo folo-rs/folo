@@ -26,7 +26,7 @@ targets = [
 ]
 ```
 
-Replace the example repository and branch; no consumer branch name is mandated.
+Replace the example repository and release branch; no particular release-branch name is required.
 
 | Key | Meaning |
 | --- | --- |
@@ -106,10 +106,14 @@ list allows no external exposure. See the
 Each publishable binary package declares one executable whose required features
 are enabled by its default feature selection. The offline metadata check does not
 compile that executable; normal build validation establishes buildability.
-Its Cargo `repository` matches the configured GitHub destination, and
+Its Cargo `repository` is exactly `https://github.com/<owner>/<repository>` using
+the configured destination, without a trailing slash or `.git` suffix, and
 its binstall metadata describes the standard ZIP layout:
 
 ```toml
+[package]
+repository = "https://github.com/example/widgets"
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
 bin-dir = "{ bin }{ binary-ext }"

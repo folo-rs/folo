@@ -502,32 +502,15 @@ on a pull request, the merge-group base commit on a queue run, and the tested ma
 on main pushes and scheduled/manual runs.
 
 `scripts/release/ReleasePlan.psm1` is the PowerShell boundary between that report and hosted
-validation. Rust artifact commands validate the report and distinguish publishable release
-assessments from all tracked version targets. The report's `packages`
-array supplies released-content evidence and consumer-contract selection for publishable members;
-`non_publishable_packages` supplies only names, declared versions, and derived group membership.
-SemVer analysis and change-level decisions use the former, while grouping and alignment use their
-union. The pre-apply publication gate resolves every planned target against current workspace
-metadata and queries crates.io only for targets Cargo says are publishable. Package-name patterns
-do not determine whether a crate has a consumer contract or is publishable.
+validation. It invokes report/check, emits the report-selected CI targets, and runs
+the direct compatibility checker with its canary and exit-status handling.
+Pester covers those process and output boundaries.
 
-`cargo-release-plan analysis-order`, `semver-targets`, and `propose` own dependency-order
-presentation, consumer-contract selection, change-level validation, version-group realignment,
-and release propagation. These operations consume captured artifacts without discovering the
-workspace or contacting a registry. The module retains process orchestration and the crates.io
-publication probe; the just recipes remain thin command-line entry points. Pester tests protect
-argument forwarding, subprocess failures, publication checks, and the evidence lifecycle.
-
-The guided release workflow collects its decision evidence after explicit offline preparation.
-It then sends semantic choices to Rust's prospective resolution preview, which completes the
-version-target set and captures the resolved files before application. The PowerShell boundary does
-not duplicate Cargo resolution or infer binary closure membership. Compatibility evidence is
-built with the prospective manifest path and working directory, so Cargo reads its captured
-configuration and resolution rather than the live tree's. A read-only comparison rejects any
-input mutation by that build. The module presents the stable
-expanded artifact and applies it unchanged; the Rust boundary rejects stale original inputs
-and installs only the captured state. CI's report/check path and post-apply reporting remain
-read-only, with no hidden preparation or dependency refresh.
+The Rust application owns preparation, compatibility evidence, artifact validation,
+version planning, preview/application and registry preflight. The copied skill guides
+those operations; repository PowerShell does not maintain another planning or
+publication-preflight implementation. CI's report/check path stays read-only, with
+no hidden preparation or dependency refresh.
 
 There is no separate version-approval prompt. The complete pull request and its
 Version/release plan section carry the human review of release impact.
@@ -563,7 +546,9 @@ shortens the generated paths upstream.
 `release-action-identity.yml` checks the source-installed application and separately
 asserts the called action's immutable revision using read-only permissions.
 Its path selection covers the application family, configuration and installation
-inputs. The check, self-revision assertion and production caller's identity probe
+inputs, including the optional release setup hook. Superseded PR runs are cancelled;
+manual dispatches have independent concurrency identities.
+The check, self-revision assertion and production caller's identity probe
 use one tested action commit.
 
 This bootstrap canary accompanies the legacy publisher. The operational cutover

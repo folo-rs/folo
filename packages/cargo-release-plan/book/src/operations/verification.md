@@ -15,7 +15,7 @@ the remote state you depend on.
 - Any dry-run, blocked, failed or unknown outcome remains distinguishable from
   completed delivery.
 
-Nonpublishable alignment helpers do not appear as registry requests. Packages
+Non-publishable version targets do not appear as registry requests. Packages
 unchanged against their merged anchors still do.
 
 ## Read outcomes correctly
@@ -56,7 +56,7 @@ gh release view $Tag --repo $Repository --json tagName,assets
 Inspect the remote tag, including its peeled commit when annotated:
 
 ```powershell
-git ls-remote origin "refs/tags/$Tag" "refs/tags/$Tag^{}"
+git ls-remote "https://github.com/$Repository.git" "refs/tags/$Tag" "refs/tags/$Tag^{}"
 ```
 
 A release's displayed branch name is not a substitute for resolving the actual
@@ -77,6 +77,7 @@ $Destination = Join-Path ".release-plan-work" "verify-windows"
 gh release download $Tag --repo $Repository --pattern "$Stem.*" `
     --dir $Destination
 $Archive = Join-Path $Destination "$Stem.zip"
+# GNU-compatible checksum lines put the digest before the marker and archive filename.
 $Expected = (Get-Content (Join-Path $Destination "$Stem.sha256") -Raw).Split()[0]
 $Actual = (Get-FileHash $Archive -Algorithm SHA256).Hash
 if ($Expected -notmatch '\A[0-9a-fA-F]{64}\z' -or $Actual -ine $Expected) {

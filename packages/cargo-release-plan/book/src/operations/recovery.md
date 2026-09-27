@@ -75,9 +75,10 @@ $Repository = "example/widgets"
 $Tag = "widget-cli-v2.0.1"
 $Source = "<full-original-publication-source-SHA>"
 $RunId = "<original-failed-run-id>"
-git fetch origin --tags
+$RepositoryUrl = "https://github.com/$Repository.git"
+git fetch $RepositoryUrl $Source
 git show --no-patch --format=fuller $Source
-git ls-remote origin "refs/tags/$Tag" "refs/tags/$Tag^{}"
+git ls-remote $RepositoryUrl "refs/tags/$Tag" "refs/tags/$Tag^{}"
 ```
 
 Only when the tag is absent locally and remotely, create and push it:
@@ -86,12 +87,15 @@ Only when the tag is absent locally and remotely, create and push it:
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 git tag --annotate $Tag $Source --message "Release $Tag"
-git push origin "refs/tags/$Tag"
+git push $RepositoryUrl "refs/tags/$Tag"
 gh run rerun $RunId --repo $Repository
 ```
 
 Never force-update an existing tag. If a tag already exists but points to
 unexpected source, stop and investigate its identity rather than replacing it.
+The Git URL and GitHub CLI destination derive from the same reviewed repository,
+not a checkout-local remote nickname. Use the maintainer's configured GitHub
+authentication; do not embed credentials in the URL.
 
 The retry recognizes the valid manually created tag through its existing-tag
 path. It does not repeat the moving-candidate selection used only for missing

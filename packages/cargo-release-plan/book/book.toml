@@ -13,6 +13,7 @@ edit-url-template = "https://github.com/folo-rs/folo/edit/main/packages/cargo-re
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [output.html.playground]
+# Examples are repository-dependent operational fragments, not standalone browser programs.
 runnable = false
 
 # The shared book-build recipe generates these ignored JavaScript assets.

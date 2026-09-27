@@ -9,6 +9,7 @@ on:
       - .github/workflows/release-action-identity.yml
       - .github/workflows/release.yml
       - .github/actions/setup-environment/**
+      - .github/actions/release-plan-setup/**
       - .cargo/**
       - Cargo.toml
       - Cargo.lock
@@ -18,6 +19,12 @@ on:
       - packages/crp_*/**
       - scripts/setup/**
   workflow_dispatch: {}
+
+# Superseded PR checks provide no readiness evidence; explicit dispatches remain independent.
+# Ref: .github/workflows/implementation.md#release-action-bootstrap-check.
+concurrency:
+  group: release-action-check-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

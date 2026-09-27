@@ -10,7 +10,7 @@ name: Release
 # depend on token-authored tags triggering another workflow.
 # Ref: .github/workflows/design.md#publication-and-recovery.
 #
-# Native helpers own structured release decisions; PowerShell/Just provide process boundaries.
+# Rust release tools own structured decisions; PowerShell/Just provide process boundaries.
 # The steps here remain thin local entry points.
 on:
   push:
@@ -175,11 +175,11 @@ jobs:
       fail-fast: false
       matrix:
         # One entry per target: {triple, os, timeout_minutes, binaries: [{name, bin,
-        # version, tag, source_sha}]}. Items build separately but reuse one Cargo cache.
+        # version, tag, source_sha}]}. Binary releases build separately but reuse one Cargo cache.
         # Ref: .github/workflows/implementation.md#release-binary-batches.
         include: ${{ fromJSON(needs.plan-binaries.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    # The planner budgets cold setup plus each item, capped at the hosted runner ceiling.
+    # The planner budgets cold setup plus each binary release, capped at the hosted runner ceiling.
     timeout-minutes: ${{ matrix.timeout_minutes }}
 
     permissions:
@@ -193,6 +193,8 @@ jobs:
         # fetched individually when preparing immutable source worktrees.
         with:
           ref: ${{ github.sha }}
+          # Linked source worktrees share Git configuration. Authenticate missing-source
+          # fetches explicitly rather than leaving checkout credentials available to builds.
           persist-credentials: false
 
       - name: Setup environment

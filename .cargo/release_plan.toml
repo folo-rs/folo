@@ -2,6 +2,8 @@
 # cargo-release-plan supplies the shared release model and operations.
 schema-version = 1
 repository = "folo-rs/folo"
+# Match the branch whose merges initiate publication in .github/workflows/release.yml.
+# Ref: docs/release-versioning.md, The invariant.
 release-branch = "main"
 # Select the supported native targets with provisioned runners.
 # Keep the legacy runner table aligned while it is used by release.yml.

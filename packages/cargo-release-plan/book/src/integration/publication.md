@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: Optional original release-source commit for explicit recovery
+        description: Optional full original publication-source commit for recovery
         type: string
         default: ''
       verify-publishing-identity:
@@ -70,13 +70,13 @@ with:
   publishing-environment: release
 ```
 
-For source installation, add `install-method: path` and select the tool checkout
+For path installation, add `install-method: path` and select the tool checkout
 with `source-path`. Released installation does not use `source-path`.
 
 An empty `source` uses the invocation's commit. For explicit recovery, supply the
 full original source SHA; the tool still verifies its release-branch membership.
 This is a new invocation with new evidence, never an automatic fallback when an
-old artifact is missing. The source override selects the release snapshot only.
+old artifact is missing. The source override selects the publication source only.
 The **controller** is the `cargo-release-plan` executable run by the workflow.
 In source-install mode, `source-path` selects its source from the invocation
 checkout, so recovering old publication source does not rebuild an old controller.
@@ -259,7 +259,7 @@ cargo release-plan publish binaries --publication $Publication --batch $Batch `
 
 The tool rechecks tag identities and assets, then builds each executable
 separately from its actual peeled tag commit. To stage the frozen batch without
-querying or writing GitHub, use `--no-upload` with separate destinations:
+tag/release/asset queries or uploads, use `--no-upload` with separate destinations:
 
 ```powershell
 cargo release-plan publish binaries --publication $Publication --batch $Batch `
@@ -267,7 +267,9 @@ cargo release-plan publish binaries --publication $Publication --batch $Batch `
     --artifacts (Join-Path $Work "windows-verification-artifacts-1") --no-upload
 ```
 
-This mode still verifies source and archives. It does not discover a batch,
+This mode still verifies source and archives. It may fetch an unavailable source
+commit from the configured repository, including using repository-read authentication.
+It does not discover a batch,
 select substitute source or produce a completed publication outcome.
 
 ## Report every attempt

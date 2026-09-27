@@ -17,8 +17,7 @@ cargo release-plan check-publishing-identity [--verbose]
 ```
 
 `release-context` reads the selected working-tree configuration and prints
-`schema_version` (currently `1`), `repository`, `release_branch`, `release_base`, `head`, `workspace_manifest`,
-`config_path` and `concurrency_group`. It fetches the configured release branch
+the [release-context artifact](artifacts.md#release-context). It fetches the configured release branch
 unless `--base` supplies the tested baseline explicitly. It accepts dirty source
 and does not require the configuration to match a committed file. In contrast,
 `prepare-publish` requires tracked committed inputs.
@@ -95,7 +94,7 @@ decisions. Select exactly one source mode:
 
 It regenerates a report bound to the selected source and verifies captured inputs
 before and after checking. It never accepts detached `--report` evidence.
-The existing report/plan schema remains `4`.
+The regenerated report uses report/plan schema `4`.
 
 The new output directory contains `compatibility.json`, `semver-checks.log` and
 the read-only report. Evidence records the checker identity, exact published
@@ -109,7 +108,7 @@ fail the command as well. Read `completed`, `compared` and `required_level`,
 not merely the exit code.
 
 `check-published --plan` validates the resolved target set and fails on a
-never-published or indeterminate publishable target. Alignment-only helpers are
+never-published or indeterminate publishable target. Non-publishable version targets are
 excluded. Without a plan, workspace-wide missing/unknown-package discovery is
 advisory. Neither mode uploads a first version or verifies Trusted Publisher
 administration.
@@ -132,7 +131,7 @@ destination.
 
 `inspect-plan --require-resolved` validates captured inputs and the retained
 compatibility workspace, then prints publication target names and its manifest
-path. Alignment-only helpers are not publication targets.
+path. Non-publishable version targets are not publication targets.
 
 `verify-preview` checks that external analysis left the prospective workspace
 unchanged. It does not resolve or compile.
@@ -185,8 +184,9 @@ suppress independent valid work.
 `publish binaries` consumes one frozen batch and its parent manifest. It
 rechecks tag identity and current assets, builds each executable from the
 recorded tag commit, and completes missing ZIP/checksum pairs. `--no-upload`
-stages that frozen work without querying or writing GitHub, retaining source
-and archive verification.
+stages that frozen work without tag/release/asset queries or uploads, retaining
+source and archive verification. Missing source objects may still be fetched
+from the configured repository, requiring repository-read access.
 
 Every attempt needs new outcome and batch/artifact destinations. Name phase
 outcomes `outcome.json` inside separate artifact subdirectories when handing

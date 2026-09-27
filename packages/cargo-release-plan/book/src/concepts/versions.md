@@ -11,7 +11,7 @@ The author supplies semantic decisions:
 | Decision | Use |
 | --- | --- |
 | `breaking` | A change breaks a consumer promise. |
-| `nonbreaking` | A compatible addition extends the consumer contract. |
+| `nonbreaking` | A compatible addition extends the consumer's promises. |
 | `patch` | A correction or other change needs no stronger semantic decision. |
 
 Consumer promises include documented behavior, CLI arguments, data formats,

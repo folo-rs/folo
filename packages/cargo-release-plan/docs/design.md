@@ -943,7 +943,7 @@ not by rewriting published versions or established tags. Once adopted, the relea
 process preserves that correspondence.
 
 Every publishable workspace package at that snapshot contributes its exact
-name/version request, including packages assessed as unchanged. Nonpublishable
+name/version request, including packages assessed as unchanged. Non-publishable
 version targets contribute no upload request. Preparation can read
 remote availability, but neither existing tags nor the report's pending-release
 subset substitutes for checking crates.io.
@@ -1109,7 +1109,7 @@ remain a failed prerequisite, not a smaller implicitly successful release.
 The package tag is `{package}-v{version}`. Existing tags are authoritative and
 never moved. For a missing tag, the application fetches and pins the configured
 release branch, verifies that it descends from the publication source, and checks
-the requested package version and its release-relevant content at that candidate.
+the requested package version and its released content at that candidate.
 Equivalence uses the same anchor-based content model as version assessment,
 including inherited inputs and binary dependency closures.
 
@@ -1194,8 +1194,9 @@ not be paired with an unverified surviving remote archive. Repair replaces both
 members using the locally generated pair.
 
 The nonpublishing binary mode consumes an existing frozen batch and builds and
-stages its requested archives without querying or writing GitHub releases. It
-retains source and archive verification and requires no upload credential. It
+stages its requested archives without tag, release or asset queries or uploads. It
+retains source and archive verification and requires no upload credential.
+Repository-read access may still be needed to fetch a missing source commit. It
 does not discover tags or select a pre-publication source on the caller's behalf.
 
 ### Outcomes and recovery
@@ -1235,7 +1236,7 @@ compensate for failed cleanup or reporting.
 
 The integration exposes a command-selecting composite action and reusable
 workflows over the same application. Consumers select committed configuration
-and an immutable action revision. **Source installation** builds the controller
+and an immutable action revision. **Path installation** builds the controller
 from an explicitly selected checkout; it tests application changes without
 claiming that the corresponding package or archives are published.
 The [implementation guide](implementation.md#reusable-action-boundary) owns the
@@ -1249,7 +1250,9 @@ share one action release and tag stream.
 The composite's required `command` selects version checking, compatibility
 checking, preparation, registry publication, GitHub reconciliation, binary
 publication or failure reporting.
-Inputs that do not apply to that command are rejected. Substantive selection,
+Non-default command-specific inputs that do not apply to the selected command
+are rejected. Shared installation settings retain their documented mode semantics.
+Substantive selection,
 validation, reconciliation and report composition belong to the installed application.
 
 Reusable workflows provide the standard read-only merge check and release flow.
@@ -1359,7 +1362,7 @@ Source publication and binary builds use their documented source-toolchain
 contract. Unsupported combinations fail in preflight rather than first being
 discovered after a registry upload.
 
-Source installation can publish the application's own package without first
+Path installation can publish the application's own package without first
 installing the version being published. It validates the chosen action revision
 and source checkout together, not published-installation availability.
 
@@ -1410,9 +1413,9 @@ not Folo's Just recipes, sibling skills or root scripts. Repository and release
 branch choices come from the selected workspace and explicit configuration, not
 hardcoded Folo identities.
 
-The book identifies the tool/action/skill revision combination its walkthrough
-uses and retains access to revision-pinned instructions for older supported
-combinations. Upgrading an action does not silently update a copied skill. A
+The book fixes the tool and skill interfaces used by its walkthrough and explains
+how adopters select and record a compatible immutable action revision. It retains
+access to revision-pinned instructions. Upgrading an action does not silently update a copied skill. A
 consumer can verify compatibility before changing its repository or regenerating
 local evidence.
 

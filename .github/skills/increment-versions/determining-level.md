@@ -1,4 +1,4 @@
-# Determining a change level
+# Choosing a semantic decision
 
 Use this guide for every publishable package in the release-plan report. The decision concerns
 the complete released change since the package's version anchor, including changes already
@@ -90,7 +90,7 @@ adding a meaningful consumer-facing capability.
 A direct `[package]` metadata change or an inherited `[workspace.package]` change establishes
 at least `patch` for every affected package. This rule applies to every package metadata field,
 including `rust-version` (the minimum supported Rust version). Combine this minimum with the
-package's other evidence and choose the highest applicable change level.
+package's other evidence and choose the strongest applicable semantic decision.
 
 Treat dependency and feature-table changes separately: analyze the consumer impact of the
 resulting dependency or feature behavior rather than assuming every `Cargo.toml` edit is
@@ -123,7 +123,7 @@ own released changes and choose no increment when it has none. Do not assess sou
 `non_publishable_packages` or assign those non-publishable version targets a semantic decision.
 
 A publishable package in `report.json.packages` that has no anchor has no Git release baseline
-for this assessment. Do not assign a change level merely because it is new to the release
+for this assessment. Do not assign a semantic decision merely because it is new to the release
 branch, and do not infer that it has never reached crates.io. Follow the
 [first-publication handoff](SKILL.md#first-publication-handoff): a maintainer manually
 publishes its bootstrap version before the first merge and configures Trusted Publishing.

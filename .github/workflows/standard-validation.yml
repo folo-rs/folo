@@ -387,7 +387,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           just package="${{ needs.prepare.outputs.packages }}" test-docs
 
-      # Covers native ZIP layout/permissions on macOS as well as Linux and Windows without
+      # Covers native ZIP layout/permissions on every matrix platform without
       # publishing. Script-only selection must not expand the Cargo package checks above.
       # Ref: .github/workflows/implementation.md#release-binary-batches.
       - name: Smoke release binary packaging

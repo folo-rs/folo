@@ -14,6 +14,8 @@ BeforeAll {
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
     $script:queue = Get-Content -LiteralPath (Join-Path $root '.github/workflows/merge-queue-validation.yml') -Raw
     $script:canary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/benchmark-action-canary.yml') -Raw
+    $script:release = Get-Content -LiteralPath (Join-Path $root '.github/workflows/release.yml') -Raw
+    $script:releaseCanary = Get-Content -LiteralPath (Join-Path $root '.github/workflows/release-action-identity.yml') -Raw
     $script:benchmarkWorkflows = @(
         foreach ($name in @('bench-history', 'pr-bench-history', 'bench-history-backfill', 'benchmark-action-canary')) {
             Get-Content -LiteralPath (Join-Path $root ".github/workflows/$name.yml") -Raw
@@ -90,6 +92,23 @@ Describe 'Workflow dependency extraction' {
         $block = @(Get-WorkflowJobDependency "    needs:`n      - plan`n      - checks`n")
         $inline | Should -Be @('plan', 'checks')
         $block | Should -Be $inline
+    }
+
+    Describe 'Release action revision relationships' {
+        It 'uses the same immutable revision for production, checks and identity assertions' {
+            $references = @([regex]::Matches("$release`n$releaseCanary",
+                'uses:\s+folo-rs/cargo-release-plan-action(?:/[^\s@]+)?@(?<revision>[^\s]+)') |
+                ForEach-Object { $_.Groups['revision'].Value })
+            $expected = @([regex]::Matches($releaseCanary,
+                '(?m)^\s+expected-sha:\s+(?<revision>[^\s]+)') |
+                ForEach-Object { $_.Groups['revision'].Value })
+            $references.Count | Should -BeGreaterThan 0
+            $expected.Count | Should -BeGreaterThan 0
+            foreach ($revision in @($references) + @($expected)) {
+                $revision | Should -Match '^[0-9a-f]{40}$'
+                $revision | Should -BeExactly $references[0]
+            }
+        }
     }
 
     It 'accepts a scalar dependency or no dependency' {

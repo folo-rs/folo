@@ -88,8 +88,11 @@ resolution. A package containing a binary, including a mixed library/binary
 package, releases its **locked dependency closure**: the dependencies reachable
 for installation, identified by name, version and source.
 
-The tool compares this package-specific closure, not raw workspace lockfile
-bytes. Normal and build dependencies across target platforms participate;
+The tool compares a package-rooted closure from the workspace lockfile, not raw
+workspace lockfile bytes. It is conservative: registry dependencies retain their
+workspace-unified locked edges, so packaging can prune optional edges that this
+assessment includes. It does not perform separate package/feature resolution
+during read-only classification. Normal and build dependencies across target platforms participate;
 development-only workspace edges do not. Examples, benchmarks, tests and build
 scripts do not turn a library into an installable binary.
 

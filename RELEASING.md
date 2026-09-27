@@ -19,12 +19,15 @@ the declared versions. Use the book's
 and [verification procedure](https://folo-rs.github.io/folo/cargo-release-plan/operations/verification.html).
 Do not run `just gh-release` manually; it is a CI-only publishing entry point.
 
-## First publish of a new crate
+<a id="first-publish-of-a-new-crate"></a>
+
+## First publication of a new package
 
 Follow the [first-publication guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html):
 complete maintainer bootstrap and Trusted Publishing setup before the package's
 first merge. Folo's registration uses owner `folo-rs`, repository `folo`, workflow
-`release.yml`, and any selected publishing environment. The generic skill
+`release.yml`, with no publishing environment selected. Registering an environment
+requires a corresponding reviewed caller/probe configuration change. The generic skill
 reports this handoff but does not perform it.
 
 ## Recovery and emergency operation
@@ -41,7 +44,7 @@ it is not an action performed by the version-planning skill.
 named `required-checks`; individual conditionally selected matrix jobs are not
 ruleset requirements.
 
-Each publishable crate completes the [publisher setup](#first-publish-of-a-new-crate).
+Each publishable package completes the [publisher setup](#first-publication-of-a-new-package).
 The separate required installation gate in
 [`folo-rs/cargo-release-plan-action`](https://github.com/folo-rs/cargo-release-plan-action)
 verifies actual published tool versions and archives before that action is released.

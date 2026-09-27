@@ -26,7 +26,7 @@ Required prerequisites are Git, the selected Cargo/Rust toolchain and `cargo-rel
 `check-compatibility` completes an empty selection without invoking it or querying the registry.
 GitHub CLI authentication is needed when the configured release
 repository cannot be fetched anonymously. Do not install or upgrade tools without the caller's
-applicable permission. Run from the selected Cargo workspace with the committed
+applicable permission. Run from the selected Cargo workspace with the selected working-tree
 `.cargo/release_plan.toml` configuration, or its explicit configured override.
 
 # Release model
@@ -35,6 +35,11 @@ The **release baseline** is a frozen release-branch commit selecting the history
 available to the assessment. Each package's **anchor** is the newest first-parent
 commit in that history that changed its parsed version; it supplies that package's
 comparison content and version. An unreleased parent PR is not a release baseline.
+
+A **version group** is a connected set of tracked workspace members joined by
+exact local dependency requirements such as `=1.2.3`, following those relationships
+in either direction. Its members align versions, while semantic assessment remains
+package-specific. Ordinary compatible requirements do not declare a version group.
 
 A **semantic decision** is the author's judgment: `breaking`, `nonbreaking` or `patch`.
 The tool translates it into a numeric increment and expands version-group and
@@ -54,8 +59,8 @@ from a publishable private-API package, whose library has no supported consumer 
 | `TOOL` | Installed `cargo-release-plan` executable, or an explicitly selected source-built executable. |
 | `MANIFEST` | Absolute path to the selected workspace's `Cargo.toml`. |
 | `CONFIG` | Publication configuration path relative to that workspace. Default: `.cargo/release_plan.toml`. |
-| `WORK_DIR` | New absolute untracked evidence directory for this assessment. |
-| `VERIFY_DIR` | Separate new absolute untracked directory for post-application evidence. |
+| `WORK_DIR` | New absolute evidence directory outside the repository or under an ignored directory. |
+| `VERIFY_DIR` | Separate new absolute ignored or external directory for post-application evidence. |
 | `BASE` | Frozen `release_base` commit from `context.json`, not a PR target branch. |
 | `PACKAGE`, `DIFF_PATH` | Package name and its report-relative `diff_path`. |
 
@@ -68,6 +73,17 @@ Keep `context.json`, `prepared.json`, `report.json`, `diffs/`, `analysis-order.j
 `decisions.json`, `plan.json`, `compatibility/`, and `preview/` under `WORK_DIR`. Captured files
 are tool-owned: do not edit them by hand. Only `decisions.json` is authored by the agent.
 Keep evidence, logs and temporary previews out of commits.
+Before writing evidence, choose directories outside the repository or verify that
+their repository-local parent is covered by an existing ignore rule:
+
+> git check-ignore --quiet -- "{{WORK_DIR}}"
+>
+> git check-ignore --quiet -- "{{VERIFY_DIR}}"
+
+These checks apply only to repository-local paths. A nonzero exit means the chosen
+path is not confirmed ignored; select an external directory or establish the
+appropriate ignore rule before continuing. An untracked but unignored directory
+is not suitable because assessment can discover its own generated files.
 
 Every `check-compatibility --output` must name a directory that does not exist yet;
 the command creates it. Create only `WORK_DIR` by hand, not `VERIFY_DIR`. When
@@ -119,7 +135,9 @@ and public-exposure flags. File changes have patches; inherited workspace values
 binary dependency changes appear only in `changed`. Assess all of them.
 
 Track any untracked source that this contribution intends to publish, then restart preparation.
-Account for other untracked entries as deliberately unreleased. Non-publishable version
+Record every remaining untracked package path and its exclusion rationale in the
+assessment handoff; surface that decision to the caller rather than silently omitting it.
+Non-publishable version
 targets appear in `non_publishable_packages` for alignment only: do not assign them semantic
 decisions or query their registry status. Group members span both arrays.
 
@@ -193,6 +211,9 @@ First-publication packages get a separate handoff: name the package, lack of pac
 known registry state, bootstrap version and higher intended first automated-release version.
 A maintainer bootstraps in dependency order from the feature branch before its first merge and configures Trusted
 Publishing; the first merge performs the second publication. Do not publish from this skill.
+The bootstrap creates the registry package required for Trusted Publisher registration.
+Its version is then occupied, so the first merged automated release must be higher.
+See the [first-publication guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html).
 
 # Stage 6: Refresh context and apply unchanged
 
@@ -231,7 +252,9 @@ only under the repository's rules and reassess any resulting released-content ef
 Commit the intended source/version/requirement/lockfile changes and keep the PR section current.
 Follow the repository's communication rules and post-version integration instructions.
 Summarize substantive decisions, incomplete comparisons, first-publication handoffs and any
-execution blockers. If posting diagnostics on GitHub, keep them in a collapsible section rather
+execution blockers, including deliberately unreleased untracked paths and their reasons.
+Confirm that every intended release input is tracked and that preparation covers it.
+If posting diagnostics on GitHub, keep them in a collapsible section rather
 than embedding local paths or a validation transcript in the PR's release table.
 
 # Recovery

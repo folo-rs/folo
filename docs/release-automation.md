@@ -10,7 +10,8 @@ This chapter records Folo's selection and operational entry points.
 Publishing for `folo-rs/folo`. It runs on pushes to `main` and explicit dispatches.
 Keep that filename stable when changing reusable orchestration; it is part of
 the publisher identity. Registry jobs use OIDC, GitHub reconciliation/binary jobs
-use the ambient repository token, and failure reporting needs issue permission.
+use the workflow's `GITHUB_TOKEN` with `contents: write`; failure reporting needs
+`issues: write`.
 
 The workflow implementation and compatibility entry points are described in
 [the workflow implementation guide](../.github/workflows/implementation.md).
@@ -55,10 +56,10 @@ Other successfully published packages and archive pairs remain in place.
 The original workflow artifacts are required for ordinary failed-job retry;
 expired evidence needs explicit-source recovery rather than silent rediscovery.
 
-## First publish of a new crate
+## First publication of a new package
 
 Complete the [Folo maintainer handoff](../RELEASING.md#first-publish-of-a-new-crate)
-before the crate's first merge.
+before the package's first merge.
 
 ## Tool and action release coordination
 

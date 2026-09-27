@@ -19,7 +19,8 @@ Record:
 - Its exact `cargo-release-plan` and API compatibility checker (`cargo-semver-checks`) pins.
 - The immutable source revision of the copied skill directory.
 - The source revision of the book used for that combination.
-- Consumer-owned external-type checker/nightly pins and supported API targets.
+- Consumer-owned external-type checker/nightly pins, libraries, feature selections
+  and platform targets covered by those checks.
 
 The action's release manifest is authoritative for its installed tools. A
 published action revision does not accept a silently substituted application

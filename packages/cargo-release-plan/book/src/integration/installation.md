@@ -13,7 +13,9 @@ Confirm that the exact package and its promised native archives are published
 before adoption. Source-mode tests are not evidence of published availability,
 and a missing release is not a reason to substitute an older incompatible tool.
 
-The command examples use PowerShell 7.6 or later. Multi-step procedures explicitly
+The command examples target the tested PowerShell 7.6 support baseline, independently
+of the application's CLI portability. This is a support policy, not a claim that
+every example uses a newly introduced language feature. Multi-step procedures explicitly
 enable terminating native-command errors; the PowerShell version alone does not
 enable that behavior. `Join-Path` keeps filesystem arguments native on Windows,
 Linux and macOS. Use one installation method:
@@ -99,7 +101,8 @@ Establish:
 - Whether current registry versions and existing tags correspond to known
   publication source.
 
-The final item needs an [existing-repository adoption audit](../operations/first-publication.md#adopting-an-already-published-workspace),
+Confirming registry versions and tags correspond to known publication source needs an
+[existing-repository adoption audit](../operations/first-publication.md#adopting-an-already-published-workspace),
 not just matching version strings.
 
 Use an ignored, workspace-local directory for evidence, such as
