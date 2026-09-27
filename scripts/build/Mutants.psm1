@@ -1,4 +1,4 @@
-#requires -Version 7
+#requires -Version 7.6
 
 # Argument construction for `just mutants`, the cargo-mutants mutation-testing recipe.
 #
@@ -38,6 +38,10 @@ function Get-MutantsExcludeArgument {
         # Ref: docs/testing.md, "Mutation testing target selection".
         '-e', '**/src/main.rs',
         '-e', '**/src/bin/**',
+
+        # This package is in maintenance mode; mutation-only improvements are not pursued.
+        # Ref: docs/testing.md, "Mutation testing target selection".
+        '-e', 'packages/infinity_pool/**',
 
         # Parts of this package require Criterion to work and other parts are currently not tested
         # as there is no public way to simulate a system topology for `many_cpus`.

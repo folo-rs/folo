@@ -1,8 +1,9 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Exercises cargo-mutants source discovery with the real recipe exclusions. The build-domain
-# script suite verifies that library-only testing excludes binary source without losing CLI
-# library mutations. Listing does not compile or execute mutations.
+# script suite verifies that library-only testing excludes binary source and maintenance-only
+# packages without losing other library mutations. Listing does not compile or execute mutations.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -45,6 +46,30 @@ BeforeAll {
 # cargo-mutants is not installed on ARM64 by the workspace tool setup. Mutation validation
 # targets x64; the same source-selection policy is architecture-independent.
 Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') {
+    It 'excludes infinity_pool without losing mutations in active packages' {
+        $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
+        $withoutPoolExclusion = @()
+        for ($index = 0; $index -lt $exclusions.Count; $index += 2) {
+            if ($exclusions[$index + 1] -ne 'packages/infinity_pool/**') {
+                $withoutPoolExclusion += $exclusions[$index], $exclusions[$index + 1]
+            }
+        }
+        $before = @(Get-DiscoveredMutant -Exclusions $withoutPoolExclusion)
+        $after = @(Get-DiscoveredMutant -Exclusions $exclusions)
+        $poolMutants = @($before | Where-Object { $_.package -eq 'infinity_pool' })
+        $otherMutants = @($before | Where-Object { $_.package -ne 'infinity_pool' })
+
+        # Compare complete inventories so an empty selection or collateral exclusion cannot pass.
+        $poolMutants.Count | Should -BeGreaterThan 0
+        $otherMutants.Count | Should -BeGreaterThan 0
+        @($after | Where-Object { $_.package -eq 'infinity_pool' }).Count | Should -Be 0
+        @($after.name | Sort-Object) | Should -Be @($otherMutants.name | Sort-Object)
+
+        # Explicit package selection must not bypass the shared maintenance exclusion.
+        @(Get-DiscoveredMutant -Exclusions $exclusions -PackageArguments @('-p', 'infinity_pool')).Count |
+            Should -Be 0
+    }
+
     It 'removes binary source mutations and preserves every selected library mutation' {
         $exclusions = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
         # Compare against the same platform/package policy without the binary-source exclusions.

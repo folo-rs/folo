@@ -300,6 +300,11 @@ Cargo integration-test targets are excluded because their repeated
 build and execution cost is not part of the mutation-testing budget. Doctests,
 binary targets, examples, and benchmarks also stay outside this selection.
 
+`infinity_pool` is in maintenance mode and is excluded from mutation testing on
+every platform. Mutation-only improvements are not pursued for this package.
+The shared exclusion applies to local and scheduled runs, including explicit
+package selection; ordinary tests, coverage and other validation remain enabled.
+
 Cargo's `--lib` selector determines which harness runs; it does not enforce the
 [in-process unit-test boundary](#unit-tests-stay-inside-the-process). Authors must
 keep external interactions in integration targets rather than putting them into

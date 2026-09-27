@@ -1,5 +1,13 @@
 # Agent notes for infinity_pool
 
+## Maintenance scope
+
+This package is in maintenance mode and is no longer being developed. Do not
+undertake feature work, performance improvements, broad test expansion or mutation-only repairs.
+The shared mutation recipe excludes the whole package; preserve that exclusion.
+Ordinary tests and other validation remain enabled. The guidance below applies
+to explicitly requested maintenance.
+
 ## Design intent: long-lived pools
 
 `infinity_pool` is designed for **long-lived pools**, not short-lived or
