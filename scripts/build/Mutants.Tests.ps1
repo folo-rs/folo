@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -91,6 +92,7 @@ Describe 'Get-MutantsExcludeArgument' {
         $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $windows -IsLinuxPlatform $linux)
         $values | Should -Contain '**/*facade.rs'
         $values | Should -Contain 'packages/testing/**'
+        $values | Should -Contain 'packages/infinity_pool/**'
         $values | Should -Contain 'packages/cargo-bench-history-figures/**'
         $values | Should -Contain 'packages/dure/src/pal/**/windows.rs'
         $values | ForEach-Object { $_ | Should -Not -Match "^'" }
