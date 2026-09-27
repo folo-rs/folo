@@ -15,6 +15,9 @@ The writer streams one executable through bounded buffers, retaining its root na
 and Unix permissions. A fixed ZIP timestamp avoids incidental source-file timestamp
 variation; it is not a promise of byte-identical compression across tool versions.
 ZIP64 represents large entries without a separate archive format.
+The archive is promoted from an owned temporary file only after explicit
+finalization and flushing. A failed writer cannot leave a plausible partial ZIP
+at the final asset path, and promotion does not replace an existing asset.
 
 The same item deadline and cancellation flag are checked between input buffers,
 around archive finalization, and while hashing the finished archive. Interruption
@@ -49,5 +52,5 @@ tests. Native I/O scheduling precedes last-chance watchdog timing; mutation test
 retains the watchdog disablement. The package does not depend on publication or CLI types.
 
 The low/high in-memory archive benchmark measures ZIP/Deflate work independently
-of source acquisition and filesystem noise. Its private driver is available only
-to maintainer builds through `private-test-util`.
+of source acquisition and filesystem noise. Maintainer drivers and file-boundary
+interruption injection use `private-test-util`; production execution is unchanged.

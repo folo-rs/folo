@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use ohno::AppError;
 use sha2::{Digest, Sha256};
+use tempfile::NamedTempFile;
 
 use crate::command::{cancelled, interruption};
 use crate::request::BuildRequest;
@@ -91,9 +92,8 @@ impl Staging {
             }
         };
         checkpoint()?;
-        self.write_archive(&mut checkpoint).map_err(|error| {
-            ArchiveFailed::caused_by(self.archive.clone(), "Cannot write ZIP archive", error)
-        })?;
+        self.write_archive(&mut checkpoint)
+            .map_err(|error| contextualize_archive_error(&self.archive, error))?;
         self.checksum(&mut checkpoint)
     }
 
@@ -111,7 +111,13 @@ impl Staging {
         };
         #[cfg(not(unix))]
         let permissions = None;
-        let output = BufWriter::new(File::create_new(&self.archive)?);
+        let directory = self.archive.parent().ok_or_else(|| {
+            ArchiveFailed::new(self.archive.clone(), "Archive has no parent directory")
+        })?;
+        // ZipWriter may finalize partial contents on drop. Keep those bytes private
+        // until explicit finalization succeeds, without replacing an existing asset.
+        let mut temporary = NamedTempFile::new_in(directory)?;
+        let output = BufWriter::new(temporary.as_file_mut());
         write_archive(
             input,
             output,
@@ -119,7 +125,17 @@ impl Staging {
             metadata.len(),
             permissions,
             checkpoint,
-        )
+        )?;
+        temporary
+            .persist_noclobber(&self.archive)
+            .map_err(|error| {
+                ArchiveFailed::caused_by(
+                    self.archive.clone(),
+                    "Cannot promote completed ZIP archive",
+                    error.error,
+                )
+            })?;
+        Ok(())
     }
 
     // SHA-256 is provided by sha2; only filesystem serialization lives at this boundary.
@@ -180,6 +196,29 @@ struct ArchiveFailed {
     message: &'static str,
 }
 
+/// Drives the real file-promotion boundary with an in-process interruption source.
+#[cfg(any(test, feature = "private-test-util"))]
+pub fn write_archive_for_test(
+    executable: &Path,
+    archive: &Path,
+    mut checkpoint: impl FnMut() -> Result<(), AppError>,
+) -> Result<(), AppError> {
+    Staging {
+        executable: executable.to_owned(),
+        archive: archive.to_owned(),
+        checksum: archive.with_extension("sha256"),
+    }
+    .write_archive(&mut checkpoint)
+}
+
+fn contextualize_archive_error(path: &Path, error: AppError) -> AppError {
+    if error.find_source::<ArchiveFailed>().is_some() {
+        error
+    } else {
+        ArchiveFailed::caused_by(path.to_path_buf(), "Cannot write ZIP archive", error).into()
+    }
+}
+
 fn archive_name(path: &Path) -> Result<&str, AppError> {
     path.file_name()
         .ok_or_else(|| ArchiveFailed::new(path.to_path_buf(), "Archive has no filename"))?
@@ -195,7 +234,29 @@ fn checksum_line(digest: &str, name: &str, windows: bool) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::io;
+
     use super::*;
+
+    #[test]
+    fn archive_interruption_keeps_its_existing_context() {
+        let error: AppError =
+            ArchiveFailed::new(PathBuf::from("output.zip"), "batch cancelled").into();
+        let error = contextualize_archive_error(Path::new("output.zip"), error);
+        assert_eq!(
+            error.find_source::<ArchiveFailed>().unwrap().message,
+            "batch cancelled"
+        );
+        let error = contextualize_archive_error(
+            Path::new("output.zip"),
+            io::Error::other("write failure").into(),
+        );
+        assert_eq!(
+            error.find_source::<ArchiveFailed>().unwrap().path,
+            Path::new("output.zip")
+        );
+        assert!(error.find_source::<io::Error>().is_some());
+    }
 
     #[test]
     fn checksum_sidecar_uses_bare_name_and_lf_without_bom() {

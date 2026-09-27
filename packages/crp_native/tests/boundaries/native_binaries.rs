@@ -4,9 +4,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{fs, io};
+use std::{fs, io, mem};
 
 use crp_diag::DiagnosticSink;
+#[cfg(feature = "private-test-util")]
+use crp_native::__private::write_archive_for_test;
 use crp_native::command::{capture, strings};
 use crp_native::{BuildRequest, Native, SourceProvider};
 use crp_workspace::testing::{Repository, with_io_slot};
@@ -49,6 +51,32 @@ impl SourceProvider for LocalSource {
     fn fetch(&self, _controller: &Path, _commit: &str, _deadline: Instant) -> Result<(), AppError> {
         panic!("the fixture commit is already present locally")
     }
+}
+
+#[test]
+#[cfg(feature = "private-test-util")]
+#[cfg_attr(miri, ignore = "writes and inspects real archive files")]
+fn interrupted_archive_never_reaches_the_final_asset_path() {
+    let directory = TempDir::new().unwrap();
+    let executable = directory.path().join("program");
+    let archive = directory.path().join("program.zip");
+    fs::write(&executable, b"streaming archive input").unwrap();
+    let mut started = false;
+    let mut interrupted = false;
+    write_archive_for_test(&executable, &archive, || {
+        // Allow the initial check, then interrupt after the entry header starts.
+        // Buffered file lengths are not a portable signal for that write boundary.
+        if mem::replace(&mut started, true) {
+            interrupted = true;
+            Err(io::Error::other("interrupted archive").into())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap_err();
+    assert!(interrupted);
+    assert!(!archive.exists());
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 #[test]

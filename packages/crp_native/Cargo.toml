@@ -32,6 +32,7 @@ crp_workspace = { workspace = true }
 ctrlc = { workspace = true, features = ["termination"] }
 dunce = { workspace = true }
 # Select the safe-Rust backend explicitly for the interpreter-checked archive writer.
+# Cargo unifies backend features: zip/deflate or flate2 zlib features elsewhere can override it.
 flate2 = { workspace = true, features = ["miniz_oxide"] }
 ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }

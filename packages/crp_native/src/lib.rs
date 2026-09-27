@@ -23,6 +23,7 @@ mod zip_writer;
 #[cfg(any(test, feature = "private-test-util"))]
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::archive::write_archive_for_test;
     pub use crate::zip_writer::benchmark_archive;
 }
 

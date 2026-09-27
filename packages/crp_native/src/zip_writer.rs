@@ -155,6 +155,7 @@ mod tests {
         })
         .unwrap_err();
         assert!(read.get());
+        assert!(!output.get_ref().is_empty());
     }
 
     #[test]
