@@ -68,7 +68,7 @@ fn protected_expansion_preserves_inputs_and_default_expansion_remains_in_place()
     let input = fixture.path().join("proposal.json");
     fs::write(
         &input,
-        r#"{"schema_version":4,"increments":[{"name":"api","level":"patch"}]}"#,
+        r#"{"schema_version":5,"increments":[{"name":"api","level":"patch"}]}"#,
     )
     .unwrap();
     let original = fs::read(&input).unwrap();
@@ -118,7 +118,7 @@ fn protected_expansion_rejects_a_symlinked_final_destination() {
     write_package(&fixture, "api", "1.0.0", "");
     fixture.commit("package");
     let input = fixture.path().join("proposal.json");
-    fs::write(&input, r#"{"schema_version":4,"increments":[]}"#).unwrap();
+    fs::write(&input, r#"{"schema_version":5,"increments":[]}"#).unwrap();
     let original = fs::read(&input).unwrap();
     let alias = fixture.path().join("alias");
     symlink(fixture.path(), &alias).unwrap();
@@ -144,7 +144,7 @@ fn utf8_bom_is_accepted_by_expansion_and_application() {
         &plan,
         concat!(
             "\u{feff}",
-            r#"{"schema_version":4,"increments":[{"name":"api","level":"patch"}]}"#
+            r#"{"schema_version":5,"increments":[{"name":"api","level":"patch"}]}"#
         ),
     )
     .unwrap();
@@ -193,7 +193,7 @@ helper = { path = "../helper", version = "1.0.0" }
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [{ "name": "helper", "level": "patch" }] }"#,
+        r#"{ "schema_version": 5, "increments": [{ "name": "helper", "level": "patch" }] }"#,
     )
     .unwrap();
     let expanded_path = fixture.path().join("expanded.json");
@@ -253,7 +253,7 @@ shell_impl = { workspace = true }
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [
+        r#"{ "schema_version": 5, "increments": [
             { "name": "shell", "level": "patch" },
             { "name": "loner", "level": "minor" }
         ] }"#,
@@ -322,7 +322,7 @@ fn a_helper_directly_targets_an_all_non_publishable_group() {
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [{ "name": "z-helper", "level": "patch" }] }"#,
+        r#"{ "schema_version": 5, "increments": [{ "name": "z-helper", "level": "patch" }] }"#,
     )
     .unwrap();
     let expanded_path = fixture.path().join("expanded.json");
@@ -374,7 +374,7 @@ fn expand_rejects_disagreeing_versions_within_one_group() {
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [
+        r#"{ "schema_version": 5, "increments": [
             { "name": "shell", "version": "0.2.0" },
             { "name": "shell_impl", "version": "0.3.0" }
         ] }"#,
@@ -416,7 +416,7 @@ fn a_patch_increment_level_realigns_an_inconsistent_group() {
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [{ "name": "shell", "level": "patch" }] }"#,
+        r#"{ "schema_version": 5, "increments": [{ "name": "shell", "level": "patch" }] }"#,
     )
     .unwrap();
     let expanded_path = fixture.path().join("expanded.json");
@@ -463,7 +463,7 @@ fn an_exact_target_aligns_a_group_without_advancing_its_leader() {
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [{ "name": "shell", "version": "1.1.0" }] }"#,
+        r#"{ "schema_version": 5, "increments": [{ "name": "shell", "version": "1.1.0" }] }"#,
     )
     .unwrap();
     let expanded_path = fixture.path().join("expanded.json");

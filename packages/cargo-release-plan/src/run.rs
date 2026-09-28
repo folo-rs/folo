@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crp_diag::Verbose;
 use crp_publication::PublicationOutput;
 use crp_publication::publication::binaries::publish::publish as publish_binaries;
-use crp_publication::publication::context::release_context;
+use crp_publication::publication::context::{CONTEXT_SCHEMA_VERSION, release_context};
 use crp_publication::publication::credentials::provide;
 use crp_publication::publication::github::publish as publish_github;
 use crp_publication::publication::identity::check_publishing_identity;
@@ -18,15 +18,18 @@ use crp_versioning::analysis_order::run_analysis_order;
 use crp_versioning::apply::run_apply;
 use crp_versioning::expand::run_expand;
 use crp_versioning::inspect_plan::run_inspect_plan;
-use crp_versioning::preview::{run_prepare, run_preview};
-use crp_versioning::propose::run_propose;
-use crp_versioning::report::run_report;
+use crp_versioning::plan::SCHEMA_VERSION;
+use crp_versioning::preview::{run_prepare_with_target, run_preview};
+use crp_versioning::propose::{DECISION_SCHEMA_VERSION, run_propose};
+use crp_versioning::report::run_report_with_target;
 use crp_versioning::resolved::run_verify_preview;
 use crp_versioning::semver_targets::run_semver_targets;
-use crp_versioning::{CheckFormat, CheckRequest, check};
+use crp_versioning::{CheckFormat, CheckRequest, check_with_target};
 use ohno::AppError;
 
-use crate::compatibility::check as check_compatibility;
+use crate::compatibility::{
+    COMPATIBILITY_SCHEMA_VERSION, check_with_target as check_compatibility,
+};
 
 /// Input parameters for [`run`].
 #[derive(Debug)]
@@ -35,6 +38,8 @@ use crate::compatibility::check as check_compatibility;
     reason = "Application code and maintainer tests exhaustively match internal command inputs"
 )]
 pub enum RunInput {
+    /// Report the installed executable and its artifact contracts without a workspace.
+    Version,
     /// Check crates.io publication identities without uploading or changing source.
     CheckPublished {
         manifest_path: PathBuf,
@@ -47,6 +52,7 @@ pub enum RunInput {
         prepared: Option<PathBuf>,
         plan: Option<PathBuf>,
         base: Option<String>,
+        merge_target: Option<String>,
         output: PathBuf,
         deny_findings: bool,
         verbose: bool,
@@ -68,6 +74,7 @@ pub enum RunInput {
         manifest_path: PathBuf,
         config: Option<PathBuf>,
         base: Option<String>,
+        merge_target: Option<String>,
         verbose: bool,
     },
     /// Verify the GitHub caller's Trusted Publishing identity without uploading.
@@ -158,8 +165,10 @@ pub enum RunInput {
     Prepare {
         /// Directory receiving report evidence and prepared.json.
         output: PathBuf,
-        /// Release baseline; defaults to the remote default branch.
+        /// Actual release history; defaults to the remote default branch.
         base: Option<String>,
+        /// Optional anticipated parent release, using its final content and versions.
+        merge_target: Option<String>,
         /// Workspace manifest to prepare.
         manifest_path: PathBuf,
         /// Print explanatory resolver decisions.
@@ -191,10 +200,12 @@ pub enum RunInput {
     Report {
         /// Directory that receives `report.json` and `diffs/`.
         out_dir: PathBuf,
-        /// Release baseline whose first-parent line supplies anchors.
+        /// Actual release-history commit whose first-parent line supplies anchors.
         ///
         /// `None` defers to the default branch of the `origin` remote.
         base: Option<String>,
+        /// Optional anticipated parent release, using its final content and versions.
+        merge_target: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
         /// When set, print explanatory decision notes to stderr.
@@ -202,10 +213,12 @@ pub enum RunInput {
     },
     /// Validate workspace version support and optional publication configuration.
     Check {
-        /// Release baseline whose first-parent line supplies anchors.
+        /// Actual release-history commit whose first-parent line supplies anchors.
         ///
         /// `None` defers to the default branch of the `origin` remote.
         base: Option<String>,
+        /// Optional anticipated parent release, using its final content and versions.
+        merge_target: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
         /// How to render diagnostics.
@@ -324,6 +337,19 @@ pub enum RunOutcome {
 /// `passed: false`, not an error.
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     match input {
+        RunInput::Version => Ok(RunOutcome::ArtifactQuery {
+            message: serde_json::to_string(&serde_json::json!({
+                "tool_version": env!("CARGO_PKG_VERSION"),
+                "schemas": {
+                    "plan": SCHEMA_VERSION,
+                    "report": SCHEMA_VERSION,
+                    "prepared": SCHEMA_VERSION,
+                    "decisions": DECISION_SCHEMA_VERSION,
+                    "compatibility": COMPATIBILITY_SCHEMA_VERSION,
+                    "release_context": CONTEXT_SCHEMA_VERSION
+                }
+            }))?,
+        }),
         RunInput::CheckPublished {
             manifest_path,
             plan,
@@ -345,6 +371,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             prepared,
             plan,
             base,
+            merge_target,
             output,
             deny_findings,
             verbose,
@@ -354,6 +381,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 prepared.as_deref(),
                 plan.as_deref(),
                 base.as_deref(),
+                merge_target.as_deref(),
                 output,
                 *deny_findings,
                 *verbose,
@@ -387,12 +415,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             manifest_path,
             config,
             base,
+            merge_target,
             verbose,
         } => {
             let message = release_context(
                 manifest_path,
                 config.as_deref(),
                 base.as_deref(),
+                merge_target.as_deref(),
                 Verbose::new(*verbose, &crp_diag::Stderr),
             )?;
             Ok(RunOutcome::ArtifactQuery { message })
@@ -533,12 +563,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
         RunInput::Prepare {
             output,
             base,
+            merge_target,
             manifest_path,
             verbose,
         } => {
-            let message = run_prepare(
+            let message = run_prepare_with_target(
                 output,
                 base.as_deref(),
+                merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
             )?;
@@ -563,12 +595,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
         RunInput::Report {
             out_dir,
             base,
+            merge_target,
             manifest_path,
             verbose,
         } => {
-            let message = run_report(
+            let message = run_report_with_target(
                 out_dir,
                 base.as_deref(),
+                merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
             )?;
@@ -576,6 +610,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
         }
         RunInput::Check {
             base,
+            merge_target,
             manifest_path,
             format,
             verify_packaging,
@@ -589,13 +624,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                     Verbose::new(*verbose, &crp_diag::Stderr),
                 )?;
             }
-            let outcome = check(
+            let outcome = check_with_target(
                 &CheckRequest {
                     base: base.as_deref(),
                     manifest_path,
                     format: *format,
                     verify_packaging: *verify_packaging,
                 },
+                merge_target.as_deref(),
                 Verbose::new(*verbose, &crp_diag::Stderr),
             )?;
             Ok(RunOutcome::Check {

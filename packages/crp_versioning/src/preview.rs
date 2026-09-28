@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::apply::{ManifestEdit, compute_edits};
 use crate::check::releases_breaking_change;
-use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify};
+use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify_with_target};
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
     IncrementLevel, PlanFile, PlanIncrement, PlanStage, ResolvedVersions, SCHEMA_VERSION,
@@ -23,8 +23,10 @@ use crate::plan::{
 };
 use crate::prospective::Prospective;
 use crate::report::write_report;
-use crate::resolved::{Artifact, Inputs, ResolvedState, canonical, read_json, write_json};
-use crate::{CheckFormat, CheckRequest, WriteFileError, check};
+use crate::resolved::{
+    Artifact, Inputs, ResolvedState, StaleInputs, canonical, read_json, write_json,
+};
+use crate::{CheckFormat, CheckRequest, WriteFileError, check_with_target};
 
 /// Post-refresh workspace inputs captured before semantic assessment.
 #[derive(Debug, Deserialize, Serialize)]
@@ -45,9 +47,21 @@ pub fn run_prepare(
     manifest: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
+    run_prepare_with_target(output, base, None, manifest, verbose)
+}
+
+/// Prepares evidence while freezing actual history and the anticipated predecessor separately.
+#[cfg_attr(test, mutants::skip)] // Real source/resolution acquisition belongs to boundary tests.
+pub fn run_prepare_with_target(
+    output: &Path,
+    release_history: Option<&str>,
+    merge_target: Option<&str>,
+    manifest: &Path,
+    verbose: Verbose<'_>,
+) -> Result<String, AppError> {
     let output = absolute(output).map_err(|error| WriteFileError::caused_by(output, error))?;
     let manifest = canonical(manifest)?;
-    let inputs = Inputs::capture(&manifest, base)?;
+    let inputs = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
     let prospective = Prospective::new(&output, &inputs)?;
     remove_marker(&output.join("prepared.json"))?;
     prospective.resolve(verbose)?;
@@ -62,8 +76,17 @@ pub fn run_prepare(
         fs::write(&lockfile, file.contents)
             .map_err(|error| WriteFileError::caused_by(&lockfile, error))?;
     }
-    let inputs = Inputs::capture(&manifest, base)?;
-    let classification = classify(&manifest, Some(&inputs.base), verbose)?;
+    let refreshed = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
+    if !inputs.same_history(&refreshed) {
+        return Err(StaleInputs::new().into());
+    }
+    let inputs = refreshed;
+    let classification = classify_with_target(
+        &manifest,
+        Some(&inputs.release_history),
+        inputs.merge_target.as_deref(),
+        verbose,
+    )?;
     inputs.verify(&manifest, None)?;
     write_report(&output, &classification)?;
     write_json(
@@ -95,7 +118,12 @@ pub fn run_preview(
         inputs.verify(manifest, None).map(|_| ())
     })?;
     let prospective = Prospective::new(&output, &prepared.inputs)?;
-    let mut classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+    let mut classification = classify_with_target(
+        &prospective.manifest,
+        Some(&prepared.inputs.release_history),
+        prepared.inputs.merge_target.as_deref(),
+        verbose,
+    )?;
     let resolved = resolve_plan(
         &plan,
         &classification.membership,
@@ -114,7 +142,12 @@ pub fn run_preview(
                     .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
             })?;
             prospective.resolve(verbose)?;
-            classification = classify(&prospective.manifest, Some(&prepared.inputs.base), verbose)?;
+            classification = classify_with_target(
+                &prospective.manifest,
+                Some(&prepared.inputs.release_history),
+                prepared.inputs.merge_target.as_deref(),
+                verbose,
+            )?;
             let files = prospective.artifacts(&prepared.inputs)?;
             let mut expanded = resolved.clone();
             add_consequences(
@@ -127,13 +160,14 @@ pub fn run_preview(
             Ok((expanded, files))
         },
     )?;
-    let result = check(
+    let result = check_with_target(
         &CheckRequest {
-            base: Some(&prepared.inputs.base),
+            base: Some(&prepared.inputs.release_history),
             manifest_path: &prospective.manifest,
             format: CheckFormat::Text,
             verify_packaging: false,
         },
+        prepared.inputs.merge_target.as_deref(),
         verbose,
     )?;
     require_complete_preview(result.passed, result.message)?;
@@ -144,6 +178,8 @@ pub fn run_preview(
         .inputs
         .verify_candidate(&evidence_manifest_path, &final_digest)?;
     let mut plan = explicit_plan(&resolved);
+    plan.release_history = Some(prepared.inputs.release_history.clone());
+    plan.merge_target.clone_from(&prepared.inputs.merge_target);
     plan.resolved = Some(ResolvedState {
         final_digest,
         versions: resolved
@@ -219,6 +255,7 @@ pub fn preview_inputs(
     verify(&prepared.inputs)?;
     let plan: PlanFile = read_json(plan)?;
     plan.validate_schema()?;
+    plan.validate_history(&prepared.inputs)?;
     Ok((prepared, plan))
 }
 

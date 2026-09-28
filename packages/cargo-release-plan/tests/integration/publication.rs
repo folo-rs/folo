@@ -35,6 +35,7 @@ fn publication_configuration_is_explicit_and_does_not_replace_version_checks() {
     fixture.commit("configure publication");
     let base = fixture.sha("HEAD");
     let input = |configured: bool| RunInput::Check {
+        merge_target: None,
         base: Some(base.clone()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -116,6 +117,7 @@ pkg-fmt = "zip"
     fixture.commit("configured binary source");
     assert!(matches!(
         run(&RunInput::Check {
+            merge_target: None,
             base: Some(fixture.sha("HEAD")),
             manifest_path: fixture.manifest(),
             format: CheckFormat::Text,
@@ -137,7 +139,7 @@ fn publication_preflight_does_not_query_or_change_nonpublishable_members() {
     let fixture = Fixture::new("");
     write_package(&fixture, "helper", "1.0.0", "publish = false\n");
     fixture.commit("local-only workspace");
-    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":5,"increments":[]}"#);
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let manifest = fs::read(fixture.manifest()).unwrap();
     let lockfile = fixture.read("Cargo.lock");
@@ -341,7 +343,7 @@ pkg-fmt = "zip"
     miri,
     ignore = "Resolves configured release history with Git and Cargo"
 )]
-fn release_context_resolves_baseline_without_requiring_clean_source() {
+fn release_context_resolves_history_without_requiring_clean_source() {
     let fixture = publication_source();
     let base = fixture.sha("HEAD");
     fixture.write(
@@ -350,6 +352,7 @@ fn release_context_resolves_baseline_without_requiring_clean_source() {
     );
     for explicit in [None, Some(base.clone())] {
         let outcome = run(&RunInput::ReleaseContext {
+            merge_target: None,
             manifest_path: fixture.manifest(),
             config: None,
             base: explicit,
@@ -360,7 +363,9 @@ fn release_context_resolves_baseline_without_requiring_clean_source() {
             panic!()
         };
         let context: Value = serde_json::from_str(&message).unwrap();
-        assert_eq!(context.get("release_base").unwrap(), &base);
+        assert_eq!(context.get("schema_version").unwrap(), 2);
+        assert_eq!(context.get("release_history").unwrap(), &base);
+        assert!(context.get("merge_target").unwrap().is_null());
         assert_eq!(
             context.get("repository").unwrap(),
             "example/publication-fixture"
@@ -374,6 +379,49 @@ fn release_context_resolves_baseline_without_requiring_clean_source() {
                 .unwrap()
                 .starts_with("cargo-release-plan-")
         );
+    }
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Resolves release and parent commits in a local Git fixture"
+)]
+fn release_context_keeps_actual_history_distinct_from_the_parent_target() {
+    let fixture = publication_source();
+    let history = fixture.sha("HEAD");
+    fixture.write("packages/library/src/lib.rs", "pub fn parent_change() {}\n");
+    fixture.commit("parent final content");
+    let parent = fixture.sha("HEAD");
+    fixture.write(
+        "packages/library/src/lib.rs",
+        "pub fn uncommitted_child() {}\n",
+    );
+    let mut concurrency = None;
+    for (target, expected) in [
+        (None, None),
+        (Some(history.clone()), None),
+        (Some(parent.clone()), Some(parent.as_str())),
+    ] {
+        let RunOutcome::ArtifactQuery { message } = run(&RunInput::ReleaseContext {
+            manifest_path: fixture.manifest(),
+            config: None,
+            base: Some(history.clone()),
+            merge_target: target,
+            verbose: false,
+        })
+        .unwrap() else {
+            panic!()
+        };
+        let context: Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(context.get("release_history").unwrap(), &history);
+        assert_eq!(context.get("merge_target").unwrap().as_str(), expected);
+        let group = context.get("concurrency_group").unwrap();
+        if let Some(previous) = &concurrency {
+            assert_eq!(group, previous);
+        } else {
+            concurrency = Some(group.clone());
+        }
     }
 }
 

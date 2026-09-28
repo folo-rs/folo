@@ -1,271 +1,213 @@
----
-name: increment-versions
-description: Assess and apply complete Cargo workspace version increments using cargo-release-plan. Use when version validation fails, a pull request is ready for review, or the user requests version increments.
----
-
 # Scope
 
-Assess released changes, choose semantic decisions, preview their complete dependency effects,
-and apply the resolved version plan. Human review of the complete contribution is the approval
-step; do not add a separate approval pause for version choices. This skill authorizes neither
-merging nor registry publication, tag creation, or Trusted Publisher administration.
+Prepare the version changes for one pull request in a repository that uses the
+cargo-release-plan toolkit for publication. Confirm that adoption from the
+repository's instructions or publishing workflow before proceeding; a globally
+installed skill must not operate on an unrelated repository.
 
-This directory is self-contained. Copy the whole directory, including its decision guide and
-license. The [public user guide](https://folo-rs.github.io/folo/cargo-release-plan/) explains
-adoption; it is not required to execute the steps below. Repository-specific action pairing and
-communication rules belong to the caller's instructions, not a sibling skill dependency.
+The skill assesses released changes, chooses semantic decisions, previews their
+dependency effects and applies the resulting version plan. Review of the complete
+pull request approves the result; do not introduce a separate approval pause for
+version choices. This skill does not authorize merging, publication, tag creation
+or Trusted Publisher administration.
 
-The supported tool interface is `cargo-release-plan` 0.4.1, with version-plan/report schema 4
-and semantic-decision schema 1. Verify the executable before modifying source. Do not assume
-an arbitrary newer version preserves the copied skill's interface; update the skill together
-with the selected tool or use the supported version. A repository developing the tool may
-explicitly select its tested source-built executable instead of an installed release.
+The CLI, this skill and the reusable GitHub workflows form one toolkit. The
+[public guide](https://folo-rs.github.io/folo/cargo-release-plan/) explains adoption.
+Repository-specific action pairing and communication rules belong to the caller's
+instructions.
 
-Required prerequisites are Git, the selected Cargo/Rust toolchain and `cargo-release-plan`.
-`cargo-semver-checks` is needed only when the prepared report selects consumer contracts;
-`check-compatibility` completes an empty selection without invoking it or querying the registry.
-GitHub CLI authentication is needed when the configured release
-repository cannot be fetched anonymously. Do not install or upgrade tools without the caller's
-applicable permission. Run from the selected Cargo workspace with the selected working-tree
-`.cargo/release_plan.toml` configuration, or its explicit configured override.
+# Prerequisites
 
-# Release model
+Git, the selected Cargo/Rust toolchain, `cargo-release-plan`, and
+`cargo-semver-checks` must be available. Do not install or upgrade tools without
+the caller's applicable permission. Fetching a private configured repository also
+requires GitHub CLI authentication.
 
-The **release baseline** is a frozen release-branch commit selecting the history
-available to the assessment. Each package's **anchor** is the newest first-parent
-commit in that history that changed its parsed version; it supplies that package's
-comparison content and version. An unreleased parent PR is not a release baseline.
+Check the schema revisions reported by `cargo release-plan version` before
+modifying source. This skill consumes plan/report/prepared schema `5`,
+semantic-decision schema `1`, compatibility schema `1` and release-context schema
+`2`. Matching package version numbers are not a prerequisite.
 
-A **version group** is a connected set of tracked workspace members joined by
-exact local dependency requirements such as `=1.2.3`, following those relationships
-in either direction. Its members align versions, while semantic assessment remains
-package-specific. Ordinary compatible requirements do not declare a version group.
+If schemas differ, update the installed skill from the complete
+[canonical skill directory](https://github.com/folo-rs/folo/tree/main/.github/skills/increment-versions),
+including its command reference, decision guide and license, and restart with its
+instructions. If already working in the canonical repository, report the mismatch
+to the caller instead of overwriting the skill under development. If unexpected
+CLI errors suggest that tool and skill have diverged despite matching schemas,
+consider upgrading both to their latest compatible revisions. Inspect any partial
+changes before restarting; an upgrade is not permission to repeat a failed write blindly.
+If the updated skill still does not support the tool's schemas, stop and report
+the mismatch rather than repeatedly copying the same revision.
 
-A **semantic decision** is the author's judgment: `breaking`, `nonbreaking` or `patch`.
-The tool translates it into a numeric increment and expands version-group and
-dependency effects. A **resolved plan** captures the resulting versions, manifest
-and lockfile edits, and the original inputs those edits may replace.
+Run in the selected Cargo workspace with its working-tree
+`.cargo/release_plan.toml`, or an explicit configuration override. Existing tracked
+files may have staged or unstaged edits; a clean checkout or prior commit is not
+required. Newly created release inputs must be tracked before assessment. Stage
+those specific paths without disturbing unrelated changes, then collect fresh
+evidence. Version planning reads the working tree, not just the staged diff.
 
-A **pending release** already declares a version above its anchor, or prepares a first
-release. It still requires assessment of all accumulated changes. A **non-publishable
-version target** is a tracked `publish = false` member whose version can participate in
-group alignment without registry publication or a semantic decision. This is distinct
-from a publishable private-API package, whose library has no supported consumer contract.
+# Assessment model
 
-# Placeholders and working files
+The **release history** is the actual release branch up to one selected commit.
+A package's **anchor** is the newest first-parent commit in that history where
+its parsed version changed. It supplies the package's comparison version and
+content. Changes after an anchor remain relevant, allowing a repository to catch
+up after migration or manual changes without matching version increments.
 
-| Placeholder | Meaning |
-| --- | --- |
-| `TOOL` | Installed `cargo-release-plan` executable, or an explicitly selected source-built executable. |
-| `MANIFEST` | Absolute path to the selected workspace's `Cargo.toml`. |
-| `CONFIG` | Publication configuration path relative to that workspace. Default: `.cargo/release_plan.toml`. |
-| `WORK_DIR` | New absolute evidence directory outside the repository or under an ignored directory. |
-| `VERIFY_DIR` | Separate new absolute ignored or external directory for post-application evidence. |
-| `BASE` | Frozen `release_base` commit from `context.json`, not a PR target branch. |
-| `PACKAGE`, `DIFF_PATH` | Package name and its report-relative `diff_path`. |
+The **merge target** is the commit the current pull request intends to merge into.
+For a stacked PR it can be the tip of an unmerged parent. Supply that target
+separately from release history. A parent's pending version and final content are
+assessed together as its anticipated squash release; its intermediate commits
+do not define separate releases. Additional child changes need their own version
+movement. Packages still at their release-history version retain their historical
+anchors and catch-up obligations.
 
-The command examples use PowerShell; executable arguments have the same meaning on other
-supported systems. Stop on any command failure unless a step explicitly defines an advisory
-result. Retain diagnostics and valid evidence; do not turn missing or malformed output into
-an empty successful plan.
+The managed workflow uses squash merges so each merged PR records its final
+content and versions together. Assessment does not depend on whether a merge queue
+groups PRs. After a parent merges, refresh the history and target rather than
+continuing to use stale evidence.
 
-Keep `context.json`, `prepared.json`, `report.json`, `diffs/`, `analysis-order.json`,
-`decisions.json`, `plan.json`, `compatibility/`, and `preview/` under `WORK_DIR`. Captured files
-are tool-owned: do not edit them by hand. Only `decisions.json` is authored by the agent.
-Keep evidence, logs and temporary previews out of commits.
-Before writing evidence, choose directories outside the repository or verify that
-their repository-local parent is covered by an existing ignore rule:
+A **version group** connects tracked workspace members through exact local
+requirements such as `=1.2.3`; their versions align. A compatible requirement such
+as `1.2.3` permits later compatible releases and does not create a version group.
 
-> git check-ignore --quiet -- "{{WORK_DIR}}"
->
-> git check-ignore --quiet -- "{{VERIFY_DIR}}"
+A **semantic decision** is a `breaking`, `nonbreaking` or `patch` judgment produced
+by this skill. A **version plan** translates those decisions into package versions
+and required group/dependency changes.
 
-These checks apply only to repository-local paths. A nonzero exit means the chosen
-path is not confirmed ignored; select an external directory or establish the
-appropriate ignore rule before continuing. An untracked but unignored directory
-is not suitable because assessment can discover its own generated files.
+A package has a **pending increment** when its working-tree version is above its
+comparison version. Assess every change assigned to that increment. Keep it when
+it is sufficient; raise it when a stronger decision requires more movement. Do
+not erase or increment it again merely because the skill was rerun.
 
-Every `check-compatibility --output` must name a directory that does not exist yet;
-the command creates it. Create only `WORK_DIR` by hand, not `VERIFY_DIR`. When
-repeating a comparison, choose a fresh name such as `compatibility-2` and use that
-path consistently in subsequent reads. Source/preparation restarts use a new
-`WORK_DIR`, preserving the prior evidence instead of overwriting it.
+A **non-publishable version target** has `publish = false`. It can participate in
+group alignment but receives no publication request or semantic decision. A
+publishable private-API package is different: it still has released content.
 
-# Stage 1: Verify the tool and resolve the release context
+# Evidence and commands
 
-> & "{{TOOL}}" --version
->
-> git symbolic-ref --quiet --short HEAD
->
-> New-Item -ItemType Directory -Path "{{WORK_DIR}}"
->
-> & "{{TOOL}}" release-context --manifest-path "{{MANIFEST}}" --config "{{CONFIG}}" --verbose > "{{WORK_DIR}}/context.json"
+Read [commands.md](commands.md) for the command examples, placeholder table,
+PowerShell error handling and expected outputs. Read the matching command section
+before executing each numbered stage below.
 
-Require the supported executable identity and a named feature branch. Stop on detached HEAD
-or when the branch equals `release_branch` in `context.json`. Read `repository`,
-`release_branch` and `release_base`; use that immutable `release_base` as `BASE` throughout.
-The tool fetches the configured repository's actual release branch, without assuming a local
-remote nickname or that the release branch is named `main`.
+Choose new absolute evidence directories outside the repository or under an
+already ignored location. The tool writes reports, patches, plans and supporting
+files there. Do not edit these generated files manually. The semantic
+`decisions.json` is the agent-authored input. Keep all working evidence out of commits.
 
-An unreleased stacked-PR parent is not a release baseline. A merge queue instead uses its
-explicit tested release-branch base; repository CI supplies that input, not this feature-branch
-authoring workflow.
+Every compatibility output directory must be new. When repeating a stage, choose
+new destinations and retain earlier evidence. Record diagnostics as they occur;
+missing or malformed output is never an empty successful plan.
 
-> & "{{TOOL}}" check-published --manifest-path "{{MANIFEST}}" --verbose
+# Stage 1: Check prerequisites and select history
 
-Workspace discovery is advisory: report every missing or indeterminate package and continue
-to assessment. The resolved-plan gate in Stage 6 is not advisory. A Git anchor's absence does
-not establish that a package has never been published.
+Follow [initialization](commands.md#stage-1-check-prerequisites-and-select-history).
+Require matching schemas and a named non-release branch. For a stacked PR, obtain
+its actual target branch/ref from the PR or established session context; do not
+silently substitute the repository's release branch.
 
-# Stage 2: Prepare and collect bound evidence
+Read the repository, release branch, `release_history` and optional `merge_target`
+from the generated context. Use those exact commits throughout this assessment.
+Keep the supplied target ref as well so refresh can detect parent movement.
 
-> & "{{TOOL}}" prepare --manifest-path "{{MANIFEST}}" --base "{{BASE}}" --output "{{WORK_DIR}}" --verbose
->
-> & "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" --prepared "{{WORK_DIR}}/prepared.json" --output "{{WORK_DIR}}/compatibility" --verbose
+Run advisory workspace registry discovery. Record every missing or indeterminate
+package and continue assessment; the later plan-scoped gate is mandatory.
 
-Preparation performs the intended offline workspace resolution and may update `Cargo.lock`.
-It does not request blanket third-party upgrades. Read-only classification never resolves
-dependencies. Compatibility execution uses the prepared source identity, runs the
-external checker only for selected consumer contracts, and checks that source and resolution
-remain unchanged. A broken checker or stale input is not evidence of compatibility.
+# Stage 2: Prepare complete evidence
 
-Read every publishable package in `report.json.packages`, not only changed-file patches.
-Each entry includes its status, declared version, optional anchor, changed inputs, dependencies
-and public-exposure flags. File changes have patches; inherited workspace values and locked
-binary dependency changes appear only in `changed`. Assess all of them.
+Follow [preparation](commands.md#stage-2-prepare-complete-evidence).
+The outcome is a consistent workspace lockfile and a report bound to the source
+being assessed. Preparation may update `Cargo.lock`; inspect and retain that
+change as part of the contribution.
 
-Track any untracked source that this contribution intends to publish, then restart preparation.
-Record every remaining untracked package path and its exclusion rationale in the
-assessment handoff; surface that decision to the caller rather than silently omitting it.
-Non-publishable version
-targets appear in `non_publishable_packages` for alignment only: do not assign them semantic
-decisions or query their registry status. Group members span both arrays.
+Read every publishable package in `report.json.packages`, not only file patches.
+Include inherited manifest changes and binary dependency changes listed in
+`changed`. Read `diff_path` relative to the report directory when present.
+Record excluded untracked package paths and their rationale; track intended
+release inputs and restart instead of silently omitting them.
 
-# Stage 3: Determine assessment order
+Non-publishable targets appear separately for alignment. Do not assign them
+semantic decisions or query their registry publication status.
 
-> & "{{TOOL}}" analysis-order --report "{{WORK_DIR}}/report.json" --verbose > "{{WORK_DIR}}/analysis-order.json"
+# Stage 3: Assess in dependency order
 
-Read the ordered package batches. Every publishable package appears once, dependency-first.
-A cyclic batch represents actual mutually dependent packages; assess it until decisions settle.
-Version grouping alone does not create a semantic-assessment cycle.
+Follow [assessment ordering](commands.md#stage-3-assess-in-dependency-order).
+Read the ordered package batches. Each publishable package appears once,
+dependency-first. Assess a cyclic batch until its mutually dependent decisions
+settle. Version grouping alone does not create a semantic-assessment cycle.
 
 # Stage 4: Choose semantic decisions
 
-For each batch, use [determining-level.md](determining-level.md) to judge the complete
-released change since each package's anchor. Include pending increments already on the branch;
-an existing increment is not an assessment of the changes accumulated beneath it.
+Use [determining-level.md](determining-level.md) for the complete released change
+in each package, including all changes covered by a pending increment.
 
-Read `compatibility/compatibility.json` and the associated `semver-checks.log`.
-Require `completed: true`. A compared package's `required_level` is a semantic floor:
-`breaking` or `nonbreaking`; `null` supplies no minimum. A package with `compared: false` has
-no comparison, not proof of compatibility. The checker does not cover all behavioral,
-CLI, persisted-format or feature-gating promises; semantic judgment still belongs here.
+Require `completed: true` in compatibility evidence. A compared package's
+`required_level` supplies a minimum semantic decision; a null value imposes no
+minimum, and `compared: false` is not proof of compatibility. The skill's wider
+judgment of behavior, CLI, data formats and feature contracts can raise that floor.
 
-Write semantic decisions, not numeric increments:
+Write `decisions.json` with semantic levels, not numeric increments. Omit packages
+requiring no semantic increment. Record substantive reasons, including inherited
+changes, dependency effects and retained pending versions. Do not invent a Git
+anchor for a package absent from release history and the anticipated parent.
 
-```json
-{
-  "schema_version": 1,
-  "changes": [
-    { "name": "example-api", "level": "nonbreaking" },
-    { "name": "example-tool", "level": "patch" }
-  ]
-}
-```
+# Stage 5: Review resolved effects
 
-Omit packages needing no semantic increment. Do not lower a decision below a checker floor.
-Keep substantive reasons with the evidence, including inherited-only changes, locked binary
-closures, public-dependency breaks and dependent requirement rewrites.
+Follow [proposal and preview](commands.md#stage-5-review-resolved-effects).
+Preview produces the complete version target set and exact manifest/lockfile
+edits, including effects discovered through dependency resolution.
 
-# Stage 5: Resolve and review the complete effects
+Read its report, patches and compatibility results. Assess new effects and raise
+decisions where needed, then repeat proposal/preview from the original prepared
+evidence with new output directories. Source edits require new preparation.
+Never hand-edit generated plans or widen exact requirements to evade grouping.
 
-> & "{{TOOL}}" propose --report "{{WORK_DIR}}/report.json" --decisions "{{WORK_DIR}}/decisions.json" --out "{{WORK_DIR}}/plan.json" --verbose
->
-> & "{{TOOL}}" preview --manifest-path "{{MANIFEST}}" --prepared "{{WORK_DIR}}/prepared.json" --plan "{{WORK_DIR}}/plan.json" --output "{{WORK_DIR}}/preview" --verbose
->
-> & "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" --plan "{{WORK_DIR}}/preview/plan.json" --output "{{WORK_DIR}}/preview-compatibility" --verbose
-
-The proposed plan is not the complete release set. Preview expands groups, requirement
-rewrites and actual binary lockfile effects to a fixed point, retaining sufficient pending
-increments rather than increasing them again. The resolved `preview/plan.json` names every
-version target and captures the exact manifest/lockfile writes. Structural `expand` output
-alone is not sufficient for this workflow.
-
-Assess `preview/report.json`, its patches and final compatibility evidence. New dependency
-effects establish a minimum, not semantic compatibility. Raise `decisions.json` where needed,
-then repeat proposal/preview against the original prepared report, using new compatibility
-output directories. Never synthesize edits to generated plans or widen exact requirements
-to remove unwanted group members. Source edits require new preparation.
-
-Prepare the PR's **Version/release plan** section from the union of resolved-plan targets and
-all pending-release entries in the final report. Use one row per complete version group and
-one per ungrouped package. Include every member, previous anchor version, proposed version,
-semantic decision and substantive reason. Use current non-publishable target versions only as
-alignment starting points, not invented published predecessors. Mark those targets **version alignment
-only, not published**. Explain retained increments, group-only alignment, public dependency
-effects and prospective dependency changes. State explicitly when nothing is to release.
+Prepare the PR's **Version/release plan** from the union of resolved-plan targets
+and pending releases in the final report. Give one row per complete group or
+ungrouped package: previous comparison version, proposed version, semantic level
+and substantive reason. Explain dependent/group movements and retained versions.
+Mark non-publishable targets **version alignment only, not published** without
+inventing a published predecessor. State explicitly when nothing is to release.
 
 ## First-publication handoff
 
-First-publication packages get a separate handoff: name the package, lack of package anchor,
-known registry state, bootstrap version and higher intended first automated-release version.
-A maintainer bootstraps in dependency order from the feature branch before its first merge and configures Trusted
-Publishing; the first merge performs the second publication. Do not publish from this skill.
-The bootstrap creates the registry package required for Trusted Publisher registration.
-Its version is then occupied, so the first merged automated release must be higher.
-See the [first-publication guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/first-publication.html).
+For packages with no comparison anchor, record the known registry state, bootstrap
+version and higher first automated-release version. A maintainer bootstraps the
+registry identities before first merge and configures Trusted Publishing.
+Bootstrap occupies its version, so the automated release needs a higher one.
+Do not publish from this skill or infer registry absence from Git history.
 
-# Stage 6: Refresh context and apply unchanged
+# Stage 6: Refresh and apply
 
-> & "{{TOOL}}" release-context --manifest-path "{{MANIFEST}}" --config "{{CONFIG}}" --verbose > "{{WORK_DIR}}/refreshed-context.json"
->
-> & "{{TOOL}}" check-published --manifest-path "{{MANIFEST}}" --plan "{{WORK_DIR}}/preview/plan.json" --verbose
+Follow [application](commands.md#stage-6-refresh-and-apply).
+Refresh the selected release history and target ref. If either changed, use the
+recovery procedure below. Require the plan-scoped registry gate to pass for every
+publishable target.
 
-Compare the refreshed release baseline with `BASE`. If it moved, recover as described below.
-The plan-scoped registry check must succeed for every publishable resolved target;
-non-publishable version targets are excluded. Stop for first-publication or unknown-state blockers.
-
-Preserve the exact pre-application file state and the versioning-only delta this run produces.
-Then apply without a separate approval prompt:
-
-> & "{{TOOL}}" apply --manifest-path "{{MANIFEST}}" --plan "{{WORK_DIR}}/preview/plan.json" --verbose
-
-Application must use the captured resolved artifact unchanged. It does not perform a late
-resolver refresh. Stale inputs require fresh preparation; partial I/O failure requires inspecting
-and reporting the affected files before any further planning.
+Preserve the pre-application file state and identify the versioning-only delta.
+Apply the resolved artifact unchanged, without another approval prompt. Inspect
+and report any partial I/O failure before further planning.
 
 # Stage 7: Verify and hand off
 
-> cargo metadata --manifest-path "{{MANIFEST}}" --locked --format-version 1 > $null
->
-> & "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" --base "{{BASE}}" --output "{{VERIFY_DIR}}" --verbose
->
-> & "{{TOOL}}" check --manifest-path "{{MANIFEST}}" --base "{{BASE}}" --config "{{CONFIG}}" --format github --verbose
+Follow [verification](commands.md#stage-7-verify-and-hand-off).
+Require complete fresh compatibility evidence and a passing configured check.
+Verify every decision and resolved target against the fresh report. Preserve the
+original assessment and account for all intended tracked release inputs.
 
-The metadata invocation is an exit-status-only lockfile check; its JSON is not assessment
-evidence. The fresh compatibility operation writes a read-only report and bound comparison evidence.
-Check its `completed` state and floors, not only the process exit. Verify every original
-decision and resolved target against that report, preserving original preparation evidence.
-The lockfile check must not repair anything. Refresh independently maintained fixture lockfiles
-only under the repository's rules and reassess any resulting released-content effects.
-
-Commit the intended source/version/requirement/lockfile changes and keep the PR section current.
-Follow the repository's communication rules and post-version integration instructions.
-Summarize substantive decisions, incomplete comparisons, first-publication handoffs and any
-execution blockers, including deliberately unreleased untracked paths and their reasons.
-Confirm that every intended release input is tracked and that preparation covers it.
-If posting diagnostics on GitHub, keep them in a collapsible section rather
-than embedding local paths or a validation transcript in the PR's release table.
+Commit the intended source/version/requirement/lockfile changes and keep the PR's
+release plan current. Follow repository-specific post-version instructions.
+Summarize substantive decisions, incomplete comparisons, first-publication work,
+excluded untracked paths and execution blockers. When posting on GitHub, put
+execution diagnostics in a collapsible section rather than the release table.
 
 # Recovery
 
-Release-branch movement is expected. Undo only the verified generated versioning delta from
-this run, preserving independently authored changes; merge the refreshed release baseline into
-the feature branch using the repository's normal workflow, then restart with new evidence
-directories. Do not reset the worktree, overwrite mixed manifest edits or increment stale
-proposed versions manually. Stop for ambiguous partial application or unresolved conflicts.
+When release history or the target advances, undo only the verified generated
+versioning delta from this run. Preserve independently authored changes, update
+the branch to the intended target and restart with new evidence directories.
+Do not reset the worktree or overwrite mixed manifest edits.
 
-Changed source, group membership or configuration requires preparation again. Changed semantic
-decisions alone require proposal and preview again. Manifest defects are not semantic choices:
-fix malformed/stale requirements or invalid configuration directly, then regenerate evidence.
-Completing this workflow remains neither merge approval nor publication authority.
+Changed source, groups or configuration also require fresh preparation. Changed
+semantic decisions alone require proposal and preview again. Fix manifest defects
+directly, then regenerate evidence; a malformed requirement is not a semantic choice.

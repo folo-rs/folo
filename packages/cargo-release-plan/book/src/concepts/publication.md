@@ -55,7 +55,7 @@ stored-token or PAT fallback.
 The **publication source** is the merged commit whose versions are requested.
 The **tag target** is the actual commit named by a package tag. A later commit
 can be a valid tag target when the requested version and released content remain
-equivalent. The release baseline used for planning is a separate identity.
+equivalent. The history and merge target used for planning are separate identities.
 
 Package tags use `{package}-v{version}` and are never moved. A missing tag is
 created only at a verified eligible release-branch snapshot. Libraries receive

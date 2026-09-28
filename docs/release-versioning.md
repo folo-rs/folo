@@ -6,7 +6,7 @@ repository policy rather than maintaining another explanation of that process.
 
 ## The invariant
 
-Folo releases from `main`. A contribution changing released content includes its
+Folo releases from `main` through squash merges. A contribution changing released content includes its
 reviewed version changes; merging the complete contribution starts publication.
 The repository configuration is `.cargo/release_plan.toml`.
 
@@ -40,7 +40,13 @@ local planning uses the skill or the documented CLI sequence.
 Use the skill's recovery procedure and the book's
 [recovery guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html).
 Preserve independently authored edits; only a verified generated versioning delta
-may be undone automatically. Refresh the release baseline and the PR section.
+may be undone automatically. Refresh selected release history, the merge target
+and the PR section.
+
+For stacked PRs, assess the child's additional changes against the parent's final
+anticipated squash release, while retaining actual `main` history for catch-up
+assessment. Parent and child are independently versioned even when a merge queue
+can process them together.
 
 ## Version groups
 

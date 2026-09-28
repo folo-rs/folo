@@ -7,7 +7,7 @@ use crp_diag::Quotable as _;
 use ohno::AppError;
 use semver::Version;
 
-use crate::classify::PackageStatus;
+use crate::classify::{AnchorJson, PackageStatus};
 use crate::groups::Groups;
 use crate::plan::SCHEMA_VERSION;
 use crate::report::ReportFile;
@@ -26,6 +26,27 @@ pub fn read_report(path: &Path) -> Result<ReportFile, AppError> {
 }
 
 impl ReportFile {
+    /// Returns the exact commit and package version of an anticipated-parent anchor.
+    ///
+    /// Historical anchors return `None`, even when another package uses the merge target.
+    /// Compatibility uses the returned immutable source for a parent-root comparison rather
+    /// than substituting a published registry version for an unmerged predecessor.
+    #[must_use]
+    pub fn anticipated_parent_anchor(&self, package: &str) -> Option<&AnchorJson> {
+        let target = self
+            .merge_target
+            .as_deref()
+            .filter(|target| *target != self.release_history)?;
+        // Classification admits only a descendant target distinct from actual history.
+        // Such a commit cannot be an anchor on the actual release-history timeline.
+        self.packages
+            .iter()
+            .find(|entry| entry.name == package)?
+            .anchor
+            .as_ref()
+            .filter(|anchor| anchor.commit == target)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), AppError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(UnsupportedPlanSchemaError::new(self.schema_version).into());
@@ -250,6 +271,37 @@ mod tests {
             .unwrap()
             .name = "helper".to_owned();
         data.validate().unwrap();
+    }
+
+    #[test]
+    fn anticipated_parent_queries_distinguish_package_anchors_without_new_wire_fields() {
+        let mut data = report(vec![
+            package("parent-release", "needs-increment", true),
+            package("historical", "needs-increment", true),
+        ]);
+        assert!(data.anticipated_parent_anchor("parent-release").is_none());
+        data.merge_target = Some("parent-final".to_owned());
+        data.packages
+            .first_mut()
+            .unwrap()
+            .anchor
+            .as_mut()
+            .unwrap()
+            .commit = "parent-final".to_owned();
+        assert_eq!(
+            data.anticipated_parent_anchor("parent-release"),
+            Some(&AnchorJson {
+                commit: "parent-final".to_owned(),
+                version: "1.0.0".to_owned(),
+            })
+        );
+        assert!(data.anticipated_parent_anchor("historical").is_none());
+        assert!(data.anticipated_parent_anchor("absent").is_none());
+        data.release_history = "parent-final".to_owned();
+        assert!(data.anticipated_parent_anchor("parent-release").is_none());
+        data.release_history = "release-history".to_owned();
+        data.packages.first_mut().unwrap().anchor = None;
+        assert!(data.anticipated_parent_anchor("parent-release").is_none());
     }
 
     #[test]

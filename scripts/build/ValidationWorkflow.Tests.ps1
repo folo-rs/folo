@@ -9,6 +9,9 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 BeforeAll {
+    # Only this conjunction proves event HEAD is already on Folo's release branch.
+    $script:mainHistoryBinding = '${{ github.event_name != ''pull_request'' && github.ref == ''refs/heads/main'' && github.sha || '''' }}'
+
     $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $script:standard = Get-Content -LiteralPath (Join-Path $root '.github/workflows/standard-validation.yml') -Raw
     $script:deep = Get-Content -LiteralPath (Join-Path $root '.github/workflows/deep-validation.yml') -Raw
@@ -145,6 +148,73 @@ Describe 'Workflow dependency extraction' {
     It 'accepts a scalar dependency or no dependency' {
         @(Get-WorkflowJobDependency "    needs: plan`n") | Should -Be @('plan')
         @(Get-WorkflowJobDependency "    runs-on: ubuntu-latest`n") | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Release assessment history and target handoff' {
+    BeforeAll {
+        function Get-VersionReadinessStep([string] $Workflow) {
+            $job = Get-WorkflowJob $Workflow 'validate-versions'
+            return @([regex]::Matches($job, '(?ms)^      - .*?(?=^      - |\z)') |
+                ForEach-Object { $_.Value } |
+                Where-Object { $_ -match '(?m)^\s+just validate-versions\s*$' })
+        }
+
+        function Assert-VersionTargetHandoff([string] $Workflow, [string] $EventTarget, [switch] $KnownMainHistory) {
+            $steps = @(Get-VersionReadinessStep $Workflow)
+            $steps.Count | Should -Be 1
+            $binding = [regex]::Match($steps[0],
+                '(?m)^\s+RELEASE_PLAN_MERGE_TARGET:\s*(?<value>[^\r\n]+)').Groups['value'].Value
+            $binding | Should -Match ([regex]::Escape($EventTarget))
+            $steps[0] | Should -Not -Match '(?m)^\s+RELEASE_PLAN_BASE:'
+            $history = @([regex]::Matches($steps[0],
+                '(?m)^\s+RELEASE_PLAN_HISTORY:\s*(?<value>[^\r\n]+)'))
+            if ($KnownMainHistory) {
+                $history.Count | Should -Be 1
+                $history[0].Groups['value'].Value | Should -BeExactly $script:mainHistoryBinding
+            } else {
+                $history.Count | Should -Be 0
+            }
+            Get-WorkflowJob $Workflow 'validate-versions' | Should -Match '(?m)^\s+fetch-depth:\s*0\s*$'
+        }
+    }
+
+    It 'passes event targets separately from configured release history' {
+        Assert-VersionTargetHandoff $standard 'github.event.pull_request.base.sha' -KnownMainHistory
+        Assert-VersionTargetHandoff $queue 'github.event.merge_group.base_sha'
+    }
+
+    It 'rejects a missing target handoff or a target relabeled as release history' {
+        foreach ($name in @('RELEASE_PLAN_HISTORY', 'RELEASE_PLAN_BASE', 'UNRELATED_INPUT')) {
+            $changed = $standard.Replace('RELEASE_PLAN_MERGE_TARGET:', "$name`:")
+            { Assert-VersionTargetHandoff $changed 'github.event.pull_request.base.sha' -KnownMainHistory } | Should -Throw
+        }
+    }
+
+    It 'rejects event HEAD as history without both non-PR and main-ref guards' {
+        foreach ($binding in @(
+            '${{ github.sha }}',
+            '${{ github.event_name != ''pull_request'' && github.sha || '''' }}',
+            '${{ github.ref == ''refs/heads/main'' && github.sha || '''' }}'
+        )) {
+            $changed = $standard.Replace($script:mainHistoryBinding, $binding)
+            { Assert-VersionTargetHandoff $changed 'github.event.pull_request.base.sha' -KnownMainHistory } |
+                Should -Throw
+        }
+    }
+
+    It 'retains conditional Standard SemVer analysis without adding it to the queue' {
+        $standardJob = Get-WorkflowJob $standard 'validate-versions'
+        $steps = @([regex]::Matches($standardJob, '(?ms)^      - .*?(?=^      - |\z)') |
+            ForEach-Object { $_.Value })
+        $canary = @($steps | Where-Object { $_ -match '(?m)^\s+just verify-semver-checks\s*$' })
+        $comparison = @($steps | Where-Object { $_ -match '(?m)^\s+just package=.* semver-checks\s*$' })
+        $canary.Count | Should -Be 1
+        $comparison.Count | Should -Be 1
+        $comparison[0] | Should -Match 'steps\.semver-canary\.outcome\s*==\s*''success'''
+        $comparison[0] | Should -Match 'steps\.check\.outputs\.semver_targets\s*!=\s*'''''
+        $comparison[0] | Should -Match 'SEMVER_TARGETS:\s*\$\{\{\s*steps\.check\.outputs\.semver_targets\s*\}\}'
+        Get-WorkflowJob $queue 'validate-versions' | Should -Not -Match 'verify-semver-checks| semver-checks|validate-binstall'
     }
 }
 

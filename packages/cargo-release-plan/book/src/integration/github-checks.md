@@ -55,10 +55,17 @@ Do not scope offline version readiness to a changed-package list. It must find
 unversioned released content anywhere in the workspace, including inherited
 inputs and effects carried from an earlier contribution.
 
-The core offline invocation, after the caller has selected `$Baseline`, is:
+The core offline invocation uses the pair returned by `release-context`:
 
 ```powershell
-cargo release-plan check --base $Baseline `
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$AssessmentArguments = @("--release-history", $Context.release_history)
+if ($Context.merge_target) {
+    $AssessmentArguments += @("--merge-target", $Context.merge_target)
+}
+cargo release-plan check @AssessmentArguments `
     --config (Join-Path ".cargo" "release_plan.toml") --format github
 ```
 
@@ -69,7 +76,7 @@ The equivalent compatibility gate uses fresh bound evidence and rejects
 insufficient increments:
 
 ```powershell
-cargo release-plan check-compatibility --base $Baseline `
+cargo release-plan check-compatibility @AssessmentArguments `
     --output (Join-Path ".release-plan-work" "ci-compatibility") --deny-findings
 ```
 
@@ -84,32 +91,35 @@ does not remove the author's feature-subset and behavioral review obligations.
 
 ## Fetch and select the correct history
 
-Use a full-history checkout. Resolve the baseline once for the tested event:
+Use a full-history checkout. Resolve actual release history separately from any
+anticipated target:
 
-| Event | Baseline selection |
+| Event | History and target |
 | --- | --- |
-| Ordinary or stacked PR | Actual base-repository release-branch tip, not the PR target branch. |
-| Merge queue | The queue candidate's release-branch base, `merge_group.base_sha`. |
-| Release-branch push | The immutable source commit being tested. |
-| Scheduled or manual source check | The explicitly selected immutable release source. |
+| PR | Fetch actual configured release history; pass `pull_request.base.sha` as the proposed merge target. |
+| Merge queue | Keep actual release history separate; the supplied integration base is a proposed target, not independently established history. |
+| Pinned release-source check | Explicitly select that known release-branch commit as history; no anticipated target. |
+| Other push, scheduled or manual check | Let context acquire configured release history rather than assuming the tested HEAD is already released. |
 
 Fetch the required base-repository history for fork PRs too. A similarly named
 branch in the fork is not a substitute.
 
 For a custom graph, `release-context --config <path>` fetches the configured
-release branch and returns `release_base`. Supply
-`release-context --base <tested-commit>` when the event already fixes the
-baseline, especially for a merge queue. Readiness receives that same frozen
-commit; it does not independently fetch a newer one.
+release branch and returns `release_history` plus nullable `merge_target`.
+Supply `--merge-target <target-commit>` for a PR or integration target. Context
+normalizes a target already in release history to null. Pass the returned pair
+unchanged to check and compatibility. Use `--release-history <commit>` only when
+the caller already knows the actual release-history boundary.
 
 A repository can keep a deliberately narrow queue gate using the lower
-version-readiness operation and the tested queue baseline. That does not remove
+version-readiness operation and the candidate's history/target pair. That does not remove
 the full compatibility and publication-input checks from ordinary PR validation.
 
 ## Protect the branch
 
-Configure branch protection and, where appropriate, a merge queue for the chosen
-release branch. Require a stable status that represents all merge-blocking work.
+Configure squash merging and branch protection for the chosen release branch.
+Each PR's target-aware checks establish its own version decisions; merge queue
+grouping does not replace those checks. Require a stable status that represents all merge-blocking work.
 
 A final aggregation job is useful for dynamic matrices: it succeeds only when
 required prerequisites succeeded or were deliberately not applicable. Failure,

@@ -149,7 +149,7 @@ fn write_report(directory: &Path) {
     fs::write(
         directory.join("report.json"),
         json!({
-            "schema_version": 4, "head": "captured",
+            "schema_version": 5, "head": "captured", "release_history": "released",
             "packages": [{
                 "name": "api", "declared_version": "1.0.0", "status": "needs-increment",
                 "anchor": {"commit": "anchor", "version": "1.0.0"},
@@ -238,7 +238,7 @@ fn proposal_writes_a_usable_plan_without_workspace_discovery() {
     );
     let plan: Value =
         serde_json::from_slice(&fs::read(directory.path().join("proposal.json")).unwrap()).unwrap();
-    assert_eq!(plan.get("schema_version").unwrap(), 4);
+    assert_eq!(plan.get("schema_version").unwrap(), 5);
     assert_eq!(plan.get("increments").unwrap().as_array().unwrap().len(), 1);
     assert_eq!(plan.pointer("/increments/0/name").unwrap(), "api");
     assert!(plan.get("resolved").is_none());

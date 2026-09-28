@@ -67,6 +67,7 @@ fn shallow_history_without_a_version_change_is_an_error() {
     );
 
     let result = run(&RunInput::Check {
+        merge_target: None,
         base: Some("HEAD".to_string()),
         manifest_path: clone.path().join("Cargo.toml"),
         format: CheckFormat::Text,

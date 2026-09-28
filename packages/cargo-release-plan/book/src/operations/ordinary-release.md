@@ -11,7 +11,7 @@ and update the relevant tests and public documentation. The group starts at
 `1.4.0`; `widget-cli` already has a pending `2.0.1` increment from `2.0.0`.
 
 Run the copied `increment-versions` skill, or follow
-[local planning](../integration/local-planning.md). Freeze the release baseline,
+[local planning](../integration/local-planning.md). Select release history and the merge target,
 prepare resolution and assess dependency-first. The implementation change selects
 the public library contract for external comparison.
 
@@ -54,7 +54,7 @@ Apply the captured resolved artifact unchanged, verify locked metadata and run
 the repository's required checks. Preserve the before/after evidence separately
 from source.
 
-Source, group, baseline or decision changes require reassessment and an updated
+Source, group, history, target or decision changes require reassessment and an updated
 section. If another PR consumes the version, use
 [release-branch movement recovery](recovery.md#release-branch-movement).
 

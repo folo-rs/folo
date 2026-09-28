@@ -24,6 +24,7 @@ mod diff;
 mod errors;
 pub mod expand;
 pub mod groups;
+pub mod history;
 mod inherited;
 pub mod inspect_plan;
 pub mod plan;

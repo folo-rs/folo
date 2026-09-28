@@ -158,6 +158,12 @@ same checker protocol used for real comparisons. Updating the configured checker
 pin requires reviewing its exit-status and summary output against the parser;
 unknown output remains an operational failure rather than a compatible result.
 
+For an anticipated parent release, the report identifies packages whose comparison
+anchor is the parent's final commit. Their API comparison uses that source rather
+than an older registry version. The checker owns a detached parent worktree for the
+comparison and preserves source-verification and cleanup failures in its outcome.
+Historical anchors retain the registry comparison path.
+
 Registry preflight reuses exact registry observations and resolved-plan inspection.
 The plan-scoped form fails closed for unavailable or never-published targets;
 workspace discovery remains an explicit advisory. Neither form performs package
@@ -870,7 +876,8 @@ must start from the live state that preparation captured.
 Preview uses a disposable prospective workspace so version and requirement
 rewrites never become original planning inputs. Each iteration derives its
 candidate from the prepared input rather than incrementing the preceding
-candidate again. Classification uses the same pinned release baseline throughout.
+candidate again. Classification uses the same release-history and merge-target
+commits throughout.
 New binary closure effects and their dependent/group consequences expand the
 candidate until it is stable. Existing sufficient versions are retained.
 

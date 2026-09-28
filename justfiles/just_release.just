@@ -78,9 +78,13 @@ verify-lockfile:
 
 # CI version-readiness wrappers.
 #
-# `RELEASE_PLAN_BASE` supplies the release baseline when set (CI passes the release branch, or
-# `merge_group.base_sha` on a queue run); an empty value falls through to the tool default. When
-# `GITHUB_OUTPUT` is set, a report is written first so the `semver_targets` step output reaches
+# `release-context` resolves actual configured release history and normalizes the optional
+# `RELEASE_PLAN_MERGE_TARGET` (the PR target or queue base, not already-released history).
+# `RELEASE_PLAN_HISTORY` can select explicit known history; `RELEASE_PLAN_BASE` is its legacy alias.
+# Proven non-PR main runs use their tested commit. Local calls without an explicit history or
+# target use Folo's cached origin/main; hosted PR/queue contexts still resolve actual history.
+# The resolved pair is forwarded unchanged to report and check. When `GITHUB_OUTPUT` is set,
+# the report is written first so the `semver_targets` step output reaches
 # `semver-checks` even if the check then fails. Released-content comparison stays in the Rust
 # tool; this recipe is only its command-line entry point.
 #

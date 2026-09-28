@@ -9,7 +9,8 @@ use ohno::AppError;
 use serde::{Deserialize, Serialize};
 
 use crate::classify::{
-    AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, classify,
+    AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus,
+    classify_with_target,
 };
 use crate::plan::SCHEMA_VERSION;
 use crate::report::output::{FileOutput, ReportOutput};
@@ -19,6 +20,9 @@ use crate::report::output::{FileOutput, ReportOutput};
 pub struct ReportFile {
     pub(crate) schema_version: u32,
     pub(crate) head: String,
+    pub(crate) release_history: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) merge_target: Option<String>,
     pub(crate) packages: Vec<ReportPackage>,
     pub(crate) non_publishable_packages: Vec<ReportVersionTarget>,
     pub(crate) groups: BTreeMap<String, ReportGroup>,
@@ -74,9 +78,21 @@ pub fn run_report(
     manifest_path: &Path,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
+    run_report_with_target(out_dir, base, None, manifest_path, verbose)
+}
+
+/// Produces report evidence with a final anticipated predecessor while retaining real history.
+#[cfg_attr(test, mutants::skip)] // Git/Cargo acquisition and file writes require boundary coverage.
+pub fn run_report_with_target(
+    out_dir: &Path,
+    release_history: Option<&str>,
+    merge_target: Option<&str>,
+    manifest_path: &Path,
+    verbose: Verbose<'_>,
+) -> Result<String, AppError> {
     create_report(
         out_dir,
-        || classify(manifest_path, base, verbose),
+        || classify_with_target(manifest_path, release_history, merge_target, verbose),
         &mut FileOutput { directory: out_dir },
     )
 }
@@ -152,6 +168,8 @@ fn emit_report(
     let report = ReportFile {
         schema_version: SCHEMA_VERSION,
         head: classification.head.clone(),
+        release_history: classification.release_history.clone(),
+        merge_target: classification.merge_target.clone(),
         packages,
         non_publishable_packages,
         groups,

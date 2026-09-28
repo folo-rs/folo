@@ -7,8 +7,10 @@ fn inputs() -> Inputs {
         root: PathBuf::from("root"),
         manifest: PathBuf::from("Cargo.toml"),
         head: "head".to_owned(),
-        base: "base".to_owned(),
-        base_revision: "origin/main".to_owned(),
+        release_history: "base".to_owned(),
+        release_history_revision: "origin/main".to_owned(),
+        merge_target: None,
+        merge_target_revision: None,
         index: "100644 blob 0\tCargo.toml\0".to_owned(),
         paths: BTreeSet::from([PathBuf::from("Cargo.toml"), PathBuf::from("src/lib.rs")]),
         digest: "initial".to_owned(),
@@ -22,17 +24,22 @@ fn captured_index_is_returned_verbatim() {
 }
 
 #[test]
-fn retained_acquisition_pins_the_resolved_base_and_propagates_both_failures() {
-    let inputs = inputs();
+fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
+    let inputs = Inputs {
+        merge_target: Some("parent-final".to_owned()),
+        merge_target_revision: Some("parent-branch".to_owned()),
+        ..inputs()
+    };
     for fail_capture in [false, true] {
         let compared = Cell::new(false);
         let error = inputs
             .verify_candidate_with(
                 Path::new("retained/Cargo.toml"),
                 "final",
-                |manifest, base| {
+                |manifest, base, target| {
                     assert_eq!(manifest, Path::new("retained/Cargo.toml"));
                     assert_eq!(base, Some("base"));
+                    assert_eq!(target, Some("parent-final"));
                     if fail_capture {
                         Err(CandidateFailure::new().into())
                     } else {
@@ -55,7 +62,7 @@ fn retained_acquisition_pins_the_resolved_base_and_propagates_both_failures() {
         .verify_candidate_with(
             Path::new("candidate"),
             "final",
-            |_, _| Ok(inputs.clone()),
+            |_, _, _| Ok(inputs.clone()),
             |_, _| Ok(()),
         )
         .unwrap();

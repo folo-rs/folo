@@ -14,7 +14,7 @@ use crate::plan::{IncrementLevel, PlanIncrement, increment_version};
 use crate::propose::generate::Proposal;
 
 /// Local decision-file revision used by the increment-versions skill.
-const DECISION_SCHEMA_VERSION: u32 = 1;
+pub const DECISION_SCHEMA_VERSION: u32 = 1;
 
 /// Human semantic assessments, before resolving their mechanical consequences.
 ///

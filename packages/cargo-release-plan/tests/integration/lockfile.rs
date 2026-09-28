@@ -1138,6 +1138,7 @@ fn historical_registry_parse_errors_only_block_closures_requiring_registry_names
             // A failed classification must not overwrite an existing report.
             fixture.write("report/report.json", "existing report");
             _ = run(&RunInput::Report {
+                merge_target: None,
                 out_dir: fixture.path().join("report"),
                 base: Some(base),
                 manifest_path: fixture.manifest(),

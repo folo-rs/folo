@@ -252,9 +252,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          # cargo-release-plan resolves the release baseline and each package's version anchor
-          # from the release branch's first-parent history, so a truncated clone can hide the
-          # commit that last changed a version and report that package as unchanged.
+          # Actual release history supplies anchors; an unmerged PR target supplies a separate
+          # anticipated final snapshot. The context command needs ancestry for both.
           fetch-depth: 0
 
       - name: Setup environment
@@ -279,11 +278,13 @@ jobs:
         id: check
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         env:
-          # The release baseline is the tip of the branch releases are made from, which is
-          # not the branch a pull request targets: a stacked pull request targets an
-          # unreleased parent, and anchoring on it would treat that parent's pending
-          # increment as a release. Main runs use the tested commit, not a moving remote tip.
-          RELEASE_PLAN_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.event.repository.default_branch) || github.sha }}
+          # The event base is only the merge target. release-context resolves configured actual
+          # release history and normalizes already-released targets; PowerShell forwards that pair.
+          # Ref: .github/workflows/implementation.md#release-validation.
+          RELEASE_PLAN_MERGE_TARGET: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          # Main push and main-gated reusable runs test already-merged source. Freeze that tested
+          # commit so later main advances cannot make this run regress against newer releases.
+          RELEASE_PLAN_HISTORY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.sha || '' }}
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest

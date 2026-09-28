@@ -53,6 +53,7 @@ pub(crate) fn check(fixture: &Fixture, base: &str) -> (bool, String) {
 
 pub(crate) fn check_result(fixture: &Fixture, base: &str) -> Result<(bool, String), String> {
     match run(&RunInput::Check {
+        merge_target: None,
         base: Some(base.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -70,6 +71,7 @@ pub(crate) fn check_result(fixture: &Fixture, base: &str) -> Result<(bool, Strin
 
 pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
     match run(&RunInput::Check {
+        merge_target: None,
         base: Some(base.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -87,6 +89,7 @@ pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
 
 pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, String) {
     match run(&RunInput::Check {
+        merge_target: None,
         base: Some(base.to_string()),
         manifest_path,
         format: CheckFormat::Text,
@@ -105,6 +108,7 @@ pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, Stri
 /// Runs `check` with no baseline, leaving the tool to discover one.
 pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String), String> {
     match run(&RunInput::Check {
+        merge_target: None,
         base: None,
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -122,6 +126,7 @@ pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String)
 
 pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool, String) {
     match run(&RunInput::Check {
+        merge_target: None,
         base: Some(base.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -140,6 +145,7 @@ pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool,
 pub(crate) fn report_json(fixture: &Fixture, base: &str) -> String {
     let out_dir = fixture.path().join("out");
     run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
         base: Some(base.to_string()),
         manifest_path: fixture.manifest(),
@@ -154,7 +160,7 @@ pub(crate) fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
     fs::write(
         &plan_path,
         format!(
-            r#"{{ "schema_version": 4, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
+            r#"{{ "schema_version": 5, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
         ),
     )
     .unwrap();
@@ -185,6 +191,7 @@ pub(crate) fn resolved_plan(fixture: &Fixture, proposal: &Path) -> PathBuf {
 pub(crate) fn prepare(fixture: &Fixture) -> PathBuf {
     let prepared = fixture.path().join("prepared");
     run(&RunInput::Prepare {
+        merge_target: None,
         output: prepared.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),

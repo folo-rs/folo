@@ -15,7 +15,7 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 use ohno::AppError;
 
-use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
+use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes, spawn};
 use crate::manifest::{PathCase, to_git_separators};
 use crate::{
     CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
@@ -181,6 +181,25 @@ impl GitRepo {
         ) {
             Ok(stdout) => Ok(stdout.trim().to_string()),
             Err(error) => Err(UnresolvedBaseError::caused_by(rev, error).into()),
+        }
+    }
+
+    /// Whether one resolved commit is an ancestor of another, including equality.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, AppError> {
+        let output = spawn(
+            "git",
+            ["merge-base", "--is-ancestor", ancestor, descendant],
+            &self.root,
+        )?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(CommandFailedError::new(
+                "git merge-base --is-ancestor",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            )
+            .into()),
         }
     }
 

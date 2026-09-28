@@ -1,30 +1,25 @@
 # Why cargo-release-plan?
 
-A release decision is easier to review alongside the change that requires it.
-`cargo-release-plan` makes that decision part of the pull request: assess the
-content consumers receive, choose appropriate versions, and merge the complete
-change. Publication then delivers those declared versions without making another
-version decision.
-
-This matters in workspaces. A change in an implementation package can require its
-public library to move with it. A dependency update can change an installable
-binary without touching its source. A successful crate upload can still leave a
-release without its binary archives. One release model connects these cases
-instead of treating version validation and publication as unrelated tasks.
+The cargo-release-plan toolkit automates release preparation and publication for
+Rust workspaces. It includes the `cargo-release-plan` command-line application,
+the `cargo-release-plan-action` reusable GitHub workflows, and the
+`increment-versions` agent skill. They are designed to be used together and are
+documented together in this book.
 
 The goals are:
 
-- **Reviewable versions.** Explain the consumer-facing significance of a change,
-  including dependent packages, rather than accepting an unexplained increment.
-- **Reproducible assessment.** Use a fixed Git history boundary and explicit
-  dependency resolution; do not let changing registry state choose versions.
-- **Complete application.** Preview the full manifest and lockfile effects,
-  then apply exactly the captured result.
-- **Recoverable delivery.** Preserve publication intent and finish missing
-  registry, tag and binary work without rewriting successful releases.
-- **Portable adoption.** Use published tools, repository configuration, a
-  copyable agent skill and reusable GitHub integration. No checkout of the Folo
-  repository, repository-local release scripts or Just installation is needed.
+- Every merged pull request immediately publishes its changed packages to crates.io.
+- Fully automated version-number increments that obey Semantic Versioning.
+- Reusable GitHub workflows for easy integration.
+- No stored secrets required for publishing.
+- Workspaces containing any number of library or binary packages.
+- `cargo-binstall` support for fast installation of binary packages.
+- Advanced workspace structures, including published packages with private APIs.
+
+The skill prepares version changes as part of the pull request. Review approves
+the code and versions together; merging starts publication without another
+version-selection step. The normal workflow uses squash merges so the PR's final
+content and versions enter release history together.
 
 ## Who this fits
 
@@ -50,9 +45,6 @@ outside this process.
 | Cargo | Resolve dependencies when requested, construct and verify package archives, and order registry uploads. |
 | GitHub Action and workflows | Install pinned tools, supply permissions, run jobs and transport evidence and outcomes. |
 
-The published application is `cargo-release-plan`. Its implementation partition
-is not a second release tool that consumers configure or invoke.
-
 Completing a plan or running the skill grants neither merge authority nor
 permission to publish. Publication starts from the reviewed, merged source under
 the repository's release policy.
@@ -61,16 +53,12 @@ the repository's release policy.
 
 ```mermaid
 flowchart TD
-    A["Source changes"] --> B["Prepare evidence"]
-    B --> C["Choose semantic decisions"]
-    C --> D["Preview complete version and lockfile effects"]
-    D --> E["Apply captured plan"]
-    E --> F["Review, checks and merge"]
-    F --> G["Capture immutable publication manifest"]
-    G --> H["Reconcile exact crates.io versions"]
-    H --> I["Reconcile package tags and binary releases"]
-    I --> J["Build missing native archive/checksum pairs"]
-    J --> K["Verify delivery and retain outcomes"]
+    A["Develop changes"] --> B["Execute increment-versions skill"]
+    B --> C["Review the pull request, including its versions"]
+    C --> D["Pull request is squash-merged"]
+    D --> E["Reusable workflows publish the release"]
+    E --> F["Packages appear on crates.io"]
+    F --> G["Binary packages gain cargo-binstall archives"]
 ```
 
 The chapters first explain the model, then walk through repository setup and

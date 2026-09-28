@@ -19,7 +19,7 @@ fn inspection_selects_only_publishable_members_and_never_edits_the_workspace() {
     fs::write(
         &path,
         json!({
-            "schema_version": 4, "expanded": true, "increments": [
+            "schema_version": 5, "expanded": true, "increments": [
                 {"name": "helper", "version": "1.0.1"}, {"name": "api", "version": "1.0.1"}
             ]
         })
@@ -67,7 +67,7 @@ fn unknown_and_untracked_members_cannot_supply_publication_targets() {
         fs::write(
             &path,
             json!({
-                "schema_version": 4, "expanded": true,
+                "schema_version": 5, "expanded": true,
                 "increments": [{"name": name, "version": "1.0.1"}]
             })
             .to_string(),

@@ -68,7 +68,7 @@ workspace for compatibility checks. `check-compatibility --plan` selects that
 workspace, regenerates a read-only report and verifies the captured source
 before and after comparison. `--prepared` instead checks the original prepared
 inputs; without either selector, it acquires fresh evidence against the chosen
-baseline.
+history and merge target.
 
 A detached report does not establish that a checkout is still current.
 Additional analysis uses the preview's recorded prospective workspace and is
@@ -87,7 +87,7 @@ manifest and lockfile contents. It does not run resolution or quietly add
 targets. `--dry-run` performs the read-only validation first.
 
 Keep `prepared.json` and the resolved plan intact. They are tool-owned evidence,
-not templates for hand editing. Source, baseline, membership or semantic changes
+not templates for hand editing. Source, history, target, membership or semantic changes
 require fresh evidence and preview.
 
 Applying the same artifact to its fully applied state is a no-op. A partially

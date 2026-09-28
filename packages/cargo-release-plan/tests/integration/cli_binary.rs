@@ -9,6 +9,10 @@
 use std::fs;
 use std::process::{Command, Output};
 
+use crp_publication::publication::context::CONTEXT_SCHEMA_VERSION;
+use crp_versioning::plan::SCHEMA_VERSION;
+use crp_versioning::propose::DECISION_SCHEMA_VERSION;
+use serde_json::Value;
 use tempfile::TempDir;
 
 use crate::fixture::{Fixture, write_package};
@@ -45,6 +49,36 @@ fn version_reports_the_installed_application_without_a_workspace() {
             stdout(&output).trim(),
             format!("cargo-release-plan {}", env!("CARGO_PKG_VERSION"))
         );
+    }
+}
+
+#[cfg_attr(miri, ignore = "Spawns the installed application without a workspace")]
+#[test]
+fn version_query_reports_schemas_without_repository_or_identity_inputs() {
+    let directory = TempDir::new().unwrap();
+    for args in [&["version"][..], &["release-plan", "version"][..]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+            .args(args)
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).is_empty());
+        let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            document.get("tool_version").unwrap(),
+            env!("CARGO_PKG_VERSION")
+        );
+        let schemas = document.get("schemas").unwrap();
+        for name in ["plan", "report", "prepared"] {
+            assert_eq!(schemas.get(name).unwrap(), SCHEMA_VERSION);
+        }
+        assert_eq!(schemas.get("decisions").unwrap(), DECISION_SCHEMA_VERSION);
+        assert_eq!(
+            schemas.get("release_context").unwrap(),
+            CONTEXT_SCHEMA_VERSION
+        );
+        assert!(schemas.get("compatibility").unwrap().as_u64().unwrap() > 0);
     }
 }
 
@@ -177,7 +211,7 @@ fn apply_writes_its_summary_to_stdout() {
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 4, "increments": [{ "name": "demo", "level": "patch" }] }"#,
+        r#"{ "schema_version": 5, "increments": [{ "name": "demo", "level": "patch" }] }"#,
     )
     .unwrap();
     let output = release_plan(
@@ -199,7 +233,7 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
     let proposal = fixture.path().join("proposal.json");
     fs::write(
         &proposal,
-        r#"{"schema_version":4,"increments":[{"name":"demo","level":"patch"}]}"#,
+        r#"{"schema_version":5,"increments":[{"name":"demo","level":"patch"}]}"#,
     )
     .unwrap();
 

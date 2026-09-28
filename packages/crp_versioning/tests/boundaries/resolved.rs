@@ -122,7 +122,7 @@ fn nested_capture_records_ancestor_configuration_and_the_default_base() {
     );
     let inputs = Inputs::capture(&directory.path().join("rust/Cargo.toml"), None).unwrap();
     assert_eq!(inputs.manifest, Path::new("rust/Cargo.toml"));
-    assert_eq!(inputs.base, head.trim());
+    assert_eq!(inputs.release_history, head.trim());
     assert!(inputs.paths.contains(Path::new(".cargo/config.toml")));
     assert!(inputs.paths.contains(Path::new("rust/.cargo/config.toml")));
     assert!(inputs.paths.contains(Path::new("rust/Cargo.lock")));
@@ -133,8 +133,10 @@ fn inputs() -> Inputs {
         root: PathBuf::from("repository"),
         manifest: PathBuf::from("Cargo.toml"),
         head: "head".to_owned(),
-        base: "base".to_owned(),
-        base_revision: "main".to_owned(),
+        release_history: "base".to_owned(),
+        release_history_revision: "main".to_owned(),
+        merge_target: None,
+        merge_target_revision: None,
         index: "index".to_owned(),
         paths: ["Cargo.toml", "Cargo.lock", "src/lib.rs"]
             .into_iter()

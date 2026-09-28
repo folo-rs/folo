@@ -212,7 +212,9 @@ impl<'a> Proposal<'a> {
         }
         let increments = self.decision_increments(&levels, &verbose)?;
         let increments = self.combine(increments, &alignment);
-        let plan = PlanFile::new(PlanStage::Proposed, increments);
+        let mut plan = PlanFile::new(PlanStage::Proposed, increments);
+        plan.release_history = Some(self.report.release_history.clone());
+        plan.merge_target.clone_from(&self.report.merge_target);
         let resolved = self.resolve(&plan)?;
         self.validate_result(&resolved, &levels)?;
         Ok(plan)

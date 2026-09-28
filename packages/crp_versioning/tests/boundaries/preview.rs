@@ -13,8 +13,8 @@ fn prepared_document() -> String {
     json!({
         "schema_version": SCHEMA_VERSION,
         "inputs": {
-            "root": "repository", "manifest": "Cargo.toml", "head": "head", "base": "base",
-            "base_revision": "main", "index": "index", "paths": ["Cargo.toml"], "digest": "initial"
+            "root": "repository", "manifest": "Cargo.toml", "head": "head", "release_history": "base",
+            "release_history_revision": "main", "index": "index", "paths": ["Cargo.toml"], "digest": "initial"
         }
     })
     .to_string()
@@ -70,7 +70,7 @@ fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker
     assert!(error.find_source::<serde_json::Error>().is_some());
     assert!(!marker.exists());
 
-    fs::write(&proposal, r#"{"schema_version":4,"increments":[]}"#).unwrap();
+    fs::write(&proposal, r#"{"schema_version":5,"increments":[]}"#).unwrap();
     let (_, plan) = preview_inputs(&proposal, &prepared, output, &manifest, |_| Ok(())).unwrap();
     assert!(plan.increments.is_empty());
     assert!(!marker.exists());

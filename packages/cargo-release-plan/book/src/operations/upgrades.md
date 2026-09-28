@@ -4,8 +4,9 @@ The application, GitHub integration and copied skill have related interfaces but
 different distribution lifecycles. Upgrade them as a tested combination rather
 than assuming equal version numbers.
 
-The walkthrough selects the `0.4.1` application interface and matching copied
-skill, with report/plan schema `4` and semantic-decision schema `1`.
+The walkthrough and copied skill use report/plan/prepared schema `5`,
+semantic-decision and compatibility schema `1`, and release-context schema `2`.
+`cargo release-plan version` reports these revisions as JSON.
 `ACTION_REVISION` in workflow examples must be replaced with the verified
 immutable commit of a tested published action release selecting that interface.
 Use the same commit for the root composite, check, release and identity-probe
@@ -38,11 +39,12 @@ retaining an older unsupported command interface.
 1. Read the chosen release's command, configuration and artifact compatibility
    notes.
 2. Confirm the exact application package and promised native archives exist.
-3. Verify the installed executable with `cargo release-plan --version`, without
-   relying on an old executable cache.
+3. Verify the installed executable and schemas with `cargo release-plan version`.
 4. Exercise the selected action revision in read-only checks on a representative
    consumer workspace.
-5. Copy the complete matching skill directory and record its revision.
+5. If the skill's supported schemas differ, update its complete directory from
+   the canonical repository and record its revision. In the canonical repository,
+   report a mismatch instead of overwriting the skill being developed.
 6. Verify OIDC exchange/revocation with the identity probe when the caller or
    publishing environment changes, and confirm package-specific grants separately.
    Use the permanent release caller's identity-only mode.

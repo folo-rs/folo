@@ -12,6 +12,7 @@ fn executable_wiring_is_reexported() {
     assert!(matches!(
         input,
         RunInput::Check {
+            merge_target: None,
             format: CheckFormat::Text,
             ..
         }

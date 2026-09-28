@@ -89,6 +89,7 @@ fn a_non_publishable_group_member_is_a_version_target() {
     let base = fixture.sha("HEAD");
 
     let outcome = run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -236,12 +237,13 @@ fn malformed_exact_requirements_fail_all_commands_before_writes() {
     let plan = fixture.path().join("plan.json");
     fs::write(
         &plan,
-        r#"{ "schema_version": 4, "increments": [{ "name": "library", "level": "patch" }] }"#,
+        r#"{ "schema_version": 5, "increments": [{ "name": "library", "level": "patch" }] }"#,
     )
     .unwrap();
 
     let commands = [
         RunInput::Check {
+            merge_target: None,
             base: Some(base.clone()),
             manifest_path: fixture.manifest(),
             format: CheckFormat::Text,
@@ -250,6 +252,7 @@ fn malformed_exact_requirements_fail_all_commands_before_writes() {
             verbose: false,
         },
         RunInput::Report {
+            merge_target: None,
             out_dir: fixture.path().join("report"),
             base: Some(base),
             manifest_path: fixture.manifest(),
@@ -291,6 +294,7 @@ fn current_legacy_group_metadata_is_rejected() {
     let base = fixture.sha("HEAD");
 
     run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,

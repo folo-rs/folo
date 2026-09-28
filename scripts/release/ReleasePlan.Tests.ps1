@@ -1,3 +1,4 @@
+#requires -Version 7.6
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Protects the local and CI validation gates: injected Cargo output is authoritative, failed
@@ -10,12 +11,44 @@ $VerbosePreference = 'Continue'
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ReleasePlan.psm1') -Force
     $script:previousBase = $env:RELEASE_PLAN_BASE
-    $env:RELEASE_PLAN_BASE = 'baseline-must-not-reach-artifact-commands'
+    $script:previousHistory = $env:RELEASE_PLAN_HISTORY
+    $script:previousTarget = $env:RELEASE_PLAN_MERGE_TARGET
+    $script:previousActions = $env:GITHUB_ACTIONS
+    $env:RELEASE_PLAN_BASE = $null
+    $env:RELEASE_PLAN_HISTORY = $null
+    $env:RELEASE_PLAN_MERGE_TARGET = $null
+    $env:GITHUB_ACTIONS = 'true'
     $global:LASTEXITCODE = 0
+
+    function Get-ContextFixture {
+        param([AllowNull()][object] $MergeTarget = $null)
+
+        # Full immutable identities distinguish actual history, target and the tested checkout.
+        return [ordered]@{
+            schema_version = 2
+            repository = 'fixture/release'
+            release_branch = 'releases'
+            release_history = 'a' * 40
+            merge_target = $MergeTarget
+            head = 'c' * 40
+            workspace_manifest = 'Cargo.toml'
+            config_path = '.cargo/release_plan.toml'
+            concurrency_group = 'release-fixture'
+        }
+    }
+
+    function Get-ContextJson {
+        param([AllowNull()][object] $MergeTarget = $null)
+
+        ConvertTo-Json -InputObject (Get-ContextFixture -MergeTarget $MergeTarget) -Compress
+    }
 }
 
 AfterAll {
     $env:RELEASE_PLAN_BASE = $script:previousBase
+    $env:RELEASE_PLAN_HISTORY = $script:previousHistory
+    $env:RELEASE_PLAN_MERGE_TARGET = $script:previousTarget
+    $env:GITHUB_ACTIONS = $script:previousActions
 }
 
 Describe 'CI compatibility target selection' {
@@ -159,20 +192,236 @@ Describe 'Semver target directory lifecycle' {
     }
 }
 
-Describe 'CI version validation output' {
-    It 'runs only the locked check without GitHub output' {
-        $script:seen = $null
-        Invoke-ValidateVersions -GitHubOutputPath '' -Base 'base-ref' -Cargo {
+Describe 'Release context handoff' {
+    It 'lets hosted context own configured history when no explicit history or target is supplied' {
+        $script:seen = [Collections.Generic.List[object]]::new()
+        $result = Invoke-ValidateVersions -GitHubOutputPath '' -Cargo {
             param($Argument)
-            $script:seen = $Argument
+            $script:seen.Add($Argument)
             $global:LASTEXITCODE = 0
+            if ($Argument[5] -eq 'release-context') { Get-ContextJson }
+            else { 'check result' }
         }
-        $script:seen | Should -Be @(
+        $result | Should -Be 'check result'
+        $script:seen.Count | Should -Be 2
+        $script:seen[0] | Should -Be @('run', '-p', 'cargo-release-plan', '--locked', '--', 'release-context')
+        $script:seen[1] | Should -Be @(
             'run', '-p', 'cargo-release-plan', '--locked', '--',
-            'check', '--format', 'github', '--base', 'base-ref'
+            'check', '--format', 'github', '--release-history', ('a' * 40)
         )
     }
 
+    It 'uses cached Folo release history for an ordinary local invocation' {
+        $previousActions = $env:GITHUB_ACTIONS
+        $script:seen = [Collections.Generic.List[object]]::new()
+        try {
+            $env:GITHUB_ACTIONS = $null
+            Invoke-ValidateVersions -GitHubOutputPath '' -Cargo {
+                param($Argument)
+                $script:seen.Add($Argument)
+                $global:LASTEXITCODE = 0
+                if ($Argument[5] -eq 'release-context') { Get-ContextJson }
+            }
+        } finally { $env:GITHUB_ACTIONS = $previousActions }
+        $script:seen[0] | Should -Be @(
+            'run', '-p', 'cargo-release-plan', '--locked', '--', 'release-context',
+            '--release-history', 'origin/main'
+        )
+        $script:seen[1] | Should -Be @(
+            'run', '-p', 'cargo-release-plan', '--locked', '--', 'check', '--format', 'github',
+            '--release-history', ('a' * 40)
+        )
+    }
+
+    It 'does not replace an explicit local target with cached release history' {
+        $previousActions = $env:GITHUB_ACTIONS
+        try {
+            $env:GITHUB_ACTIONS = $null
+            Invoke-ValidateVersions -GitHubOutputPath '' -MergeTarget ('b' * 40) -Cargo {
+                param($Argument)
+                $global:LASTEXITCODE = 0
+                if ($Argument[5] -eq 'release-context') {
+                    $Argument | Should -Be @(
+                        'run', '-p', 'cargo-release-plan', '--locked', '--', 'release-context',
+                        '--merge-target', ('b' * 40)
+                    )
+                    Get-ContextJson -MergeTarget ('b' * 40)
+                }
+            }
+        } finally { $env:GITHUB_ACTIONS = $previousActions }
+    }
+
+    It 'surfaces unavailable local history without retrying with a network default' {
+        $previousActions = $env:GITHUB_ACTIONS
+        $script:calls = 0
+        try {
+            $env:GITHUB_ACTIONS = $null
+            {
+                Invoke-ValidateVersions -GitHubOutputPath '' -Cargo {
+                    param($Argument)
+                    $script:calls++
+                    $Argument | Should -Contain 'origin/main'
+                    $global:LASTEXITCODE = 7
+                }
+            } | Should -Throw
+        } finally { $env:GITHUB_ACTIONS = $previousActions }
+        $script:calls | Should -Be 1
+    }
+
+    It 'passes an explicit history override through the canonical argument for <Case>' -ForEach @(
+        @{ Case = 'canonical history'; History = 'a' * 40; Base = '' }
+        @{ Case = 'legacy alias'; History = ''; Base = 'a' * 40 }
+        @{ Case = 'matching canonical and legacy inputs'; History = 'a' * 40; Base = 'a' * 40 }
+    ) {
+        $script:seen = [Collections.Generic.List[object]]::new()
+        Invoke-ValidateVersions -GitHubOutputPath '' -History $History -Base $Base -Cargo {
+            param($Argument)
+            $script:seen.Add($Argument)
+            $global:LASTEXITCODE = 0
+            if ($Argument[5] -eq 'release-context') { Get-ContextJson }
+        }
+        $script:seen[0] | Should -Be @(
+            'run', '-p', 'cargo-release-plan', '--locked', '--', 'release-context',
+            '--release-history', ('a' * 40)
+        )
+        $script:seen[1] | Should -Be @(
+            'run', '-p', 'cargo-release-plan', '--locked', '--', 'check', '--format', 'github',
+            '--release-history', ('a' * 40)
+        )
+    }
+
+    It 'rejects conflicting history aliases before invoking the tool' {
+        {
+            Invoke-ValidateVersions -GitHubOutputPath '' -History ('a' * 40) -Base ('b' * 40) `
+                -Cargo { throw 'must not invoke' }
+        } | Should -Throw '*must not select different release histories*'
+    }
+
+    It 'consumes canonical and legacy environment inputs with the same semantics' -ForEach @(
+        @{ Variable = 'RELEASE_PLAN_HISTORY' }
+        @{ Variable = 'RELEASE_PLAN_BASE' }
+    ) {
+        $previous = [Environment]::GetEnvironmentVariable($Variable, 'Process')
+        $previousTarget = $env:RELEASE_PLAN_MERGE_TARGET
+        try {
+            Set-Item -LiteralPath "Env:$Variable" -Value ('a' * 40)
+            $env:RELEASE_PLAN_MERGE_TARGET = 'b' * 40
+            Invoke-ValidateVersions -GitHubOutputPath '' -Cargo {
+                param($Argument)
+                $global:LASTEXITCODE = 0
+                $Argument | Should -Contain '--release-history'
+                $Argument | Should -Contain ('a' * 40)
+                $Argument | Should -Contain '--merge-target'
+                $Argument | Should -Contain ('b' * 40)
+                $Argument | Should -Not -Contain '--base'
+                if ($Argument[5] -eq 'release-context') { Get-ContextJson -MergeTarget ('b' * 40) }
+            }
+        } finally {
+            Set-Item -LiteralPath "Env:$Variable" -Value $previous
+            $env:RELEASE_PLAN_MERGE_TARGET = $previousTarget
+        }
+    }
+
+    It 'forwards the resolved pair unchanged when target normalization is <Case>' -ForEach @(
+        @{ Case = 'an anticipated unmerged parent'; Normalized = 'b' * 40 }
+        @{ Case = 'an already-released target'; Normalized = $null }
+    ) {
+        $script:seen = [Collections.Generic.List[object]]::new()
+        $output = Join-Path $TestDrive "pair-output-$Case"
+        Push-Location $TestDrive
+        try {
+            Invoke-ValidateVersions -GitHubOutputPath $output -MergeTarget ('b' * 40) -Cargo {
+                param($Argument)
+                $script:seen.Add($Argument)
+                $global:LASTEXITCODE = 0
+                switch ($Argument[5]) {
+                    'release-context' { Get-ContextJson -MergeTarget $Normalized }
+                    'semver-targets' { '["alpha"]' }
+                }
+            }
+        } finally { Pop-Location }
+        $script:seen.Count | Should -Be 4
+        $script:seen[0] | Should -Be @(
+            'run', '-p', 'cargo-release-plan', '--locked', '--', 'release-context',
+            '--merge-target', ('b' * 40)
+        )
+        $pair = @('--release-history', ('a' * 40))
+        if ($null -ne $Normalized) { $pair += @('--merge-target', $Normalized) }
+        $script:seen[1] | Should -Be (@(
+            'run', '-p', 'cargo-release-plan', '--locked', '--',
+            'report', '--out-dir', $script:seen[1][7]
+        ) + $pair)
+        $script:seen[3] | Should -Be (@(
+            'run', '-p', 'cargo-release-plan', '--locked', '--',
+            'check', '--format', 'github'
+        ) + $pair)
+        $script:seen[2] | Should -Not -Contain '--release-history'
+        $script:seen[2] | Should -Not -Contain '--merge-target'
+        Get-Content -LiteralPath $output | Should -Be 'semver_targets=alpha'
+    }
+
+    It 'propagates rejected source/context acquisition before producing a report or CI target' {
+        $script:commands = [Collections.Generic.List[string]]::new()
+        $output = Join-Path $TestDrive 'rejected-source'
+        {
+            Invoke-ValidateVersions -GitHubOutputPath $output -MergeTarget 'invalid-source' -Cargo {
+                param($Argument)
+                $script:commands.Add($Argument[5])
+                $Argument | Should -Contain 'invalid-source'
+                $global:LASTEXITCODE = 7
+                Get-ContextJson
+            }
+        } | Should -Throw
+        $script:commands | Should -Be @('release-context')
+        Test-Path -LiteralPath $output | Should -BeFalse
+    }
+
+    It 'rejects an invalid context handoff: <Case>' -ForEach @(
+        @{ Case = 'malformed JSON' }
+        @{ Case = 'null' }
+        @{ Case = 'array' }
+        @{ Case = 'old schema' }
+        @{ Case = 'string schema' }
+        @{ Case = 'missing history' }
+        @{ Case = 'symbolic history' }
+        @{ Case = 'missing target' }
+        @{ Case = 'empty target' }
+        @{ Case = 'numeric target' }
+        @{ Case = 'symbolic target' }
+    ) {
+        $context = Get-ContextFixture
+        switch ($Case) {
+            'old schema' { $context.schema_version = 1 }
+            'string schema' { $context.schema_version = '2' }
+            'missing history' { $context.Remove('release_history') }
+            'symbolic history' { $context.release_history = 'origin/releases' }
+            'missing target' { $context.Remove('merge_target') }
+            'empty target' { $context.merge_target = '' }
+            'numeric target' { $context.merge_target = 1 }
+            'symbolic target' { $context.merge_target = 'unmerged-parent' }
+        }
+        $contextJson = switch ($Case) {
+            'malformed JSON' { 'not JSON' }
+            'null' { 'null' }
+            'array' { '[]' }
+            default { ConvertTo-Json -InputObject $context -Compress }
+        }
+        $script:commands = [Collections.Generic.List[string]]::new()
+        $output = Join-Path $TestDrive 'invalid-context'
+        {
+            Invoke-ValidateVersions -GitHubOutputPath $output -Cargo {
+                param($Argument)
+                $script:commands.Add($Argument[5])
+                $global:LASTEXITCODE = 0
+                $contextJson
+            }
+        } | Should -Throw
+        $script:commands | Should -Be @('release-context')
+        Test-Path -LiteralPath $output | Should -BeFalse
+    }
+}
+
+Describe 'CI version validation output' {
     It 'writes <Expected> before a failing check and removes its report directory' -ForEach @(
         @{ Json = '[]'; Expected = 'semver_targets=' },
         @{ Json = '["alpha"]'; Expected = 'semver_targets=alpha' },
@@ -185,13 +434,16 @@ Describe 'CI version validation output' {
         Push-Location $TestDrive
         try {
             {
-                Invoke-ValidateVersions -GitHubOutputPath $githubOutput -Base base-ref -Cargo {
+                Invoke-ValidateVersions -GitHubOutputPath $githubOutput -MergeTarget ('b' * 40) -Cargo {
                     param($Argument)
                     $global:LASTEXITCODE = 0
                     switch ($Argument[5]) {
+                        'release-context' { Get-ContextJson -MergeTarget ('b' * 40) }
                         'report' { $script:reportDirectory = $Argument[7] }
                         'semver-targets' {
                             $Argument | Should -Not -Contain '--base'
+                            $Argument | Should -Not -Contain '--release-history'
+                            $Argument | Should -Not -Contain '--merge-target'
                             $Json
                         }
                         'check' {
@@ -221,11 +473,12 @@ Describe 'CI version validation output' {
         Push-Location $TestDrive
         try {
             {
-                Invoke-ValidateVersions -GitHubOutputPath $githubOutput -Base 'base-ref' -Cargo {
+                Invoke-ValidateVersions -GitHubOutputPath $githubOutput -Cargo {
                     param($Argument)
                     $command = $Argument[5]
                     $script:commands.Add($command)
                     $global:LASTEXITCODE = 0
+                    if ($command -eq 'release-context') { Get-ContextJson }
                     if ($command -eq 'report') {
                         $script:reportDirectory = $Argument[7]
                     }

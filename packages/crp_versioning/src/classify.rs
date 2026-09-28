@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::{fs, io, str};
 
 use crp_diag::{NoteSink, Verbose, plural, quote_path, short_commit, short_type_name};
-use crp_workspace::git::{DefaultBase, GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
+use crp_workspace::git::{GitRepo, TreeEntry, WorkTreeModes, join_git_rel, tree_mode};
 use crp_workspace::lockfile::{
     Closure, ClosureChange, InstallationGraph, Lockfile, closure_changes,
 };
@@ -33,9 +33,10 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use toml_edit::DocumentMut;
 
-use crate::anchor::{Anchor, Presence, TimelineEntry, resolve_anchor};
+use crate::anchor::{Anchor, Presence, TimelineEntry, anticipated_anchor, resolve_anchor};
 use crate::diff::{FileVersion, file_diff, mode_change_diff};
 use crate::groups::{GroupVerdict, Groups};
+use crate::history::AssessmentHistory;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::{
     LockfileClosureUnavailableError, MalformedLockfileError, ReadFileError, SymlinkReleasedError,
@@ -63,6 +64,10 @@ pub struct Classification {
     /// when it named none - rather than the commit it resolved to, so a
     /// diagnostic can quote a command that reproduces this run.
     pub base: String,
+    /// Actual committed release history resolved for this assessment.
+    pub release_history: String,
+    /// Distinct final parent identity; targets already in release history normalize to `None`.
+    pub merge_target: Option<String>,
     pub packages: Vec<PackageClass>,
     pub groups: BTreeMap<String, GroupVerdict>,
     /// Membership derived for this same workspace state, reused by preview and report projection.
@@ -409,36 +414,29 @@ pub fn classify(
     base: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<Classification, AppError> {
+    classify_with_target(manifest_path, base, None, verbose)
+}
+
+/// Assesses the working snapshot against actual history and an optional final parent snapshot.
+pub fn classify_with_target(
+    manifest_path: &Path,
+    release_history: Option<&str>,
+    merge_target: Option<&str>,
+    verbose: Verbose<'_>,
+) -> Result<Classification, AppError> {
     let (mut work_tree, git) = load_tracked_work_tree(manifest_path)?;
-    let base = match base {
-        Some(base) => base.to_owned(),
-        None => {
-            let default = git.default_base()?;
-            verbose.note(|| match &default {
-                DefaultBase::RemoteHead(revision) => format!(
-                    "no --base given; the remote records {} as its default branch, so that \
-                     is taken to be the branch releases are made from",
-                    quote_path(revision)
-                ),
-                DefaultBase::Convention(revision) => format!(
-                    "no --base given and the remote records no default branch, so the \
-                     conventional {} is assumed to be the branch releases are made from",
-                    quote_path(revision)
-                ),
-            });
-            default.revision().to_owned()
-        }
-    };
+    let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
+    let base = history.release_history_revision.clone();
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
         package.resources =
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
     let head = git.head()?;
-    let base_sha = git.rev_parse(&base)?;
+    let base_sha = &history.release_history;
     verbose.note(|| {
         format!(
-            "classifying {} against base {} ({base_sha}); \
+            "classifying {} against release history {} ({base_sha}); \
          anchors are the last parsed version change on that revision's first-parent line, \
          not on the work tree's branch",
             plural(work_tree.packages.len(), "publishable package"),
@@ -450,7 +448,23 @@ pub fn classify(
         &work_tree.workspace_root,
         work_tree.installation.registries.clone(),
     );
-    let base_snapshot = cache.snapshot(&git, &base_sha)?;
+    let base_snapshot = cache.snapshot(&git, base_sha)?;
+    let target_snapshot = history
+        .effective_target()
+        .map(|target| cache.snapshot(&git, target))
+        .transpose()?;
+    let projected = target_snapshot.as_ref().map(|snapshot| {
+        let target = history
+            .effective_target()
+            .expect("snapshot exists only for a distinct target");
+        verbose.note(|| {
+            format!(
+                "merge target {target} supplies one final anticipated squash predecessor; \
+             intermediate parent commits are not release history"
+            )
+        });
+        (target, snapshot.as_ref())
+    });
     let work_root_path = work_tree.workspace_root.join("Cargo.toml");
     let work_root_doc = parse_document(
         &work_root_path,
@@ -458,14 +472,17 @@ pub fn classify(
             .map_err(|error| ReadFileError::caused_by(&work_root_path, error))?,
     )?;
 
-    let commits = git.first_parent_manifest_commits(&base_sha, cache.case())?;
+    let commits = git.first_parent_manifest_commits(base_sha, cache.case())?;
     let mut classes = Vec::new();
     let groups = Groups::from_workspace(&work_tree);
     let versions = work_tree.target_versions();
     let exempt: HashSet<String> = work_tree
         .version_targets
         .iter()
-        .filter(|target| is_new_on_base(&base_snapshot, &target.name))
+        .filter(|target| {
+            is_new_on_base(&base_snapshot, &target.name)
+                && projected.is_none_or(|(_, snapshot)| is_new_on_base(snapshot, &target.name))
+        })
         .map(|target| target.name.clone())
         .collect();
     let mut lockfiles = LockfileCache {
@@ -480,9 +497,10 @@ pub fn classify(
             &work_tree,
             &groups,
             &git,
-            &base_sha,
+            base_sha,
             &commits,
             &base_snapshot,
+            projected,
             &work_root_doc,
             &mut cache,
             &mut lockfiles,
@@ -511,9 +529,12 @@ pub fn classify(
         });
     }
 
+    history.verify(&git)?;
     Ok(Classification {
         head,
         base,
+        release_history: history.release_history.clone(),
+        merge_target: history.merge_target.clone(),
         packages: classes,
         groups: group_verdicts,
         membership: groups,
@@ -535,6 +556,7 @@ fn classify_one(
     base_sha: &str,
     commits: &[String],
     base_snapshot: &CommitSnapshot,
+    projected: Option<(&str, &CommitSnapshot)>,
     work_root_doc: &DocumentMut,
     cache: &mut SnapshotCache,
     lockfiles: &mut LockfileCache,
@@ -547,7 +569,19 @@ fn classify_one(
     let group = groups.group_of(name).map(ToOwned::to_owned);
     let dependents = dependents_of(&work_tree.packages, name);
 
-    let anchor = if base_snapshot.packages.contains_key(name) {
+    let anticipated = projected.and_then(|(target, snapshot)| {
+        anticipated_anchor(
+            base_snapshot
+                .packages
+                .get(name)
+                .map(|package| &package.version),
+            snapshot.packages.get(name).map(|package| &package.version),
+            target,
+        )
+    });
+    let anchor = if let Some(anchor) = anticipated {
+        anchor
+    } else if base_snapshot.packages.contains_key(name) {
         let timeline = build_timeline(git, name, commits, cache)?;
         resolve_anchor(name, &timeline)?
     } else {

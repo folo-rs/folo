@@ -6,6 +6,7 @@ use std::num::NonZero;
 use std::path::Path;
 
 use crp_diag::Verbose;
+use crp_versioning::history::resolve_merge_target;
 use crp_workspace::git::GitRepo;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
@@ -72,7 +73,8 @@ struct ReleaseContext {
     schema_version: u32,
     repository: String,
     release_branch: String,
-    release_base: String,
+    release_history: String,
+    merge_target: Option<String>,
     head: String,
     workspace_manifest: String,
     config_path: String,
@@ -80,12 +82,13 @@ struct ReleaseContext {
 }
 
 /// Version of the release-context handoff produced for the workflow.
-const CONTEXT_SCHEMA_VERSION: u32 = 1;
+pub const CONTEXT_SCHEMA_VERSION: u32 = 2;
 
 pub fn release_context(
     manifest: &Path,
     configured_path: Option<&Path>,
     base: Option<&str>,
+    merge_target: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
     let workspace = PublicationWorkspace::load(manifest)?;
@@ -106,10 +109,11 @@ pub fn release_context(
                 InvalidManifest::new("release context paths must be UTF-8".to_owned()).into()
             })
     };
-    let release_base = match base {
+    let release_history = match base {
         Some(base) => git.rev_parse(&format!("{base}^{{commit}}"))?,
         None => fetch_release_line(git.root(), &config)?,
     };
+    let merge_target = resolve_merge_target(&git, &release_history, merge_target)?;
     let workspace_manifest = relative(&workspace.root().join("Cargo.toml"))?;
     let group = concurrency_group(
         config.repository(),
@@ -117,14 +121,15 @@ pub fn release_context(
         &workspace_manifest,
     )?;
     verbose.note(||format!(
-        "Release context uses {} branch {} at {release_base}; workspace {workspace_manifest} selects concurrency group {group}.",
+        "Release context uses {} branch {} history at {release_history}, merge target {merge_target:?}; workspace {workspace_manifest} selects concurrency group {group}.",
         config.repository(),config.release_branch()
     ));
     Ok(serde_json::to_string(&ReleaseContext {
         schema_version: CONTEXT_SCHEMA_VERSION,
         repository: config.repository().to_owned(),
         release_branch: config.release_branch().to_owned(),
-        release_base,
+        release_history,
+        merge_target,
         head: git.head()?,
         workspace_manifest,
         config_path: relative(&config_path)?,

@@ -14,7 +14,8 @@ use ohno::AppError;
 use semver::Version;
 
 use crate::classify::{
-    ChangedItem, Classification, PackageClass, PackageStatus, classify, released_work_tree_paths,
+    ChangedItem, Classification, PackageClass, PackageStatus, classify_with_target,
+    released_work_tree_paths,
 };
 use crate::groups::GroupVerdict;
 use crate::{quote_path, short_commit};
@@ -35,7 +36,7 @@ pub enum CheckFormat {
 /// Inputs to the shared version-readiness operation, independent of application dispatch.
 #[derive(Clone, Copy, Debug)]
 pub struct CheckRequest<'a> {
-    /// Release baseline; absence uses the ordinary remote-default-branch selection.
+    /// Actual committed release history; absence uses the remote-default-branch selection.
     pub base: Option<&'a str>,
     /// Cargo manifest identifying the workspace to assess.
     pub manifest_path: &'a Path,
@@ -66,8 +67,18 @@ const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
 // packages/cargo-release-plan/docs/implementation.md, "Test boundaries".
 #[cfg_attr(test, mutants::skip)]
 pub fn check(request: &CheckRequest<'_>, verbose: Verbose<'_>) -> Result<CheckOutcome, AppError> {
+    check_with_target(request, None, verbose)
+}
+
+/// Checks readiness with an optional final unmerged predecessor snapshot.
+#[cfg_attr(test, mutants::skip)] // Real acquisition is covered by boundary tests.
+pub fn check_with_target(
+    request: &CheckRequest<'_>,
+    merge_target: Option<&str>,
+    verbose: Verbose<'_>,
+) -> Result<CheckOutcome, AppError> {
     let (passed, message, warnings) = check_workspace(
-        || classify(request.manifest_path, request.base, verbose),
+        || classify_with_target(request.manifest_path, request.base, merge_target, verbose),
         request.format,
         request.verify_packaging,
         verify_packaging_rules,
@@ -105,6 +116,11 @@ fn check_workspace(
     };
 
     let passed = message.is_empty();
+    if !passed && let Some(target) = &classification.merge_target {
+        writeln!(message,
+            "Retain `--merge-target <target>` when preparing this assessment; set `<target>` to {}.",
+            quote_path(target)).expect("writing a diagnostic to String cannot fail");
+    }
 
     if let Some(success) = default_success_message(passed, &message) {
         message = success.to_string();
@@ -421,17 +437,17 @@ fn escape_property(value: &str) -> String {
 ///
 /// The self-contained path comes first so the message stays actionable without
 /// any tooling beyond this binary; the skill is named as the assisted route.
-/// The base is spelled out separately from the copyable command because it can
+/// The history ref is spelled out separately from the copyable command because it can
 /// come from a repository-controlled ref name and diagnostic quoting is not
 /// shell quoting.
 fn remedy(base: &str) -> String {
     format!(
-        "Run `cargo release-plan prepare --output <dir> --base <base>` to prepare offline \
+        "Run `cargo release-plan prepare --output <dir> --release-history <history>` to prepare offline \
          resolution and inspect the changes. Write a proposed plan, then run \
          `cargo release-plan preview --prepared <prepared.json> --plan <proposed.json> \
          --output <preview-dir>` to resolve its complete effects before running \
          `cargo release-plan apply --plan <resolved-plan.json>`, or run the \
-         {INCREMENT_VERSIONS_SKILL} skill. Set `<base>` to the base reported here: {}.",
+         {INCREMENT_VERSIONS_SKILL} skill. Set `<history>` to the release history reported here: {}.",
         quote_path(base)
     )
 }
@@ -668,8 +684,8 @@ mod tests {
 
         let text = render_diagnostics(&[package], &BTreeMap::new(), "deadbeef", CheckFormat::Text);
 
-        assert!(text.contains("--base <base>"));
-        assert!(text.contains("base reported here: deadbeef"));
+        assert!(text.contains("--release-history <history>"));
+        assert!(text.contains("release history reported here: deadbeef"));
     }
 
     #[test]
@@ -681,7 +697,7 @@ mod tests {
 
         assert_eq!(
             prepare_command,
-            "cargo release-plan prepare --output <dir> --base <base>"
+            "cargo release-plan prepare --output <dir> --release-history <history>"
         );
         assert!(!prepare_command.contains(base));
     }

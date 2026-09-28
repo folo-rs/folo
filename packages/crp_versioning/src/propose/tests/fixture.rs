@@ -107,6 +107,8 @@ pub(crate) fn report(
     ReportFile {
         schema_version: SCHEMA_VERSION,
         head: "captured-head".to_owned(),
+        release_history: "release-history".to_owned(),
+        merge_target: None,
         packages,
         non_publishable_packages: helpers,
         groups: group_values,

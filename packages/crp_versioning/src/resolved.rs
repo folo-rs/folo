@@ -14,6 +14,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crp_diag::Verbose;
 use crp_workspace::command::{hash_bytes, run_capture};
+use crp_workspace::git::GitRepo;
 use crp_workspace::manifest::{PathCase, for_each_dependency_table, parse_document};
 use crp_workspace::metadata::load_tracked_work_tree;
 use ohno::AppError;
@@ -22,6 +23,7 @@ use toml_edit::{Item, TableLike};
 
 use self::paths::PathIdentity;
 use crate::groups::Groups;
+use crate::history::AssessmentHistory;
 use crate::plan::{PlanFile, PlanStage, SCHEMA_VERSION, resolve_plan};
 use crate::{ParsePlanError, ReadFileError, UnsupportedPlanSchemaError, WriteFileError};
 
@@ -41,8 +43,14 @@ pub struct Inputs {
     pub root: PathBuf,
     pub manifest: PathBuf,
     pub head: String,
-    pub base: String,
-    pub base_revision: String,
+    pub release_history: String,
+    pub release_history_revision: String,
+    /// A distinct anticipated predecessor; targets already in release history normalize to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_target: Option<String>,
+    /// Original target ref, retained even when it initially resolved within release history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_target_revision: Option<String>,
     pub index: String,
     pub paths: BTreeSet<PathBuf>,
     pub digest: String,
@@ -50,16 +58,26 @@ pub struct Inputs {
 
 impl Inputs {
     pub fn capture(manifest: &Path, base: Option<&str>) -> Result<Self, AppError> {
+        Self::capture_with_target(manifest, base, None)
+    }
+
+    pub fn capture_with_target(
+        manifest: &Path,
+        release_history: Option<&str>,
+        merge_target: Option<&str>,
+    ) -> Result<Self, AppError> {
         // Cargo preserves the supplied path spelling, including Windows short names.
         // Normalize the entry point before discovering any paths that will be rebased.
         let manifest = canonical(manifest)?;
         let (work_tree, git) = load_tracked_work_tree(&manifest)?;
         let root = canonical(git.root())?;
         let manifest = relative(&root, &manifest)?;
-        let base_revision = match base {
-            Some(base) => base.to_owned(),
-            None => git.default_base()?.revision().to_owned(),
-        };
+        let history = AssessmentHistory::resolve(
+            &git,
+            release_history,
+            merge_target,
+            Verbose::new(false, &crp_diag::Discard),
+        )?;
         let mut paths: BTreeSet<PathBuf> =
             git.ls_files("")?.into_iter().map(PathBuf::from).collect();
         paths.insert(relative(
@@ -91,12 +109,15 @@ impl Inputs {
             &mut paths,
         )?;
         let digest = fingerprint(&root, &paths, &BTreeMap::new())?;
+        history.verify(&git)?;
         Ok(Self {
             root,
             manifest,
             head: git.head()?,
-            base: git.rev_parse(&base_revision)?,
-            base_revision,
+            release_history: history.release_history,
+            release_history_revision: history.release_history_revision,
+            merge_target: history.merge_target,
+            merge_target_revision: history.merge_target_revision,
             index: run_capture("git", &["ls-files", "--stage", "-z"], git.root())?,
             paths,
             digest,
@@ -117,19 +138,50 @@ impl Inputs {
     // Connects captured-input acquisition to the unit-tested verification protocol.
     #[cfg_attr(test, mutants::skip)]
     pub fn verify_candidate(&self, manifest: &Path, final_digest: &str) -> Result<(), AppError> {
-        self.verify_candidate_with(manifest, final_digest, Self::capture, |current, digest| {
-            self.compare_candidate(current, digest)
-        })
+        self.verify_candidate_with(
+            manifest,
+            final_digest,
+            Self::capture_with_target,
+            |current, digest| self.compare_candidate(current, digest),
+        )?;
+        self.verify_history()
+    }
+
+    /// Rechecks the originally captured history refs without reacquiring workspace content.
+    ///
+    /// Retained candidates use frozen commits for their content checks, but must still reject
+    /// movement of the caller's original release-history or merge-target ref.
+    pub fn verify_history(&self) -> Result<(), AppError> {
+        self.validate_history_fields()?;
+        let history = AssessmentHistory {
+            release_history: self.release_history.clone(),
+            release_history_revision: self.release_history_revision.clone(),
+            merge_target: self.merge_target.clone(),
+            merge_target_revision: self.merge_target_revision.clone(),
+        };
+        history
+            .verify(&GitRepo {
+                root: self.root.clone(),
+                prefix: String::new(),
+            })
+            .map_err(StaleInputs::caused_by)?;
+        Ok(())
     }
 
     fn verify_candidate_with(
         &self,
         manifest: &Path,
         final_digest: &str,
-        capture: impl FnOnce(&Path, Option<&str>) -> Result<Self, AppError>,
+        capture: impl FnOnce(&Path, Option<&str>, Option<&str>) -> Result<Self, AppError>,
         compare: impl FnOnce(&Self, &str) -> Result<(), AppError>,
     ) -> Result<(), AppError> {
-        let current = capture(manifest, Some(&self.base)).map_err(StaleInputs::caused_by)?;
+        self.validate_history_fields()?;
+        let current = capture(
+            manifest,
+            Some(&self.release_history),
+            self.merge_target.as_deref(),
+        )
+        .map_err(StaleInputs::caused_by)?;
         compare(&current, final_digest)
     }
 
@@ -149,7 +201,7 @@ impl Inputs {
         identity: &PathIdentity<'_>,
         fingerprint: impl FnOnce() -> Result<String, AppError>,
     ) -> Result<(), AppError> {
-        if current.head != self.head || current.base != self.base || current.index != self.index {
+        if current.head != self.head || !self.same_history(current) || current.index != self.index {
             return Err(StaleInputs::new().into());
         }
         if current.manifest != self.manifest || current.paths != self.paths {
@@ -167,8 +219,13 @@ impl Inputs {
 
     /// Accepts only the complete initial state or the complete captured final state.
     pub fn verify(&self, manifest: &Path, final_digest: Option<&str>) -> Result<bool, AppError> {
-        let current =
-            Self::capture(manifest, Some(&self.base_revision)).map_err(StaleInputs::caused_by)?;
+        self.validate_history_fields()?;
+        let current = Self::capture_with_target(
+            manifest,
+            Some(&self.release_history_revision),
+            self.merge_target_revision.as_deref(),
+        )
+        .map_err(StaleInputs::caused_by)?;
         self.compare(&current, final_digest)
     }
 
@@ -176,7 +233,7 @@ impl Inputs {
         if current.root != self.root
             || current.manifest != self.manifest
             || current.head != self.head
-            || current.base != self.base
+            || !self.same_history(current)
             || current.index != self.index
             || current.paths != self.paths
         {
@@ -189,6 +246,17 @@ impl Inputs {
             return Ok(true);
         }
         Err(StaleInputs::new().into())
+    }
+
+    pub(crate) fn same_history(&self, other: &Self) -> bool {
+        self.release_history == other.release_history && self.merge_target == other.merge_target
+    }
+
+    fn validate_history_fields(&self) -> Result<(), AppError> {
+        if self.merge_target.is_some() && self.merge_target_revision.is_none() {
+            return Err(StaleInputs::new().into());
+        }
+        Ok(())
     }
 
     pub fn final_digest(&self, files: &[Artifact]) -> Result<String, AppError> {
@@ -397,6 +465,7 @@ pub(crate) fn apply_resolved(
     if plan.schema_version != SCHEMA_VERSION || plan.stage() != PlanStage::Expanded {
         return Err(ResolutionRequired::new().into());
     }
+    plan.validate_history(&state.inputs)?;
     let manifest = canonical(manifest)?;
     let already_applied = state.inputs.verify(&manifest, Some(&state.final_digest))?;
     let (work_tree, _) = load_tracked_work_tree(&manifest)?;
@@ -666,8 +735,10 @@ mod tests {
             root: PathBuf::from("repository"),
             manifest: PathBuf::from("Cargo.toml"),
             head: "head".to_owned(),
-            base: "base".to_owned(),
-            base_revision: "main".to_owned(),
+            release_history: "base".to_owned(),
+            release_history_revision: "main".to_owned(),
+            merge_target: None,
+            merge_target_revision: None,
             index: "index".to_owned(),
             paths: ["Cargo.toml", "Cargo.lock", "src/lib.rs"]
                 .into_iter()
@@ -679,13 +750,18 @@ mod tests {
 
     #[test]
     fn captured_identity_fields_are_required_for_initial_and_final_states() {
-        let inputs = inputs();
+        let inputs = Inputs {
+            merge_target: Some("parent-final".to_owned()),
+            merge_target_revision: Some("parent".to_owned()),
+            ..inputs()
+        };
         let original = serde_json::to_value(&inputs).unwrap();
         for (field, value) in [
             ("root", json!("another-repository")),
             ("manifest", json!("member/Cargo.toml")),
             ("head", json!("another-head")),
-            ("base", json!("another-base")),
+            ("release_history", json!("another-base")),
+            ("merge_target", json!("another-parent")),
             ("index", json!("another-index")),
             ("paths", json!(["Cargo.toml"])),
         ] {
@@ -707,6 +783,23 @@ mod tests {
     }
 
     #[test]
+    fn captured_target_cannot_disappear_or_lose_its_revision() {
+        let inputs = Inputs {
+            merge_target: Some("parent-final".to_owned()),
+            merge_target_revision: Some("parent".to_owned()),
+            ..inputs()
+        };
+        let mut altered = inputs.clone();
+        altered.merge_target = None;
+        let error = inputs.compare(&altered, None).unwrap_err();
+        assert!(error.find_source::<StaleInputs>().is_some());
+        altered = inputs;
+        altered.merge_target_revision = None;
+        let error = altered.validate_history_fields().unwrap_err();
+        assert!(error.find_source::<StaleInputs>().is_some());
+    }
+
+    #[test]
     fn live_inputs_accept_only_initial_or_complete_final_bytes() {
         let inputs = inputs();
         assert!(!inputs.compare(&inputs, None).unwrap());
@@ -719,7 +812,7 @@ mod tests {
             assert!(error.find_source::<StaleInputs>().is_some());
         }
         // The revision spelling is acquisition input; only its resolved commit is identity.
-        current.base_revision = "another-ref-to-the-same-commit".to_owned();
+        current.release_history_revision = "another-ref-to-the-same-commit".to_owned();
         assert!(inputs.compare(&current, Some("final")).unwrap());
         // Final bytes do not bypass the identity guard exercised field-by-field above.
         current.head = "another-head".to_owned();
@@ -732,7 +825,9 @@ mod tests {
         let inputs = inputs();
         let mut candidate = inputs.clone();
         candidate.root = PathBuf::from("retained-workspace");
-        candidate.base_revision.clone_from(&inputs.base);
+        candidate
+            .release_history_revision
+            .clone_from(&inputs.release_history);
         let identity = PathIdentity::new(&candidate.root, &|_| panic!("exact paths need no probe"));
         let error = inputs
             .compare_candidate_with(&candidate, "final", &identity, || panic!())
@@ -818,8 +913,10 @@ mod tests {
             root: PathBuf::from("not-accessed"),
             manifest: PathBuf::from("Cargo.toml"),
             head: String::new(),
-            base: String::new(),
-            base_revision: String::new(),
+            release_history: String::new(),
+            release_history_revision: String::new(),
+            merge_target: None,
+            merge_target_revision: None,
             index: String::new(),
             paths: ["Cargo.toml", "src/lib.rs"]
                 .into_iter()

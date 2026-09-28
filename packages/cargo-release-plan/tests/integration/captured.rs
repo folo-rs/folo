@@ -21,6 +21,7 @@ fn missing_captured_configuration_is_distinct_from_an_empty_file() {
     let fixture = seeded_package();
     let prepared = fixture.path().join("prepared");
     run(&RunInput::Prepare {
+        merge_target: None,
         output: prepared.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
@@ -28,7 +29,7 @@ fn missing_captured_configuration_is_distinct_from_an_empty_file() {
     })
     .unwrap();
     fixture.write(".cargo/config.toml", "");
-    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":5,"increments":[]}"#);
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),
         prepared: prepared.join("prepared.json"),
@@ -49,6 +50,7 @@ fn executable_mode_changes_invalidate_captured_evidence_without_changing_bytes()
     let contents = fs::read(&source).unwrap();
     let prepared = fixture.path().join("prepared");
     run(&RunInput::Prepare {
+        merge_target: None,
         output: prepared.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
@@ -64,7 +66,7 @@ fn executable_mode_changes_invalidate_captured_evidence_without_changing_bytes()
         mode & !0o111
     });
     fs::set_permissions(&source, permissions).unwrap();
-    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":5,"increments":[]}"#);
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),
         prepared: prepared.join("prepared.json"),
@@ -93,6 +95,7 @@ fn preparation_rejects_absolute_paths_before_creating_a_resolution_workspace() {
     );
     fixture.write("packages/demo/Cargo.toml", &manifest);
     run(&RunInput::Prepare {
+        merge_target: None,
         output: fixture.path().join("prepared"),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
@@ -144,6 +147,7 @@ fn case_aliased_workspace_inputs_project_and_apply_the_same_final_bytes() {
     let index = fixture.git(&["ls-files", "--stage", "-z"]);
     let prepared = fixture.path().join("prepared");
     run(&RunInput::Prepare {
+        merge_target: None,
         output: prepared.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
@@ -152,7 +156,7 @@ fn case_aliased_workspace_inputs_project_and_apply_the_same_final_bytes() {
     .unwrap();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":4,"increments":[{"name":"demo","level":"patch"}]}"#,
+        r#"{"schema_version":5,"increments":[{"name":"demo","level":"patch"}]}"#,
     );
     let preview = fixture.path().join("preview");
     run(&RunInput::Preview {
@@ -226,6 +230,7 @@ fn short_windows_paths_use_the_same_captured_workspace_identity() {
     let manifest = short_root.join("Cargo.toml");
     let prepared = short_root.join("prepared");
     run(&RunInput::Prepare {
+        merge_target: None,
         output: prepared.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: manifest,

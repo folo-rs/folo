@@ -26,6 +26,8 @@ pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
     Classification {
         head: "classified-head".to_owned(),
         base: "release-base".to_owned(),
+        release_history: "release-history".to_owned(),
+        merge_target: None,
         packages,
         groups: BTreeMap::new(),
         membership: Groups::default(),

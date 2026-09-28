@@ -2,7 +2,8 @@
 
 # Version-readiness and compatibility gates called by justfiles/just_release.just from local
 # validation, Standard validation and Merge queue validation. Rust owns release decisions and
-# target selection; this module invokes Cargo, emits CI targets and checks compatibility exit codes.
+# target selection; this module freezes the CLI's history/target context, emits CI targets and
+# checks compatibility exit codes. Only Rust interprets release ancestry and anticipated targets.
 # Version planning uses the self-contained increment-versions skill or the documented CLI.
 # Ref: docs/build-and-tooling.md, "Automation language and boundaries", and
 # .github/workflows/implementation.md.
@@ -16,12 +17,16 @@ function Get-ReleasePlanCargoArgument {
     [OutputType([string[]])]
     param(
         [Parameter(Mandatory)][string[]] $Command,
-        [string] $Base
+        [string] $History,
+        [string] $MergeTarget
     )
 
     $argument = @('run', '-p', 'cargo-release-plan', '--locked', '--') + $Command
-    if (-not [string]::IsNullOrWhiteSpace($Base)) {
-        $argument += @('--base', $Base)
+    if (-not [string]::IsNullOrWhiteSpace($History)) {
+        $argument += @('--release-history', $History)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($MergeTarget)) {
+        $argument += @('--merge-target', $MergeTarget)
     }
     return $argument
 }
@@ -32,10 +37,11 @@ function Invoke-ReleasePlanCargo {
     param(
         [Parameter(Mandatory)][string[]] $Command,
         [Parameter(Mandatory)][scriptblock] $Cargo,
-        [string] $Base
+        [string] $History,
+        [string] $MergeTarget
     )
 
-    $argument = Get-ReleasePlanCargoArgument -Command $Command -Base $Base
+    $argument = Get-ReleasePlanCargoArgument -Command $Command -History $History -MergeTarget $MergeTarget
     $output = & $Cargo $argument
     if ($LASTEXITCODE -ne 0) {
         throw "cargo-release-plan $($Command[0]) failed with exit code $LASTEXITCODE."
@@ -48,22 +54,56 @@ function Get-ReleasePlanJson {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string[]] $Command,
-        [Parameter(Mandatory)][scriptblock] $Cargo
+        [Parameter(Mandatory)][scriptblock] $Cargo,
+        [string] $History,
+        [string] $MergeTarget
     )
 
-    $json = Invoke-ReleasePlanCargo -Command $Command -Cargo $Cargo
+    $json = Invoke-ReleasePlanCargo -Command $Command -Cargo $Cargo -History $History -MergeTarget $MergeTarget
     return , (ConvertFrom-Json -InputObject ($json -join "`n") -NoEnumerate)
 }
 
-function Write-ReleasePlanBaseVerbose {
+function Get-ReleasePlanContext {
+    # The tool owns configured-branch discovery, target normalization and ancestry validation.
+    # Validate only the consumed handoff shape here; never derive an anchor or target in PowerShell.
     [CmdletBinding()]
-    param([string] $Base)
+    param(
+        [string] $History,
+        [string] $Base,
+        [string] $MergeTarget,
+        [Parameter(Mandatory)][scriptblock] $Cargo
+    )
 
     if (-not [string]::IsNullOrWhiteSpace($Base)) {
-        Write-Verbose "Using RELEASE_PLAN_BASE=$Base as the explicit release baseline." -Verbose
-    } else {
-        Write-Verbose 'Using the release baseline selected by cargo-release-plan.' -Verbose
+        if (-not [string]::IsNullOrWhiteSpace($History) -and $History -cne $Base) {
+            throw 'RELEASE_PLAN_HISTORY and its legacy RELEASE_PLAN_BASE alias must not select different release histories.'
+        }
+        $History = $Base
     }
+    if ([string]::IsNullOrWhiteSpace($History) -and
+        [string]::IsNullOrWhiteSpace($MergeTarget) -and $env:GITHUB_ACTIONS -cne 'true') {
+        # This is Folo's local readiness wrapper, whose release branch is main. Preserve local
+        # history resolution without fetching; explicit or hosted contexts retain their own policy.
+        $History = 'origin/main'
+    }
+    $context = Get-ReleasePlanJson -Command @('release-context') -History $History `
+        -MergeTarget $MergeTarget -Cargo $Cargo
+    if ($context -isnot [pscustomobject] -or
+        @('schema_version', 'release_history', 'merge_target' |
+            Where-Object { $_ -cnotin $context.PSObject.Properties.Name }).Count -gt 0) {
+        throw 'release-context must return an object with explicit schema_version, release_history and merge_target fields.'
+    }
+    if (($context.schema_version -isnot [long] -and $context.schema_version -isnot [int]) -or
+        $context.schema_version -ne 2 -or
+        $context.release_history -isnot [string] -or
+        $context.release_history -cnotmatch '^[0-9a-f]{40}$' -or
+        ($null -ne $context.merge_target -and
+            ($context.merge_target -isnot [string] -or $context.merge_target -cnotmatch '^[0-9a-f]{40}$'))) {
+        throw 'release-context schema 2 must supply a full release-history commit and a null or full normalized merge-target commit.'
+    }
+    $target = if ($null -eq $context.merge_target) { 'none' } else { $context.merge_target }
+    Write-Verbose "Release assessment uses actual history $($context.release_history) and normalized merge target $target." -Verbose
+    return $context
 }
 
 function Get-AffectedSemverCheckTarget {
@@ -214,18 +254,20 @@ function Invoke-ValidateVersions {
     [CmdletBinding()]
     param(
         [string] $GitHubOutputPath = $env:GITHUB_OUTPUT,
+        [string] $History = $env:RELEASE_PLAN_HISTORY,
         [string] $Base = $env:RELEASE_PLAN_BASE,
+        [string] $MergeTarget = $env:RELEASE_PLAN_MERGE_TARGET,
         [scriptblock] $Cargo = { param([string[]] $Argument) & cargo @Argument }
     )
 
-    Write-ReleasePlanBaseVerbose -Base $Base
+    $context = Get-ReleasePlanContext -History $History -Base $Base -MergeTarget $MergeTarget -Cargo $Cargo
     if (-not [string]::IsNullOrWhiteSpace($GitHubOutputPath)) {
         Import-Module (Join-Path $PSScriptRoot 'ReleaseAutomation.psm1') -Force
         $outDir = Join-Path 'target' "release-plan-$(New-Guid)"
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
         try {
             Invoke-ReleasePlanCargo -Command @('report', '--out-dir', $outDir) `
-                -Base $Base -Cargo $Cargo
+                -History $context.release_history -MergeTarget $context.merge_target -Cargo $Cargo
             $targets = Get-AffectedSemverCheckTarget `
                 -ReportPath (Join-Path $outDir 'report.json') -Cargo $Cargo
             $previousOutput = $env:GITHUB_OUTPUT
@@ -239,7 +281,8 @@ function Invoke-ValidateVersions {
             Remove-Item -LiteralPath $outDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
-    Invoke-ReleasePlanCargo -Command @('check', '--format', 'github') -Base $Base -Cargo $Cargo
+    Invoke-ReleasePlanCargo -Command @('check', '--format', 'github') `
+        -History $context.release_history -MergeTarget $context.merge_target -Cargo $Cargo
 }
 
 Export-ModuleMember -Function Invoke-ValidateVersions, Invoke-VerifySemverCheck, Invoke-SemverCheck

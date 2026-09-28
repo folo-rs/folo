@@ -35,6 +35,7 @@ pub(crate) fn report(packages: Vec<Value>) -> ReportFile {
     let report: ReportFile = serde_json::from_value(json!({
         "schema_version": SCHEMA_VERSION,
         "head": "head",
+        "release_history": "release-history",
         "packages": packages,
         "non_publishable_packages": [],
         "groups": {}

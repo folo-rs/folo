@@ -56,7 +56,7 @@ pub(crate) fn plan(stage: PlanStage, captured: bool) -> PlanFile {
             serde_json::from_value(json!({
                 "inputs": {
                     "root": "workspace", "manifest": "Cargo.toml",
-                    "head": "head", "base": "base", "base_revision": "main",
+                    "head": "head", "release_history": "base", "release_history_revision": "main",
                     "index": "", "paths": [], "digest": "inputs"
                 },
                 "files": [], "final_digest": "candidate", "versions": {},

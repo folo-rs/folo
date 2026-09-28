@@ -13,7 +13,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::groups::Groups;
-use crate::resolved::ResolvedState;
+use crate::resolved::{Inputs, ResolvedState};
 use crate::{
     ConflictingPlanIncrementKindError, ConflictingPlanVersionError, ExpandedPlanDriftError,
     InvalidVersionError, NonPlainGroupVersionError, PlanIncrementSpecError,
@@ -32,7 +32,7 @@ use crate::{
 /// captured previews; only a captured preview is an applicable expanded plan.
 /// Command and JSON incompatibilities require a breaking semantic decision even
 /// when comparison of the public Rust API finds no incompatible signatures.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// On-disk plan file.
 ///
@@ -41,6 +41,12 @@ pub const SCHEMA_VERSION: u32 = 4;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanFile {
     pub schema_version: u32,
+    /// Bound report history for generated proposals; hand-authored proposals may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_history: Option<String>,
+    /// The anticipated predecessor used by the bound report, not an independently selected target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_target: Option<String>,
     /// Set by `expand`, absent in a hand-written plan.
     ///
     /// Read through [`PlanFile::stage`] rather than directly, so the two stages
@@ -58,6 +64,19 @@ impl PlanFile {
         if self.schema_version != SCHEMA_VERSION {
             return Err(UnsupportedPlanSchemaError::new(self.schema_version).into());
         }
+        if self.merge_target.is_some() && self.release_history.is_none() {
+            return Err(UnboundMergeTarget::new().into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_history(&self, inputs: &Inputs) -> Result<(), AppError> {
+        self.validate_schema()?;
+        if self.release_history.as_ref().is_some_and(|history| {
+            history != &inputs.release_history || self.merge_target != inputs.merge_target
+        }) {
+            return Err(PlanHistoryMismatch::new().into());
+        }
         Ok(())
     }
 
@@ -74,6 +93,8 @@ impl PlanFile {
     pub fn new(stage: PlanStage, increments: Vec<PlanIncrement>) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            release_history: None,
+            merge_target: None,
             expanded: matches!(stage, PlanStage::Expanded),
             increments,
             resolved: None,
@@ -84,12 +105,24 @@ impl PlanFile {
     pub(crate) fn with_schema_version(schema_version: u32) -> Self {
         Self {
             schema_version,
+            release_history: None,
+            merge_target: None,
             expanded: false,
             increments: Vec::new(),
             resolved: None,
         }
     }
 }
+
+/// A target identity is meaningful only with the actual release history it extends.
+#[ohno::error]
+#[display("plan merge_target requires a bound release_history")]
+struct UnboundMergeTarget;
+
+/// Decisions from another assessment cannot be previewed or applied against this captured source.
+#[ohno::error]
+#[display("plan release history or merge target differs from prepared evidence")]
+struct PlanHistoryMismatch;
 
 /// Which stage of planning a plan document belongs to.
 ///
@@ -687,7 +720,7 @@ mod tests {
 
     #[test]
     fn rejects_older_and_future_schemas() {
-        for schema_version in [3, 5] {
+        for schema_version in [SCHEMA_VERSION - 1, SCHEMA_VERSION + 1] {
             let plan = PlanFile::with_schema_version(schema_version);
             let error = resolve_plan(
                 &plan,

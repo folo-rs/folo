@@ -32,6 +32,10 @@ use crate::{CreateOutputDirectoryError, WriteFileError, quote_path};
 #[derive(Serialize)]
 struct ExpandedPlanFile {
     schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_history: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_target: Option<String>,
     expanded: bool,
     increments: Vec<ExpandedPackageVersion>,
 }
@@ -99,6 +103,8 @@ fn expand(
 
     let document = ExpandedPlanFile {
         schema_version: SCHEMA_VERSION,
+        release_history: plan.release_history,
+        merge_target: plan.merge_target,
         expanded: true,
         increments: resolved
             .packages

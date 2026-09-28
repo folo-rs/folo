@@ -5,13 +5,18 @@ The same workflow works when performed by a maintainer or guided by an agent.
 
 ## Prerequisites
 
-Use the `cargo-release-plan` `0.4.1` interface, report/plan schema `4` and
-semantic-decision schema `1`, with Git and the selected Cargo/Rust toolchain.
-The API compatibility checker (`cargo-semver-checks`) is required only when
-consumer contracts are selected. Private release repositories also need GitHub
+Use compatible tool and skill schemas: report/plan/prepared `5`, semantic
+decisions and compatibility `1`, and release context `2`. Read the installed
+values with `cargo release-plan version`. Git, the selected Cargo/Rust toolchain
+and the API compatibility checker (`cargo-semver-checks`) are prerequisites.
+Private release repositories also need GitHub
 CLI authentication. Installation or upgrades follow your authorization policy.
 
-For direct CLI planning, continue with [Freeze history and prepare](#freeze-history-and-prepare).
+Tracked files may have staged or unstaged edits. No prior commit or clean checkout
+is required for planning. Track newly created release inputs before assessment;
+publication separately requires clean committed source.
+
+For direct CLI planning, continue with [Select history and prepare](#select-history-and-prepare).
 
 ## Optional agent integration
 
@@ -20,12 +25,15 @@ immutable source revision matching your selected tool into the same location
 in your repository. Obtain the directory from the
 [source repository](https://github.com/folo-rs/folo) at that revision, not a
 floating branch. You do not need the rest of the repository or its scripts.
-Include its decision guide and license, not only `SKILL.md`.
+Include its command reference, decision guide and license, not only `SKILL.md`.
 
 Record the source revision and tool version in your repository's adoption notes.
-Read the copied skill's prerequisites and compare its command interface with
-`cargo release-plan --version` and `--help` **before allowing it to edit files**.
-Selecting a newer skill does not upgrade an older executable.
+Read the copied skill's prerequisites and compare its supported schemas with
+`cargo release-plan version` before allowing it to edit files. Matching package
+versions are unnecessary when the schemas agree. On mismatch, update the skill
+from the canonical directory; inside the canonical repository, report the mismatch
+instead of overwriting work. Unexpected CLI errors can warrant upgrading tool and
+skill together.
 
 The copied skill does not grant permission to install tools.
 
@@ -35,7 +43,7 @@ The skill makes semantic decisions, resolves effects and applies the complete
 result without a separate version-choice approval gate. Human review of the
 complete PR remains approval of the contribution.
 
-## Freeze history and prepare
+## Select history and prepare
 
 The following PowerShell commands run at the selected workspace root on a named
 feature branch. Native command failures should stop the session. Configuration
@@ -43,6 +51,7 @@ selects the actual repository and release branch, without assuming a local
 remote nickname or a branch named `main`:
 
 ```powershell
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 $EvidenceRoot = ".release-plan-work"
@@ -53,15 +62,28 @@ git check-ignore --quiet -- $EvidenceRoot
 $Work = Join-Path $EvidenceRoot ([guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Work | Out-Null
 $ContextPath = Join-Path $Work "context.json"
-cargo release-plan release-context --config $Configuration > $ContextPath
+$TargetRef = "" # For a stacked PR, set this to its parent branch/ref.
+$TargetArguments = @()
+if ($TargetRef) { $TargetArguments = @("--merge-target", $TargetRef) }
+cargo release-plan release-context --config $Configuration @TargetArguments > $ContextPath
 $Context = Get-Content $ContextPath -Raw | ConvertFrom-Json
 if ($Branch -eq $Context.release_branch) {
     throw "Version planning requires a feature branch, not the release branch."
 }
-$Baseline = $Context.release_base
-cargo release-plan check-published
+$HistoryCommit = $Context.release_history
+$AssessmentArguments = @("--release-history", $HistoryCommit)
+if ($Context.merge_target) {
+    $AssessmentArguments += @("--merge-target", $Context.merge_target)
+}
+try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    cargo release-plan check-published
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Retain the registry discovery diagnostics for assessment." }
+} finally {
+    $PSNativeCommandUseErrorActionPreference = $true
+}
 $Prepared = Join-Path $Work "prepared"
-cargo release-plan prepare --base $Baseline --output $Prepared
+cargo release-plan prepare @AssessmentArguments --output $Prepared
 cargo release-plan check-compatibility `
     --prepared (Join-Path $Prepared "prepared.json") `
     --output (Join-Path $Work "compatibility")
@@ -69,14 +91,12 @@ cargo release-plan check-compatibility `
 
 The evidence root must already be covered by an ignore rule; an external root is
 also suitable and does not need `git check-ignore`. Each assessment gets a new
-child directory while retaining earlier evidence. Preparation performs the
-intended offline workspace dependency refresh before capturing evidence. It can
-modify `Cargo.lock`; it does not request blanket third-party upgrades. Missing
-offline dependencies are a setup problem to resolve explicitly, not permission
-to replace assessment with an uncontrolled online update.
+child directory while retaining earlier evidence. Preparation produces a
+consistent workspace lockfile and evidence describing that same source.
+It can modify `Cargo.lock`; inspect that change with the contribution.
 
-`release-context` fetches the configured release branch and captures its immutable
-`release_base`. It also reports source HEAD, input locations and a workspace-scoped
+`release-context` fetches the configured release branch and records `release_history`
+and the optional normalized `merge_target`. It also reports source HEAD, input locations and a workspace-scoped
 concurrency identity; it does not require clean source or prepare publication.
 Detached HEAD is not a valid feature-branch planning state.
 
@@ -102,7 +122,8 @@ comparison, not compatibility.
 source and verifies that source before and after the checker. It does not accept
 a detached `--report` artifact. A checker execution failure is not a pass; an
 empty contract selection requires neither checker execution nor a registry query.
-The author still assesses behavioral and feature-subset promises.
+The wider semantic assessment still covers behavioral and feature-subset promises
+and can require a stronger decision than the checker's floor.
 
 For the running example, save this literal decisions document as
 `.release-plan-work\decisions.json`:
@@ -166,15 +187,16 @@ reject insufficient increments.
 ## Apply and verify
 
 Refresh the release context and stop for
-[reassessment](../operations/recovery.md#release-branch-movement) if its baseline
-moved. The plan-scoped registry check is fail-closed, unlike workspace discovery:
+[reassessment](../operations/recovery.md#release-branch-movement) if its history or
+merge target moved. The plan-scoped registry check is fail-closed, unlike workspace discovery:
 
 ```powershell
 $RefreshedPath = Join-Path $Work "refreshed-context.json"
-cargo release-plan release-context --config $Configuration > $RefreshedPath
+cargo release-plan release-context --config $Configuration @TargetArguments > $RefreshedPath
 $Refreshed = Get-Content $RefreshedPath -Raw | ConvertFrom-Json
-if ($Refreshed.release_base -ne $Baseline) {
-    throw "The release baseline moved; refresh the assessment before applying."
+if ($Refreshed.release_history -cne $HistoryCommit -or
+    $Refreshed.merge_target -cne $Context.merge_target) {
+    throw "Release history or the merge target moved; refresh the assessment."
 }
 cargo release-plan check-published --plan $Plan
 ```
@@ -191,9 +213,9 @@ the captured result and verify it with fresh evidence:
 cargo release-plan apply --plan $Plan --dry-run
 cargo release-plan apply --plan $Plan
 cargo metadata --locked --format-version 1 > $null
-cargo release-plan check-compatibility --base $Baseline `
+cargo release-plan check-compatibility @AssessmentArguments `
     --output (Join-Path $Work "after") --deny-findings
-cargo release-plan check --base $Baseline --config $Configuration
+cargo release-plan check @AssessmentArguments --config $Configuration
 ```
 
 The fresh compatibility output includes its read-only report; inspect completed
@@ -209,6 +231,6 @@ regenerate evidence instead of editing the plan's captured state.
 
 Present the complete release in the PR's
 [Version/release plan section](../operations/ordinary-release.md#present-the-complete-release).
-Include pending increments already on the branch, not merely the packages
-changed by the most recent tool invocation. Use the union of resolved-plan
+Assess all changes covered by existing pending increments, retaining each when
+sufficient rather than counting only packages changed by the latest tool invocation. Use the union of resolved-plan
 targets and all pending-release entries in the final report.

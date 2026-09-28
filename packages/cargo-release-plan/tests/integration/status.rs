@@ -46,6 +46,7 @@ fn content_already_on_base_needs_an_increment() {
 
     let out_dir = fixture.path().join("out");
     let outcome = run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
         base: Some(base),
         manifest_path: fixture.manifest(),
@@ -120,6 +121,7 @@ fn binary_executable_bit_alone_renders_only_modes() {
 
     let out_dir = fixture.path().join("out");
     run(&RunInput::Report {
+        merge_target: None,
         out_dir: out_dir.clone(),
         base: Some(base),
         manifest_path: fixture.manifest(),
@@ -365,6 +367,7 @@ fn declared_version_below_the_anchor_is_an_error() {
     fixture.commit("downgrade");
 
     let result = run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,

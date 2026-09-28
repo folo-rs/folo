@@ -62,6 +62,7 @@ impl Cli {
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
+            Command::Version => RunInput::Version,
             Command::CheckPublished(args) => RunInput::CheckPublished {
                 manifest_path: args
                     .manifest_path
@@ -76,6 +77,7 @@ impl Cli {
                 prepared: args.prepared,
                 plan: args.plan,
                 base: args.base,
+                merge_target: args.merge_target,
                 output: args.output,
                 deny_findings: args.deny_findings,
                 verbose: args.verbose,
@@ -94,6 +96,7 @@ impl Cli {
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 config: args.config,
                 base: args.base,
+                merge_target: args.merge_target,
                 verbose: args.verbose,
             },
             Command::CheckPublishingIdentity(args) => RunInput::CheckPublishingIdentity {
@@ -168,6 +171,7 @@ impl Cli {
             Command::Prepare(args) => RunInput::Prepare {
                 output: args.output,
                 base: args.base,
+                merge_target: args.merge_target,
                 manifest_path: args
                     .manifest_path
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
@@ -185,6 +189,7 @@ impl Cli {
             Command::Report(args) => RunInput::Report {
                 out_dir: args.out_dir,
                 base: args.base,
+                merge_target: args.merge_target,
                 manifest_path: args
                     .manifest_path
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
@@ -192,6 +197,7 @@ impl Cli {
             },
             Command::Check(args) => RunInput::Check {
                 base: args.base,
+                merge_target: args.merge_target,
                 manifest_path: args
                     .manifest_path
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
@@ -256,6 +262,10 @@ impl EarlyExit {
 /// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Print the executable version and supported artifact schemas as JSON.
+    ///
+    /// This query does not need a workspace, Git history or network access.
+    Version,
     /// Check whether publishable packages are established on crates.io.
     ///
     /// Workspace discovery is advisory. With --plan, missing or unknown results fail the check.
@@ -326,9 +336,12 @@ struct ContextArgs {
     manifest_path: Option<PathBuf>,
     #[arg(long)]
     config: Option<PathBuf>,
-    /// Explicit tested baseline (for example a merge-queue base); otherwise fetch the release branch.
-    #[arg(long)]
+    /// Commit delimiting actual release history; otherwise fetch the configured release branch.
+    #[arg(long = "release-history", visible_alias = "base")]
     base: Option<String>,
+    /// Intended target of this PR, including an unmerged parent's final snapshot.
+    #[arg(long)]
+    merge_target: Option<String>,
     #[arg(long)]
     verbose: bool,
 }
@@ -358,14 +371,17 @@ struct CompatibilityArgs {
     #[arg(long)]
     manifest_path: Option<PathBuf>,
     /// Check the captured original prepared inputs.
-    #[arg(long,conflicts_with_all=["plan","base"])]
+    #[arg(long,conflicts_with_all=["plan","base","merge_target"])]
     prepared: Option<PathBuf>,
     /// Check a resolved preview's retained prospective workspace.
-    #[arg(long,conflicts_with_all=["prepared","base"])]
+    #[arg(long,conflicts_with_all=["prepared","base","merge_target"])]
     plan: Option<PathBuf>,
-    /// Baseline for fresh read-only classification when no evidence artifact is selected.
-    #[arg(long)]
+    /// Release history for fresh assessment when no evidence artifact is selected.
+    #[arg(long = "release-history", visible_alias = "base")]
     base: Option<String>,
+    /// Intended PR target for fresh assessment; captured artifacts already contain this input.
+    #[arg(long)]
+    merge_target: Option<String>,
     /// Evidence directory; must not already exist.
     #[arg(long)]
     output: PathBuf,
@@ -544,9 +560,12 @@ struct PrepareArgs {
     /// Directory receiving report.json, diffs/, and prepared.json.
     #[arg(long, visible_alias = "out-dir")]
     output: PathBuf,
-    /// Release baseline, defaulting to the remote default branch.
-    #[arg(long)]
+    /// Actual release-history commit, defaulting to the remote default branch.
+    #[arg(long = "release-history", visible_alias = "base")]
     base: Option<String>,
+    /// Intended PR target, including the final snapshot of an unmerged parent.
+    #[arg(long)]
+    merge_target: Option<String>,
     /// Path to the workspace Cargo.toml.
     #[arg(long)]
     manifest_path: Option<PathBuf>,
@@ -596,11 +615,14 @@ struct ReportArgs {
     #[arg(long)]
     out_dir: PathBuf,
 
-    /// Release baseline whose first-parent line supplies anchors.
+    /// Actual release-history commit whose first-parent line supplies package anchors.
     ///
     /// Defaults to the default branch the `origin` remote advertises.
-    #[arg(long)]
+    #[arg(long = "release-history", visible_alias = "base")]
     base: Option<String>,
+    /// Intended PR target, including the final snapshot of an unmerged parent.
+    #[arg(long)]
+    merge_target: Option<String>,
 
     /// Path to the workspace `Cargo.toml`.
     #[arg(long)]
@@ -614,11 +636,14 @@ struct ReportArgs {
 /// Arguments for `check`.
 #[derive(Debug, Parser)]
 struct CheckArgs {
-    /// Release baseline whose first-parent line supplies anchors.
+    /// Actual release-history commit whose first-parent line supplies package anchors.
     ///
     /// Defaults to the default branch the `origin` remote advertises.
-    #[arg(long)]
+    #[arg(long = "release-history", visible_alias = "base")]
     base: Option<String>,
+    /// Intended PR target, including the final snapshot of an unmerged parent.
+    #[arg(long)]
+    merge_target: Option<String>,
 
     /// Path to the workspace `Cargo.toml`.
     #[arg(long)]
@@ -706,6 +731,7 @@ impl From<CliCheckFormat> for CheckFormat {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::iter;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::path::Path;
 
@@ -745,6 +771,65 @@ mod tests {
     }
 
     #[test]
+    fn schema_query_and_history_arguments_preserve_distinct_inputs() {
+        assert!(matches!(
+            Cli::from_args_os(["cargo-release-plan", "version"])
+                .unwrap()
+                .into_input(),
+            RunInput::Version
+        ));
+        for history_flag in ["--release-history", "--base"] {
+            let RunInput::Check {
+                base, merge_target, ..
+            } = Cli::from_args_os([
+                "cargo-release-plan",
+                "check",
+                history_flag,
+                "released",
+                "--merge-target",
+                "parent",
+            ])
+            .unwrap()
+            .into_input()
+            else {
+                panic!()
+            };
+            assert_eq!(base.as_deref(), Some("released"));
+            assert_eq!(merge_target.as_deref(), Some("parent"));
+        }
+        for arguments in [
+            vec![
+                "check",
+                "--base",
+                "released",
+                "--release-history",
+                "another",
+            ],
+            vec![
+                "check-compatibility",
+                "--output",
+                "evidence",
+                "--prepared",
+                "prepared.json",
+                "--merge-target",
+                "parent",
+            ],
+            vec![
+                "check-compatibility",
+                "--output",
+                "evidence",
+                "--plan",
+                "plan.json",
+                "--release-history",
+                "released",
+            ],
+        ] {
+            let args = iter::once("cargo-release-plan").chain(arguments);
+            Cli::from_args_os(args).unwrap_err().status.unwrap_err();
+        }
+    }
+
+    #[test]
     fn cargo_plugin_marker_selects_the_internal_provider() {
         let cli = Cli::from_args_os(["cargo-release-plan", "--cargo-plugin"]).unwrap();
         assert!(matches!(cli.into_input(), RunInput::CredentialProvider));
@@ -764,6 +849,7 @@ mod tests {
             prepared,
             plan,
             base,
+            merge_target: None,
             output,
             deny_findings,
             verbose,
@@ -802,6 +888,7 @@ mod tests {
                 prepared,
                 plan,
                 base,
+                merge_target: None,
                 output,
                 deny_findings,
                 verbose,
@@ -905,6 +992,7 @@ mod tests {
                 manifest_path,
                 config,
                 base,
+                merge_target: None,
                 verbose,
             } = Cli::from_args_os(args).unwrap().into_input()
             else {

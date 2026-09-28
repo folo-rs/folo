@@ -11,20 +11,23 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::{env, fs, io};
 
-use crp_diag::{DiagnosticSink, Quotable as _, Stderr, Verbose};
+use crp_diag::{DiagnosticSink, Quotable as _, Stderr, Verbose, quote_path};
 use crp_publication::PublicationOutput;
 use crp_publication::publication::registry::RegistryClient;
 use crp_versioning::inspect_plan::read_resolved_preview;
 use crp_versioning::preview::Prepared;
-use crp_versioning::report::{read_report, run_report};
+use crp_versioning::report::{read_report, run_report_with_target};
 use crp_versioning::resolved::{Inputs, ResolvedState, read_json};
 use crp_versioning::semver_targets::semver_targets;
 use crp_workspace::artifact_path::write_new;
-use crp_workspace::command::BUILD_CREDENTIAL_VARIABLES;
+use crp_workspace::command::{BUILD_CREDENTIAL_VARIABLES, run_capture};
+use crp_workspace::git::GitRepo;
+use crp_workspace::metadata::{MetadataJson, capture_metadata};
 use ohno::AppError;
 use semver::Version;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
 /// Identifies the assessed source without accepting a report detached from its input snapshot.
 enum Evidence {
@@ -39,10 +42,10 @@ impl Evidence {
             Self::Preview(resolved) => &resolved.inputs.root,
         }
     }
-    fn base(&self) -> &str {
+    fn inputs(&self) -> &Inputs {
         match self {
-            Self::Source(inputs) => &inputs.base,
-            Self::Preview(resolved) => &resolved.inputs.base,
+            Self::Source(inputs) => inputs,
+            Self::Preview(resolved) => &resolved.inputs,
         }
     }
     fn verify(&self, manifest: &Path) -> Result<(), AppError> {
@@ -53,6 +56,26 @@ impl Evidence {
             Self::Preview(resolved) => resolved.verify_candidate(manifest)?,
         }
         Ok(())
+    }
+}
+
+fn comparison_baseline(
+    name: &str,
+    parent: Option<(&str, &Path)>,
+    registry: impl FnOnce(&str) -> Result<Option<Version>, AppError>,
+    verbose: Verbose<'_>,
+) -> Result<Option<Version>, AppError> {
+    if let Some((version, root)) = parent {
+        verbose.note(|| format!(
+            "{name} uses anticipated parent {version} from '{}'; its final source, not a published registry version, defines this comparison.",
+            quote_path(&root.to_string_lossy()),
+        ));
+        Ok(Some(Version::parse(version)?))
+    } else {
+        verbose.note(|| {
+            format!("{name} retains registry baseline selection from actual release history.")
+        });
+        registry(name)
     }
 }
 
@@ -120,7 +143,7 @@ impl CompatibilityOutcome {
             });
             return Ok(());
         };
-        verbose.note(||format!("Comparing {name} against published {baseline} with all features from the captured source workspace."));
+        verbose.note(||format!("Comparing {name} against baseline {baseline} with all features from the captured source workspace."));
         let result = compare(&baseline)?;
         let text = output.record(&result)?;
         let floor = interpret(result.status.code(), &text)?;
@@ -187,7 +210,7 @@ impl CompatibilityOutcome {
     }
 }
 
-/// One contract's published comparison and any floor supplied by the checker.
+/// One contract's baseline comparison and any floor supplied by the checker.
 ///
 /// Unavailable evidence has no baseline or floor and is not compared. Completed comparisons
 /// always identify their baseline; an absent floor then means no minimum was established.
@@ -201,7 +224,7 @@ struct Comparison {
 }
 
 /// Current compatibility.json layout; independent of the report and plan schemas.
-const COMPATIBILITY_SCHEMA_VERSION: u32 = 1;
+pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 1;
 
 /// Persists critical checker evidence while deferring secondary diagnostic-delivery failures.
 struct CheckerOutput<L, M> {
@@ -311,11 +334,16 @@ fn finish_delivery<T>(
     }
 }
 
-pub(crate) fn check(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Pass the explicit command options without a second application request type"
+)]
+pub(crate) fn check_with_target(
     manifest: &Path,
     prepared: Option<&Path>,
     plan: Option<&Path>,
-    base: Option<&str>,
+    release_history: Option<&str>,
+    merge_target: Option<&str>,
     output: &Path,
     deny_findings: bool,
     verbose: bool,
@@ -330,7 +358,8 @@ pub(crate) fn check(
         manifest,
         prepared,
         plan,
-        base,
+        release_history,
+        merge_target,
         output,
         deny_findings,
         &diagnostics,
@@ -338,11 +367,16 @@ pub(crate) fn check(
     finish_delivery(result, deferred.take_failure())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the command options together while substituting the diagnostic destination"
+)]
 fn check_with_output(
     manifest: &Path,
     prepared: Option<&Path>,
     plan: Option<&Path>,
     base: Option<&str>,
+    merge_target: Option<&str>,
     output: &Path,
     deny_findings: bool,
     diagnostics: &PublicationOutput,
@@ -363,15 +397,22 @@ fn check_with_output(
         (Evidence::Preview(resolved), manifest)
     } else {
         let manifest = manifest.canonicalize()?;
-        let inputs = Inputs::capture(&manifest, base)?;
+        let inputs = Inputs::capture_with_target(&manifest, base, merge_target)?;
         (Evidence::Source(inputs), manifest)
     };
     // Derive target selection from the bound source rather than trusting an adjacent report
     // that could have been replaced independently of the prepared/preview artifact.
-    run_report(output, Some(evidence.base()), &manifest, verbose)?;
+    run_report_with_target(
+        output,
+        Some(&evidence.inputs().release_history),
+        evidence.inputs().merge_target.as_deref(),
+        &manifest,
+        verbose,
+    )?;
     evidence.verify(&manifest)?;
     let report = output.join("report.json");
-    let targets = semver_targets(&read_report(&report)?, verbose);
+    let source_report = read_report(&report)?;
+    let targets = semver_targets(&source_report, verbose);
     let cache = cache_path(&env::temp_dir(), evidence.root())?;
     fs::create_dir_all(&cache)?;
     let log = output.join("semver-checks.log");
@@ -390,7 +431,34 @@ fn check_with_output(
         findings: false,
         packages: Vec::new(),
     };
+    let mut parent_source = None;
     let result = (|| {
+        let parent_root = if let Some(anchor) = targets
+            .iter()
+            .find_map(|name| source_report.anticipated_parent_anchor(name))
+        {
+            // A caller can name a moved member. Use Cargo's workspace root, as classification
+            // does, and share the single captured parent snapshot across selected contracts.
+            let metadata: MetadataJson = serde_json::from_slice(&capture_metadata(&manifest)?)?;
+            let workspace = GitRepo::discover(Path::new(&metadata.workspace_root))?;
+            let source =
+                parent_source.insert(ParentSource::create(evidence.root(), &anchor.commit)?);
+            Some(source.root.join(workspace.prefix()))
+        } else {
+            None
+        };
+        let parent_baseline = |name: &str| {
+            source_report.anticipated_parent_anchor(name).map(|anchor| {
+                (
+                    anchor.version.as_str(),
+                    parent_root
+                        .as_deref()
+                        .expect("selected parent anchors acquired their shared source"),
+                )
+            })
+        };
+        // Source acquisition must not turn a moved named target into accepted comparison input.
+        evidence.verify(&manifest)?;
         // Resolve once outside the assessed Cargo configuration. An alias in that configuration
         // must not select a different checker for identity, canary or comparison.
         let checker = if targets.is_empty() {
@@ -403,27 +471,63 @@ fn check_with_output(
             outcome.identify(&identity)?;
             canary(checker, &cache, &mut checker_output)?;
         }
-        let registry = RegistryClient::new(diagnostics.clone())?;
+        let registry = targets
+            .iter()
+            .any(|name| parent_baseline(name).is_none())
+            .then(|| RegistryClient::new(diagnostics.clone()))
+            .transpose()?;
         outcome.assess(
             targets,
-            |name| registry.comparison_baseline(name),
-            |name, baseline| {
-                execute_checker(
-                    comparison_command(
-                        checker
-                            .as_deref()
-                            .expect("nonempty comparison targets resolved the checker"),
-                        &manifest,
-                        name,
-                        baseline,
-                    ),
-                    &cache,
+            |name| {
+                comparison_baseline(
+                    name,
+                    parent_baseline(name),
+                    |name| {
+                        registry
+                            .as_ref()
+                            .expect("historical targets acquired the registry client")
+                            .comparison_baseline(name)
+                    },
+                    verbose,
                 )
+            },
+            |name, baseline| {
+                evidence.verify(&manifest)?;
+                let checker = checker
+                    .as_deref()
+                    .expect("nonempty targets resolved the checker");
+                let command = match parent_baseline(name) {
+                    Some((_, root)) => {
+                        parent_source
+                            .as_ref()
+                            .expect("anticipated comparison acquired its source")
+                            .verify()?;
+                        source_comparison_command(checker, &manifest, name, root)
+                    }
+                    None => comparison_command(checker, &manifest, name, baseline),
+                };
+                execute_checker(command, &cache)
             },
             &mut checker_output,
             verbose,
         )
     })();
+    let parent_unchanged = parent_source.as_ref().map_or(Ok(()), ParentSource::verify);
+    if parent_unchanged.is_err() {
+        outcome.completed = false;
+    }
+    let result = match (result, parent_unchanged) {
+        (Err(comparison), Err(verification)) => {
+            Err(ComparisonAndSourceFailed::caused_by(verification, comparison).into())
+        }
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    };
+    let cleanup = parent_source.as_mut().map_or(Ok(()), ParentSource::finish);
+    if cleanup.is_err() {
+        outcome.completed = false;
+    }
+    let result = finish_parent_source(result, cleanup);
     let unchanged = evidence.verify(&manifest);
     let destination = output.join("compatibility.json");
     outcome.finish(checker_output.finish(result), unchanged, |outcome| {
@@ -449,6 +553,139 @@ fn comparison_command(checker: &Path, manifest: &Path, name: &str, baseline: &Ve
             name,
         ],
     )
+}
+
+fn source_comparison_command(
+    checker: &Path,
+    manifest: &Path,
+    name: &str,
+    baseline_root: &Path,
+) -> Command {
+    checker_command(
+        checker,
+        manifest,
+        &[
+            "--all-features",
+            "--manifest-path",
+            &manifest.to_string_lossy(),
+            "--baseline-root",
+            &baseline_root.to_string_lossy(),
+            "-p",
+            name,
+        ],
+    )
+}
+
+/// Owns one immutable parent snapshot only for the duration of its required API comparisons.
+struct ParentSource {
+    directory: Option<TempDir>,
+    repository: PathBuf,
+    root: PathBuf,
+    commit: String,
+}
+
+impl ParentSource {
+    #[cfg_attr(test, mutants::skip)] // Real Git worktree acquisition and cleanup use integration tests.
+    fn create(repository: &Path, commit: &str) -> Result<Self, AppError> {
+        let directory = tempfile::Builder::new()
+            .prefix("crp-semver-parent-")
+            .tempdir()
+            .map_err(|error| {
+                ParentSourceFailed::caused_by(commit.to_owned(), "create source directory", error)
+            })?;
+        let mut source = Self {
+            root: directory.path().join("source"),
+            directory: Some(directory),
+            repository: repository.to_owned(),
+            commit: commit.to_owned(),
+        };
+        let created = run_capture(
+            "git",
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                &source.root.to_string_lossy(),
+                commit,
+            ],
+            repository,
+        )
+        .map_err(|error| {
+            ParentSourceFailed::caused_by(commit.to_owned(), "create source worktree", error).into()
+        });
+        if let Err(error) = created {
+            return finish_parent_source(Err(error), source.finish());
+        }
+        Ok(source)
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Checks the pinned Git source, without resolution or compilation.
+    fn verify(&self) -> Result<(), AppError> {
+        let actual = GitRepo::discover(&self.root)?.rev_parse("HEAD^{commit}")?;
+        if actual != self.commit {
+            return Err(ParentSourceFailed::new(
+                self.commit.clone(),
+                "retain immutable source HEAD",
+            )
+            .into());
+        }
+        run_capture("git", &["diff", "--exit-code", "HEAD", "--"], &self.root).map_err(
+            |error| {
+                ParentSourceFailed::caused_by(
+                    self.commit.clone(),
+                    "retain unchanged source files",
+                    error,
+                )
+            },
+        )?;
+        Ok(())
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Git and directory cleanup preserve their independent failures.
+    fn finish(&mut self) -> Result<(), AppError> {
+        let Some(directory) = self.directory.take() else {
+            return Ok(());
+        };
+        let removed = run_capture(
+            "git",
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                &self.root.to_string_lossy(),
+            ],
+            &self.repository,
+        )
+        .map(|_| ())
+        .map_err(|error| ParentSourceCleanupFailed::caused_by(&self.root, error).into());
+        let closed = directory
+            .close()
+            .map_err(|error| ParentSourceCleanupFailed::caused_by(&self.root, error).into());
+        finish_parent_source(removed, closed)
+    }
+}
+
+impl Drop for ParentSource {
+    #[cfg_attr(test, mutants::skip)] // Unwind fallback; normal execution explicitly finalizes.
+    fn drop(&mut self) {
+        if let Err(error) = self.finish() {
+            // A failed diagnostic must not replace the unwind that caused fallback cleanup.
+            drop(writeln!(io::stderr().lock(), "{error}"));
+        }
+    }
+}
+
+fn finish_parent_source<T>(
+    operation: Result<T, AppError>,
+    cleanup: Result<(), AppError>,
+) -> Result<T, AppError> {
+    match (operation, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(operation), Err(cleanup)) => {
+            Err(ParentCleanupAlsoFailed::caused_by(cleanup, operation).into())
+        }
+    }
 }
 
 fn cache_path(temporary: &Path, root: &Path) -> Result<PathBuf, AppError> {
@@ -691,6 +928,28 @@ struct EvidencePersistenceAlsoFailed {
 #[display("Failed to write '{}'", path.quoted())]
 struct CompatibilityWriteError {
     path: PathBuf,
+}
+
+/// Identifies the fixed parent snapshot whose acquisition failed.
+#[ohno::error]
+#[display("cannot {operation} for anticipated parent {commit}")]
+struct ParentSourceFailed {
+    commit: String,
+    operation: &'static str,
+}
+
+/// Retains the failed owned source cleanup operation and its original cause.
+#[ohno::error]
+#[display("cannot clean up compatibility parent source '{}'", path.quoted())]
+struct ParentSourceCleanupFailed {
+    path: PathBuf,
+}
+
+/// A cleanup failure cannot erase an independent checker/acquisition failure.
+#[ohno::error]
+#[display("anticipated-parent source cleanup also failed: {cleanup}")]
+struct ParentCleanupAlsoFailed {
+    cleanup: AppError,
 }
 
 #[cfg(test)]
@@ -1403,6 +1662,80 @@ mod tests {
             checker_command(checker, Path::new(""), &["--version"]).get_current_dir(),
             Some(Path::new("."))
         );
+    }
+
+    #[test]
+    fn anticipated_parent_comparison_uses_source_instead_of_a_registry_version() {
+        let manifest = Path::new("candidate").join("Cargo.toml");
+        let baseline = Path::new("parent").join("nested-workspace");
+        let command =
+            source_comparison_command(Path::new("checker"), &manifest, "library", &baseline);
+        assert_eq!(command.get_current_dir(), Some(Path::new("candidate")));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("semver-checks"),
+                OsStr::new("--all-features"),
+                OsStr::new("--manifest-path"),
+                manifest.as_os_str(),
+                OsStr::new("--baseline-root"),
+                baseline.as_os_str(),
+                OsStr::new("-p"),
+                OsStr::new("library"),
+            ]
+        );
+    }
+
+    #[test]
+    fn anticipated_anchor_bypasses_registry_baseline_selection() {
+        let verbose = Verbose::new(false, &crp_diag::Discard);
+        assert_eq!(
+            comparison_baseline(
+                "library",
+                Some(("1.1.0", Path::new("parent"))),
+                |_| panic!("an anticipated anchor must not read the registry"),
+                verbose
+            )
+            .unwrap(),
+            Some(Version::new(1, 1, 0))
+        );
+        assert_eq!(
+            comparison_baseline(
+                "historical",
+                None,
+                |name| {
+                    assert_eq!(name, "historical");
+                    Ok(Some(Version::new(1, 0, 0)))
+                },
+                verbose
+            )
+            .unwrap(),
+            Some(Version::new(1, 0, 0))
+        );
+    }
+
+    #[test]
+    fn parent_cleanup_preserves_both_comparison_and_cleanup_failures() {
+        let error = finish_parent_source::<()>(
+            Err(CheckerSummaryMissing::new().into()),
+            Err(ParentSourceCleanupFailed::new(Path::new("parent-source")).into()),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<CheckerSummaryMissing>().is_some());
+        assert!(
+            error
+                .find_source::<ParentCleanupAlsoFailed>()
+                .unwrap()
+                .cleanup
+                .find_source::<ParentSourceCleanupFailed>()
+                .is_some()
+        );
+        let error = finish_parent_source(
+            Ok(()),
+            Err(ParentSourceCleanupFailed::new(Path::new("parent-source")).into()),
+        )
+        .unwrap_err();
+        assert!(error.find_source::<ParentSourceCleanupFailed>().is_some());
     }
 
     #[test]

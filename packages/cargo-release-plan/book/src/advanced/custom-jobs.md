@@ -74,7 +74,8 @@ remains the policy source.
 
 | Identity | Role |
 | --- | --- |
-| Frozen release baseline | Select history for pre-merge version assessment. |
+| Release-history commit | Select actual publishing-branch history for assessment. |
+| Merge-target commit | Supply an unmerged parent's final state as an anticipated squash release. |
 | Per-package anchor | Supply that package's comparison content and version. |
 | Prepared source and prospective workspace | Bind semantic evidence and the exact plan application. |
 | Publication source | Fix the merged source and declared versions to deliver. |
@@ -122,8 +123,8 @@ release contexts distinct concurrency and artifact identities, while preserving
 one context across retries.
 
 `release-context` supplies the configured `repository`, `release_branch`,
-immutable `release_base` and stable `concurrency_group`. With an explicit
-`--base`, it uses the tested history boundary without fetching another baseline.
+`release_history`, nullable `merge_target` and stable `concurrency_group`.
+With an explicit `--release-history`, it uses that commit without fetching history.
 It does not replace publication preparation or require a clean checkout.
 
 Use the exact [phase commands](../reference/commands.md#prepare-and-publish-exact-versions)

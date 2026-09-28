@@ -12,6 +12,10 @@ the package. Classification, version-group decisions and publication eligibility
 belong to callers. Workspace observations retain validated exact dependency edges;
 versioning derives their groups.
 
+Git observations can resolve commits and test ancestor relationships without
+rewriting history. Whether a descendant snapshot represents an anticipated squash
+predecessor is versioning policy, not a workspace acquisition rule.
+
 Path handling probes actual filesystem alias behavior rather than assuming case
 sensitivity from the operating system. Dependency membership uses the lexical member
 index first, then filesystem-resolved member identity, so caller path spelling does

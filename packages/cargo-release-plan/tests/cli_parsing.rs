@@ -166,6 +166,7 @@ fn report_defers_base_and_defaults_the_manifest_path() {
     let input = parse(&["report", "--out-dir", "out"]).unwrap().into_input();
     match input {
         RunInput::Report {
+            merge_target: None,
             out_dir,
             base,
             manifest_path,
@@ -197,6 +198,7 @@ fn check_parses_github_format_and_verify_packaging() {
     .into_input();
     match input {
         RunInput::Check {
+            merge_target: None,
             base,
             format,
             verify_packaging,
@@ -301,6 +303,7 @@ fn preparation_requires_output_and_preserves_baseline_selection() {
     .into_input();
     match input {
         RunInput::Prepare {
+            merge_target: None,
             output,
             base,
             manifest_path,

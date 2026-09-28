@@ -91,7 +91,7 @@ must precede the first merge; that merge performs the second publication. See
 [the first-publication procedure](../RELEASING.md#first-publish-of-a-new-crate).
 An empty increment plan does not mean there is nothing to release.
 
-Refresh the evidence, plan, and section when the source, release baseline, group
+Refresh the evidence, plan, and section when the source, release history, merge target, group
 membership, or decisions change. The section describes the final current PR,
 not the history of intermediate plans. Keep it focused on release decisions,
 not a generic changed-file list or a validation log. The PR is ready for human

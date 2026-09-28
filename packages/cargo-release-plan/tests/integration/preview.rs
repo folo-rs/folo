@@ -13,6 +13,7 @@ use crate::harness::check;
 fn prepare(fixture: &Fixture) -> PathBuf {
     let output = fixture.path().join("prepared");
     let RunOutcome::Prepare { message } = run(&RunInput::Prepare {
+        merge_target: None,
         output: output.clone(),
         base: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
@@ -35,7 +36,7 @@ fn preview(fixture: &Fixture, prepared: PathBuf, increments: &Value) -> PathBuf 
     let proposed = fixture.path().join("proposal.json");
     fs::write(
         &proposed,
-        serde_json::to_vec(&json!({"schema_version": 4, "increments": increments})).unwrap(),
+        serde_json::to_vec(&json!({"schema_version": 5, "increments": increments})).unwrap(),
     )
     .unwrap();
     let output = fixture.path().join("preview");
@@ -123,7 +124,7 @@ fn workspace_bumps_expand_transitive_binary_closures_before_apply() {
         .find(|package| package.get("name").unwrap() == "core")
         .unwrap();
     assert_eq!(core.get("status").unwrap(), "needs-increment");
-    fixture.write("proposal.json", r#"{"schema_version":4,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":5,"increments":[]}"#);
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),
         prepared: prepared.clone(),
@@ -325,7 +326,7 @@ fn plain_expansion_is_read_only_and_cannot_bypass_resolution() {
     fixture.commit("released binary");
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":4,"increments":[{"name":"tool","level":"patch"}]}"#,
+        r#"{"schema_version":5,"increments":[{"name":"tool","level":"patch"}]}"#,
     );
     let lock = fixture.read("Cargo.lock");
     let expanded = fixture.path().join("expanded.json");
@@ -361,7 +362,7 @@ fn source_changes_after_preparation_invalidate_preview() {
     fixture.write("packages/library/src/lib.rs", "pub fn new_evidence() {}\n");
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":4,"increments":[{"name":"library","level":"patch"}]}"#,
+        r#"{"schema_version":5,"increments":[{"name":"library","level":"patch"}]}"#,
     );
     run(&RunInput::Preview {
         plan: fixture.path().join("proposal.json"),

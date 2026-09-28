@@ -195,8 +195,11 @@ runs:
         env-vars: ImageVersion
 
     - name: Cache development tools
-      # Save installed Cargo tools and their registration metadata together.
-      # Exclude rustup's cargo-* proxies: the runner/toolchain setup owns those.
+      # Cache package executables installed by install-just.ps1 / just install-tools, together
+      # with Cargo/binstall registration data. cargo-* covers Cargo subcommands; other package
+      # executable names below come from those installers' package inventory.
+      # cargo-clippy, cargo-fmt and cargo-miri are rustup dispatchers for toolchain components,
+      # not cargo-installed packages. Exclude those matches; rustup/toolchain setup owns them.
       # A same-image fallback restores older pins; installation reconciles them before saving.
       # The checkout commit covers every install input without a maintained file-hash list.
       # Workspace compilation remains in the independent Rust cache.

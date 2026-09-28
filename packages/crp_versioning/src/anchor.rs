@@ -46,6 +46,23 @@ pub(crate) enum Presence {
     Published(Version),
 }
 
+/// Selects the final parent snapshot only when it contributes a distinct predecessor release.
+///
+/// Unversioned parent changes must remain visible against the actual historical anchor.
+/// Ref: docs/implementation.md, "Anticipated squash predecessors".
+pub(crate) fn anticipated_anchor(
+    history: Option<&Version>,
+    target: Option<&Version>,
+    target_commit: &str,
+) -> Option<Anchor> {
+    target
+        .filter(|target| history.is_none_or(|history| *target > history))
+        .map(|version| Anchor {
+            commit: target_commit.to_owned(),
+            version: version.clone(),
+        })
+}
+
 impl Presence {
     /// The version a consumer could have received at this commit.
     pub(crate) fn released_version(&self) -> Option<&Version> {
@@ -139,6 +156,28 @@ mod tests {
             presence: Presence::Unpublished,
             has_parent,
         }
+    }
+
+    #[test]
+    fn anticipated_predecessor_uses_final_snapshot_only_for_new_or_higher_versions() {
+        let released = v("1.2.3");
+        let next = v("1.2.4");
+        assert_eq!(
+            anticipated_anchor(Some(&released), Some(&next), "parent-final"),
+            Some(Anchor {
+                commit: "parent-final".to_owned(),
+                version: next.clone()
+            })
+        );
+        assert_eq!(
+            anticipated_anchor(None, Some(&next), "parent-final")
+                .unwrap()
+                .version,
+            next
+        );
+        assert!(anticipated_anchor(Some(&released), Some(&released), "parent-final").is_none());
+        assert!(anticipated_anchor(Some(&released), Some(&v("1.2.2")), "parent-final").is_none());
+        assert!(anticipated_anchor(Some(&released), None, "parent-final").is_none());
     }
 
     #[test]

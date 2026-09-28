@@ -14,6 +14,51 @@ and application stay together. Their captured-input and no-late-resolution invar
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
 
+## Anticipated squash predecessors
+
+Assessment keeps the actual release-history commit separate from an optional final
+merge-target commit. A target equal to or already an ancestor of release history
+normalizes to no projected target. Otherwise it must descend from that history;
+divergent refs require refresh/rebase rather than an invented merged timeline.
+`history::resolve_merge_target` owns this local ref-resolution and ancestry rule
+for both assessment capture and publication-context callers; it performs no fetch.
+The supplied ref remains captured: verification rejects movement that changes
+the effective target, while movement wholly within committed release history
+does not introduce a new predecessor.
+
+The target contributes one anticipated predecessor snapshot, not its intermediate
+commits. A package first published by the target, or declaring a higher version
+there, anchors to that final snapshot. A package retaining its history version
+keeps its actual historical version-change anchor. This preserves catch-up
+obligations from unversioned commits in real release history or in the parent.
+Group membership, dependency graphs and content/lockfile comparison remain the
+ordinary classifier's responsibilities.
+
+Captured inputs retain `release_history` and `release_history_revision`, plus
+`merge_target` for a distinct predecessor and `merge_target_revision` whenever supplied.
+Live verification resolves
+the original refs and rejects movement. Prospective and retained workspaces use
+the frozen commits, independently of the clone's ref names; after candidate
+verification, the original captured refs are checked again at the source repository.
+Preparation retains
+the context across lockfile refresh; every fixed-point classification uses it.
+
+Reports expose the resolved history and optional target identities. Generated
+proposals carry that same context, expansion preserves it, and preview rejects
+bound proposals from another prepared context. A hand-authored proposal without
+a bound context uses the prepared inputs. Resolved plans include both the context
+and captured inputs; verification and application enforce their agreement.
+The shared report/plan/prepared schema is defined by `plan::SCHEMA_VERSION`;
+semantic decision documents keep their separate `DECISION_SCHEMA_VERSION`.
+`ReportFile::anticipated_parent_anchor` exposes the existing anchor commit and version
+for packages whose predecessor is the final parent snapshot.
+The classifier validates that a distinct target descends from the
+release history, so its commit cannot also be an anchor in that actual history.
+External compatibility execution uses this immutable source as its comparison root;
+a registry release is not a substitute for an anticipated, still-unpublished predecessor.
+
+## Shared operation and tests
+
 The typed workspace-check operation is shared by application dispatch and publication
 candidate verification. It has no dependency on CLI command variants or publication
 configuration. Production entry points acquire workspace observations; deterministic

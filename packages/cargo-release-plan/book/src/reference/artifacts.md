@@ -21,12 +21,12 @@ A decisions document is caller-authored literal JSON:
 `changes[].level` is semantic: `breaking`, `nonbreaking` or `patch`.
 Non-publishable version targets have no semantic decisions.
 
-The proposed-plan format uses report/plan schema revision `4`. This is a literal
+The proposed-plan format uses report/plan schema revision `5`. This is a literal
 example of that format:
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "increments": [
     { "name": "widget", "level": "minor" },
     { "name": "widget-cli", "version": "2.0.1" }
@@ -49,19 +49,23 @@ regenerate unsupported or stale evidence with `prepare` and `preview`.
 
 ## Reports
 
-The revision-4 report's top level contains:
+The revision-5 report's top level contains:
 
 | Field | Content |
 | --- | --- |
 | `schema_version` | Report/plan format revision. |
 | `head` | Source commit associated with the assessment. |
+| `release_history` | Selected actual release-history commit. |
+| `merge_target` | Optional final parent commit supplying anticipated releases. |
 | `packages` | Publishable package assessments. |
 | `non_publishable_packages` | Tracked alignment targets without release assessments. |
 | `groups` | Complete group membership across both package arrays. |
 
 Each publishable entry includes `name`, `declared_version`, `status`, `changed`,
 `stat`, `dependencies`, `dependents` and `consumer_contract`. Optional evidence
-includes its group, anchor, patch path and advisory untracked files.
+includes its group, anchor, patch path and advisory untracked files. An anchor can
+identify a release-history version change or the final snapshot of an anticipated
+parent version; the report's history/target fields identify that context.
 
 Changed entries distinguish:
 
@@ -86,7 +90,7 @@ change can have no patch.
 A report's HEAD alone does not prove that an arbitrary dirty checkout matches
 the evidence. `check-compatibility` regenerates a bound read-only report from
 prepared inputs, a resolved preview or a fresh source assessment. It does not
-accept a detached report. This leaves the report/plan schema unchanged.
+accept a detached report.
 
 ## Release context
 
@@ -94,24 +98,26 @@ accept a detached report. This leaves the report/plan schema unchanged.
 
 | Field | Meaning |
 | --- | --- |
-| `schema_version` | Release-context format revision, currently `1`. |
+| `schema_version` | Release-context format revision, currently `2`. |
 | `repository` | Configured GitHub `owner/repository`. |
 | `release_branch` | Configured release branch. |
-| `release_base` | Resolved immutable history boundary for this invocation. |
+| `release_history` | Commit delimiting actual release-branch history. |
+| `merge_target` | Anticipated unmerged parent commit, or null when no additional target is needed. |
 | `head` | Assessed source HEAD. |
 | `workspace_manifest` | Repository-relative workspace manifest location. |
 | `config_path` | Repository-relative configuration location. |
 | `concurrency_group` | Stable workspace-scoped release concurrency identity. |
 
 This is acquired context, not publication intent. Save it for the local planning
-run and reuse its `release_base`. Refresh before application; do not silently
-replace the baseline beneath prepared evidence.
+run and reuse its history/target pair. Refresh both before application; do not
+replace either beneath prepared evidence.
 
 ## Compatibility evidence
 
 Each `check-compatibility` invocation uses a new output directory and writes
 `compatibility.json`, `semver-checks.log` and a regenerated read-only report.
-The evidence retains checker identity and exact published comparison versions.
+The evidence retains checker identity and exact comparison versions. Its linked
+report identifies any anticipated-parent anchor supplying the comparison source.
 
 Compatibility evidence uses schema `1`:
 
@@ -125,8 +131,9 @@ Compatibility evidence uses schema `1`:
 | `packages` | Comparison records containing the fields below. |
 
 Each comparison record contains `name`, `compared`, nullable `baseline_version`,
-and nullable `required_level`. A compared package has a published baseline.
-An unavailable comparison has `compared: false` and no baseline or required level.
+and nullable `required_level`. A compared package uses a published version or its
+anticipated parent's version and final source. An unavailable comparison has
+`compared: false` and no comparison version or required level.
 An operational failure can leave only earlier completed records; inspect the
 overall completion flag and retained diagnostics rather than treating absent
 records as passes.

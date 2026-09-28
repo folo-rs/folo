@@ -54,8 +54,8 @@ support set.
 `check --config` validates configuration and binary publication inputs offline.
 Ordinary `check` without that option retains its version-readiness scope.
 Publication reads configuration by default. None of these settings silently
-changes the baseline default for version assessment; automation supplies
-`--base` explicitly.
+changes the history default for version assessment; automation supplies
+`--release-history` and any `--merge-target` explicitly.
 
 ## Package metadata
 

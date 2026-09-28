@@ -39,12 +39,13 @@ including an installable binary's locked dependencies. Not every repository edit
 changes released content.
 
 A **version assessment** establishes which released content changed and whether
-the declared versions cover those changes. It uses a **release baseline**: a
-frozen commit identifying the release-branch history available to the assessment.
+the declared versions cover those changes. Its **release history** ends at a
+selected commit on the branch that publishes.
 Within that history, each package has its own **anchor**, the newest first-parent
 commit that changed its parsed version. The anchor supplies the package's
-comparison version and content. The baseline selects history; the anchor selects
-the package-specific comparison point.
+comparison version and content. For a stacked PR, a separate **merge target**
+identifies the unmerged parent's final state. Its higher package versions and
+final contents are treated together as anticipated predecessor releases.
 
 A **semantic decision** judges the significance of the changed consumer contract:
 `breaking`, `nonbreaking` or `patch`. A **version plan** translates those decisions
@@ -59,13 +60,13 @@ publication obligations.
 
 The process connects these concepts as follows:
 
-1. Prepare the intended dependency resolution and collect an assessment against
-   one fixed baseline. Review source changes, inherited inputs, dependency effects
+1. Prepare a consistent workspace lockfile and collect an assessment using
+   the selected history and merge target. Review source changes, inherited inputs, dependency effects
    and external compatibility-check results.
 2. Choose semantic decisions, generate a version plan and preview its complete
    effects. Assess additional effects exposed by preview before applying the
    captured result.
-3. Review and merge the source changes together with their version changes.
+3. Review and squash-merge the source changes together with their version changes.
    Automated merge checks verify version readiness and supported compatibility
    requirements; human review supplies the approval.
 4. Prepare a publication manifest from the clean, merged source. This manifest
@@ -141,17 +142,18 @@ changelog generation and arbitrary release-policy hooks are outside this scope.
 
 ### The release branch is the source of truth
 
-Version decisions come from the history of the branch that actually publishes,
-not from a pull request target or the registry. This keeps stacked pull requests
-and local work trees meaningful without network access. Remote publication state
+Actual release history comes from the branch that publishes. An unmerged PR target
+is a separately identified anticipated squash release, not existing release history.
+Version assessment retains this distinction for stacked PRs. Remote publication state
 determines which delivery operations remain, not which versions are valid.
 
-### One baseline, one anchor per package
+### One selected history, package-specific comparisons
 
-Every package is assessed using the same frozen release baseline, normally the
-freshly fetched release-branch tip. Each package has its own anchor within that
-history. Fixing the baseline prevents unrelated packages from being assessed
-against different views of release history within one plan.
+Every package uses the same release-history commit and optional merge target
+throughout an assessment. Package-specific anchors preserve catch-up work in
+existing history. Pending versions introduced by the target instead compare
+against its final content, so independently mergeable child PRs cannot reuse a
+parent's increment. Refreshing either input requires fresh assessment.
 
 ### Published artifacts decide relevance
 
@@ -165,8 +167,8 @@ contents release-relevant.
 ### Evidence and judgement stay separate
 
 Released-content analysis determines whether an increment is required and records
-the evidence. The author chooses semantic decisions using that evidence and
-external compatibility results. Proposal generation completes their mechanical
+the evidence. Semantic decisions combine that evidence with
+external compatibility results and wider contract assessment. Proposal generation completes their mechanical
 version effects; resolution preview exposes additional dependency-resolution
 effects before application. A minimum imposed by a tool is not a complete semantic
 assessment.
@@ -417,13 +419,13 @@ checker identity, findings and diagnostics; it does not replace the author's
 semantic decisions.
 
 Prepared execution explicitly selects a workspace and verifies its captured
-source, baseline and resolution. Fresh execution captures those inputs around
+source, selected history, merge target and resolution. Fresh execution captures those inputs around
 its own report generation. A matching HEAD
 alone is insufficient for a dirty work tree. The tool verifies those inputs before
 and after the comparison, as it does for a retained preview. Artifact-only target
 selection does not by itself establish that the selected checkout matches a report.
-The published comparison versions are recorded with the result; an unavailable
-comparison is not silently replaced with a different baseline.
+The comparison versions and any anticipated-parent source are recorded with the
+result; an unavailable comparison is not silently replaced with a different one.
 
 A self-comparison canary checks that the installed checker can perform a comparison
 before its evidence is relied upon. Findings, a valid empty target set and an
@@ -481,14 +483,12 @@ can use it independently of the publication commands' availability checks.
 
 ### Prepare evidence and preview resolution
 
-Preparation performs the workflow's intended offline workspace resolution before
-collecting released-content evidence. It does not request blanket third-party
-upgrades. The report and compatibility assessment used for semantic decisions
-describe that prepared state.
+Preparation supplies a consistent workspace lockfile and evidence describing that
+same source, before semantic decisions are made.
 
 Preview applies candidate versions and requirement rewrites in a disposable
 workspace and resolves there under the same offline policy. It classifies the
-prospective tree against the fixed release baseline and expands release effects
+prospective tree using the selected history and merge target and expands release effects
 until versions and captured manifest/lockfile contents are both stable.
 A repeated non-final state is a resolution error, not a completed preview.
 Transitive binary lockfile effects and
@@ -530,7 +530,8 @@ it is not a routine source of additional lockfile-only release decisions.
 
 Workspace commands use the workspace selected by `--manifest-path`. Artifact-only
 planning commands instead use their supplied reports and decisions. `report` and
-`check` accept `--base` to name the shared release baseline.
+`check` accept `--release-history` and optional `--merge-target` to identify the
+comparison history. `--base` remains a compatibility alias for release history.
 
 ### Prepare and execute publication
 
@@ -555,60 +556,46 @@ cannot yield authoritative tag-bound build batches until actually established.
 Detailed source, completion and recovery guarantees are in
 [Publication](#publication).
 
-## The release baseline
+## Release history and the merge target
 
-The release baseline answers: **which release-branch history may this assessment
-treat as established version history?** It is one immutable commit, normally
-captured by fetching the release branch and resolving its tip before preparation.
-It is not a registry version, a tag, a merge-base calculation or the source
-checkout being assessed.
+Release history answers which package versions are established by the publishing
+branch. The selected commit is the common starting point for per-package anchor
+searches, not itself every package's content comparison point.
 
-The tool searches backward from this boundary to find each package's anchor.
-It then compares that anchor with the assessed work tree. Comparing only the
-baseline's files with the work tree would miss the purpose: accumulated package
-changes and a pending version movement must be judged together against that
-package's anchor.
+The merge target answers what will precede the current PR. A target already in
+release history adds no anticipated release. An unmerged parent is considered as
+one prospective squash commit: its final tree supplies every pending version's
+content, ignoring the parent's internal commit ordering. Additional child changes
+must advance that version. Packages retaining an existing release-history version
+continue to use its anchor, preserving unversioned catch-up changes.
 
-Passing `--base <commit>` explicitly is most reliable because the caller knows
-the project's release process. Resolve a branch name once for a planning run;
-do not let its movement change the history between report, preview and apply.
+For example, `main` records package `1.4.0`. A parent PR increments to `1.5.0` and
+then adds another fix. A child compares with the complete parent `1.5.0`, not the
+commit where its version string was first edited. Extra child changes need a
+version above `1.5.0`. After the parent is squash-merged, that final content and
+version are recorded together, preserving the comparison.
 
-Without `--base`, the tool uses the default branch recorded for the `origin`
-remote and falls back to `origin/main` when the remote records none. These are
-conveniences for interactive use, not knowledge of the project's release policy.
-Publication configuration does not silently change this resolution. Shared
-version-checking workflows supply the appropriate baseline explicitly.
+Squash merging is the supported managed publication workflow. Existing history
+may contain migration or manual commits without matching increments; anchors
+retain their outstanding released-content changes. This tolerance does not turn
+an unmerged parent's intermediate commits into established releases.
 
-The baseline is shared, while anchors differ by package:
+`release-context` fetches the configured release branch and resolves the optional
+target ref. All assessment stages use that same returned commit pair.
+`--release-history <commit>` explicitly selects known release history;
+`--merge-target <commit>` supplies an anticipated parent.
+`--base` is an alias for `--release-history`, not a different comparison mode.
+Direct assessment without an explicit history uses `origin`'s recorded default
+branch, falling back to `origin/main`; automation should use the configured context.
 
-```text
-release baseline history
+The original PR checks establish independent version decisions. A merge queue can
+check its candidate against the appropriate history/target inputs, but grouping
+PRs is not a substitute for those checks and does not define their version scope.
+No synthetic queue history is treated as a sequence of already published PRs.
 
-A ---- B ---- C ---- D ---- E   <- frozen baseline
-       ^           ^
-       |           +-- package-beta anchor (version 2.1.0)
-       +-------------- package-alpha anchor (version 1.4.0)
-
-work tree
-  package-alpha: compare B -> work tree
-  package-beta:  compare D -> work tree
-```
-
-Here both packages use history ending at `E`, but neither uses `E` as its content
-comparison point. If another package changes at `E`, it does not reset either
-of these anchors.
-
-| Context | Baseline and purpose |
-| --- | --- |
-| Local feature branch or ordinary PR | Freeze the actual release-branch tip to assess all accumulated changes, including an increment already present on the feature branch. |
-| Stacked PR | Still use the release branch, not the unreleased parent PR. Otherwise the parent's pending increment could be mistaken for an established release version. |
-| Merge queue | Use the release-branch base commit of the tested queue candidate, keeping the assessment tied to what the queue actually tested. |
-| Merged-source validation and publication preparation | Use the pinned source commit itself as the history boundary. Check its content against its own anchors; do not interpret this as registry-upload progress. |
-
-If the release branch advances during local planning, the skill refreshes the
-assessment before applying. Even an unchanged patch may need a different decision:
-another PR may have consumed the previously proposed version. Captured preparation
-and preview evidence must not be silently reassigned to the new baseline.
+When release history or the target advances, refresh assessment before applying.
+Another PR may have consumed a selected version, or the parent may have changed
+the child's comparison. Do not reassign old evidence to new inputs.
 
 Version assessment supports dirty work trees, so `check` can find a missing
 increment before edits are committed. Publication instead requires a clean,
@@ -617,28 +604,28 @@ whose declared versions are to be delivered. A **tag target** identifies the
 immutable commit a package tag actually names and from which its binaries build.
 The tag target can be a later **release-equivalent commit**: an eligible
 first-parent descendant of the publication source retaining the requested package
-version and released content. Neither identity replaces the baseline used to
-assess the author's changes.
+version and released content. Neither identity replaces the history and target
+selected for pre-merge assessment.
 
-The API compatibility checker's comparison baseline is a separate input, commonly the
-latest published crate version. That comparison detects supported API changes.
-The release baseline described here selects Git history for version validity;
-using the word "baseline" in both tools does not make those inputs interchangeable.
+The API compatibility checker's comparison source is separate. Existing releases
+normally use a published crate version; an anticipated parent uses its final
+source where needed to assess the child's change in supported API.
 
 ## Anchors
 
-An anchor is the newest commit on the baseline's first-parent history where the
+An anchor is the newest commit on the selected release history's first-parent line where the
 package's parsed version changed. Reformatting the version declaration does not
 move it. The commit that first adds a package counts as a version change.
 
-First-parent history makes a merged pull request one release event. If a version
-was edited on a topic branch, its anchor is the merge commit where that version
-first reached the release branch, not the topic commit where it was typed:
+Squash merging records the PR's final content and version as one release event.
+For historical non-squash merge commits, first-parent traversal still follows the
+commit where a version reached the release branch, not the topic commit where it
+was typed:
 
 ```text
           E ---- F
          /        \
-A ---- B ---------- M ---- D   <- baseline first-parent history
+A ---- B ---------- M ---- D   <- release first-parent history
                        ^
                        version reaches the release branch; M is the anchor
 ```
@@ -646,11 +633,11 @@ A ---- B ---------- M ---- D   <- baseline first-parent history
 A shallow history that hides a required version change cannot support a release
 claim, so the command fails rather than treating the package as unchanged.
 
-### Packages the baseline does not publish
+### Packages without a comparison release
 
-A package absent from the baseline, or present there with `publish = false`, has
-no release on that baseline to compare. It is treated as preparing its first
-release and is pending release at any declared version.
+A package absent from release history and the anticipated parent, or present there
+with `publish = false`, has no comparison release. It is treated as preparing its
+first release and is pending release at any declared version.
 
 A package name that was published, removed, and later restored is also treated
 as new. Guessing which old incarnation it continues would make clone depth a
@@ -666,7 +653,7 @@ higher version.
 Publishing a patch for an older series remains possible by using a separate
 release branch based on that series. For example, `1.3.1` can follow `1.3.0` on a
 maintenance branch even when another release branch has already reached `1.4.0`;
-the maintenance branch supplies its own baseline and anchors.
+the maintenance branch supplies its own release history and anchors.
 
 ## Released content
 
@@ -824,10 +811,10 @@ carries that highest version as an exact target instead moves lagging members up
 to it and leaves the leading member unchanged. The lagging members then become
 pending release because their declared versions advanced.
 
-Members absent from the baseline are exempt from the consistency check, which
+Members absent from the comparison history are exempt from the consistency check, which
 lets a new package join a group before its first release. This exemption does
 not remove the member from alignment or from the version base. A member that
-exists on the baseline with publication disabled is not absent.
+exists in that history with publication disabled is not absent.
 
 The obsolete `[workspace.metadata.release-plan.groups]` key is rejected. Group
 membership is declared only by exact workspace dependency requirements.
@@ -859,7 +846,7 @@ private implementation `widget_impl` form a version group. Both start at `1.4.0`
 
 ```text
 prepared assessment
-  release baseline: E
+  release-history commit: E
   widget:
     anchor: B, version 1.4.0
     declared version: 1.4.0
@@ -887,7 +874,7 @@ proposed version plan
 resolved expanded version plan
   widget: version 1.5.0
   widget_impl: version 1.5.0
-  captured inputs: original prepared source and baseline
+  captured inputs: original prepared source, release history and merge target
   captured edits: both manifests, affected requirements, resolved Cargo.lock
   prospective evidence: report, patches and retained compatibility workspace
 ```
@@ -1271,11 +1258,11 @@ Substantive selection,
 validation, reconciliation and report composition belong to the installed application.
 
 Reusable workflows provide the standard read-only merge check and release flow.
-The check workflow resolves the configured release baseline for the tested event,
-including merge-queue candidates, supplies publication configuration to `check`,
+The check workflow resolves configured release history and the tested PR's target,
+supplies publication configuration to `check`,
 and performs scoped external compatibility checks. Repositories needing a narrower
 version-readiness-only queue gate use the corresponding lower composite operation,
-with the tested queue baseline explicit. The release workflow owns the preparation
+with the candidate's history and target explicit. The release workflow owns the preparation
 and registry job, subsequent
 GitHub reconciliation, native binary matrix, artifact handoff and failure
 reporting. Consumers supply their triggers, required permissions, optional
@@ -1407,7 +1394,7 @@ upgrade instructions.
 The public book teaches the complete process without relying on these internal
 design and implementation documents. It starts with motivation and goals, explains
 version assessment and publication as separate responsibilities, and introduces
-baselines, anchors, semantic decisions, plans and manifests before an integration
+release history, merge targets, anchors, semantic decisions, plans and manifests before an integration
 walkthrough. The walkthrough covers repository configuration, local planning,
 Trusted Publishing setup, reusable GitHub workflows, an ordinary release and
 verification of its remote results. Recovery and custom workflow arrangements

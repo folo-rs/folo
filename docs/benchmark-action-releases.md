@@ -74,7 +74,7 @@ Include the linked action PR and its publication dependency in the monorepo's
 
 Reuse an existing paired PR when it already covers the same release work. Refresh its pins,
 action-version decision and both descriptions whenever the final monorepo plan changes,
-including after release-baseline recovery. If version planning precedes PR creation, retain
+including after release-history or merge-target recovery. If version planning precedes PR creation, retain
 the pairing and reciprocal-link obligation in the local handoff and fulfill it when creating
 the monorepo PR. An unavailable action checkout or missing repository permission is an
 explicit handoff blocker, not permission to omit the paired change.

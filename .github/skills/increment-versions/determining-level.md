@@ -4,8 +4,8 @@ Use this guide for every publishable package in the release-plan report. The dec
 the complete released change since the package's version anchor, including changes already
 pending release.
 
-The skill's [release model](SKILL.md#release-model) defines the baseline, package
-anchor, semantic decision and resolved plan used here.
+The skill's [assessment model](SKILL.md#assessment-model) defines release history,
+the merge target, package anchors, semantic decisions and version plans.
 
 ## Evidence to inspect
 
@@ -114,7 +114,7 @@ this by omitting the package from `decisions.json`.
 
 Membership of a version group does not change this. A group whose members declare different
 versions is realigned mechanically when the plan is generated, even when `consistent` is true
-because a member absent from the release baseline is exempt from the consistency verdict.
+because a member absent from the comparison history is exempt from the consistency verdict.
 Alignment normally uses the highest version any publishable or non-publishable member declares.
 The group is patch-incremented when exact alignment would rewrite a dependency inside a
 publishable member that otherwise kept a published version, or when the highest version is not a
@@ -122,7 +122,7 @@ plain SemVer triplet. The tooling chooses the realignment. Judge each publishabl
 own released changes and choose no increment when it has none. Do not assess source changes in
 `non_publishable_packages` or assign those non-publishable version targets a semantic decision.
 
-A publishable package in `report.json.packages` that has no anchor has no Git release baseline
+A publishable package in `report.json.packages` that has no anchor has no comparison release
 for this assessment. Do not assign a semantic decision merely because it is new to the release
 branch, and do not infer that it has never reached crates.io. Follow the
 [first-publication handoff](SKILL.md#first-publication-handoff): a maintainer manually

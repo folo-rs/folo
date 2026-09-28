@@ -127,8 +127,9 @@ fn propose(report: &Path, decisions: &Path, output: &Path) -> Result<RunOutcome,
 
 fn report() -> Value {
     json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "head": "captured",
+        "release_history": "released",
         "packages": [{
             "name": "library",
             "declared_version": "1.0.0",

@@ -196,6 +196,7 @@ fn a_released_symbolic_link_stops_the_run() {
     let base = fixture.sha("HEAD");
 
     let result = run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -230,6 +231,7 @@ fn an_indexed_symlink_in_a_regular_checkout_stops_the_run() {
     fixture.git(&["checkout-index", "--force", "--", path]);
 
     let result = run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -265,6 +267,7 @@ fn a_new_package_with_an_indexed_symlink_stops_the_run() {
     fixture.git(&["checkout-index", "--force", "--", path]);
 
     let result = run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
@@ -305,6 +308,7 @@ fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
     fixture.commit("replace the link with a regular file");
 
     let result = run(&RunInput::Check {
+        merge_target: None,
         base: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,

@@ -34,7 +34,7 @@ From a Git-tracked Cargo workspace with release history available:
 ```powershell
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
-cargo release-plan --version
+cargo release-plan version
 cargo release-plan report --out-dir .release-plan-review
 ```
 
@@ -43,10 +43,11 @@ relationships, with patches for changed released files. Each package is compared
 with its version anchor: the most recent first-parent commit that changed its
 parsed version within the selected release history.
 
-Pass `--base <release-baseline>` to select that history explicitly, especially in
-CI or a stacked pull request. The release baseline is the release-branch commit,
-not an unreleased parent PR. Reporting does not choose version changes or publish
-anything.
+Pass `--release-history <commit>` to select actual release history explicitly.
+For a stacked PR, also pass `--merge-target <parent-commit>`: the parent's final
+version and content are treated as an anticipated squash release, and additional
+child changes need their own increment. Existing release-history anchors still
+retain unversioned catch-up changes. Reporting does not choose versions or publish.
 
 ## Plan and publish
 

@@ -5,8 +5,8 @@ is understood. You do not need to clone the tool's source repository.
 
 ## Select a published version
 
-This walkthrough and its matching copied skill use the `0.4.1` tool interface.
-Choose a tested published action revision that pins that interface. Check the selected
+Choose a tested published action revision whose tool supports the schemas documented
+in this book and copied skill. Check the selected
 [action release](https://github.com/folo-rs/cargo-release-plan-action) and the
 [crate's published versions](https://crates.io/crates/cargo-release-plan).
 Confirm that the exact package and its promised native archives are published
@@ -21,17 +21,18 @@ enable that behavior. `Join-Path` keeps filesystem arguments native on Windows,
 Linux and macOS. Use one installation method:
 
 ```powershell
-$CrpVersion = "0.4.1"
+$CrpVersion = "<published-version>"
 cargo binstall "cargo-release-plan@$CrpVersion" --locked
 ```
 
 Or install the published source with its lockfile:
 
 ```powershell
-$CrpVersion = "0.4.1"
+$CrpVersion = "<published-version>"
 cargo install cargo-release-plan --version "=$CrpVersion" --locked
 ```
 
+Replace `<published-version>` with the exact tool version selected by that action.
 Binstall uses a prebuilt executable where available and can fall back to source.
 A successful fallback is useful installation behavior, but is not proof that a
 promised release archive exists.
@@ -41,16 +42,18 @@ Verify the executable you will actually invoke:
 ```powershell
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
-cargo release-plan --version
+cargo release-plan version
 cargo release-plan --help
 ```
 
-`--version` identifies the application, not the packages in your workspace. It
-works without a Cargo workspace or Git repository.
+`version` prints the application's version and supported schema revisions as JSON,
+without a Cargo workspace or Git repository. The short `--version` identity remains
+available for installation probes.
 
-The matching skill uses report/plan schema `4` and semantic-decision schema `1`.
-Do not assume an arbitrary newer tool preserves those interfaces; update the
-tool, action, documentation and copied skill deliberately.
+The matching skill uses report/plan/prepared schema `5`, semantic-decision and
+compatibility schema `1`, and release-context schema `2`. Exact skill/tool package
+version synchronization is unnecessary; check those schemas. If unexpected CLI
+errors suggest a mismatch, consider upgrading both tool and skill.
 
 ## Separate the toolchains
 

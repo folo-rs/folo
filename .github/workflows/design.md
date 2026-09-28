@@ -300,11 +300,12 @@ tooling maps it to a Cargo increment level or an exact target version. This appl
 workspace as a whole rather than only packages selected by delta analysis: an earlier change can
 remain pending even when the current pull request does not touch that package.
 
-Release state is read from the branch that publishes, not from the branch a pull request
-targets, so a stacked pull request is assessed against the same baseline as any other and a
-parent branch's pending increment is never mistaken for a release. A merge-queue entry is the
-exception: it is assessed against the commit the queue rebased it onto, so its scope matches
-what will actually land.
+Actual release history comes from the publishing branch. A stacked PR also supplies
+its unmerged parent's final snapshot as an anticipated squash release. Extra child
+content needs its own increment; the parent's intermediate version-edit commits do
+not define releases. Existing release-history anchors retain catch-up work from
+unversioned changes. The same distinction applies in a merge queue: grouping PRs
+does not replace their independently assessed version decisions.
 
 Version increments follow Cargo's compatibility rule rather than plain semantic versioning:
 the leftmost non-zero component acts as the major component, so a compatible change to a 0.y

@@ -58,7 +58,7 @@ fn resolved_workspace_enforces_evidence_and_application_boundaries() {
     fixture.commit("released workspace");
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":4,"increments":[{"name":"core","level":"minor"}]}"#,
+        r#"{"schema_version":5,"increments":[{"name":"core","level":"minor"}]}"#,
     );
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let candidate = evidence_manifest(&plan);
