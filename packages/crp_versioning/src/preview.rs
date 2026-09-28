@@ -40,16 +40,6 @@ pub struct Prepared {
 // end-to-end side effects and output belong in integration tests; file admission remains
 // unit-tested by validate_preparation_files. See
 // packages/cargo-release-plan/docs/implementation.md, "Test boundaries".
-#[cfg_attr(test, mutants::skip)]
-pub fn run_prepare(
-    output: &Path,
-    base: Option<&str>,
-    manifest: &Path,
-    verbose: Verbose<'_>,
-) -> Result<String, AppError> {
-    run_prepare_with_target(output, base, None, manifest, verbose)
-}
-
 /// Prepares evidence while freezing actual history and the anticipated predecessor separately.
 #[cfg_attr(test, mutants::skip)] // Real source/resolution acquisition belongs to boundary tests.
 pub fn run_prepare_with_target(

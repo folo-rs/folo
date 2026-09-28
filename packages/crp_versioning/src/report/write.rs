@@ -70,17 +70,6 @@ pub struct ReportGroup {
     pub(crate) version: String,
 }
 
-// Only the Git/Cargo and filesystem adapter wiring is excluded from library mutations.
-#[cfg_attr(test, mutants::skip)]
-pub fn run_report(
-    out_dir: &Path,
-    base: Option<&str>,
-    manifest_path: &Path,
-    verbose: Verbose<'_>,
-) -> Result<String, AppError> {
-    run_report_with_target(out_dir, base, None, manifest_path, verbose)
-}
-
 /// Produces report evidence with a final anticipated predecessor while retaining real history.
 #[cfg_attr(test, mutants::skip)] // Git/Cargo acquisition and file writes require boundary coverage.
 pub fn run_report_with_target(

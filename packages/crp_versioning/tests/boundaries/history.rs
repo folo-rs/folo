@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crp_diag::{Discard, Verbose};
+use crp_diag::{Discard, Stderr, Verbose};
 use crp_versioning::apply::run_apply;
 use crp_versioning::classify::{Classification, PackageClass, PackageStatus, classify_with_target};
 use crp_versioning::expand::run_expand;
@@ -399,6 +399,63 @@ fn already_integrated_targets_are_ordinary_and_divergent_targets_require_rebase(
 
 fn read(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Prepares real offline evidence from the recorded default history ref"
+)]
+fn default_history_preparation_retains_target_and_detects_default_ref_movement() {
+    let fixture = HistoryFixture::new();
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/remotes/origin/stable",
+        &fixture.release_history,
+    ]);
+    fixture.repository.command(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/stable",
+    ]);
+    let output = TempDir::new().unwrap();
+    let prepared = output.path().join("prepared");
+    run_prepare_with_target(
+        &prepared,
+        None,
+        Some("merge-target"),
+        &fixture.manifest(),
+        Verbose::new(true, &Stderr),
+    )
+    .unwrap();
+    let captured = read(&prepared.join("prepared.json"));
+    let inputs: Inputs = serde_json::from_value(captured.get("inputs").unwrap().clone()).unwrap();
+    assert_eq!(inputs.release_history, fixture.release_history);
+    assert_eq!(inputs.release_history_revision, "origin/stable");
+    assert_eq!(
+        inputs.merge_target.as_deref(),
+        Some(fixture.parent_final.as_str())
+    );
+    let report = read_report(&prepared.join("report.json")).unwrap();
+    assert_eq!(
+        report.anticipated_parent_anchor("api").unwrap().commit,
+        fixture.parent_final
+    );
+    let report = read(&prepared.join("report.json"));
+    assert_eq!(
+        report.get("release_history").unwrap(),
+        &fixture.release_history
+    );
+    assert_eq!(report.get("merge_target").unwrap(), &fixture.parent_final);
+    inputs.verify(&fixture.manifest(), None).unwrap();
+
+    // Freezing the default's SHA must not forget the actual ref used to acquire it.
+    fixture.repository.command(&[
+        "update-ref",
+        "refs/remotes/origin/stable",
+        &fixture.parent_final,
+    ]);
+    _ = inputs.verify(&fixture.manifest(), None).unwrap_err();
 }
 
 #[test]
