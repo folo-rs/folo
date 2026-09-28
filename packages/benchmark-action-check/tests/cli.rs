@@ -15,7 +15,7 @@ fn unrelated_release_returns_only_false() {
         let manifest = directory.path().join("release.json");
         fs::write(
             &report,
-            r#"{"schema_version":4,"packages":[{"name":"unrelated","status":"pending-release"}]}"#,
+            r#"{"schema_version":5,"packages":[{"name":"unrelated","status":"pending-release"}]}"#,
         )
         .unwrap();
         fs::write(
@@ -42,7 +42,7 @@ fn empty_release_does_not_require_a_manifest() {
     with_watchdog(|| {
         let directory = TempDir::new().unwrap();
         let report = directory.path().join("report.json");
-        fs::write(&report, r#"{"schema_version":4,"packages":[]}"#).unwrap();
+        fs::write(&report, r#"{"schema_version":5,"packages":[]}"#).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_benchmark-action-check"))
             .arg("--report")
             .arg(&report)
@@ -64,7 +64,7 @@ fn a_pinned_release_returns_true_and_malformed_input_is_an_error() {
         let manifest = directory.path().join("proposed action manifest.json");
         fs::write(
             &report,
-            r#"{"schema_version":4,"packages":[{"name":"new-tool","status":"pending-release"}]}"#,
+            r#"{"schema_version":5,"packages":[{"name":"new-tool","status":"pending-release"}]}"#,
         )
         .unwrap();
         fs::write(

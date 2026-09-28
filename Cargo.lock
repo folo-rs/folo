@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-release-plan"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "clap",
  "crp_diag",
@@ -1200,7 +1200,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crp_diag"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "mutants",
  "static_assertions",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "crp_native"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "command-group",
  "criterion",
@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "crp_publication"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crp_diag",
  "crp_native",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "crp_versioning"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "crp_workspace"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "crp_diag",
@@ -3385,7 +3385,7 @@ dependencies = [
 
 [[package]]
 name = "release-binaries"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crp_diag",
  "crp_publication",
@@ -3399,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "release-target-check"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crp_diag",
  "crp_publication",
