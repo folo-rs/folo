@@ -21,6 +21,10 @@ the code and versions together; merging starts publication without another
 version-selection step. The normal workflow uses squash merges so the PR's final
 content and versions enter release history together.
 
+For version changes without publishing integration, use
+[standalone planning](integration/standalone.md). That scenario ends with the
+version-increment PR being reviewed and merged; publishing is not part of it.
+
 ## Who this fits
 
 The supported publication path is a Cargo workspace releasing to crates.io and

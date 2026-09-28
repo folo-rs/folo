@@ -1,15 +1,23 @@
 # Scope
 
-Prepare the version changes for one pull request in a repository that uses the
-cargo-release-plan toolkit for publication. Confirm that adoption from the
-repository's instructions or publishing workflow before proceeding; a globally
-installed skill must not operate on an unrelated repository.
+Prepare the version changes for one pull request. Use configured mode in a
+repository adopting the cargo-release-plan publishing toolkit, or standalone mode
+when the user explicitly requests a one-off version-increment PR. Do not treat a
+missing configuration as permission to run in an unrelated repository.
+Do not switch modes to bypass a failed configured check. In a repository that
+publishes on merge, an explicit standalone request does not disable that behavior
+or waive its required CI gates; make the existing merge behavior clear to the user.
 
 The skill assesses released changes, chooses semantic decisions, previews their
 dependency effects and applies the resulting version plan. Review of the complete
 pull request approves the result; do not introduce a separate approval pause for
 version choices. This skill does not authorize merging, publication, tag creation
 or Trusted Publisher administration.
+
+Standalone mode ends with the version-increment PR merged under the repository's
+review and merge policy; publishing after that is outside its scope. Completing
+the skill does not itself grant merge permission. The shared workflow remains the
+canonical supported publishing path.
 
 The CLI, this skill and the reusable GitHub workflows form one toolkit. The
 [public guide](https://folo-rs.github.io/folo/cargo-release-plan/) explains adoption.
@@ -25,8 +33,8 @@ requires GitHub CLI authentication.
 
 Check the schema revisions reported by `cargo release-plan version` before
 modifying source. This skill consumes plan/report/prepared schema `5`,
-semantic-decision schema `1`, compatibility schema `1` and release-context schema
-`2`. Matching package version numbers are not a prerequisite.
+semantic-decision schema `1` and compatibility schema `1`. Configured mode also
+consumes release-context schema `2`. Matching package version numbers are not a prerequisite.
 
 If schemas differ, update the installed skill from the complete
 [canonical skill directory](https://github.com/folo-rs/folo/tree/main/.github/skills/increment-versions),
@@ -39,8 +47,14 @@ changes before restarting; an upgrade is not permission to repeat a failed write
 If the updated skill still does not support the tool's schemas, stop and report
 the mismatch rather than repeatedly copying the same revision.
 
-Run in the selected Cargo workspace with its working-tree
-`.cargo/release_plan.toml`, or an explicit configuration override. Existing tracked
+In configured mode, use the selected workspace's working-tree
+`.cargo/release_plan.toml`, or an explicit configuration override. In standalone
+mode, obtain the selected workspace, local release-history ref and optional
+parent target ref from the user or explicit task context. Ask for missing inputs;
+do not guess them from a publishing setup the repository does not have. No
+configuration file, publishing workflow or GitHub remote is required.
+
+Existing tracked
 files may have staged or unstaged edits; a clean checkout or prior commit is not
 required. Newly created release inputs must be tracked before assessment. Stage
 those specific paths without disturbing unrelated changes, then collect fresh
@@ -93,7 +107,9 @@ before executing each numbered stage below.
 Choose new absolute evidence directories outside the repository or under an
 already ignored location. The tool writes reports, patches, plans and supporting
 files there. Do not edit these generated files manually. The semantic
-`decisions.json` is the agent-authored input. Keep all working evidence out of commits.
+`decisions.json` is the agent-authored input. Standalone mode also records the
+user-selected refs and their resolved commit IDs as a small handoff note, not as
+tool-generated publication context. Keep all working evidence out of commits.
 
 Every compatibility output directory must be new. When repeating a stage, choose
 new destinations and retain earlier evidence. Record diagnostics as they occur;
@@ -102,16 +118,23 @@ missing or malformed output is never an empty successful plan.
 # Stage 1: Check prerequisites and select history
 
 Follow [initialization](commands.md#stage-1-check-prerequisites-and-select-history).
-Require matching schemas and a named non-release branch. For a stacked PR, obtain
+Require matching schemas and a named feature branch. For a stacked PR, obtain
 its actual target branch/ref from the PR or established session context; do not
 silently substitute the repository's release branch.
+In standalone mode, confirm that the named branch is the work branch for the
+version-increment PR, not the branch it will merge into. Ask when that role is
+unclear; a commit ID alone does not identify the intended merge branch.
 
-Read the repository, release branch, `release_history` and optional `merge_target`
-from the generated context. Use those exact commits throughout this assessment.
-Keep the supplied target ref as well so refresh can detect parent movement.
+In configured mode, read `release_history` and optional `merge_target` from the
+generated context. In standalone mode, resolve the user-selected refs locally
+with Git and supply the resulting commits through the existing planning options.
+Keep the original refs for refresh before application. Do not create a dummy
+publishing configuration or call `release-context` in standalone mode.
 
-Run advisory workspace registry discovery. Record every missing or indeterminate
-package and continue assessment; the later plan-scoped gate is mandatory.
+Configured mode runs advisory workspace registry discovery and later requires
+the plan-scoped publication gate. Standalone mode skips both: registry readiness
+and Trusted Publisher setup are not prerequisites for a version-increment PR.
+API comparisons remain separate evidence and can still read published crates.
 
 # Stage 2: Prepare complete evidence
 
@@ -171,6 +194,7 @@ inventing a published predecessor. State explicitly when nothing is to release.
 
 ## First-publication handoff
 
+This handoff applies to configured publication, not standalone version planning.
 For packages with no comparison anchor, record the known registry state, bootstrap
 version and higher first automated-release version. A maintainer bootstraps the
 registry identities before first merge and configures Trusted Publishing.
@@ -181,8 +205,8 @@ Do not publish from this skill or infer registry absence from Git history.
 
 Follow [application](commands.md#stage-6-refresh-and-apply).
 Refresh the selected release history and target ref. If either changed, use the
-recovery procedure below. Require the plan-scoped registry gate to pass for every
-publishable target.
+recovery procedure below. Configured mode requires the plan-scoped registry gate;
+standalone mode refreshes its user-selected refs without a publication gate.
 
 Preserve the pre-application file state and identify the versioning-only delta.
 Apply the resolved artifact unchanged, without another approval prompt. Inspect
@@ -191,15 +215,22 @@ and report any partial I/O failure before further planning.
 # Stage 7: Verify and hand off
 
 Follow [verification](commands.md#stage-7-verify-and-hand-off).
-Require complete fresh compatibility evidence and a passing configured check.
+Require complete fresh compatibility evidence and a passing version-readiness check.
+Configured mode also checks publication inputs through `--config`; standalone
+mode omits that option.
 Verify every decision and resolved target against the fresh report. Preserve the
 original assessment and account for all intended tracked release inputs.
 
 Commit the intended source/version/requirement/lockfile changes and keep the PR's
 release plan current. Follow repository-specific post-version instructions.
-Summarize substantive decisions, incomplete comparisons, first-publication work,
+Summarize substantive decisions, incomplete comparisons, applicable first-publication work,
 excluded untracked paths and execution blockers. When posting on GitHub, put
 execution diagnostics in a collapsible section rather than the release table.
+
+Present the standalone result as a version-increment PR for normal review and
+merge. Await or perform that merge only under the caller's separate authorization.
+The standalone scenario ends there; do not add publishing setup or instructions
+for manually invoking publication commands.
 
 # Recovery
 

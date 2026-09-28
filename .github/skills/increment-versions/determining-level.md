@@ -124,9 +124,14 @@ own released changes and choose no increment when it has none. Do not assess sou
 
 A publishable package in `report.json.packages` that has no anchor has no comparison release
 for this assessment. Do not assign a semantic decision merely because it is new to the release
-branch, and do not infer that it has never reached crates.io. Follow the
+branch, and do not infer that it has never reached crates.io. Configured mode follows the
 [first-publication handoff](SKILL.md#first-publication-handoff): a maintainer manually
 publishes its bootstrap version before the first merge and configures Trusted Publishing.
 The first merge must carry a higher version for the second publication, the first automated
 one. Record that bootstrap and intended automated-release version separately from Git anchors;
 version-group expansion may supply the required increase.
+
+Standalone mode has no bootstrap or Trusted Publisher prerequisite. Retain a new
+package's intended initial version unless the assessed plan's group/dependency
+effects require movement, and record the absence of a comparison anchor in the
+version-increment PR. Publication after that PR is outside the standalone workflow.

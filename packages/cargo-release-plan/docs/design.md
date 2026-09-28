@@ -19,6 +19,11 @@ not separately configured release tools. A reusable GitHub Action and workflows
 expose these operations to other repositories without requiring a Folo checkout
 or repository-local release scripts.
 
+Version planning also supports an explicitly requested standalone run. The user
+supplies the workspace, release-history ref and optional merge target instead of
+a publication configuration. The same assessment and application operations
+prepare a version-increment PR without adopting publishing workflows.
+
 The product is a command-line application, not a Rust library API. Its supported
 interfaces are the CLI and documented configuration and artifact formats.
 Library targets in the application and its implementation packages exist only for executable
@@ -130,6 +135,12 @@ repairs a manifest or refreshes the committed dependency resolution. Preparation
 of a publication is an automatic execution step, not a second human release gate.
 
 ### Scope
+
+Standalone version planning ends with the reviewed version-increment PR being
+merged under the repository's normal authorization policy. It requires neither
+`release_plan.toml` nor registry bootstrap, Trusted Publisher setup or workflow
+installation. Publishing is outside this mode; the reusable workflow remains the
+canonical supported publication path.
 
 The supported publication path is Cargo workspaces following this version model,
 crates.io through Trusted Publishing, and GitHub tags, releases and native binary
@@ -314,6 +325,28 @@ uses that state without a late dependency refresh or unlisted version targets.
 Changed inputs require fresh preparation and assessment.
 
 ## Commands
+
+### Standalone planning
+
+The skill has a configured mode and an explicitly requested standalone mode.
+Configured mode reads publication configuration and retains its publication
+readiness gates. Standalone mode takes the selected Cargo workspace, actual
+release-history ref and any anticipated parent ref from the user or the user's
+explicitly supplied task context. It must not infer permission to operate on an
+unrelated repository merely because configuration is missing.
+
+Standalone planning passes resolved commits through `--release-history` and
+`--merge-target`; it does not synthesize publishing configuration or call
+`release-context`. The original refs are retained for refresh before application.
+Preparation, semantic decisions, dependency/group expansion, preview and captured
+application keep their ordinary contracts. The final version-readiness check
+omits `--config`, so binary publication metadata is not a prerequisite.
+
+Registry identity checks and the managed first-publication handoff belong to
+configured publication, not to standalone version edits. API compatibility
+comparison remains separate evidence: its historical comparison can still read
+crates.io, and an unavailable comparison does not establish compatibility.
+Standalone operation does not add a different registry or publishing backend.
 
 ### Produce evidence for versioning decisions with `report`
 

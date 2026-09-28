@@ -3,6 +3,10 @@
 Local planning is preparation for review, not permission to merge or publish.
 The same workflow works when performed by a maintainer or guided by an agent.
 
+This chapter uses the repository's publishing configuration. For an explicitly
+requested one-off PR without that configuration or shared workflows, use
+[standalone planning](standalone.md) and supply the history inputs directly.
+
 ## Prerequisites
 
 Use compatible tool and skill schemas: report/plan/prepared `5`, semantic

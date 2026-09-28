@@ -34,6 +34,7 @@ mod preview_safety;
 mod propose;
 mod publication;
 mod report;
+mod standalone;
 mod status;
 
 ::testing::set_allocator!();

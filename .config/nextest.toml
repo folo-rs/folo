@@ -42,10 +42,10 @@ filter = 'package(crp_workspace) & binary(boundaries) & test(snapshot)'
 platform = 'cfg(windows)'
 test-group = 'release-source-io-windows'
 
-# Compatibility repeatedly captures Git/Cargo source and acquires parent worktrees.
+# Compatibility and complete standalone planning repeatedly acquire Git/Cargo source.
 # Share the existing I/O slot so concurrent source checks cannot starve its watchdog.
 [[profile.default.overrides]]
-filter = 'package(cargo-release-plan) & binary(integration) & test(compatibility::)'
+filter = 'package(cargo-release-plan) & binary(integration) & (test(compatibility::) | test(standalone::))'
 platform = 'cfg(windows)'
 test-group = 'release-source-io-windows'
 

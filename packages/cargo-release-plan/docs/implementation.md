@@ -76,6 +76,17 @@ The application supplies its compiled version to publication producer and HTTP
 adapter wiring, independently of component bootstrap versions. Installation
 checks do not need to inspect a consumer repository to identify the executable.
 
+## Standalone planning
+
+Standalone use follows the existing explicit-history preparation, preview,
+application and check paths. These operations have no publication-configuration
+acquisition dependency. The skill selects whether to acquire configured context
+and publication prerequisites or use the user's local history/target refs.
+No additional tool mode, configuration schema or publication adapter is needed.
+Executable integration coverage runs the complete versioning sequence without a
+configuration, remote, publishing metadata or workflow and verifies the final
+squashed version/content state.
+
 ## Publication preparation
 
 The publication subject validates committed policy independently of remote state.

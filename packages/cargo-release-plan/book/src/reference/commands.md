@@ -50,6 +50,10 @@ With `--config`, it also validates publication inputs offline.
 
 Ordinary assessment uses Git and `cargo metadata --no-deps`: it does not fetch,
 contact crates.io, resolve dependencies or compile.
+`report`, `prepare`, `preview`, `apply` and unconfigured `check` do not require
+`release_plan.toml` or workflow integration. The
+[standalone workflow](../integration/standalone.md) supplies history/target inputs
+explicitly and stops at the version-increment PR.
 
 `--verify-packaging` is an explicit audit against `cargo package --list`.
 Divergences are warnings rather than changes to the verdict. This probe performs

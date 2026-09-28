@@ -8,13 +8,15 @@ writes before retrying a failed stage.
 | Placeholder | Meaning |
 | --- | --- |
 | `TOOL` | Installed `cargo-release-plan` executable or the selected tested source-built executable. |
+| `MODE` | `configured` for toolkit publication, or `standalone` for an explicitly requested one-off version-increment PR. |
 | `MANIFEST` | Absolute path to the selected workspace's `Cargo.toml`. |
-| `CONFIG` | Publication configuration path; relative paths start at the selected workspace. |
+| `CONFIG` | Configured mode only: publication configuration path, relative to the selected workspace. Leave empty in standalone mode. |
+| `HISTORY_REF` | Standalone mode only: user-selected local ref or commit delimiting actual release history. |
 | `WORK_DIR` | New absolute ignored or external directory for assessment evidence. |
 | `VERIFY_DIR` | Separate new absolute ignored or external directory for final verification; do not create it manually. |
 | `MERGE_TARGET_REF` | Unmerged parent PR's actual target ref, or an empty string for release-branch assessment. |
-| `HISTORY_COMMIT` | Full `release_history` commit from the initial context. |
-| `TARGET_COMMIT` | Full `merge_target` commit from context, or an empty string when null. |
+| `HISTORY_COMMIT` | Full history commit from configured context or the standalone input record. |
+| `TARGET_COMMIT` | Full target commit from the selected initialization path, or an empty string when absent. |
 | `PACKAGE` | Package name from a report entry. |
 | `DIFF_PATH` | That entry's `diff_path`: the generated patch filename relative to the directory containing `report.json`; absent when there is no file patch. |
 
@@ -37,8 +39,10 @@ or an existing ignored location instead. Do not run these checks for external pa
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
+if ("{{MODE}}" -notin @("configured", "standalone")) { throw "Select an explicit planning mode." }
 $Identity = & "{{TOOL}}" version | ConvertFrom-Json
-$Expected = @{ plan = 5; report = 5; prepared = 5; decisions = 1; compatibility = 1; release_context = 2 }
+$Expected = @{ plan = 5; report = 5; prepared = 5; decisions = 1; compatibility = 1 }
+if ("{{MODE}}" -eq "configured") { $Expected.release_context = 2 }
 foreach ($Name in $Expected.Keys) {
     if ($Identity.schemas.$Name -ne $Expected[$Name]) {
         throw "Unsupported $Name schema; follow the skill upgrade instructions."
@@ -47,6 +51,17 @@ foreach ($Name in $Expected.Keys) {
 Get-Command cargo-semver-checks -ErrorAction Stop | Out-Null
 $Branch = (git symbolic-ref --quiet --short HEAD).Trim()
 New-Item -ItemType Directory -Path "{{WORK_DIR}}" | Out-Null
+```
+
+Run exactly one initialization path below.
+
+### Configured initialization
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$Branch = (git symbolic-ref --quiet --short HEAD).Trim()
 $TargetArguments = @()
 if (-not [string]::IsNullOrWhiteSpace("{{MERGE_TARGET_REF}}")) {
     $TargetArguments = @("--merge-target", "{{MERGE_TARGET_REF}}")
@@ -57,12 +72,10 @@ $Context = Get-Content -LiteralPath "{{WORK_DIR}}\context.json" -Raw | ConvertFr
 if ($Branch -eq $Context.release_branch) { throw "Run version planning on a feature branch." }
 ```
 
-The version query requires no repository and reports schema revisions, not a
-permission to ignore later command failures. Use context's full history/target
-commit IDs as `HISTORY_COMMIT` and `TARGET_COMMIT`. Record the original target ref
-for Stage 6.
+Use context's full history/target commit IDs as `HISTORY_COMMIT` and `TARGET_COMMIT`.
+Record the original target ref for Stage 6.
 
-Advisory registry discovery uses its own explicit error handling:
+Only configured mode performs advisory registry discovery:
 
 ```powershell
 Set-StrictMode -Version Latest
@@ -73,6 +86,41 @@ if ($LASTEXITCODE -ne 0) {
     Write-Warning "Registry discovery was incomplete. Retain its diagnostics and assess the reported packages."
 }
 ```
+
+### Standalone initialization
+
+The user supplies the local history ref and, for a stack, the parent target ref.
+Fetch those refs beforehand only if the user requests a remote refresh. Do not
+invent a GitHub repository, workflow, publication configuration or registry setup.
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$Workspace = Split-Path -Parent "{{MANIFEST}}"
+$HistoryRef = "{{HISTORY_REF}}"
+if ([string]::IsNullOrWhiteSpace($HistoryRef)) { throw "Supply the user's release-history ref." }
+$TargetRef = "{{MERGE_TARGET_REF}}"
+$HistoryCommit = (git -C $Workspace rev-parse --verify --end-of-options "$HistoryRef^{commit}").Trim()
+$TargetCommit = $null
+if (-not [string]::IsNullOrWhiteSpace($TargetRef)) {
+    $TargetCommit = (git -C $Workspace rev-parse --verify --end-of-options "$TargetRef^{commit}").Trim()
+}
+[ordered]@{
+    release_history_ref = $HistoryRef
+    release_history = $HistoryCommit
+    merge_target_ref = $TargetRef
+    merge_target = $TargetCommit
+} | ConvertTo-Json | Set-Content -LiteralPath "{{WORK_DIR}}\standalone-inputs.json"
+```
+
+Use the resolved values as `HISTORY_COMMIT` and `TARGET_COMMIT`. The input record
+is an agent-authored handoff of the user's selections, not a publication config or
+tool context artifact. Preparation validates the selected history/target relation.
+Do not run `release-context` or `check-published` in this mode. The version query
+and schema checks above still apply.
+Confirm that the named checkout branch is the intended PR work branch before
+preparation; do not apply directly to its destination branch.
 
 ## Stage 2: Prepare complete evidence
 
@@ -145,6 +193,11 @@ preview and compatibility output directories; do not overwrite retained evidence
 
 ## Stage 6: Refresh and apply
 
+Preserve the pre-application file state, then execute the matching mode's complete
+refresh-and-apply block. Do not resume at `apply` alone after a failed refresh or gate.
+
+### Configured refresh
+
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -166,9 +219,32 @@ if ($Original.release_history -cne $Current.release_history -or
 & "{{TOOL}}" apply --manifest-path "{{MANIFEST}}" --plan "{{WORK_DIR}}\preview\plan.json" --verbose
 ```
 
-Preserve pre-application file contents before the `apply` command. Only a successful
-plan-scoped registry check permits application; missing or unknown identities are
-explicit first-publication or access blockers.
+Only a successful plan-scoped registry check permits configured application;
+missing or unknown identities are first-publication or access blockers.
+
+### Standalone refresh
+
+```powershell
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$Workspace = Split-Path -Parent "{{MANIFEST}}"
+$Original = Get-Content -LiteralPath "{{WORK_DIR}}\standalone-inputs.json" -Raw | ConvertFrom-Json
+$HistoryRef = $Original.release_history_ref
+$CurrentHistory = (git -C $Workspace rev-parse --verify --end-of-options "$HistoryRef^{commit}").Trim()
+$CurrentTarget = $null
+if (-not [string]::IsNullOrWhiteSpace($Original.merge_target_ref)) {
+    $TargetRef = $Original.merge_target_ref
+    $CurrentTarget = (git -C $Workspace rev-parse --verify --end-of-options "$TargetRef^{commit}").Trim()
+}
+if ($Original.release_history -cne $CurrentHistory -or
+    $Original.merge_target -cne $CurrentTarget) {
+    throw "User-selected history or target moved; restart assessment."
+}
+& "{{TOOL}}" apply --manifest-path "{{MANIFEST}}" --plan "{{WORK_DIR}}\preview\plan.json" --verbose
+```
+
+No publication-readiness gate is added to standalone version edits.
 
 ## Stage 7: Verify and hand off
 
@@ -176,6 +252,12 @@ explicit first-publication or access blockers.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
+$ConfigArguments = @()
+switch ("{{MODE}}") {
+    "configured" { $ConfigArguments = @("--config", "{{CONFIG}}") }
+    "standalone" {}
+    default { throw "Select an explicit planning mode." }
+}
 $TargetArguments = @()
 if (-not [string]::IsNullOrWhiteSpace("{{TARGET_COMMIT}}")) {
     $TargetArguments = @("--merge-target", "{{TARGET_COMMIT}}")
@@ -184,10 +266,13 @@ cargo metadata --manifest-path "{{MANIFEST}}" --locked --format-version 1 > $nul
 & "{{TOOL}}" check-compatibility --manifest-path "{{MANIFEST}}" `
     --release-history "{{HISTORY_COMMIT}}" @TargetArguments --output "{{VERIFY_DIR}}" --verbose
 & "{{TOOL}}" check --manifest-path "{{MANIFEST}}" --release-history "{{HISTORY_COMMIT}}" `
-    @TargetArguments --config "{{CONFIG}}" --format github --verbose
+    @TargetArguments @ConfigArguments --format github --verbose
 ```
 
 Read `VERIFY_DIR\report.json` and completed compatibility evidence, verify all
 decisions and resolved targets, and confirm that intended release inputs are
 tracked. The metadata exit status verifies the lockfile; its JSON is not a second
-assessment report. Keep the reviewed release plan and handoff current.
+assessment report. Keep the reviewed release plan and handoff current. Standalone
+verification does not validate binary publication metadata or require registry
+bootstrap. Present its version-increment PR for normal review and authorized merge;
+do not continue into publication commands.

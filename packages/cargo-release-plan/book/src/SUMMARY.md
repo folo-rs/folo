@@ -15,6 +15,7 @@
 - [Install and inspect](integration/installation.md)
 - [Configure your repository](integration/repository.md)
 - [Adopt local version planning](integration/local-planning.md)
+- [One-off version increments](integration/standalone.md)
 - [Add GitHub checks](integration/github-checks.md)
 - [Connect publication](integration/publication.md)
 
