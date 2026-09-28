@@ -58,8 +58,3 @@ Candidate policy consumes workspace facts and the typed versioning check result,
 not application command dispatch. Production entry points select concrete adapters;
 unit tests inject narrow observation and action interfaces. Real HTTP/Git/Cargo and delivery-adapter
 behavior belongs to boundary tests, never production registry or GitHub writes.
-
-The `legacy` module adapts the private `release-binaries` and `release-target-check` protocols to these same
-publication and native capabilities. It owns their compatibility command and
-batch translation, not another release-policy or execution implementation.
-See the application architecture for the selected workflow's adapter ownership.

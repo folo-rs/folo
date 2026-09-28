@@ -92,7 +92,7 @@ Describe 'Library-only mutation discovery' -Skip:([Runtime.InteropServices.Runti
         @($after | Where-Object { $_.file -match $binaryPattern }).Count | Should -Be 0
         @($after.name | Sort-Object) | Should -Be @($libraryMutants.name | Sort-Object)
 
-        $packages = @('cargo-bench-history-stress', 'cargo-release-plan', 'release-binaries', 'release-target-check')
+        $packages = @('cargo-bench-history-stress', 'cargo-release-plan')
         if ($IsWindows) { $packages += 'dure' }
         foreach ($packageName in $packages) {
             # Every executable keeps its own non-binary adapter behavior mutation-selected.

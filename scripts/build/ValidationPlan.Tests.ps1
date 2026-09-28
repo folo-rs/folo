@@ -193,7 +193,7 @@ Describe 'Caller integration selection' {
 
 Describe 'Cargo helper integration selection' {
     It 'adds release tests for affected helper <_>' -ForEach @(
-        'cargo-release-plan', 'release-target-check', 'release-binaries'
+        'cargo-release-plan'
     ) {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('scripts/book/BookSite.psm1'))
         $packages = ConvertTo-Json -InputObject @($_) -Compress
@@ -230,7 +230,7 @@ Describe 'Cargo helper integration selection' {
 Describe 'Release binary smoke selection' {
     It 'selects the release binary smoke for release adapter and shared setup inputs' -ForEach @(
         '.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just',
-        'scripts/release/ReleaseBinaries.psm1',
+        '.cargo/release_plan.toml',
         'scripts/setup/RustToolchain.psm1', 'scripts/build/RequiredChecks.psm1',
         '.cargo/config.toml'
     ) {
@@ -240,15 +240,15 @@ Describe 'Release binary smoke selection' {
 
     It 'selects helper dependency impact without unrelated Cargo impact' {
         $plan = ConvertTo-PlanJson (Get-ValidationPlan -ChangedPath @('Cargo.lock'))
-        foreach ($packageName in @('cargo-release-plan', 'release-binaries')) {
+        foreach ($packageName in @('cargo-release-plan')) {
             $packages = ConvertTo-Json -InputObject @($packageName) -Compress
             Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson $packages | Should -BeTrue
         }
         # A private implementation change arrives with its affected executable consumers.
-        $closure = '["crp_native","crp_publication","cargo-release-plan","release-binaries","release-target-check"]'
+        $closure = '["crp_native","crp_publication","cargo-release-plan"]'
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson $closure | Should -BeTrue
         @(Get-ValidationScriptDomain -PlanJson $plan -AffectedPackageJson $closure) | Should -Be @('release')
-        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["release-target-check"]' | Should -BeFalse
+        Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["crp_native","crp_publication"]' | Should -BeFalse
         Test-ReleaseBinarySmokeSelected -PlanJson $plan -AffectedPackageJson '["events_once"]' | Should -BeFalse
     }
 

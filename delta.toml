@@ -21,7 +21,7 @@ file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 #     the whole workspace, so a change flips `cargo fmt --check` pass/fail for every crate.
 #
 # Everything else is deliberately NOT a trip wire. Workflow definitions (`.github/**`), the build
-# system (`justfile`, `justfiles/**`), release configuration (`release-plz.toml`) and delta's own
+# system (`justfile`, `justfiles/**`), release configuration (`.cargo/release_plan.toml`) and delta's own
 # config (`delta.toml`) do not change any crate's build/test correctness. A change that breaks the
 # *mechanism* fails the PR's own jobs (which run those very workflows and recipes), so it never
 # passes silently; and the rare correctness impact that dependency analysis cannot see is caught by

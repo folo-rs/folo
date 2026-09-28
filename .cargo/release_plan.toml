@@ -6,8 +6,8 @@ repository = "folo-rs/folo"
 # Ref: docs/release-versioning.md, The invariant.
 release-branch = "main"
 # Select the supported native targets with provisioned runners.
-# Keep the legacy runner table aligned while it is used by release.yml.
-# Ref: docs/release-automation.md, Target selection; Get-ReleaseTarget in ReleaseAutomation.psm1.
+# The shared action owns runner assignments.
+# Ref: docs/release-automation.md, Target selection.
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",

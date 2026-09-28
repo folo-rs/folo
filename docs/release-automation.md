@@ -13,10 +13,14 @@ the publisher identity. Registry jobs use OIDC, GitHub reconciliation/binary job
 use the workflow's `GITHUB_TOKEN` with `contents: write`; failure reporting needs
 `issues: write`.
 
-The workflow implementation and compatibility entry points are described in
+Folo invokes the immutable shared `release.yml` with `install-method: path` and
+`source-path: .`; registry, GitHub, native execution and reporting stay in that graph.
+The workflow implementation and shared entry points are described in
 [the workflow implementation guide](../.github/workflows/implementation.md).
 The invocation checkout at the workflow event SHA supplies the release controller;
 binary builds use separate immutable source worktrees at the peeled package-tag commits.
+The optional `source` dispatch input is a full original publication-source SHA for
+recovery, not an override of the controller revision.
 
 Publication runs are not cancelled when another merge arrives. A failed run
 retains its original requests and is retried rather than replacing them with the
@@ -46,11 +50,12 @@ published tag and asset identities.
 ## Failure recovery
 
 Follow the [recovery guide](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html).
-The selected publisher's diagnostics and original workflow run identify the
-recovery work. The unified publication report additionally retains the exact
-missing tag and original publication source for superseded-version recovery.
+The shared publication report retains the original workflow run, exact missing tag
+and original publication source for superseded-version recovery.
 An operator creates only that missing tag with appropriate rights, then retries
 the original failed workflow. Existing tags remain unchanged.
+Independent valid native batches still run when another package cannot be reconciled;
+the overall workflow fails and posts an operator issue.
 
 Other successfully published packages and archive pairs remain in place.
 The original workflow artifacts are required for ordinary failed-job retry;

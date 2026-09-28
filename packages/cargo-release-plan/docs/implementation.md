@@ -232,15 +232,6 @@ unit tested in the component; real filesystem and process behavior belongs in it
 boundary tests, and executable-connected contracts belong in the application's
 native integration suite.
 
-Folo's `release.yml` also uses the nonpublished `release-binaries`
-and `release-target-check` executables. Their private command protocols are
-adapted by `crp_publication::legacy`, reusing the same native executor, publication
-operations and typed candidate verifier. They are legacy workflow adapters, not
-API compatibility checkers or a second release engine. Wrapper-connected tests
-belong beside those executables; the owning
-[workflow guide](../../../.github/workflows/implementation.md#release-publication)
-describes their invocation.
-
 The controller repository supplies Git objects and the shared target directory,
 while each release tag selects a disposable immutable source worktree.
 Missing objects are fetched by exact commit from the configured GitHub repository;

@@ -83,9 +83,8 @@ Repository instructions and workflow callers select Folo policy rather than
 reimplementing that behavior. Keep the shared action revision immutable and
 validated. Preserve the registered `release.yml` caller and its publication
 authorization boundary; source-mode checks do not authorize a live release.
-Keep the selected legacy publisher and its nonpublished command adapters operational
-until the separately authorized cutover. Do not replace their private JSON with
-unified publication manifests merely to remove adapter code.
+Use the unified application's publication operations and manifest-linked batches.
+Do not introduce repository-local publication policy or alternate command adapters.
 
 Keep every application-family library target marked `private-api = true` with library documentation
 disabled. Assess the CLI and artifact contracts defined in `docs/design.md`,

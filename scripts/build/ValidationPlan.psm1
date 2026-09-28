@@ -128,7 +128,7 @@ function Get-ValidationPlan {
             $null = $domains.Add('build')
             Write-Verbose "'$path' configures build/check execution; selecting build-helper tests."
         }
-        if ($path -ceq 'release-plz.toml') {
+        if ($path -ceq '.cargo/release_plan.toml') {
             $null = $domains.Add('release')
             Write-Verbose "'$path' configures release automation; selecting release tests."
         }
@@ -137,8 +137,7 @@ function Get-ValidationPlan {
             $null = $domains.Add('release')
             Write-Verbose "'$path' supplies the release workflow or its native executable boundary; selecting release tests."
         }
-        if ($path -cin @('.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just') -or
-            $path -cmatch '^scripts/release/(ReleaseBinaries|ReleasePublication|ReleaseAutomation)(\.Tests)?\.ps(m1|1)$' -or
+        if ($path -cin @('.github/workflows/release.yml', '.github/workflows/standard-validation.yml', 'justfiles/just_release.just', '.cargo/release_plan.toml') -or
             $path -cmatch '^scripts/build/CargoExecutable\.(psm1|Tests\.ps1)$' -or
             $path -cmatch '^\.cargo/config(\.toml)?$') {
             $releaseBinarySmoke = $true
@@ -218,7 +217,7 @@ function Get-ValidationScriptDomain {
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     $domains = @($plan.script_domains)
     foreach ($package in $packages) {
-        if ($package -cin @('cargo-release-plan', 'release-target-check', 'release-binaries')) {
+        if ($package -ceq 'cargo-release-plan') {
             $domains += 'release'
             Write-Verbose "Cargo delta selected '$package'; selecting its release verification tests."
         }
@@ -233,7 +232,7 @@ function Test-ReleaseBinarySmokeSelected {
     # Path selection covers the native adapters; Cargo delta covers helper dependency changes.
     # Both prepare and the required-checks fan-in use this same union.
     # Cargo delta already supplies transitive affected consumers, so private partitions need
-    # no separate inventory. The candidate-only wrapper does not own native binary smoke.
+    # no separate inventory.
     # Ref: .github/workflows/implementation.md#release-binary-batches.
     [CmdletBinding()]
     [OutputType([bool])]
@@ -245,7 +244,7 @@ function Test-ReleaseBinarySmokeSelected {
     $plan = Read-ValidationPlan -Json $PlanJson
     $packages = @(Read-ValidationAffectedPackage -Json $AffectedPackageJson)
     return $plan.release_binary_smoke -or @($packages | Where-Object {
-        $_ -cin @('cargo-release-plan', 'release-binaries')
+        $_ -ceq 'cargo-release-plan'
     }).Count -gt 0
 }
 

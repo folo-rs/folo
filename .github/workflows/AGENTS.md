@@ -41,7 +41,8 @@ high-level design in `design.md` and per-job mechanics in inline YAML comments.
   native-helper impact comes from Cargo delta and is unioned with path-selected domains.
   New test domains must join the full-suite selection. Preserve full tooling validation on
   pushes to `main`, and update the planner/fan-in tests when selection changes.
-- Keep `validate-versions` unconditional, including its live binstall metadata and SemVer checks.
+- Keep the shared `validate-versions` call unconditional, including its publication metadata
+  and scoped compatibility checks.
   It generates release state for every publishable package against its version anchor, so the
   PR's changed package set cannot skip a package that already needed an increment.
 - Use sequential steps for checks sharing a validation job. Give independent checks an explicit

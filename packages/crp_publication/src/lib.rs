@@ -15,7 +15,6 @@ pub(crate) use errors::*;
 pub use output::PublicationOutput;
 
 mod errors;
-pub mod legacy;
 mod output;
 pub mod publication;
 

@@ -42,8 +42,8 @@ asking - including as a smoke test of a new Callgrind benchmark.
 We generally prefer using Just commands over raw Cargo commands if there is a
 suitable Just command defined in one of the `*.just` files.
 
-Do **not** execute `just gh-release` — it performs real crates.io publishes and is
-a CI-only entry point (driven by the release workflow); never run it manually.
+Do **not** invoke mutating `cargo release-plan publish` commands without explicit
+publication authorization. Ordinary development and validation do not grant it.
 
 Do **not** use VS Code tasks, relying instead on `just` and, if necessary, `cargo`
 commands.

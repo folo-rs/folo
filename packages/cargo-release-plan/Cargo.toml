@@ -3,7 +3,7 @@
 name = "cargo-release-plan"
 description = "Plan workspace releases and publish captured exact versions to crates.io and GitHub"
 publish = true
-version = "0.5.0"
+version = "0.5.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -31,7 +31,7 @@ allowed_external_types = [
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml, and these
 # keys must resolve to exactly the assets that workflow uploads: cargo-binstall
-# cannot derive them, because release-plz tags releases under a scheme its
+# cannot derive them, because package-qualified release tags use a scheme its
 # auto-detection does not know and the release matrix uses one archive format on
 # every platform. Ref: docs/release-automation.md, asset-naming contract.
 # `bin-dir` is spelled out because the archive has no versioned inner directory.

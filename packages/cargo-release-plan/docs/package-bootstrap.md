@@ -11,8 +11,7 @@ publication, then the executable. No implementation package depends on the
 executable. The unified `publish registry` operation delegates dependency scheduling
 to Cargo and uses the exact versions from the reviewed release plan.
 Folo's selected publisher is described by the
-[workflow implementation](../../../.github/workflows/implementation.md#release-publication);
-the `release-plz` bootstrap path does not exercise the unified registry operation.
+[workflow implementation](../../../.github/workflows/implementation.md#release-publication).
 
 ## Introducing another implementation package
 

@@ -1,9 +1,0 @@
-[package]
-name = "demo-tool"
-version = "2.3.4"
-edition = "2021"
-autobins = false
-
-[[bin]]
-name = "demo-bin"
-path = "src/main.rs"

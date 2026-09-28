@@ -7,12 +7,10 @@ use std::{env, fmt, thread};
 use crp_native::command::{cancelled, capture};
 use crp_native::{Native, SourceProvider};
 use ohno::AppError;
-use serde_json::Value;
 
 use crate::PublicationOutput;
 use crate::publication::binaries::model::Release;
 use crate::publication::binaries::{Asset, Binary};
-use crate::publication::github::peel_tag;
 
 // Retry idempotent GitHub commands briefly within their caller's deadline. Tag reconciliation
 // separately refreshes candidate source evidence between its write attempts.
@@ -129,70 +127,6 @@ impl Github {
         unreachable!("the final attempt always returns")
     }
 
-    #[cfg_attr(test, mutants::skip)] // The fake-gh integration fixture exercises this read protocol.
-    pub(crate) fn verify_sources(&self, binaries: &[Binary], cwd: &Path) -> Result<(), AppError> {
-        for binary in binaries {
-            let deadline = Native::deadline_after(QUERY_BUDGET);
-            // Matching refs returns an empty array for an absent tag rather than making a
-            // failed gh exit indistinguishable from a missing ref. Exact matching rejects prefixes.
-            let references = self.api(
-                &format!("/git/matching-refs/tags/{}", binary.tag),
-                cwd,
-                deadline,
-            )?;
-            let reference_name = format!("refs/tags/{}", binary.tag);
-            let mut matching = references
-                .as_array()
-                .ok_or_else(|| {
-                    TagVerificationFailed::new(
-                        binary.tag.clone(),
-                        "GitHub matching refs must be an array".to_owned(),
-                    )
-                })?
-                .iter()
-                .filter(|reference| {
-                    reference.get("ref").and_then(Value::as_str) == Some(reference_name.as_str())
-                });
-            let reference = matching.next().ok_or_else(|| {
-                TagVerificationFailed::new(binary.tag.clone(), "Release tag is absent".to_owned())
-            })?;
-            if matching.next().is_some() {
-                return Err(TagVerificationFailed::new(
-                    binary.tag.clone(),
-                    "GitHub returned duplicate exact tag refs".to_owned(),
-                )
-                .into());
-            }
-            let commit = peel_tag(&binary.tag, reference.clone(), |suffix| {
-                self.api(suffix, cwd, deadline).map(Some)
-            })?;
-            if commit != binary.source_sha {
-                return Err(TagVerificationFailed::new(
-                    binary.tag.clone(),
-                    format!(
-                        "Observed commit {commit} differs from frozen source {}",
-                        binary.source_sha
-                    ),
-                )
-                .into());
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg_attr(test, mutants::skip)] // The explicit gh executable is the transport boundary.
-    fn api(&self, suffix: &str, cwd: &Path, deadline: Instant) -> Result<Value, AppError> {
-        let output = self.invoke_command(
-            &[
-                "api".into(),
-                format!("repos/{}{suffix}", self.repository).into(),
-            ],
-            cwd,
-            deadline,
-        )?;
-        Ok(serde_json::from_str(&output)?)
-    }
-
     // A missing release is an error: reconciliation must create it before binary planning.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn assets(&self, binary: &Binary, cwd: &Path) -> Result<Vec<Asset>, AppError> {
@@ -247,14 +181,6 @@ impl SourceProvider for Github {
         Ok(())
     }
 }
-/// A remote tag observation cannot establish the requested frozen source.
-#[ohno::error]
-#[display("Cannot verify tag {tag}: {message}")]
-struct TagVerificationFailed {
-    tag: String,
-    message: String,
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -263,6 +189,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::publication::github::peel_tag;
 
     #[test]
     fn canonical_peeling_follows_nested_annotations_without_substituting_their_ids() {

@@ -160,7 +160,7 @@ missing scope or unexpected skips cannot pass the required fan-in.
 
 Release validation (`validate-versions`) remains unconditional: release-plan generation compares every
 publishable package's released content to that package's version anchor, not just to the PR
-base. Live binstall metadata validation accompanies it because Cargo target discovery can
+base. Publication metadata validation accompanies it because Cargo target discovery can
 change release obligations without a manifest edit. API compatibility uses the report's
 consumer-contract selection and a working compatibility tool; a failed version-readiness
 verdict does not suppress comparisons when the report supplied targets.
@@ -781,26 +781,10 @@ lives in [`docs/release-automation.md`](../../docs/release-automation.md).
 
 ### Release-equivalent snapshots
 
-A package's version anchor identifies the main commit that introduced its version. It
-remains the comparison baseline for version validation, not a mandatory release-tag target.
-A release tag identifies an immutable main snapshot containing the package's released
-content at that version. A later main commit is equally valid when the package version
-and its released content remain unchanged.
-
-This follows from the merge gate: released-content changes require a version increment.
-Equivalence uses the same package-content model as that gate, including inherited manifest
-values and an installable binary's locked dependency closure. It does not require identical
-unrelated workspace files, workflow files or build environments, and does not promise
-byte-identical rebuilt binaries. A crate already on crates.io is never republished;
-its recorded source commit can differ from the equivalent snapshot chosen for its
-GitHub release and prebuilt binaries.
-
-GitHub can require workflow-write authority when creating a tag at a historical commit
-whose workflow files differ from main. Actions' ambient token cannot receive that
-permission. Requiring every tag to point at its version anchor would therefore make
-unattended recovery depend on a permission the workflow does not possess. Selecting a
-verified current-main snapshot preserves package identity without adding credentials or
-blocking unrelated merges.
+Folo uses the application's
+[release-source identity model](https://folo-rs.github.io/folo/cargo-release-plan/concepts/publication.html).
+Verified equivalent sources do not require workflow-write authority or serialize
+merges. They do not promise byte-identical rebuilt binaries.
 
 ### Publishing identity probe
 
@@ -820,33 +804,24 @@ Success validates that identity path, not every package-specific publisher grant
 
 ### Publication and recovery
 
-Registry publication and GitHub publication have separate owners. Release-plz publishes
-crates through Trusted Publishing but creates neither tags nor GitHub releases. A shared
-reconciler handles both ordinary GitHub publication and recovery after a partial or manual
-registry publish. Libraries receive tags; publishable binary packages also receive GitHub
-releases and prebuilt assets. Discovery remains package-driven rather than a hardcoded list.
+Folo's registered `release.yml` selects the shared release workflow at an immutable
+tested revision. It builds the controller from the invocation checkout and supplies
+`.cargo/release_plan.toml`; the shared graph owns registry, GitHub, native batches
+and operator reporting. No repository-local publisher or reconciliation policy exists.
 
 Release-triggered runs use non-cancelling queued concurrency to retain pending
 commits as well as the running publication. Hosted queue capacity and external
 cancellation remain operational limits; queuing does not serialize merges.
 
-The reconciler freezes the package/version requests from the successful registry
-publication's source snapshot. Before creating missing tags, it fetches main, pins its
-commit, and verifies a clean disposable checkout with the release validator. Every requested
-package must still be publishable at exactly the requested version. A version string alone
-does not authorize content that fails the release invariant.
+The shared graph freezes publication intent and keeps native build source separate
+from controller source. Failed reconciliation does not suppress independent valid
+native batches, but the overall run fails and posts an operator issue.
 
-Writes use the verified commit ID, never an unchecked moving `main` reference. If tag
-creation fails and main has advanced, a bounded retry selects and verifies a fresh snapshot.
-An unchanged main, failed verification or exhausted retry budget surfaces an error.
-Advancement to a different package version is not permission to relabel that version:
-automatic recovery of a superseded version is not guaranteed.
-
-Existing tags are authoritative and are never moved or overwritten. A missing binary release
-is attached to its existing tag, without asking GitHub to choose another target.
-Binary build jobs receive the tag's resolved commit ID separately from the release name,
-so source checkout remains pinned while assets are uploaded to the correct versioned release.
-Partial successes survive a retry; reconciliation creates only what remains missing.
+If concurrent merges leave a missing tag for a superseded version, an operator
+creates that exact tag at the original recorded source and retries the original run.
+Existing tags are never moved. Recovery does not broaden workflow credentials or
+block merges. Expired artifacts require an explicit original-source dispatch rather
+than silently selecting current `main`.
 
 ### Platform-grouped binary builds
 
