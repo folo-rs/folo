@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
+use std::env::consts::EXE_SUFFIX;
 use std::io::{self, Cursor};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{env, fs, iter};
 
 use crp_diag::Verbose;
 use crp_publication::publication::credentials::{CredentialSession, serve_credential};
@@ -26,6 +28,7 @@ use tiny_http::{Response, StatusCode};
 use crate::git_fixture::Repository;
 use crate::http_fixture::HttpService;
 use crate::identity_fixture::IdentityService;
+use crate::with_io_test;
 
 /// Observes the real configured command without executing a registry upload.
 struct UploadRuntime<'a> {
@@ -474,6 +477,147 @@ fn mismatched_source_configuration_and_requests_fail_before_registry_or_credenti
     assert!(runtime.target.borrow().is_none());
     assert!(identity.operations().is_empty());
 }
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Changes tracked source during a real Cargo metadata subprocess"
+)]
+fn acquisition_time_source_drift_fails_before_registry_work() {
+    // Re-enter only this boundary in a child so its Cargo shim cannot change sibling tests' PATH.
+    if let Some(artifacts) = env::var_os("CRP_SOURCE_DRIFT_ARTIFACTS") {
+        let artifacts = PathBuf::from(artifacts);
+        let publication = PublicationManifest::read(&artifacts.join("publication.json")).unwrap();
+        let manifest = PathBuf::from(env::var_os("CRP_SOURCE_DRIFT_MANIFEST").unwrap());
+        let client = RegistryClient::with_endpoint(
+            "invalid registry URL",
+            crp_publication::PublicationOutput::new("1.2.3", false, Arc::new(crp_diag::Discard)),
+        )
+        .unwrap();
+        let mut result = outcome(&publication, true);
+        execute_with(
+            &publication,
+            &manifest,
+            &client,
+            &mut result,
+            Verbose::new(false, &crp_diag::Discard),
+            &NoRegistryWork,
+        )
+        .unwrap_err();
+        assert!(
+            result
+                .packages
+                .iter()
+                .all(|package| package.state == RegistryState::Unknown)
+        );
+        return;
+    }
+    with_io_test(|| {
+        let (repository, publication) = publication_source();
+        assert!(repository.command(&["status", "--porcelain"]).is_empty());
+        let artifacts = tempfile::tempdir().unwrap();
+        let publication_path = artifacts.path().join("publication.json");
+        publication.write(&publication_path).unwrap();
+        let original = fs::read(&publication_path).unwrap();
+        let shim = artifacts.path().join("cargo.rs");
+        fs::write(&shim, SOURCE_DRIFT_CARGO).unwrap();
+        let compiled = Command::new("rustc")
+            .args(["--edition=2024", "--crate-name=source_drift_cargo"])
+            .arg(shim)
+            .arg("-o")
+            .arg(artifacts.path().join(format!("cargo{EXE_SUFFIX}")))
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let path = env::var_os("PATH").unwrap();
+        let cargo = env::split_paths(&path)
+            .map(|directory| directory.join(format!("cargo{EXE_SUFFIX}")))
+            .find(|candidate| candidate.is_file())
+            .unwrap();
+        let path = env::join_paths(
+            iter::once(artifacts.path().to_path_buf()).chain(env::split_paths(&path)),
+        )
+        .unwrap();
+        let source = repository.path().join("alpha/src/lib.rs");
+        let marker = artifacts.path().join("metadata-completed");
+        let result = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "publication_registry::acquisition_time_source_drift_fails_before_registry_work",
+                "--nocapture",
+            ])
+            .env("PATH", path)
+            .env("CRP_REAL_CARGO", cargo)
+            .env("CRP_SOURCE_DRIFT_ARTIFACTS", artifacts.path())
+            .env(
+                "CRP_SOURCE_DRIFT_MANIFEST",
+                repository.path().join("Cargo.toml"),
+            )
+            .env("CRP_SOURCE_DRIFT_PATH", &source)
+            .env("CRP_SOURCE_DRIFT_MARKER", &marker)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(marker.is_file());
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"pub fn changed_during_metadata() {}\n"
+        );
+        assert_eq!(fs::read(&publication_path).unwrap(), original);
+    });
+}
+
+/// Invalid URLs cannot reach a registry; even retry or upload setup means the source guard failed.
+struct NoRegistryWork;
+
+impl RegistryRuntime for NoRegistryWork {
+    fn credentials(
+        &self,
+        _publication: &PublicationManifest,
+        _manifest: &Path,
+        _target: &Path,
+    ) -> Result<CredentialSession, AppError> {
+        panic!("source acquisition must fail before credential or build-artifact setup");
+    }
+
+    fn upload(&self, _command: &mut Command) -> io::Result<Output> {
+        panic!("source acquisition must fail before upload");
+    }
+
+    fn pause(&self, _delay: Duration) {
+        panic!("source acquisition must fail before registry queries");
+    }
+}
+
+// Forward real Cargo metadata, then inject tracked content drift before returning its facts.
+// The explicit parent process sets every path, and no production test hook is involved.
+const SOURCE_DRIFT_CARGO: &str = r#"
+use std::{env, fs, io::{self, Write}, process::{self, Command}};
+
+fn main() {
+    let args: Vec<_> = env::args_os().skip(1).collect();
+    let output = Command::new(env::var_os("CRP_REAL_CARGO").unwrap())
+        .args(&args).output().unwrap();
+    if output.status.success() && args.first().is_some_and(|arg| arg == "metadata") {
+        assert!(args.iter().any(|arg| arg == "--no-deps"));
+        fs::write(env::var_os("CRP_SOURCE_DRIFT_PATH").unwrap(),
+            b"pub fn changed_during_metadata() {}\n").unwrap();
+        fs::write(env::var_os("CRP_SOURCE_DRIFT_MARKER").unwrap(), b"metadata completed\n").unwrap();
+    }
+    io::stdout().write_all(&output.stdout).unwrap();
+    io::stderr().write_all(&output.stderr).unwrap();
+    process::exit(output.status.code().unwrap_or(1));
+}
+"#;
 
 fn registry_service(available: &Arc<Mutex<BTreeSet<String>>>) -> HttpService {
     HttpService::new({

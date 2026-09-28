@@ -60,6 +60,8 @@ pub(crate) fn verify_source(
         )
         .into());
     }
+    // Acquisition must not certify source that changed after the initial check.
+    repository.ensure_clean_head()?;
     Ok(VerifiedSource {
         repository,
         manifest: workspace_manifest,

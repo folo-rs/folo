@@ -3,9 +3,9 @@
 This nonpublished helper implements the inexpensive first step of the repository-specific
 action-pairing skill. General crate version planning remains in `cargo-release-plan`.
 
-The input is the final verified release report. The checker projects its pending package names
-Its schema revision follows the application's report contract; the projection does
-not reinterpret release-history or anticipated-parent evidence. The checker projects its pending package names
+The input is the final verified release report. Its schema revision follows the
+application's report contract; the projection does not reinterpret release-history
+or anticipated-parent evidence. The checker projects its pending package names
 and intersects them with names from the action's authoritative release manifest. This includes
 retained pending versions, first publication and dependent/group movement without deriving
 versions a second time. Nonpublished alignment-only helpers are not publication candidates.
