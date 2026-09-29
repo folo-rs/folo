@@ -413,20 +413,40 @@ fn explicit_plan(resolved: &ResolvedVersions) -> PlanFile {
     )
 }
 
+// Native marker observation/removal; the injected operation tests invalidation and write errors.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn remove_marker(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| WriteFileError::caused_by(path, error))?;
+    remove_marker_with(path, path.exists(), |path| fs::remove_file(path))
+}
+
+fn remove_marker_with(
+    path: &Path,
+    exists: bool,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), AppError> {
+    if exists {
+        remove(path).map_err(|error| WriteFileError::caused_by(path, error))?;
     }
     Ok(())
 }
 
+// Native alias acquisition only; collision checks consume resolved observations in process.
+#[cfg_attr(test, mutants::skip)]
 fn guard_output_inputs(output: &Path, inputs: &[&Path]) -> Result<(), AppError> {
-    let output = resolve_path(output)?;
-    let files = ["report.json", "report.json.tmp"].map(|name| resolve_path(&output.join(name)));
+    guard_output_inputs_with(output, inputs, resolve_path)
+}
+
+fn guard_output_inputs_with(
+    output: &Path,
+    inputs: &[&Path],
+    mut resolve: impl FnMut(&Path) -> Result<PathBuf, AppError>,
+) -> Result<(), AppError> {
+    let output = resolve(output)?;
+    let files = ["report.json", "report.json.tmp"].map(|name| resolve(&output.join(name)));
     let [report, temporary] = files;
     let files = [report?, temporary?];
     for input in inputs {
-        let input = resolve_path(input)?;
+        let input = resolve(input)?;
         validate_output_input(&output, &input, &files)?;
     }
     Ok(())
@@ -550,6 +570,61 @@ mod tests {
             assert!(error.find_source::<OutputInputCollision>().is_some());
         }
         validate_output_input(output, Path::new("other/plan"), &files).unwrap();
+    }
+
+    #[test]
+    fn acquired_output_aliases_cannot_replace_inputs() {
+        let output = Path::new("output");
+        for owned in [
+            "report.json",
+            "report.json.tmp",
+            "workspace/plan",
+            "diffs/plan",
+            ".prospective/plan",
+        ] {
+            let error = guard_output_inputs_with(output, &[Path::new("alias")], |path| {
+                Ok(if path == Path::new("alias") {
+                    output.join(owned)
+                } else {
+                    path.into()
+                })
+            })
+            .unwrap_err();
+            assert!(error.find_source::<OutputInputCollision>().is_some());
+        }
+        guard_output_inputs_with(output, &[Path::new("independent")], |path| Ok(path.into()))
+            .unwrap();
+        assert!(
+            guard_output_inputs_with(output, &[Path::new("input")], |_| Err(
+                std::io::Error::other("identity").into()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn marker_invalidation_removes_only_present_markers_and_propagates_failure() {
+        for exists in [false, true] {
+            let path = Path::new("plan.json");
+            let mut called = false;
+            let result = remove_marker_with(path, exists, |actual| {
+                called = true;
+                assert_eq!(actual, path);
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            });
+            assert_eq!(called, exists);
+            if exists {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .find_source::<WriteFileError>()
+                        .is_some()
+                );
+            } else {
+                result.unwrap();
+            }
+        }
+        remove_marker_with(Path::new("plan.json"), true, |_| Ok(())).unwrap();
     }
 
     #[test]

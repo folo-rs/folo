@@ -303,23 +303,6 @@ pub struct ManifestSnapshot {
 }
 
 impl ManifestSnapshot {
-    fn load(
-        metadata: &MetadataJson,
-        selected_member_ids: &HashSet<&str>,
-        workspace_root: &Path,
-    ) -> Result<Self, AppError> {
-        Self::load_with(
-            metadata,
-            selected_member_ids,
-            workspace_root,
-            |path| {
-                fs::read_to_string(path)
-                    .map_err(|error| ReadFileError::caused_by(path, error).into())
-            },
-            parse_document,
-        )
-    }
-
     fn load_with(
         metadata: &MetadataJson,
         selected_member_ids: &HashSet<&str>,
@@ -424,15 +407,27 @@ impl TrackedMetadata<'_> {
     }
 
     /// Whether tracked, present package inputs define an installable binary.
+    // Native metadata acquisition only; the injected regular-file observations retain policy tests.
+    #[cfg_attr(test, mutants::skip)]
     pub fn has_lockfile_target(&self, manifest: &PackageManifest) -> Result<bool, AppError> {
+        self.has_lockfile_target_with(manifest, |path| {
+            fs::symlink_metadata(path).map(|metadata| metadata.is_file())
+        })
+    }
+
+    fn has_lockfile_target_with(
+        &self,
+        manifest: &PackageManifest,
+        mut regular: impl FnMut(&Path) -> io::Result<bool>,
+    ) -> Result<bool, AppError> {
         let package_dir = join_git_rel(self.git.prefix(), &manifest.directory);
         let mut present = Vec::new();
         for path in &self.paths {
             let Some(relative) = self.case.relativize(path, &package_dir) else {
                 continue;
             };
-            match fs::symlink_metadata(self.git.root().join(path)) {
-                Ok(metadata) if metadata.is_file() => present.push(relative),
+            match regular(&self.git.root().join(path)) {
+                Ok(true) => present.push(relative),
                 Ok(_) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => {
@@ -500,21 +495,45 @@ pub fn capture_metadata(manifest_path: &Path) -> Result<Vec<u8>, AppError> {
 /// Cargo validates the argument's basename before opening it. Only a probed
 /// filesystem alias can be rewritten; a distinct sensitive path stays distinct.
 #[must_use]
+// Actual alias probing belongs in boundary tests; cargo_manifest_path_with tests the spelling rule.
+#[cfg_attr(test, mutants::skip)]
 pub fn cargo_manifest_path(path: &Path) -> PathBuf {
+    cargo_manifest_path_with(path, PathCase::probe)
+}
+
+fn cargo_manifest_path_with(path: &Path, probe: impl FnOnce(&Path) -> PathCase) -> PathBuf {
     let Some(name) = path.file_name() else {
         return path.to_path_buf();
     };
     if let Some(parent) = path.parent()
-        && PathCase::probe(parent).same_path(&name.to_string_lossy(), "Cargo.toml")
+        && probe(parent).same_path(&name.to_string_lossy(), "Cargo.toml")
     {
         return path.with_file_name("Cargo.toml");
     }
     path.to_path_buf()
 }
 
+// Wires real filesystem observations into the metadata projection tested below.
+#[cfg_attr(test, mutants::skip)]
 pub fn work_tree_from_metadata(
     metadata: &MetadataJson,
     tracked: &TrackedMetadata<'_>,
+) -> Result<WorkTree, AppError> {
+    work_tree_from_metadata_with(
+        metadata,
+        tracked,
+        |path| fs::read_to_string(path),
+        |path| fs::canonicalize(path),
+        |path| fs::symlink_metadata(path).map(|metadata| metadata.is_file()),
+    )
+}
+
+fn work_tree_from_metadata_with(
+    metadata: &MetadataJson,
+    tracked: &TrackedMetadata<'_>,
+    mut read: impl FnMut(&Path) -> io::Result<String>,
+    mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
+    mut regular: impl FnMut(&Path) -> io::Result<bool>,
 ) -> Result<WorkTree, AppError> {
     let workspace_root = PathBuf::from(&metadata.workspace_root);
     let cargo_member_ids: HashSet<&str> = metadata
@@ -546,7 +565,8 @@ pub fn work_tree_from_metadata(
                 .map(|dir| (dir.to_path_buf(), package.name.clone()))
         })
         .collect();
-    let canonical_tracked_members_by_dir = canonical_members_by_dir(&tracked_members_by_dir)?;
+    let canonical_tracked_members_by_dir =
+        canonical_members_by_dir_with(&tracked_members_by_dir, &mut canonicalize)?;
     // Apply visits every member Cargo can see so an untracked or ignored
     // dependent cannot retain a stale exact pin. This set is deliberately wider
     // than the tracked package set accepted as plan targets.
@@ -570,7 +590,13 @@ pub fn work_tree_from_metadata(
         .filter(|package| cargo_member_ids.contains(package.id.as_str()))
         .filter_map(|package| library_crate_name(package).map(|lib| (package.name.as_str(), lib)))
         .collect();
-    let manifests = ManifestSnapshot::load(metadata, &selected_member_ids, &workspace_root)?;
+    let manifests = ManifestSnapshot::load_with(
+        metadata,
+        &selected_member_ids,
+        &workspace_root,
+        |path| read(path).map_err(|error| ReadFileError::caused_by(path, error).into()),
+        parse_document,
+    )?;
     let root_manifest = manifests.root(&workspace_root);
     let mut version_targets = Vec::new();
     let mut installation = InstallationGraph::default();
@@ -608,7 +634,7 @@ pub fn work_tree_from_metadata(
         &canonical_tracked_members_by_dir,
         &manifests,
         root_manifest,
-        &workspace_root,
+        &mut canonicalize,
     )?;
     exact_dependencies.sort_by(|left, right| {
         (
@@ -655,11 +681,12 @@ pub fn work_tree_from_metadata(
             // An observation failure is not evidence that the dependency is outside the workspace.
             let member = match dep.path.as_deref() {
                 Some(path) => {
-                    resolved_member(
+                    resolved_member_with(
                         &workspace_root,
                         path,
                         &tracked_members_by_dir,
                         &canonical_tracked_members_by_dir,
+                        &mut canonicalize,
                     )? == Some(dep.name.as_str())
                 }
                 None => false,
@@ -680,7 +707,7 @@ pub fn work_tree_from_metadata(
         exposed_crates_by_package.insert(package.name.clone(), exposed_crates);
 
         packages.push(WorkPackage {
-            has_lockfile_target: tracked.has_lockfile_target(&manifest)?,
+            has_lockfile_target: tracked.has_lockfile_target_with(&manifest, &mut regular)?,
             consumer_contract: is_consumer_contract(package),
             manifest,
             manifest_path: path,
@@ -691,7 +718,7 @@ pub fn work_tree_from_metadata(
 
     packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
 
-    installation.registries = work_tree_registry_indices(tracked)?;
+    installation.registries = work_tree_registry_indices_with(tracked, &mut read)?;
     installation.registries.extend(registry_indices(
         metadata,
         &selected_member_ids,
@@ -701,7 +728,7 @@ pub fn work_tree_from_metadata(
     ));
     if packages.iter().any(|package| package.has_lockfile_target) {
         installation.patches = installation_patches(root_manifest);
-        resolve_installation_paths(&mut installation, &manifests, tracked);
+        resolve_installation_paths_with(&mut installation, &manifests, tracked, &mut read);
     }
 
     let mut member_manifests: Vec<PathBuf> = members_by_dir
@@ -727,10 +754,11 @@ pub fn work_tree_from_metadata(
     })
 }
 
-pub fn resolve_installation_paths(
+pub fn resolve_installation_paths_with(
     installation: &mut InstallationGraph,
     manifests: &ManifestSnapshot,
     tracked: &TrackedMetadata<'_>,
+    mut read: impl FnMut(&Path) -> io::Result<String>,
 ) {
     let mut identities: BTreeMap<String, Option<PackageIdentity>> = manifests
         .packages
@@ -774,7 +802,7 @@ pub fn resolve_installation_paths(
                 return Ok(document.clone());
             }
             let absolute = tracked.git.root().join(path);
-            let document = match fs::read_to_string(&absolute) {
+            let document = match read(&absolute) {
                 Ok(content) => Some(parse_document(&absolute, &content)?),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(ReadFileError::caused_by(&absolute, error).into()),
@@ -837,14 +865,15 @@ fn registry_indices(
     registries
 }
 
-pub fn work_tree_registry_indices(
+pub fn work_tree_registry_indices_with(
     tracked: &TrackedMetadata<'_>,
+    mut read: impl FnMut(&Path) -> io::Result<String>,
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut registries = BTreeMap::new();
     for candidates in cargo_config_paths(tracked.git.prefix()) {
         for relative in candidates {
             let path = tracked.git.root().join(relative);
-            match fs::read_to_string(&path) {
+            match read(&path) {
                 Ok(content) => {
                     collect_registry_indices(&parse_document(&path, &content)?, &mut registries);
                     break;
@@ -883,8 +912,9 @@ fn discover_exact_dependencies(
     canonical_tracked_members_by_dir: &BTreeMap<PathBuf, String>,
     manifests: &ManifestSnapshot,
     workspace_manifest: &DocumentMut,
-    workspace_root: &Path,
+    mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
 ) -> Result<Vec<ExactDependency>, AppError> {
+    let workspace_root = Path::new(&metadata.workspace_root);
     let mut found = Vec::new();
     for package in &metadata.packages {
         if !selected_member_ids.contains(package.id.as_str()) {
@@ -914,11 +944,12 @@ fn discover_exact_dependencies(
                     let Some(path) = dependency_field(effective.item, "path") else {
                         continue;
                     };
-                    let target = match resolved_member(
+                    let target = match resolved_member_with(
                         effective.path_base,
                         path,
                         tracked_members_by_dir,
                         canonical_tracked_members_by_dir,
+                        &mut canonicalize,
                     ) {
                         Ok(Some(target)) => target,
                         Ok(None) => continue,
@@ -1010,22 +1041,7 @@ fn dependency_requirement(item: &Item) -> Option<&str> {
     item.as_str().or_else(|| dependency_field(item, "version"))
 }
 
-pub fn resolved_member<'a>(
-    base: &Path,
-    dependency_path: &str,
-    members_by_dir: &'a BTreeMap<PathBuf, String>,
-    canonical_members_by_dir: &'a BTreeMap<PathBuf, String>,
-) -> Result<Option<&'a str>, AppError> {
-    resolved_member_with(
-        base,
-        dependency_path,
-        members_by_dir,
-        canonical_members_by_dir,
-        |path| fs::canonicalize(path),
-    )
-}
-
-fn resolved_member_with<'a>(
+pub fn resolved_member_with<'a>(
     base: &Path,
     dependency_path: &str,
     members_by_dir: &'a BTreeMap<PathBuf, String>,
@@ -1045,13 +1061,14 @@ fn resolved_member_with<'a>(
 ///
 /// Building the fallback index once per metadata snapshot keeps alias resolution
 /// to one filesystem query per dependency edge rather than one per candidate member.
-pub fn canonical_members_by_dir(
+pub fn canonical_members_by_dir_with(
     members_by_dir: &BTreeMap<PathBuf, String>,
+    mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
 ) -> Result<BTreeMap<PathBuf, String>, AppError> {
     members_by_dir
         .iter()
         .map(|(dir, name)| {
-            fs::canonicalize(dir)
+            canonicalize(dir)
                 .map(|dir| (dir, name.clone()))
                 .map_err(|error| MemberIdentityUnavailable::caused_by(dir, error).into())
         })

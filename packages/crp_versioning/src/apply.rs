@@ -6,8 +6,8 @@
 )]
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::{fs, io};
 
 use crp_diag::Verbose;
 use crp_workspace::inherited::is_workspace_inherit;
@@ -49,7 +49,18 @@ pub struct DepTargets<'a> {
 
 impl DepTargets<'_> {
     #[must_use]
+    // Filesystem aliases require native acquisition; declares_with tests both identity dimensions.
+    #[cfg_attr(test, mutants::skip)]
     pub fn declares(&self, dep_path: &str, package_name: &str) -> bool {
+        self.declares_with(dep_path, package_name, |path| fs::canonicalize(path))
+    }
+
+    fn declares_with(
+        &self,
+        dep_path: &str,
+        package_name: &str,
+        mut canonicalize: impl FnMut(&Path) -> io::Result<PathBuf>,
+    ) -> bool {
         let joined = self.manifest_dir.join(dep_path);
         if let Some(declared) = self.members_by_dir.get(&normalize_lexically(&joined)) {
             return declared == package_name;
@@ -58,11 +69,11 @@ impl DepTargets<'_> {
         // Filesystem aliases such as case variants and Windows short names can identify a
         // member that lexical comparison misses. Defer filesystem identity acquisition until
         // the lexical lookup fails; do not assume case sensitivity from the host platform.
-        let Ok(resolved) = fs::canonicalize(&joined) else {
+        let Ok(resolved) = canonicalize(&joined) else {
             return false;
         };
         self.members_by_dir.iter().any(|(dir, declared)| {
-            declared == package_name && fs::canonicalize(dir).is_ok_and(|member| member == resolved)
+            declared == package_name && canonicalize(dir).is_ok_and(|member| member == resolved)
         })
     }
 }
@@ -859,6 +870,29 @@ version = \"0.1.0\"
             manifest_dir: PathBuf::from(manifest_dir),
             members_by_dir: members,
         }
+    }
+
+    #[test]
+    fn canonical_dependency_fallback_requires_both_name_and_directory() {
+        let members = BTreeMap::from([(PathBuf::from("workspace/member"), "member".into())]);
+        let targets = targets_for("workspace", &members);
+        for name in ["member", "unrelated"] {
+            for same_directory in [false, true] {
+                assert_eq!(
+                    targets.declares_with("alias", name, |path| {
+                        Ok(if path == Path::new("workspace/alias") || same_directory {
+                            PathBuf::from("actual")
+                        } else {
+                            PathBuf::from("different")
+                        })
+                    }),
+                    name == "member" && same_directory
+                );
+            }
+        }
+        assert!(!targets.declares_with("alias", "member", |_| Err(io::ErrorKind::NotFound.into())));
+        assert!(targets.declares_with("member", "member", |_| panic!("lexical match")));
+        assert!(!targets.declares_with("member", "unrelated", |_| panic!("lexical mismatch")));
     }
 
     #[test]

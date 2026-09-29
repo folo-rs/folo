@@ -18,9 +18,294 @@ fn inputs() -> Inputs {
 }
 
 #[test]
+fn history_verification_uses_original_repository_refs_and_preserves_failures() {
+    let inputs = Inputs {
+        merge_target: Some("parent-final".into()),
+        merge_target_revision: Some("parent-branch".into()),
+        ..inputs()
+    };
+    for fail in [false, true] {
+        let mut called = false;
+        let result = inputs.verify_history_with(|history, git| {
+            called = true;
+            assert_eq!(git.root(), Path::new("root"));
+            assert_eq!(git.prefix(), "");
+            assert_eq!(history.release_history, "base");
+            assert_eq!(history.release_history_revision, "origin/main");
+            assert_eq!(history.merge_target.as_deref(), Some("parent-final"));
+            assert_eq!(
+                history.merge_target_revision.as_deref(),
+                Some("parent-branch")
+            );
+            if fail {
+                Err(CandidateFailure::new().into())
+            } else {
+                Ok(())
+            }
+        });
+        assert!(called);
+        if fail {
+            let error = result.unwrap_err();
+            assert!(error.find_source::<StaleInputs>().is_some());
+            assert!(error.find_source::<CandidateFailure>().is_some());
+        } else {
+            result.unwrap();
+        }
+    }
+}
+
+#[test]
 fn captured_index_is_returned_verbatim() {
     let inputs = inputs();
     assert_eq!(inputs.index(), "100644 blob 0\tCargo.toml\0");
+}
+
+#[test]
+fn live_verification_distinguishes_original_final_and_stale_inputs() {
+    let inputs = Inputs {
+        merge_target: Some("parent".into()),
+        merge_target_revision: Some("parent-branch".into()),
+        ..inputs()
+    };
+    for (digest, expected) in [
+        ("initial", Some(false)),
+        ("final", Some(true)),
+        ("stale", None),
+    ] {
+        let result = inputs.verify_with(
+            Path::new("root/Cargo.toml"),
+            Some("final"),
+            |manifest, history, target| {
+                assert_eq!(manifest, Path::new("root/Cargo.toml"));
+                assert_eq!(history, Some("origin/main"));
+                assert_eq!(target, Some("parent-branch"));
+                Ok(Inputs {
+                    digest: digest.into(),
+                    ..inputs.clone()
+                })
+            },
+        );
+        if let Some(expected) = expected {
+            assert_eq!(result.unwrap(), expected);
+        } else {
+            assert!(result.unwrap_err().find_source::<StaleInputs>().is_some());
+        }
+    }
+    assert!(
+        inputs
+            .verify_with(Path::new("root/Cargo.toml"), None, |_, _, _| Err(
+                CandidateFailure::new().into()
+            ))
+            .unwrap_err()
+            .find_source::<CandidateFailure>()
+            .is_some()
+    );
+}
+
+#[test]
+fn final_digest_uses_exact_artifact_bytes_and_propagates_fingerprint_failure() {
+    let inputs = inputs();
+    let identity = PathIdentity::new(inputs.root(), &|_| PathCase::Sensitive);
+    let files = vec![Artifact {
+        path: "Cargo.toml".into(),
+        contents: "captured\n".into(),
+    }];
+    assert_eq!(
+        inputs
+            .final_digest_with(&files, &identity, |replacements| {
+                assert_eq!(
+                    *replacements,
+                    BTreeMap::from([(PathBuf::from("Cargo.toml"), b"captured\n".to_vec())])
+                );
+                Ok("fingerprint".into())
+            })
+            .unwrap(),
+        "fingerprint"
+    );
+    assert!(
+        inputs
+            .final_digest_with(&files, &identity, |_| Err(CandidateFailure::new().into()))
+            .unwrap_err()
+            .find_source::<CandidateFailure>()
+            .is_some()
+    );
+}
+
+#[test]
+fn artifact_validation_requires_versions_membership_supported_paths_and_final_bytes() {
+    let inputs = inputs();
+    let identity = PathIdentity::new(inputs.root(), &|_| PathCase::Sensitive);
+    let versions = BTreeMap::from([("pkg".into(), "1.0.1".into())]);
+    let allowed = BTreeSet::from([PathBuf::from("Cargo.toml"), PathBuf::from("src/lib.rs")]);
+    let state = ResolvedState {
+        inputs: inputs.clone(),
+        files: vec![Artifact {
+            path: "Cargo.toml".into(),
+            contents: "final".into(),
+        }],
+        final_digest: "final-digest".into(),
+        versions: versions.clone(),
+        evidence_manifest_path: "retained/Cargo.toml".into(),
+    };
+    state
+        .validate_artifacts_with(&versions, &allowed, &identity, || Ok("final-digest".into()))
+        .unwrap();
+    for path in ["src/lib.rs", "other/Cargo.toml"] {
+        let mut invalid = state.clone();
+        invalid.files.first_mut().unwrap().path = path.into();
+        assert!(
+            invalid
+                .validate_artifacts_with(&versions, &allowed, &identity, || panic!(
+                    "invalid artifact"
+                ))
+                .unwrap_err()
+                .find_source::<ResolutionRequired>()
+                .is_some()
+        );
+    }
+    assert!(
+        state
+            .validate_artifacts_with(&BTreeMap::new(), &allowed, &identity, || panic!(
+                "wrong versions"
+            ))
+            .is_err()
+    );
+    assert!(
+        state
+            .validate_artifacts_with(&versions, &allowed, &identity, || Ok("changed".into()))
+            .unwrap_err()
+            .find_source::<ResolutionRequired>()
+            .is_some()
+    );
+    assert!(
+        state
+            .validate_artifacts_with(&versions, &allowed, &identity, || Err(
+                CandidateFailure::new().into()
+            ))
+            .unwrap_err()
+            .find_source::<CandidateFailure>()
+            .is_some()
+    );
+}
+
+#[test]
+fn json_emission_preserves_serialized_values_and_write_failures() {
+    let path = Path::new("output.json");
+    let value = BTreeMap::from([("contents", "quotes \" and newline\n")]);
+    let mut called = false;
+    write_json_with(path, &value, |actual, bytes| {
+        called = true;
+        assert_eq!(actual, path);
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(
+            serde_json::from_slice::<BTreeMap<String, String>>(bytes).unwrap(),
+            value
+                .iter()
+                .map(|(key, value)| ((*key).into(), (*value).into()))
+                .collect()
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert!(called);
+    assert!(
+        write_json_with(path, &value, |_, _| Err(ErrorKind::PermissionDenied.into()))
+            .unwrap_err()
+            .find_source::<WriteFileError>()
+            .is_some()
+    );
+}
+
+#[test]
+fn source_collection_follows_acquired_directories_and_preserves_actual_paths() {
+    let root = Path::new("root");
+    let mut paths = BTreeSet::new();
+    let mut visited = Vec::new();
+    collect_sources_with(root, &root.join("src"), &mut paths, &mut |path| {
+        visited.push(path.to_path_buf());
+        if path == root.join("src") {
+            Ok(Some(vec![
+                (root.join("src/lib.rs"), false),
+                (root.join("src/nested"), true),
+                (root.join("src/missing"), true),
+            ]))
+        } else if path == root.join("src/nested") {
+            Ok(Some(vec![(root.join("src/nested/mod.rs"), false)]))
+        } else {
+            assert_eq!(path, root.join("src/missing"));
+            Ok(None)
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        paths,
+        ["src/lib.rs", "src/nested/mod.rs"]
+            .map(PathBuf::from)
+            .into()
+    );
+    assert_eq!(
+        visited,
+        ["src", "src/nested", "src/missing"].map(|path| root.join(path))
+    );
+    assert!(
+        collect_sources_with(root, &root.join("src"), &mut paths, &mut |_| Err(
+            CandidateFailure::new().into()
+        ))
+        .unwrap_err()
+        .find_source::<CandidateFailure>()
+        .is_some()
+    );
+}
+
+#[test]
+fn local_capture_follows_transitive_aliases_and_cycles_without_reacquiring_visited_manifests() {
+    let root = Path::new("root");
+    let manifests = [root.join("Cargo.toml")];
+    let mut paths = BTreeSet::new();
+    let mut reads = Vec::new();
+    capture_path_dependencies_with(root, &manifests, &mut paths, |path| {
+        reads.push(path.to_path_buf());
+        assert!(reads.len() <= 3, "the captured cycle must make progress");
+        Ok(if path == root.join("Cargo.toml") {
+            "[dependencies]\nlocal={path='alias'}\n[target.'cfg(unix)'.build-dependencies]\nlocal={path='alias'}\n[workspace.dependencies]\nlocal={path='alias'}\n[patch.crates-io]\nlocal={path='alias'}\n[replace]\n'local:1.0.0'={path='alias'}\n"
+        } else if path == root.join("actual/Cargo.toml") {
+            "[dependencies]\nleaf={path='../leaf'}\n"
+        } else {
+            assert_eq!(path, root.join("leaf/Cargo.toml"));
+            "[dependencies]\nroot={path='..'}\n"
+        }.into())
+    }, |path| {
+        Ok(if path == root.join("alias") { root.join("actual") }
+        else if path == root.join("actual/../leaf") { root.join("leaf") }
+        else { assert_eq!(path, root.join("leaf/..")); root.into() })
+    }, |directory, paths| {
+        paths.insert(relative(root, &directory.join("file.rs"))?);
+        Ok(())
+    }).unwrap();
+    assert_eq!(
+        reads,
+        ["Cargo.toml", "actual/Cargo.toml", "leaf/Cargo.toml"].map(|path| root.join(path))
+    );
+    assert_eq!(
+        paths,
+        [
+            "Cargo.toml",
+            "actual/Cargo.toml",
+            "leaf/Cargo.toml",
+            "src/file.rs",
+            "actual/src/file.rs",
+            "leaf/src/file.rs"
+        ]
+        .map(PathBuf::from)
+        .into()
+    );
+    let table: toml_edit::DocumentMut =
+        "a = { path = 'first' }\nb = '1'\nc = { git = 'url' }\nd = { path = 'second' }\n"
+            .parse()
+            .unwrap();
+    let mut dependencies = Vec::new();
+    dependency_paths(table.as_table(), &mut dependencies);
+    assert_eq!(dependencies, ["first", "second"]);
 }
 
 #[test]

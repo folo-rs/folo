@@ -734,30 +734,50 @@ fn log_status(notes: &impl NoteSink, class: &PackageClass) {
     });
 }
 
+// Native snapshot and parent acquisition; build_timeline_with owns ordered observation and stopping.
+#[cfg_attr(test, mutants::skip)]
 fn build_timeline(
     git: &GitRepo,
     name: &str,
     commits: &[String],
     cache: &mut SnapshotCache,
 ) -> Result<Vec<TimelineEntry>, AppError> {
+    build_timeline_with(
+        commits,
+        |commit| {
+            let snapshot = cache.snapshot(git, commit)?;
+            Ok(snapshot_presence(&snapshot, name))
+        },
+        |commit| git.has_parent_or_is_shallow_boundary(commit),
+    )
+}
+
+fn snapshot_presence(snapshot: &CommitSnapshot, name: &str) -> Presence {
+    snapshot.packages.get(name).map_or_else(
+        || {
+            if snapshot.unpublished.contains(name) {
+                Presence::Unpublished
+            } else {
+                Presence::Absent
+            }
+        },
+        |package| Presence::Published(package.version.clone()),
+    )
+}
+
+fn build_timeline_with(
+    commits: &[String],
+    mut observe: impl FnMut(&str) -> Result<Presence, AppError>,
+    mut parent_boundary: impl FnMut(&str) -> Result<bool, AppError>,
+) -> Result<Vec<TimelineEntry>, AppError> {
     let mut timeline = Vec::with_capacity(commits.len());
     for (index, commit) in commits.iter().enumerate() {
-        let snapshot = cache.snapshot(git, commit)?;
-        let presence = snapshot.packages.get(name).map_or_else(
-            || {
-                if snapshot.unpublished.contains(name) {
-                    Presence::Unpublished
-                } else {
-                    Presence::Absent
-                }
-            },
-            |pkg| Presence::Published(pkg.version.clone()),
-        );
+        let presence = observe(commit)?;
         let is_last = index
             .checked_add(1)
             .is_some_and(|next| next == commits.len());
         let has_parent = if is_last {
-            git.has_parent_or_is_shallow_boundary(commit)?
+            parent_boundary(commit)?
         } else {
             true
         };
@@ -853,6 +873,8 @@ fn resolve_resources(
     resolved
 }
 
+// Native acquisition is integration-tested; PackageDiff renders the acquired endpoint observations.
+#[cfg_attr(test, mutants::skip)]
 pub fn diff_package(
     git: &GitRepo,
     name: &str,
@@ -882,104 +904,143 @@ pub fn diff_package(
     // representation Git itself compares by, which is what keeps an LFS-tracked
     // asset or a line-ending rule from making an untouched package look
     // changed. Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
-    let anchor_ids: HashMap<&str, &str> = anchor_tree
-        .iter()
-        .map(|entry| (entry.path.as_str(), entry.id.as_str()))
-        .collect();
     let work_modes = work_tree_modes(git, work_side, &tracked_resources)?;
     let work_ids = work_blob_ids(git, name, work_files, &work_modes)?;
 
-    // Cargo copies the executable bit into the archive, so a file made
-    // executable without an edit is released content that changed even though
-    // its blob is untouched. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
-    let anchor_exec: HashSet<&str> = anchor_tree
-        .iter()
-        .filter(|entry| entry.is_executable())
-        .map(|entry| entry.path.as_str())
-        .collect();
-    let rels: BTreeSet<&str> = anchor_files
-        .keys()
-        .chain(work_files.keys())
-        .map(String::as_str)
-        .collect();
-
-    let mut changed = Vec::new();
-    let mut patch = String::new();
-    let mut insertions = 0_usize;
-    let mut deletions = 0_usize;
-
-    for rel in rels {
-        let old_id = anchor_files
-            .get(rel)
-            .and_then(|path| anchor_ids.get(path.as_str()).copied());
-        let new_id = work_ids.get(rel).map(String::as_str);
-        // The mode is only a change while the file exists at both ends: an
-        // addition or a deletion is already reported by presence alone.
-        let mode_change = match (anchor_files.get(rel), work_files.get(rel)) {
-            (Some(old_path), Some(new_path)) if old_id.is_some() && new_id.is_some() => {
-                let old_mode = tree_mode(anchor_exec.contains(old_path.as_str()));
-                let new_mode = tree_mode(work_modes.is_executable(new_path));
-                (old_mode != new_mode).then_some((old_mode, new_mode))
-            }
-            _ => None,
-        };
-        if old_id == new_id && mode_change.is_none() {
-            continue;
-        }
-        let kind = match (old_id.is_some(), new_id.is_some()) {
-            (false, true) => "added",
-            (true, false) => "deleted",
-            _ => "modified",
-        };
-        changed.push(ChangedItem::Package {
-            path: rel.to_string(),
-            change: kind.to_string(),
-        });
-        if let Some((old_mode, new_mode)) = mode_change {
-            patch.push_str(&mode_change_diff(rel, old_mode, new_mode).text);
-        }
-        // Equal object ids prove the bytes are unchanged. This check comes after
-        // mode rendering so a mode-only binary change cannot gain a false
-        // "Binary files differ" line from the content renderer.
-        if old_id == new_id {
-            continue;
-        }
-        // The content itself is only needed to render an identity change.
-        let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
-            Some(path) => git.show_file_bytes(anchor_commit, path)?,
-            None => None,
-        };
-        let new = new_id.map(|id| git.show_blob_bytes(id)).transpose()?;
-        let old_side = old.as_deref().map(|content| FileVersion {
-            content,
-            mode: tree_mode(
-                anchor_files
-                    .get(rel)
-                    .is_some_and(|path| anchor_exec.contains(path.as_str())),
-            ),
-        });
-        let new_side = new.as_deref().map(|content| FileVersion {
-            content,
-            mode: tree_mode(
-                work_files
-                    .get(rel)
-                    .is_some_and(|path| work_modes.is_executable(path)),
-            ),
-        });
-        let file_diff = file_diff(rel, old_side, new_side);
-        insertions = insertions.saturating_add(file_diff.insertions);
-        deletions = deletions.saturating_add(file_diff.deletions);
-        patch.push_str(&file_diff.text);
+    let (changed, patch, stat) = PackageDiff {
+        anchor_files: &anchor_files,
+        work_files,
+        anchor_tree: &anchor_tree,
+        work_modes: &work_modes,
+        work_ids: &work_ids,
     }
-
+    .render(
+        |path| git.show_file_bytes(anchor_commit, path),
+        |id| git.show_blob_bytes(id),
+    )?;
     let untracked = untracked_released(git, work_side, &tracked_resources, &work.present_tracked)?;
-
-    let stat = DiffStat {
-        files: changed.len(),
-        insertions,
-        deletions,
-    };
     Ok((changed, patch, stat, untracked))
+}
+
+/// Acquired endpoint identities for one package's released-content comparison.
+///
+/// Content bytes are requested only for differing objects, after presence and mode decisions.
+/// Ref: packages/cargo-release-plan/docs/implementation.md, "Classification".
+struct PackageDiff<'a> {
+    anchor_files: &'a HashMap<String, String>,
+    work_files: &'a HashMap<String, String>,
+    anchor_tree: &'a [TreeEntry],
+    work_modes: &'a WorkTreeModes,
+    work_ids: &'a HashMap<String, String>,
+}
+
+impl PackageDiff<'_> {
+    fn render(
+        &self,
+        mut old_bytes: impl FnMut(&str) -> Result<Option<Vec<u8>>, AppError>,
+        mut new_bytes: impl FnMut(&str) -> Result<Vec<u8>, AppError>,
+    ) -> Result<(Vec<ChangedItem>, String, DiffStat), AppError> {
+        let Self {
+            anchor_files,
+            work_files,
+            anchor_tree,
+            work_modes,
+            work_ids,
+        } = self;
+        let anchor_ids: HashMap<&str, &str> = anchor_tree
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.id.as_str()))
+            .collect();
+        // Cargo copies the executable bit into the archive, so a file made
+        // executable without an edit is released content that changed even though
+        // its blob is untouched. Ref: packages/cargo-release-plan/docs/design.md, "Released content".
+        let anchor_exec: HashSet<&str> = anchor_tree
+            .iter()
+            .filter(|entry| entry.is_executable())
+            .map(|entry| entry.path.as_str())
+            .collect();
+        let rels: BTreeSet<&str> = anchor_files
+            .keys()
+            .chain(work_files.keys())
+            .map(String::as_str)
+            .collect();
+
+        let mut changed = Vec::new();
+        let mut patch = String::new();
+        let mut insertions = 0_usize;
+        let mut deletions = 0_usize;
+
+        for rel in rels {
+            let old_id = anchor_files
+                .get(rel)
+                .and_then(|path| anchor_ids.get(path.as_str()).copied());
+            let new_id = work_ids.get(rel).map(String::as_str);
+            // The mode is only a change while the file exists at both ends: an
+            // addition or a deletion is already reported by presence alone.
+            let mode_change = match (anchor_files.get(rel), work_files.get(rel)) {
+                (Some(old_path), Some(new_path)) if old_id.is_some() && new_id.is_some() => {
+                    let old_mode = tree_mode(anchor_exec.contains(old_path.as_str()));
+                    let new_mode = tree_mode(work_modes.is_executable(new_path));
+                    (old_mode != new_mode).then_some((old_mode, new_mode))
+                }
+                _ => None,
+            };
+            if old_id == new_id && mode_change.is_none() {
+                continue;
+            }
+            let kind = match (old_id.is_some(), new_id.is_some()) {
+                (false, true) => "added",
+                (true, false) => "deleted",
+                _ => "modified",
+            };
+            changed.push(ChangedItem::Package {
+                path: rel.to_string(),
+                change: kind.to_string(),
+            });
+            if let Some((old_mode, new_mode)) = mode_change {
+                patch.push_str(&mode_change_diff(rel, old_mode, new_mode).text);
+            }
+            // Equal object ids prove the bytes are unchanged. This check comes after
+            // mode rendering so a mode-only binary change cannot gain a false
+            // "Binary files differ" line from the content renderer.
+            if old_id == new_id {
+                continue;
+            }
+            // The content itself is only needed to render an identity change.
+            let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
+                Some(path) => old_bytes(path)?,
+                None => None,
+            };
+            let new = new_id.map(&mut new_bytes).transpose()?;
+            let old_side = old.as_deref().map(|content| FileVersion {
+                content,
+                mode: tree_mode(
+                    anchor_files
+                        .get(rel)
+                        .is_some_and(|path| anchor_exec.contains(path.as_str())),
+                ),
+            });
+            let new_side = new.as_deref().map(|content| FileVersion {
+                content,
+                mode: tree_mode(
+                    work_files
+                        .get(rel)
+                        .is_some_and(|path| work_modes.is_executable(path)),
+                ),
+            });
+            let file_diff = file_diff(rel, old_side, new_side);
+            insertions = insertions.saturating_add(file_diff.insertions);
+            deletions = deletions.saturating_add(file_diff.deletions);
+            patch.push_str(&file_diff.text);
+        }
+
+        let stat = DiffStat {
+            files: changed.len(),
+            insertions,
+            deletions,
+        };
+        Ok((changed, patch, stat))
+    }
 }
 
 /// Git modes for released work-tree paths.
@@ -988,6 +1049,8 @@ pub fn diff_package(
 /// it, so those paths are asked for alongside the directory. Only tracked
 /// resources are asked for, because an untracked one is not released content
 /// and Git records no mode for it.
+// Native mode-query forwarding; resources outside the package are exercised by integration tests.
+#[cfg_attr(test, mutants::skip)]
 pub fn work_tree_modes(
     git: &GitRepo,
     side: &PackageSide<'_>,
@@ -1006,6 +1069,8 @@ pub fn work_tree_modes(
 /// it read as deleted. A symbolic link stops the run here rather than being
 /// hashed, because Git would hash the file it points at while the tree records
 /// the link itself.
+// Validates native files before hashing; the injected pairing operation is covered in process.
+#[cfg_attr(test, mutants::skip)]
 fn work_blob_ids(
     git: &GitRepo,
     name: &str,
@@ -1013,8 +1078,15 @@ fn work_blob_ids(
     modes: &WorkTreeModes,
 ) -> Result<HashMap<String, String>, AppError> {
     let files = validated_work_tree_files(git, name, released, modes)?;
+    work_blob_ids_with(files, |paths| git.hash_objects(paths))
+}
+
+fn work_blob_ids_with(
+    files: Vec<(&str, &str)>,
+    hash: impl FnOnce(&[&str]) -> Result<Vec<String>, AppError>,
+) -> Result<HashMap<String, String>, AppError> {
     let paths: Vec<&str> = files.iter().map(|(_, path)| *path).collect();
-    let ids = git.hash_objects(&paths)?;
+    let ids = hash(&paths)?;
     Ok(files
         .into_iter()
         .map(|(rel, _)| rel.to_string())
@@ -1031,6 +1103,8 @@ fn work_blob_ids(
     clippy::implicit_hasher,
     reason = "This internal acquisition operation consumes the classifier's concrete released-file map."
 )]
+// The in-process helper consumes the symlink observation; this adapter only acquires it.
+#[cfg_attr(test, mutants::skip)]
 pub fn validated_work_tree_files<'a>(
     git: &GitRepo,
     name: &str,
@@ -1178,6 +1252,8 @@ pub fn tracked_resources(
 /// so an untracked path is never a change. Ref: packages/cargo-release-plan/docs/design.md,
 /// "Released
 /// content".
+// Acquires Git listings and advisory resource presence for the pure selection operation.
+#[cfg_attr(test, mutants::skip)]
 pub fn untracked_released(
     git: &GitRepo,
     side: &PackageSide<'_>,
@@ -1185,11 +1261,27 @@ pub fn untracked_released(
     tracked: &[String],
 ) -> Result<Vec<String>, AppError> {
     let listed: Vec<String> = git.ls_untracked(side.dir, side.case)?;
+    Ok(untracked_released_with(
+        side,
+        tracked_resources,
+        tracked,
+        &listed,
+        |path| git.root().join(path).symlink_metadata().is_ok(),
+    ))
+}
+
+fn untracked_released_with(
+    side: &PackageSide<'_>,
+    tracked_resources: &BTreeMap<String, String>,
+    tracked: &[String],
+    listed: &[String],
+    mut present: impl FnMut(&str) -> bool,
+) -> Vec<String> {
     // The same nested-package boundary the tracked listing observes applies
     // here, or a file under a nested package would be advertised as content
     // Cargo would pack for the outer one. The manifest drawing that boundary
     // may itself still be untracked, so both listings feed the scan.
-    let mut boundary_paths = listed.clone();
+    let mut boundary_paths = listed.to_vec();
     boundary_paths.extend_from_slice(tracked);
     let nested = nested_package_dirs(&boundary_paths, side.dir, side.case);
 
@@ -1206,17 +1298,19 @@ pub fn untracked_released(
     // declared from outside would go unmentioned even though Cargo would pack
     // it. It is advisory in exactly the same way, and it is named by the path
     // it takes inside the package archive.
-    untracked.extend(side.resources.iter().filter_map(|(name, path)| {
-        let present = git.root().join(path).symlink_metadata().is_ok();
-        (present && !tracked_resources.contains_key(name)).then(|| name.clone())
-    }));
+    untracked.extend(
+        side.resources
+            .iter()
+            .filter(|&(name, path)| present(path) && !tracked_resources.contains_key(name))
+            .map(|(name, _path)| name.clone()),
+    );
     if side.auto_readme {
         // A README Cargo would detect is packed whatever the packaging rules
         // say. Detect across both sets because a higher-priority untracked name
         // can outrank a tracked fallback; only the selected untracked path is
         // advisory.
         let listed_set: HashSet<&str> = listed.iter().map(String::as_str).collect();
-        let present: HashSet<&str> = tracked.iter().chain(&listed).map(String::as_str).collect();
+        let present: HashSet<&str> = tracked.iter().chain(listed).map(String::as_str).collect();
         if let Some((name, full)) = detected_readme(side.dir, &present, side.case)
             && listed_set.contains(full.as_str())
         {
@@ -1225,7 +1319,7 @@ pub fn untracked_released(
     }
     untracked.sort_unstable();
     untracked.dedup();
-    Ok(untracked)
+    untracked
 }
 
 /// The package-relative paths of one work-tree package's released content.
@@ -1235,6 +1329,8 @@ pub fn untracked_released(
 /// from `include` and `exclude` alone would drop a README Cargo detects for
 /// itself and take in the files of a nested package, reporting a mismatch on a
 /// package whose rules are in fact right.
+// Native packaging-probe adapter; shared released_from_paths selection is tested in process.
+#[cfg_attr(test, mutants::skip)]
 pub fn released_work_tree_paths(
     git: &GitRepo,
     package: &WorkPackage,
@@ -1311,12 +1407,24 @@ fn is_new_at_snapshot(snapshot: &CommitSnapshot, name: &str) -> bool {
 /// Only a path that is not there is absent; any other failure stops the run,
 /// because reading it as a deletion would silently change what the package
 /// releases.
+// Native metadata adapter; presence, missing paths and operational errors are tested below.
+#[cfg_attr(test, mutants::skip)]
 pub fn present_in_work_tree(git: &GitRepo, paths: &[String]) -> Result<Vec<String>, AppError> {
+    present_in_work_tree_with(git.root(), paths, |path| {
+        fs::symlink_metadata(path).map(|_| ())
+    })
+}
+
+fn present_in_work_tree_with(
+    root: &Path,
+    paths: &[String],
+    mut metadata: impl FnMut(&Path) -> io::Result<()>,
+) -> Result<Vec<String>, AppError> {
     let mut present = Vec::with_capacity(paths.len());
     for path in paths {
-        let full = git.root().join(path);
-        match fs::symlink_metadata(&full) {
-            Ok(_) => present.push(path.clone()),
+        let full = root.join(path);
+        match metadata(&full) {
+            Ok(()) => present.push(path.clone()),
             Err(error) if is_not_found(&error) => {}
             Err(error) => return Err(ReadFileError::caused_by(&full, error).into()),
         }
@@ -1481,6 +1589,8 @@ impl SnapshotCache {
     }
 }
 
+// Git acquisitions are native; load_snapshot_with reconstructs members from captured observations.
+#[cfg_attr(test, mutants::skip)]
 fn load_snapshot(
     git: &GitRepo,
     commit: &str,
@@ -1488,13 +1598,25 @@ fn load_snapshot(
     registries: &BTreeMap<String, String>,
 ) -> Result<CommitSnapshot, AppError> {
     let tree_paths = git.ls_tree_paths(commit)?;
+    load_snapshot_with(git, case, registries, &tree_paths, |path| {
+        git.show_file(commit, path)
+    })
+}
+
+fn load_snapshot_with(
+    git: &GitRepo,
+    case: PathCase,
+    registries: &BTreeMap<String, String>,
+    tree_paths: &[String],
+    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
+) -> Result<CommitSnapshot, AppError> {
     let requested_root = root_manifest_rel(git);
-    let root_rel = case.recorded_path(&tree_paths, &requested_root);
+    let root_rel = case.recorded_path(tree_paths, &requested_root);
     // History before the workspace existed has no root manifest. An empty
     // `[workspace]` reproduces that state exactly: no members, so every current
     // package is absent from the snapshot and classified as newly created.
     let root_content = match root_rel {
-        Some(path) => git.show_file(commit, path)?,
+        Some(path) => read(path)?,
         None => None,
     }
     .unwrap_or_else(|| "[workspace]\n".to_string());
@@ -1515,8 +1637,7 @@ fn load_snapshot(
     }
 
     let mut manifests = GitManifestSource {
-        git,
-        commit,
+        read: &mut read,
         workspace_prefix,
         workspace,
         paths: manifest_paths,
@@ -1563,18 +1684,18 @@ fn load_snapshot(
         );
     }
     if packages.values().any(|package| package.has_lockfile_target) {
-        match historical_registries(git, commit, registries, &tree_paths, case) {
+        match historical_registries_with(git.prefix(), registries, tree_paths, case, &mut read) {
             Ok(registries) => installation.registries = registries,
             Err(error) => installation.registry_error = Some(installation_error(error)),
         }
         installation.patches = installation_patches(&root_doc);
-        resolve_historical_installation_paths(
+        resolve_historical_installation_paths_with(
             &mut installation,
             path_identities,
             git,
-            commit,
-            &tree_paths,
+            tree_paths,
             case,
+            &mut read,
         );
     }
     Ok(CommitSnapshot {
@@ -1585,13 +1706,13 @@ fn load_snapshot(
     })
 }
 
-pub fn resolve_historical_installation_paths(
+pub fn resolve_historical_installation_paths_with(
     installation: &mut InstallationGraph,
     mut identities: BTreeMap<String, Option<PackageIdentity>>,
     git: &GitRepo,
-    commit: &str,
     tree_paths: &[String],
     case: PathCase,
+    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
 ) {
     let mut documents = BTreeMap::<String, Option<DocumentMut>>::new();
     installation.resolve_paths(|reference| {
@@ -1615,8 +1736,7 @@ pub fn resolve_historical_installation_paths(
             if let Some(document) = documents.get(path) {
                 return Ok(document.clone());
             }
-            let document = git
-                .show_file(commit, path)?
+            let document = read(path)?
                 .map(|content| parse_document(Path::new(path), &content))
                 .transpose()?;
             documents.insert(path.clone(), document.clone());
@@ -1631,20 +1751,20 @@ pub fn resolve_historical_installation_paths(
 ///
 /// Cargo loads ancestor configurations from outermost to innermost and prefers
 /// the extensionless filename when both names exist in the same directory.
-pub fn historical_registries(
-    git: &GitRepo,
-    commit: &str,
+pub fn historical_registries_with(
+    prefix: &str,
     ambient: &BTreeMap<String, String>,
     tree_paths: &[String],
     case: PathCase,
+    mut read: impl FnMut(&str) -> Result<Option<String>, AppError>,
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut registries = ambient.clone();
-    for candidates in cargo_config_paths(git.prefix()) {
+    for candidates in cargo_config_paths(prefix) {
         for path in candidates {
             let Some(path) = case.recorded_path(tree_paths, &path) else {
                 continue;
             };
-            let Some(content) = git.show_file(commit, path)? else {
+            let Some(content) = read(path)? else {
                 continue;
             };
             let doc = parse_document(Path::new(&path), &content)?;
@@ -1699,9 +1819,9 @@ pub trait ManifestSource {
 
 /// Reads member manifests out of one commit, parsing each at most once.
 #[derive(Debug)]
-pub struct GitManifestSource<'a> {
-    pub git: &'a GitRepo,
-    pub commit: &'a str,
+pub struct GitManifestSource<'a, F> {
+    /// Reads a recorded path from the selected commit.
+    pub read: F,
     pub workspace_prefix: &'a str,
     pub workspace: WorkspaceInherit<'a>,
     /// Git-root-relative manifest path of every candidate directory.
@@ -1710,7 +1830,9 @@ pub struct GitManifestSource<'a> {
     pub case: PathCase,
 }
 
-impl ManifestSource for GitManifestSource<'_> {
+impl<F: FnMut(&str) -> Result<Option<String>, AppError>> ManifestSource
+    for GitManifestSource<'_, F>
+{
     fn candidate_dirs(&self) -> Vec<String> {
         self.paths.keys().cloned().collect()
     }
@@ -1726,7 +1848,7 @@ impl ManifestSource for GitManifestSource<'_> {
         };
         if !self.parsed.contains_key(&dir) {
             let parsed = match self.paths.get(&dir) {
-                Some(path) => match self.git.show_file(self.commit, path)? {
+                Some(path) => match (self.read)(path)? {
                     Some(content) => parse_package_manifest(&content, path, &self.workspace)?,
                     None => None,
                 },
@@ -1838,6 +1960,8 @@ pub struct LockfileCache {
 }
 
 impl LockfileCache {
+    // Acquires tracked bytes only on a cache miss; anchor_with tests cache identity and parsing.
+    #[cfg_attr(test, mutants::skip)]
     pub fn anchor<'a>(
         &'a mut self,
         git: &GitRepo,
@@ -1845,13 +1969,25 @@ impl LockfileCache {
         commit: &str,
         path: &str,
     ) -> Result<&'a Lockfile, AppError> {
-        if !self.anchors.contains_key(commit) {
+        let case = self.case;
+        self.anchor_with(name, commit, path, || {
             let paths = git.ls_tree_paths(commit)?;
-            let bytes = match self.case.recorded_path(&paths, path) {
-                Some(recorded) => git.show_file_bytes(commit, recorded)?,
-                None => None,
-            };
-            let Some(bytes) = bytes else {
+            match case.recorded_path(&paths, path) {
+                Some(recorded) => git.show_file_bytes(commit, recorded),
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn anchor_with(
+        &mut self,
+        name: &str,
+        commit: &str,
+        path: &str,
+        read: impl FnOnce() -> Result<Option<Vec<u8>>, AppError>,
+    ) -> Result<&Lockfile, AppError> {
+        if !self.anchors.contains_key(commit) {
+            let Some(bytes) = read()? else {
                 return Err(LockfileClosureUnavailableError::new(
                     name,
                     "the anchor commit does not track a workspace Cargo.lock",
@@ -2005,6 +2141,8 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
 /// the target path, so neither reading the target text nor following the link
 /// yields a comparison that is right at both ends. Ref: packages/cargo-release-plan/docs/design.md,
 /// "Released content".
+// Native observations only; read_optional_bytes_with covers missing/error/link/byte distinctions.
+#[cfg_attr(test, mutants::skip)]
 pub fn read_optional_bytes(
     path: &Path,
     name: &str,

@@ -32,3 +32,11 @@ Pure parsing and graph tests remain in process. Real Git/Cargo/filesystem tests
 belong to boundary integration targets, with hermetic Git identity/configuration.
 Shared integration fixtures are opt-in private test support, not acquisition hidden
 inside unit tests. Lockfile-closure benchmarks measure only the in-process algorithm.
+
+Observation adapters acquire process outputs, directory identities and file-type facts.
+Their interpretation remains independent of native execution: status and optional-result
+handling, first-parent endpoint selection, ancestor resolution, tracked-source eligibility
+and configuration precedence consume captured values or narrow read callbacks. Metadata
+projection shares those operations rather than duplicating publication and dependency
+decisions in a test model. Only native forwarding is excluded from unit mutation testing;
+boundary integrations exercise the actual commands and filesystem effects.

@@ -54,8 +54,7 @@ fn historical_paths_distinguish_local_inherited_and_outside_members() {
     .map(|(directory, path)| (directory.to_string(), path.to_string()))
     .into();
     let mut source = GitManifestSource {
-        git: &git,
-        commit: commit.trim(),
+        read: |path: &str| git.show_file(commit.trim(), path),
         workspace_prefix: "nested/",
         case: PathCase::Sensitive,
         workspace: WorkspaceInherit::from_root(&root),
