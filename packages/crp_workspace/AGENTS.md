@@ -5,5 +5,6 @@ Follow the [application guidance](../cargo-release-plan/AGENTS.md) and the
 preserve raw manifest syntax through exact-dependency validation.
 
 Run component tests with `--all-features` so shared private fixtures are available.
-Unit fixtures must provide matching lexical member paths; canonicalization fallback
-and path-alias cases belong in boundary tests. Do not import versioning group types.
+Unit fixtures must provide captured directory identities through injected callbacks;
+never canonicalize fixture paths on the host. Real canonicalization and path-alias
+cases belong in boundary tests. Do not import versioning group types.
