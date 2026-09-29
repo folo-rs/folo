@@ -223,7 +223,7 @@ fn publication_preflight_propagates_workspace_acquisition_failure() {
         all(target_os = "macos", target_arch = "aarch64")
     )
 ))]
-fn unified_binary_command_stages_a_frozen_batch_without_github() {
+fn unified_binary_command_uses_the_workspace_of_a_member_manifest() {
     // As in native_binaries::SMOKE_WATCHDOG, allow orders of magnitude more than ordinary
     // seconds-long toolchain/archive runs. This watchdog is not a test failure assertion.
     testing::with_watchdog_timeout(Duration::from_mins(5), || {
@@ -305,7 +305,7 @@ pkg-fmt = "zip"
             .arg("--batch")
             .arg(&batch)
             .arg("--manifest-path")
-            .arg(fixture.manifest())
+            .arg(fixture.path().join("packages/library/Cargo.toml"))
             .arg("--output")
             .arg(&outcome)
             .arg("--artifacts")

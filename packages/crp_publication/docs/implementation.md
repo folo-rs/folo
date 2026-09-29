@@ -44,6 +44,8 @@ Post-upload observation retains each independent package result even when anothe
 fails. Failed writes or Cargo exits remain attached when confirmation also fails.
 Shared source-intent verification and outcome-file persistence belong to the publication
 source and artifact modules rather than to a registry-specific adapter.
+Registry and native execution use the verified workspace manifest as their working-directory
+authority, including when the caller selects that workspace through a member manifest.
 Tracked inputs are collected within each guarded acquisition step and checked through
 workspace's batched index API; canonical paths are reused during intent serialization.
 Registry preflight consumes typed plan-inspection facts and the shared reserved-metadata

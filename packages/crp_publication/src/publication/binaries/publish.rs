@@ -61,16 +61,16 @@ pub fn publish(
     let batch = decode_batch(&bytes, batch_path)?;
     validate(&publication, &batch)
         .map_err(|error| BinaryBatchInputError::caused_by(batch_path, error))?;
-    verify_source(&publication, manifest)?;
+    let source = verify_source(&publication, manifest)?;
     if !no_upload {
         verify_batch_tags(&batch, diagnostics)?;
     }
     install_cancellation_handler()?;
-    let workspace = manifest
-        .canonicalize()
-        .map_err(|error| ReadFileError::caused_by(manifest, error))?
+    // A member manifest can select the workspace; native execution needs its verified root.
+    let workspace = source
+        .manifest
         .parent()
-        .expect("a canonical manifest has a parent directory")
+        .expect("the verified workspace manifest has a parent directory")
         .to_path_buf();
     let mut executor = BinaryPublisher::new(
         workspace,
