@@ -126,6 +126,9 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
 /// Returns a [`ConfigError`] if the file cannot be read (an explicit `--config`
 /// that does not exist, or any non-"not found" I/O error), or if its contents
 /// are not a valid configuration.
+// Native read forwarder: tests/load_config.rs covers acquisition; in-process
+// parse_config_read tests cover all parsing and read-error decisions.
+#[cfg_attr(test, mutants::skip)]
 pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigError> {
     parse_config_read(path, explicit, tokio::fs::read_to_string(path).await)
 }
