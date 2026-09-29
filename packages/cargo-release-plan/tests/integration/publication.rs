@@ -990,11 +990,19 @@ fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() 
             .write_all(request.to_string().as_bytes())
             .unwrap();
         let rejected = child.wait_with_output().unwrap();
-        assert!(!rejected.status.success());
-        assert_eq!(
-            serde_json::from_slice::<Value>(&rejected.stdout).unwrap(),
-            json!({"v":[1]})
-        );
+        // A completed protocol exchange exits successfully; Cargo reads rejection from Err.
+        assert!(rejected.status.success());
+        let responses: Vec<Value> = String::from_utf8(rejected.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses.first().unwrap(), &json!({"v":[1]}));
+        let response = responses.last().unwrap();
+        assert_eq!(response.pointer("/Err/kind").unwrap(), "other");
+        assert!(response.pointer("/Err/message").unwrap().is_string());
+        assert!(response.get("Ok").is_none());
         assert!(!String::from_utf8_lossy(&rejected.stderr).contains("identity-credential-canary"));
         session.finish().unwrap();
     });

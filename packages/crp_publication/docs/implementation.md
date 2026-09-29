@@ -51,8 +51,12 @@ workspace's batched index API; canonical paths are reused during intent serializ
 Registry preflight consumes typed plan-inspection facts and the shared reserved-metadata
 and destination-eligibility rules, rather than a second schema or a JSON round trip.
 
-Credential issuance validates Cargo's publish operation, registry, requested package/version
-and checksum shape, with a clean-source check before acquiring per-upload authority.
+Credential dispatch decodes Cargo's request kind and operation before requiring package fields.
+Cargo's package-less read preflight acquires its own short-lived credential; unsupported operations
+and invalid requests receive structured protocol errors. Every issuance validates the registry
+and publication session and rechecks clean source. Publish requests additionally require the
+requested package/version and checksum shape. Preflight and upload credentials are uncached,
+operation-dependent leases, so each upload acquires fresh authority after package verification.
 Cargo computes that checksum from the archive handle it uploads. The provider does not
 authenticate archive contents against source or enforce an additional packaged dependency
 closure. Private token leases, revocation and independent cleanup failures remain session-owned.
