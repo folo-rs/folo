@@ -41,7 +41,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 if ("{{MODE}}" -notin @("configured", "standalone")) { throw "Select an explicit planning mode." }
 $Identity = & "{{TOOL}}" version | ConvertFrom-Json
-$Expected = @{ plan = 5; report = 5; prepared = 5; decisions = 1; compatibility = 1 }
+$Expected = @{ plan = 6; report = 6; prepared = 6; decisions = 2; compatibility = 2 }
 if ("{{MODE}}" -eq "configured") { $Expected.release_context = 2 }
 foreach ($Name in $Expected.Keys) {
     if ($Identity.schemas.$Name -ne $Expected[$Name]) {
@@ -156,21 +156,21 @@ $PSNativeCommandUseErrorActionPreference = $true
 Use the returned ordered batches for the assessment. Resolve a package's patch
 with `Join-Path "{{WORK_DIR}}" "{{DIFF_PATH}}"` when it has `diff_path`.
 
-## Stage 4: Choose semantic decisions
+## Stage 4: Choose semantic impacts
 
 Write the assessed decisions to `WORK_DIR\decisions.json`, for example:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "changes": [
-    { "name": "example-api", "level": "nonbreaking" },
-    { "name": "example-tool", "level": "patch" }
+    { "name": "example-api", "impact": "nonbreaking" },
+    { "name": "example-tool", "impact": "patch" }
   ]
 }
 ```
 
-Names and levels are scenario values, not defaults. Use the decision guide and
+Names and impacts are scenario values, not defaults. Use the decision guide and
 report evidence; keep the explanation alongside this agent-authored document.
 
 ## Stage 5: Review resolved effects

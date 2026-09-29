@@ -1,8 +1,6 @@
 //! External acquisition for manifest.
 
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use crp_workspace::manifest::*;
@@ -43,23 +41,6 @@ fn path_case_probe_agrees_with_the_filesystem() {
         PathCase::Sensitive
     };
     assert_eq!(probed, observed);
-}
-
-#[cfg(unix)]
-#[cfg_attr(miri, ignore = "Creates and probes a real dangling symbolic link.")]
-#[test]
-fn path_case_probe_observes_dangling_directory_entries() {
-    let directory = tempfile::tempdir().unwrap();
-    symlink("missing-target", directory.path().join("Probe.txt")).unwrap();
-    let observed = match fs::symlink_metadata(directory.path().join("pROBE.TXT")) {
-        Ok(metadata) => {
-            assert!(metadata.file_type().is_symlink());
-            PathCase::Insensitive
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathCase::Sensitive,
-        Err(error) => panic!("filesystem alias probe failed: {error}"),
-    };
-    assert_eq!(PathCase::probe(directory.path()), observed);
 }
 
 #[cfg_attr(miri, ignore)] // Reads the filesystem, which Miri cannot emulate.

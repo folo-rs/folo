@@ -4,8 +4,8 @@ The application, GitHub integration and copied skill have related interfaces but
 different distribution lifecycles. Upgrade them as a tested combination rather
 than assuming equal version numbers.
 
-The walkthrough and copied skill use report/plan/prepared schema `5`,
-semantic-decision and compatibility schema `1`, and release-context schema `2`.
+The walkthrough and copied skill use report/plan/prepared schema `6`,
+semantic-decision and compatibility schema `2`, and release-context schema `2`.
 `cargo release-plan version` reports these revisions as JSON.
 `ACTION_REVISION` in workflow examples must be replaced with the verified
 immutable commit of a tested published action release selecting that interface.

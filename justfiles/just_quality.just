@@ -95,20 +95,6 @@ verify-caller-fixture:
     Import-Module ./scripts/bench-history/CallerFixture.psm1 -Force
     Assert-CallerFixture -Workspace "{{justfile_directory()}}"
 
-# Validates that every publishable binary crate declares the `[package.metadata.binstall]` block
-# the release workflow relies on, so a binary crate can never ship without installable prebuilt
-# binaries (see scripts/release/BinstallValidation.psm1 and docs/release-automation.md). Fast and
-# repo-wide (not package-scoped); runs with unconditional CI release validation.
-[group('quality')]
-[script]
-validate-binstall:
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
-    $PSNativeCommandUseErrorActionPreference = $true
-    Import-Module ./scripts/release/BinstallValidation.psm1 -Force
-
-    Invoke-BinstallValidation
-
 # Statically analyzes repository scripts and the packaged Azure deployment bundle with PSScriptAnalyzer
 # (installed and version-pinned by `just install-tools`). It runs the built-in rule set filtered by
 # the curated PSScriptAnalyzerSettings.psd1 PLUS the repo-local custom rules in
@@ -270,7 +256,7 @@ validate-linux:
 validate-local:
     just package="{{ package }}" format-check
     just package="{{ package }}" validate-workflows
-    just package="{{ package }}" validate-binstall
+    just validate-versions
     just package="{{ package }}" validate-scripts
     just package="{{ package }}" validate-bicep
     just package="{{ package }}" check dev

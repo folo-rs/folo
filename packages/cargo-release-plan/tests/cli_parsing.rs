@@ -15,21 +15,14 @@ fn parse(args: &[&str]) -> Result<Cli, EarlyExit> {
 }
 
 #[test]
-fn expansion_input_protection_is_explicit() {
-    let input = parse(&[
-        "expand",
-        "--plan",
-        "plan.json",
-        "--out",
-        "expanded.json",
-        "--preserve-input",
-    ])
-    .unwrap()
-    .into_input();
-    let RunInput::Expand { preserve_input, .. } = input else {
-        panic!()
-    };
-    assert!(preserve_input);
+fn retired_operations_and_argument_forms_are_rejected() {
+    for arguments in [
+        &["expand", "--plan", "plan.json", "--out", "expanded.json"][..],
+        &["check", "--base", "main"][..],
+        &["prepare", "--out-dir", "prepared"][..],
+    ] {
+        parse(arguments).unwrap_err().status.unwrap_err();
+    }
 }
 
 #[test]
@@ -66,7 +59,7 @@ fn inspection_requires_a_plan_and_preserves_workspace_selection() {
 fn artifact_commands_require_inputs_and_do_not_accept_workspace_options() {
     for command in ["analysis-order", "semver-targets"] {
         parse(&[command]).unwrap_err().status.unwrap_err();
-        for option in ["--base", "--manifest-path"] {
+        for option in ["--release-history", "--manifest-path"] {
             parse(&[command, "--report", "report.json", option, "other"])
                 .unwrap_err()
                 .status
@@ -168,12 +161,12 @@ fn report_defers_base_and_defaults_the_manifest_path() {
         RunInput::Report {
             merge_target: None,
             out_dir,
-            base,
+            release_history,
             manifest_path,
             verbose,
         } => {
             assert_eq!(out_dir, PathBuf::from("out"));
-            assert_eq!(base, None, "an unset --base defers to the repository");
+            assert_eq!(release_history, None);
             assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
             assert!(!verbose);
         }
@@ -185,7 +178,7 @@ fn report_defers_base_and_defaults_the_manifest_path() {
 fn check_parses_github_format_and_verify_packaging() {
     let input = parse(&[
         "check",
-        "--base",
+        "--release-history",
         "HEAD",
         "--format",
         "github",
@@ -199,64 +192,20 @@ fn check_parses_github_format_and_verify_packaging() {
     match input {
         RunInput::Check {
             merge_target: None,
-            base,
+            release_history,
             format,
             verify_packaging,
             config,
             verbose,
             ..
         } => {
-            assert_eq!(base.as_deref(), Some("HEAD"));
+            assert_eq!(release_history.as_deref(), Some("HEAD"));
             assert_eq!(format, CheckFormat::Github);
             assert!(verify_packaging);
             assert_eq!(config, Some(PathBuf::from(".cargo/release_plan.toml")));
             assert!(verbose);
         }
         other => panic!("expected check, got {other:?}"),
-    }
-}
-
-#[test]
-fn expand_requires_arguments() {
-    parse(&["expand"]).unwrap_err().status.unwrap_err();
-}
-
-#[test]
-fn expand_requires_an_output_path() {
-    parse(&["expand", "--plan", "plan.json"])
-        .unwrap_err()
-        .status
-        .unwrap_err();
-}
-
-#[test]
-fn expand_requires_a_plan() {
-    parse(&["expand", "--out", "expanded.json"])
-        .unwrap_err()
-        .status
-        .unwrap_err();
-}
-
-#[test]
-fn expand_defaults_the_manifest_path() {
-    let input = parse(&["expand", "--plan", "plan.json", "--out", "expanded.json"])
-        .unwrap()
-        .into_input();
-    match input {
-        RunInput::Expand {
-            plan,
-            out,
-            manifest_path,
-            preserve_input,
-            verbose,
-        } => {
-            assert_eq!(plan, PathBuf::from("plan.json"));
-            assert_eq!(out, PathBuf::from("expanded.json"));
-            assert!(!preserve_input);
-            assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
-            assert!(!verbose);
-        }
-        other => panic!("expected expand, got {other:?}"),
     }
 }
 
@@ -295,7 +244,7 @@ fn preparation_requires_output_and_preserves_baseline_selection() {
         "prepare",
         "--output",
         "evidence",
-        "--base",
+        "--release-history",
         "main",
         "--verbose",
     ])
@@ -305,12 +254,12 @@ fn preparation_requires_output_and_preserves_baseline_selection() {
         RunInput::Prepare {
             merge_target: None,
             output,
-            base,
+            release_history,
             manifest_path,
             verbose,
         } => {
             assert_eq!(output, PathBuf::from("evidence"));
-            assert_eq!(base.as_deref(), Some("main"));
+            assert_eq!(release_history.as_deref(), Some("main"));
             assert_eq!(manifest_path, PathBuf::from("Cargo.toml"));
             assert!(verbose);
         }

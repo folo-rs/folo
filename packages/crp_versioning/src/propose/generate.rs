@@ -1,7 +1,7 @@
 // Artifact-only proposal generation for the increment-versions workflow.
 //
 // Semantic judgement remains in the decision file. This module settles the version and
-// requirement consequences using the same plan resolver as expansion and application.
+// requirement consequences using the same plan resolver as preview and application.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -19,7 +19,7 @@ use crate::classify::PackageStatus;
 use crate::groups::Groups;
 use crate::plan::{PlanFile, PlanIncrement, PlanStage, ResolvedVersions, resolve_plan};
 use crate::preview::remove_marker;
-use crate::propose::decision::{ChangeLevel, Decisions};
+use crate::propose::decision::{Decisions, SemanticImpact};
 use crate::report::{ReportFile, ReportPackage, read_report};
 use crate::resolved::write_json;
 
@@ -44,7 +44,7 @@ fn propose(
 ) -> Result<String, AppError> {
     let report = artifacts.report_path(report);
     // An invalid rerun invalidates its previous proposal, but never its own source evidence.
-    // Canonical comparison also protects inputs addressed through a symlink or a relative path.
+    // Canonical comparison also protects inputs addressed through filesystem path aliases.
     for input in [&report, decisions] {
         if artifacts.same_path(input, out)? {
             return Err(ProposalInputCollision::new().into());
@@ -195,28 +195,28 @@ impl<'a> Proposal<'a> {
         let decisions = decisions.validate()?;
         // Validate user decisions even if group movement would otherwise hide an invalid entry.
         _ = self.decision_increments(&decisions, &Verbose::new(false, &crp_diag::Discard))?;
-        let mut levels = BTreeMap::new();
+        let mut impacts = BTreeMap::new();
         let mut alignment = BTreeMap::new();
         let mut visited = BTreeSet::new();
         loop {
-            record_state(&mut visited, &(&levels, &alignment))?;
-            let fresh_levels = self.public_levels(&decisions, &alignment, verbose)?;
+            record_state(&mut visited, &(&impacts, &alignment))?;
+            let fresh_impacts = self.public_impacts(&decisions, &alignment, verbose)?;
             let increments =
-                self.decision_increments(&fresh_levels, &Verbose::new(false, &crp_diag::Discard))?;
+                self.decision_increments(&fresh_impacts, &Verbose::new(false, &crp_diag::Discard))?;
             let fresh_alignment = self.align_groups(&increments, verbose)?;
-            if levels == fresh_levels && alignment == fresh_alignment {
+            if impacts == fresh_impacts && alignment == fresh_alignment {
                 break;
             }
-            levels = fresh_levels;
+            impacts = fresh_impacts;
             alignment = fresh_alignment;
         }
-        let increments = self.decision_increments(&levels, &verbose)?;
+        let increments = self.decision_increments(&impacts, &verbose)?;
         let increments = self.combine(increments, &alignment);
         let mut plan = PlanFile::new(PlanStage::Proposed, increments);
         plan.release_history = Some(self.report.release_history.clone());
         plan.merge_target.clone_from(&self.report.merge_target);
         let resolved = self.resolve(&plan)?;
-        self.validate_result(&resolved, &levels)?;
+        self.validate_result(&resolved, &impacts)?;
         Ok(plan)
     }
 
@@ -254,8 +254,9 @@ impl<'a> Proposal<'a> {
             .iter()
             .map(|entry| self.decision_key(&entry.name).to_owned())
             .collect();
-        // A fresh semantic level supersedes an earlier exact alignment for the same group.
-        // Passing both to resolve_plan would conflict; a patch alignment cannot exceed a level.
+        // A fresh semantic impact supersedes an earlier exact alignment for the same group.
+        // Passing both to resolve_plan would conflict; a patch alignment cannot exceed the
+        // selected semantic minimum.
         increments.extend(
             alignment
                 .iter()
@@ -268,11 +269,11 @@ impl<'a> Proposal<'a> {
 
     fn predicted_versions(
         &self,
-        levels: &BTreeMap<String, ChangeLevel>,
+        impacts: &BTreeMap<String, SemanticImpact>,
         alignment: &BTreeMap<String, PlanIncrement>,
     ) -> Result<BTreeMap<String, Version>, AppError> {
         let increments =
-            self.decision_increments(levels, &Verbose::new(false, &crp_diag::Discard))?;
+            self.decision_increments(impacts, &Verbose::new(false, &crp_diag::Discard))?;
         let plan = PlanFile::new(PlanStage::Proposed, self.combine(increments, alignment));
         let mut versions = self.resolve(&plan)?.packages;
         for (name, declared) in &self.versions {
@@ -288,22 +289,22 @@ impl<'a> Proposal<'a> {
         Ok(versions)
     }
 
-    fn public_levels(
+    fn public_impacts(
         &self,
-        decisions: &BTreeMap<String, ChangeLevel>,
+        decisions: &BTreeMap<String, SemanticImpact>,
         alignment: &BTreeMap<String, PlanIncrement>,
         verbose: Verbose<'_>,
-    ) -> Result<BTreeMap<String, ChangeLevel>, AppError> {
-        let mut levels = decisions.clone();
+    ) -> Result<BTreeMap<String, SemanticImpact>, AppError> {
+        let mut impacts = decisions.clone();
         let mut visited = BTreeSet::new();
         loop {
-            record_state(&mut visited, &levels)?;
-            let mut versions = self.predicted_versions(&levels, alignment)?;
+            record_state(&mut visited, &impacts)?;
+            let mut versions = self.predicted_versions(&impacts, alignment)?;
             let mut changed = false;
             for (name, package) in &self.packages {
                 if !self.anchors.contains_key(name)
                     || self.breaks(name, &versions)
-                    || levels.get(*name) == Some(&ChangeLevel::Breaking)
+                    || impacts.get(*name) == Some(&SemanticImpact::Breaking)
                 {
                     continue;
                 }
@@ -316,7 +317,7 @@ impl<'a> Proposal<'a> {
                 {
                     verbose.note(|| {
                         format!(
-                            "Package {} is raised to change level 'breaking' because its public \
+                            "Package {} is raised to semantic impact 'breaking' because its public \
                              API exposes {}, whose resolved version {} is incompatible with \
                              anchor {}. Exposed dependency types are part of the consumer contract.",
                             quote_path(name),
@@ -329,15 +330,15 @@ impl<'a> Proposal<'a> {
                                 .expect("breaking dependency releases have a published anchor")
                         )
                     });
-                    levels.insert((*name).to_owned(), ChangeLevel::Breaking);
+                    impacts.insert((*name).to_owned(), SemanticImpact::Breaking);
                     // A sibling may now move through the same group. Resolve before inspecting
                     // the next package so that it does not receive a redundant semantic entry.
-                    versions = self.predicted_versions(&levels, alignment)?;
+                    versions = self.predicted_versions(&impacts, alignment)?;
                     changed = true;
                 }
             }
             if !changed {
-                return Ok(levels);
+                return Ok(impacts);
             }
         }
     }
@@ -377,7 +378,7 @@ impl<'a> Proposal<'a> {
     fn validate_result(
         &self,
         resolved: &ResolvedVersions,
-        levels: &BTreeMap<String, ChangeLevel>,
+        impacts: &BTreeMap<String, SemanticImpact>,
     ) -> Result<(), AppError> {
         let mut versions = self.versions.clone();
         versions.extend(resolved.packages.clone());
@@ -430,12 +431,12 @@ impl<'a> Proposal<'a> {
                 return Err(UnsettledGroup::new(name).into());
             }
         }
-        for (name, level) in levels {
+        for (name, impact) in impacts {
             let anchor = self
                 .anchors
                 .get(name.as_str())
                 .expect("semantic decisions are validated against published anchors");
-            let minimum = level.minimum(anchor)?;
+            let minimum = impact.minimum(anchor)?;
             let version = versions
                 .get(name)
                 .expect("semantic decisions only name tracked packages");
@@ -485,14 +486,14 @@ struct ProposalCycle;
 
 /// Changed released content must be paired with an effective version movement.
 #[ohno::error]
-#[display("packages need an increment without one: {}. Decide their change levels", packages.join(", ").quoted())]
+#[display("packages need an increment without one: {}. Decide their change impacts", packages.join(", ").quoted())]
 struct MissingIncrement {
     packages: Vec<String>,
 }
 
 /// Requirement rewrites cannot change the contents of an already-published version.
 #[ohno::error]
-#[display("the plan rewrites published packages that keep their versions: {}. Decide their change levels", packages.join(", ").quoted())]
+#[display("the plan rewrites published packages that keep their versions: {}. Decide their change impacts", packages.join(", ").quoted())]
 struct RewrittenPublishedPackage {
     packages: Vec<String>,
 }
@@ -723,10 +724,7 @@ mod tests {
 
         fn write_plan(&mut self, path: &Path, plan: &PlanFile) -> Result<(), AppError> {
             assert_eq!(path, Path::new("output/plan.json"));
-            assert_eq!(
-                entries(plan),
-                json!([{"name": "library", "level": "patch"}])
-            );
+            assert_eq!(entries(plan), json!([{"name": "library", "bump": "patch"}]));
             self.visit("write")
         }
     }
@@ -748,21 +746,21 @@ mod tests {
             &[],
         );
         report.validate().unwrap();
-        let levels = Proposal::new(&report)
-            .public_levels(
+        let impacts = Proposal::new(&report)
+            .public_impacts(
                 &BTreeMap::new(),
                 &BTreeMap::new(),
                 Verbose::new(true, &crp_diag::Discard),
             )
             .unwrap();
         assert_eq!(
-            levels,
-            BTreeMap::from([("app".to_owned(), ChangeLevel::Breaking)])
+            impacts,
+            BTreeMap::from([("app".to_owned(), SemanticImpact::Breaking)])
         );
     }
 
     #[test]
-    fn a_propagated_semantic_level_supersedes_an_earlier_exact_group_alignment() {
+    fn a_propagated_semantic_impact_supersedes_an_earlier_exact_group_alignment() {
         let report = report(
             vec![
                 depends(package("app", "2.0.0", Some("2.0.0")), "lib", true),
@@ -780,25 +778,25 @@ mod tests {
             "app".to_owned(),
             PlanIncrement {
                 name: "app".to_owned(),
-                level: None,
+                bump: None,
                 version: Some("2.0.0".to_owned()),
             },
         )]);
-        let levels = proposal
-            .public_levels(
+        let impacts = proposal
+            .public_impacts(
                 &BTreeMap::new(),
                 &alignment,
                 Verbose::new(false, &crp_diag::Discard),
             )
             .unwrap();
         let increments = proposal
-            .decision_increments(&levels, &Verbose::new(false, &crp_diag::Discard))
+            .decision_increments(&impacts, &Verbose::new(false, &crp_diag::Discard))
             .unwrap();
         let plan = PlanFile::new(
             PlanStage::Proposed,
             proposal.combine(increments, &alignment),
         );
-        assert_eq!(entries(&plan), json!([{"name": "app", "level": "major"}]));
+        assert_eq!(entries(&plan), json!([{"name": "app", "bump": "major"}]));
         assert_versions(
             &report,
             &plan,
@@ -940,14 +938,14 @@ mod tests {
     }
 
     #[test]
-    fn resolved_versions_must_satisfy_the_supplied_semantic_level() {
+    fn resolved_versions_must_satisfy_the_supplied_semantic_impact() {
         let report = report(vec![package("lib", "1.0.0", Some("1.0.0"))], vec![], &[]);
         let resolved = ResolvedVersions {
             packages: BTreeMap::from([("lib".to_owned(), Version::new(1, 0, 1))]),
         };
-        let levels = BTreeMap::from([("lib".to_owned(), ChangeLevel::Breaking)]);
+        let impacts = BTreeMap::from([("lib".to_owned(), SemanticImpact::Breaking)]);
         let error = Proposal::new(&report)
-            .validate_result(&resolved, &levels)
+            .validate_result(&resolved, &impacts)
             .unwrap_err();
         assert!(error.find_source::<InsufficientIncrement>().is_some());
     }

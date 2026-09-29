@@ -14,6 +14,14 @@ and application stay together. Their captured-input and no-late-resolution invar
 must not be distributed across independently interpreted artifacts. Report and plan
 producers own the schemas their consumers validate.
 
+The skill's semantic decisions use `impact`; a proposal's mechanical version choices
+use `bump` or an explicit version. Proposal generation translates semantic meaning
+into version arithmetic before preview expands groups and dependency consequences
+to a fixed point. There is no separate expansion operation. The expanded marker
+binds a preview to its complete explicit package set, while captured source and
+file effects make that preview applicable. Both real and dry-run application
+require this captured state; neither interprets a proposal as live manifest edits.
+
 ## Anticipated squash predecessors
 
 Assessment keeps the actual release-history commit separate from an optional final
@@ -44,9 +52,8 @@ Preparation retains
 the context across lockfile refresh; every fixed-point classification uses it.
 
 Reports expose the resolved history and optional target identities. Generated
-proposals carry that same context, expansion preserves it, and preview rejects
-bound proposals from another prepared context. A hand-authored proposal without
-a bound context uses the prepared inputs. Resolved plans include both the context
+proposals carry that same context through preview, which rejects
+bound proposals from another prepared context. Resolved plans include both the context
 and captured inputs; verification and application enforce their agreement.
 The shared report/plan/prepared schema is defined by `plan::SCHEMA_VERSION`;
 semantic decision documents keep their separate `DECISION_SCHEMA_VERSION`.

@@ -136,7 +136,7 @@ fn validate_expanded(plan: &PlanFile) -> Result<(), AppError> {
     if plan.stage() != PlanStage::Expanded
         || plan.increments.iter().any(|increment| {
             increment.version.is_none()
-                || increment.level.is_some()
+                || increment.bump.is_some()
                 || !names.insert(&increment.name)
         })
     {
@@ -368,7 +368,7 @@ mod tests {
                 .iter()
                 .map(|name| PlanIncrement {
                     name: (*name).to_owned(),
-                    level: None,
+                    bump: None,
                     version: Some("1.0.1".to_owned()),
                 })
                 .collect(),
@@ -419,7 +419,7 @@ mod tests {
     fn only_complete_explicit_unique_expansions_are_inspectable() {
         let increment = PlanIncrement {
             name: "api".to_owned(),
-            level: None,
+            bump: None,
             version: Some("1.0.1".to_owned()),
         };
         let plan = PlanFile::new(PlanStage::Expanded, vec![increment.clone()]);
@@ -433,7 +433,7 @@ mod tests {
             PlanFile::new(
                 PlanStage::Expanded,
                 vec![PlanIncrement {
-                    level: Some("patch".to_owned()),
+                    bump: Some("patch".to_owned()),
                     ..increment.clone()
                 }],
             ),

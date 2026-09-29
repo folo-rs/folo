@@ -19,9 +19,9 @@ fn public_dependency_propagation_reaches_a_fixed_point() {
     assert_eq!(
         entries(&plan),
         json!([
-            {"name": "a_outer", "level": "major"},
-            {"name": "middle", "level": "major"},
-            {"name": "z_inner", "level": "major"}
+            {"name": "a_outer", "bump": "major"},
+            {"name": "middle", "bump": "major"},
+            {"name": "z_inner", "bump": "major"}
         ])
     );
     assert_invariants(&report, &plan);
@@ -49,7 +49,7 @@ fn assert_dependency_decision(public: bool, expected: &str) {
     let plan = generate(&report, &[("lib", "breaking"), ("app", "patch")]).unwrap();
     let first = plan.increments.first().unwrap();
     assert_eq!(first.name, "app");
-    assert_eq!(first.level.as_deref(), Some(expected));
+    assert_eq!(first.bump.as_deref(), Some(expected));
     assert_invariants(&report, &plan);
 }
 
@@ -94,8 +94,8 @@ fn assert_sibling_break(leader: &str, expected: &str) {
     assert_eq!(
         entries(&plan),
         json!([
-            {"name": "app", "level": "major"},
-            {"name": "lib_impl", "level": "major"}
+            {"name": "app", "bump": "major"},
+            {"name": "lib_impl", "bump": "major"}
         ])
     );
     assert_versions(
@@ -120,8 +120,8 @@ fn alignment_patch_breaks_propagate_after_alignment_is_settled() {
     assert_eq!(
         entries(&plan),
         json!([
-            {"name": "app", "level": "major"},
-            {"name": "lib", "level": "patch"}
+            {"name": "app", "bump": "major"},
+            {"name": "lib", "bump": "patch"}
         ])
     );
     assert_invariants(&report, &plan);
@@ -142,7 +142,7 @@ fn cyclic_public_dependencies_terminate_with_one_breaking_decision() {
     assert!(
         plan.increments
             .iter()
-            .all(|entry| entry.level.as_deref() == Some("major"))
+            .all(|entry| entry.bump.as_deref() == Some("major"))
     );
     assert_versions(&report, &plan, &json!({"alpha": "2.0.0", "beta": "3.0.0"}));
 }
@@ -159,6 +159,6 @@ fn public_propagation_does_not_add_redundant_decisions_for_group_siblings() {
         &[&["alpha", "beta"]],
     );
     let plan = generate(&report, &[]).unwrap();
-    assert_eq!(entries(&plan), json!([{"name": "alpha", "level": "major"}]));
+    assert_eq!(entries(&plan), json!([{"name": "alpha", "bump": "major"}]));
     assert_invariants(&report, &plan);
 }

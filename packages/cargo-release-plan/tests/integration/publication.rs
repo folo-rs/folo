@@ -36,7 +36,7 @@ fn publication_configuration_is_explicit_and_does_not_replace_version_checks() {
     let base = fixture.sha("HEAD");
     let input = |configured: bool| RunInput::Check {
         merge_target: None,
-        base: Some(base.clone()),
+        release_history: Some(base.clone()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -118,7 +118,7 @@ pkg-fmt = "zip"
     assert!(matches!(
         run(&RunInput::Check {
             merge_target: None,
-            base: Some(fixture.sha("HEAD")),
+            release_history: Some(fixture.sha("HEAD")),
             manifest_path: fixture.manifest(),
             format: CheckFormat::Text,
             verify_packaging: false,
@@ -139,7 +139,7 @@ fn publication_preflight_does_not_query_or_change_nonpublishable_members() {
     let fixture = Fixture::new("");
     write_package(&fixture, "helper", "1.0.0", "publish = false\n");
     fixture.commit("local-only workspace");
-    fixture.write("proposal.json", r#"{"schema_version":5,"increments":[]}"#);
+    fixture.write("proposal.json", r#"{"schema_version":6,"increments":[]}"#);
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let manifest = fs::read(fixture.manifest()).unwrap();
     let lockfile = fixture.read("Cargo.lock");
@@ -355,7 +355,7 @@ fn release_context_resolves_history_without_requiring_clean_source() {
             merge_target: None,
             manifest_path: fixture.manifest(),
             config: None,
-            base: explicit,
+            release_history: explicit,
             verbose: true,
         })
         .unwrap();
@@ -406,7 +406,7 @@ fn release_context_keeps_actual_history_distinct_from_the_parent_target() {
         let RunOutcome::ArtifactQuery { message } = run(&RunInput::ReleaseContext {
             manifest_path: fixture.manifest(),
             config: None,
-            base: Some(history.clone()),
+            release_history: Some(history.clone()),
             merge_target: target,
             verbose: false,
         })
@@ -939,7 +939,6 @@ fn credential_provider_entry_requires_context_and_rejects_unrequested_uploads() 
             .unwrap(),
             publication,
             directory.path().join("unused-source/Cargo.toml"),
-            directory.path().join("target"),
             TrustedPublisher::with_endpoint(
                 "http://127.0.0.1:0/unused",
                 crp_publication::PublicationOutput::new(

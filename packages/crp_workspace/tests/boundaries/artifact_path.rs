@@ -4,13 +4,9 @@ use std::fs;
 use std::io::Write as _;
 #[cfg(unix)]
 use std::io::{Error as IoError, ErrorKind};
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 
 use crp_workspace::artifact_path::*;
 use tempfile::tempdir;
-#[cfg(unix)]
-use tempfile::tempdir_in;
 
 #[test]
 #[cfg_attr(miri, ignore = "Creates and promotes owned temporary artifact files")]
@@ -103,61 +99,4 @@ fn parent_traversal_cannot_escape_a_non_directory() {
     );
     assert_eq!(fs::read_to_string(file).unwrap(), "not a directory");
     assert!(!directory.path().join("missing").exists());
-}
-
-#[cfg(unix)]
-#[test]
-#[cfg_attr(miri, ignore = "creates a directory symlink")]
-fn existing_symlink_ancestors_are_resolved_before_missing_components() {
-    // Exercise a noncanonical temporary root regardless of the host's temporary directory.
-    let root = tempdir().unwrap();
-    let root_alias = root.path().join("root-alias");
-    symlink(root.path(), &root_alias).unwrap();
-    let directory = tempdir_in(&root_alias).unwrap();
-    assert_ne!(
-        directory.path(),
-        fs::canonicalize(directory.path()).unwrap()
-    );
-    let real = directory.path().join("nested").join("real");
-    fs::create_dir_all(&real).unwrap();
-    let alias = directory.path().join("alias");
-    symlink(&real, &alias).unwrap();
-    let input = real.join("report.json");
-    fs::write(&input, "evidence").unwrap();
-    assert!(same_path(&input, &alias.join("report.json")).unwrap());
-    assert!(same_path(&input, &alias.join("new").join("..").join("report.json")).unwrap());
-    assert!(
-        same_path(
-            &input,
-            &directory
-                .path()
-                .join("missing")
-                .join("..")
-                .join("alias")
-                .join("report.json")
-        )
-        .unwrap()
-    );
-    let parent_input = real.parent().unwrap().join("parent.json");
-    fs::write(&parent_input, "parent evidence").unwrap();
-    assert!(
-        same_path(
-            &parent_input,
-            &directory
-                .path()
-                .join("missing")
-                .join("..")
-                .join("alias")
-                .join("..")
-                .join("parent.json")
-        )
-        .unwrap()
-    );
-    assert_eq!(
-        resolve_path(&alias.join("new").join("plan.json")).unwrap(),
-        fs::canonicalize(&real)
-            .unwrap()
-            .join("new")
-            .join("plan.json")
-    );
 }

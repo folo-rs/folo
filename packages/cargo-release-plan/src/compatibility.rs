@@ -138,7 +138,7 @@ impl CompatibilityOutcome {
             self.packages.push(Comparison {
                 name: name.to_owned(),
                 baseline_version: None,
-                required_level: None,
+                required_impact: None,
                 compared: false,
             });
             return Ok(());
@@ -151,7 +151,7 @@ impl CompatibilityOutcome {
         self.packages.push(Comparison {
             name: name.to_owned(),
             baseline_version: Some(baseline.to_string()),
-            required_level: floor,
+            required_impact: floor,
             compared: true,
         });
         Ok(())
@@ -168,8 +168,8 @@ impl CompatibilityOutcome {
                         self.packages
                             .iter()
                             .filter_map(|package| package
-                                .required_level
-                                .map(|level| format!("{} requires {level}", package.name)))
+                                .required_impact
+                                .map(|impact| format!("{} requires {impact}", package.name)))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -219,12 +219,12 @@ impl CompatibilityOutcome {
 struct Comparison {
     name: String,
     baseline_version: Option<String>,
-    required_level: Option<&'static str>,
+    required_impact: Option<&'static str>,
     compared: bool,
 }
 
 /// Current compatibility.json layout; independent of the report and plan schemas.
-pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 1;
+pub(crate) const COMPATIBILITY_SCHEMA_VERSION: u32 = 2;
 
 /// Persists critical checker evidence while deferring secondary diagnostic-delivery failures.
 struct CheckerOutput<L, M> {
@@ -375,7 +375,7 @@ fn check_with_output(
     manifest: &Path,
     prepared: Option<&Path>,
     plan: Option<&Path>,
-    base: Option<&str>,
+    release_history: Option<&str>,
     merge_target: Option<&str>,
     output: &Path,
     deny_findings: bool,
@@ -397,7 +397,7 @@ fn check_with_output(
         (Evidence::Preview(resolved), manifest)
     } else {
         let manifest = manifest.canonicalize()?;
-        let inputs = Inputs::capture_with_target(&manifest, base, merge_target)?;
+        let inputs = Inputs::capture_with_target(&manifest, release_history, merge_target)?;
         (Evidence::Source(inputs), manifest)
     };
     // Derive target selection from the bound source rather than trusting an adjacent report
@@ -599,20 +599,35 @@ impl ParentSource {
             repository: repository.to_owned(),
             commit: commit.to_owned(),
         };
-        let created = run_capture(
-            "git",
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                &source.root.to_string_lossy(),
-                commit,
-            ],
-            repository,
-        )
-        .map_err(|error| {
-            ParentSourceFailed::caused_by(commit.to_owned(), "create source worktree", error).into()
-        });
+        let created = (|| {
+            run_capture(
+                "git",
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    &source.root.to_string_lossy(),
+                    commit,
+                ],
+                repository,
+            )
+            .map_err(|error| {
+                ParentSourceFailed::caused_by(commit.to_owned(), "create source worktree", error)
+            })?;
+            // Resolve Git's registered spelling while the worktree exists. A short-name or
+            // symlink alias cannot necessarily be resolved after failed removal closes TempDir.
+            GitRepo::discover(&source.root)
+                .map_err(|error| {
+                    ParentSourceFailed::caused_by(
+                        commit.to_owned(),
+                        "resolve registered source worktree",
+                        error,
+                    )
+                })?
+                .root()
+                .clone_into(&mut source.root);
+            Ok(())
+        })();
         if let Err(error) = created {
             return finish_parent_source(Err(error), source.finish());
         }
@@ -980,6 +995,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn compatibility_outcome_uses_only_canonical_schema_and_impact_field() {
+        let mut outcome = outcome();
+        outcome.packages.push(Comparison {
+            name: "library".to_owned(),
+            baseline_version: Some("1.2.3".to_owned()),
+            required_impact: Some("breaking"),
+            compared: true,
+        });
+        assert_eq!(
+            serde_json::to_value(outcome).unwrap(),
+            json!({
+                "schema_version":2,
+                "checker":"not invoked",
+                "report":"report.json",
+                "completed":false,
+                "findings":false,
+                "packages":[{
+                    "name":"library","baseline_version":"1.2.3",
+                    "required_impact":"breaking","compared":true
+                }]
+            }),
+        );
+    }
+
     fn checker_output(code: u8, stdout: &[u8], stderr: &[u8]) -> Output {
         // Unix from_raw consumes a wait status, whose exit-code field is the shifted byte.
         #[cfg(unix)]
@@ -1064,7 +1104,7 @@ mod tests {
             serde_json::to_value(&outcome.packages).unwrap(),
             json!([{
                 "name":"new-library", "baseline_version":null,
-                "required_level":null, "compared":false
+                "required_impact":null, "compared":false
             }])
         );
         assert!(outcome.conclusion(Path::new("evidence"), true).0);
@@ -1102,7 +1142,7 @@ mod tests {
                 let comparison = outcome.packages.last().unwrap();
                 assert_eq!(comparison.name, name);
                 assert_eq!(comparison.baseline_version.as_deref(), Some("1.2.3"));
-                assert_eq!(comparison.required_level, Some(floor));
+                assert_eq!(comparison.required_impact, Some(floor));
                 assert!(comparison.compared);
             }
             outcome
@@ -1120,7 +1160,7 @@ mod tests {
                     Verbose::new(false, &crp_diag::Discard),
                 )
                 .unwrap();
-            assert!(outcome.packages.last().unwrap().required_level.is_none());
+            assert!(outcome.packages.last().unwrap().required_impact.is_none());
             assert_eq!(outcome.findings, code == 100);
             assert!(outcome.conclusion(Path::new("evidence"), false).0);
             let (passed, message) = outcome.conclusion(Path::new("evidence"), true);
@@ -1229,8 +1269,8 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&outcome.packages).unwrap(),
             json!([
-                {"name":"new","baseline_version":null,"required_level":null,"compared":false},
-                {"name":"published","baseline_version":"1.0.0","required_level":"breaking","compared":true}
+                {"name":"new","baseline_version":null,"required_impact":null,"compared":false},
+                {"name":"published","baseline_version":"1.0.0","required_impact":"breaking","compared":true}
             ])
         );
     }
@@ -1279,7 +1319,7 @@ mod tests {
             assert!(!outcome.findings);
             assert_eq!(
                 serde_json::to_value(&outcome.packages).unwrap(),
-                json!([{"name":"first","baseline_version":"1.0.0","required_level":null,"compared":true}])
+                json!([{"name":"first","baseline_version":"1.0.0","required_impact":null,"compared":true}])
             );
         }
     }

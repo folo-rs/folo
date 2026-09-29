@@ -10,15 +10,15 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::ReadFileError;
-use crate::plan::{IncrementLevel, PlanIncrement, increment_version};
+use crate::plan::{PlanIncrement, VersionBump, increment_version};
 use crate::propose::generate::Proposal;
 
 /// Local decision-file revision used by the increment-versions skill.
-pub const DECISION_SCHEMA_VERSION: u32 = 1;
+pub const DECISION_SCHEMA_VERSION: u32 = 2;
 
 /// Human semantic assessments, before resolving their mechanical consequences.
 ///
-/// Top-level metadata is extensible; individual decisions deliberately accept only name/level.
+/// Top-level metadata is extensible; individual decisions deliberately accept only name/impact.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Decisions {
     schema_version: u32,
@@ -33,13 +33,13 @@ impl Decisions {
             schema_version: DECISION_SCHEMA_VERSION,
             changes: changes
                 .iter()
-                .map(|(name, level)| Change {
+                .map(|(name, impact)| Change {
                     name: (*name).to_owned(),
-                    level: match *level {
-                        "breaking" => ChangeLevel::Breaking,
-                        "nonbreaking" => ChangeLevel::Nonbreaking,
-                        "patch" => ChangeLevel::Patch,
-                        _ => panic!("unsupported test change level"),
+                    impact: match *impact {
+                        "breaking" => SemanticImpact::Breaking,
+                        "nonbreaking" => SemanticImpact::Nonbreaking,
+                        "patch" => SemanticImpact::Patch,
+                        _ => panic!("unsupported test change impact"),
                     },
                 })
                 .collect(),
@@ -57,51 +57,51 @@ impl Decisions {
             .map_err(|error| InvalidDecisionFile::caused_by(error).into())
     }
 
-    pub(crate) fn validate(&self) -> Result<BTreeMap<String, ChangeLevel>, AppError> {
+    pub(crate) fn validate(&self) -> Result<BTreeMap<String, SemanticImpact>, AppError> {
         if self.schema_version != DECISION_SCHEMA_VERSION {
             return Err(UnsupportedDecisionSchema::new(self.schema_version).into());
         }
-        let mut levels = BTreeMap::new();
+        let mut impacts = BTreeMap::new();
         for change in &self.changes {
             if change.name.trim().is_empty()
-                || levels.insert(change.name.clone(), change.level).is_some()
+                || impacts.insert(change.name.clone(), change.impact).is_some()
             {
                 return Err(InvalidDecisionName::new(&change.name).into());
             }
         }
-        Ok(levels)
+        Ok(impacts)
     }
 }
 
-/// One case-sensitive semantic judgement, not an exact version or Cargo increment level.
+/// One case-sensitive semantic judgement, not an exact version or mechanical bump.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Change {
     name: String,
-    level: ChangeLevel,
+    impact: SemanticImpact,
 }
 
 /// Compatibility significance relative to a package's published anchor.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum ChangeLevel {
+pub(crate) enum SemanticImpact {
     Breaking,
     Nonbreaking,
     Patch,
 }
 
-impl ChangeLevel {
+impl SemanticImpact {
     pub(crate) fn minimum(self, anchor: &Version) -> Result<Version, AppError> {
         // Cargo's leftmost nonzero component determines compatibility. In particular every
         // 0.0.z movement is breaking, so even a breaking judgement only advances its patch.
         // Ref: packages/cargo-release-plan/docs/design.md, "Public dependencies".
-        let level = match self {
-            Self::Breaking if anchor.major > 0 => IncrementLevel::Major,
-            Self::Breaking if anchor.minor > 0 => IncrementLevel::Minor,
-            Self::Nonbreaking if anchor.major > 0 => IncrementLevel::Minor,
-            Self::Breaking | Self::Nonbreaking | Self::Patch => IncrementLevel::Patch,
+        let bump = match self {
+            Self::Breaking if anchor.major > 0 => VersionBump::Major,
+            Self::Breaking if anchor.minor > 0 => VersionBump::Minor,
+            Self::Nonbreaking if anchor.major > 0 => VersionBump::Minor,
+            Self::Breaking | Self::Nonbreaking | Self::Patch => VersionBump::Patch,
         };
-        increment_version(anchor, level)
+        increment_version(anchor, bump)
     }
 
     fn name(self) -> &'static str {
@@ -116,11 +116,11 @@ impl ChangeLevel {
 impl Proposal<'_> {
     pub(crate) fn decision_increments(
         &self,
-        levels: &BTreeMap<String, ChangeLevel>,
+        impacts: &BTreeMap<String, SemanticImpact>,
         verbose: &impl NoteSink,
     ) -> Result<Vec<PlanIncrement>, AppError> {
         let mut increments = Vec::new();
-        for (name, level) in levels {
+        for (name, impact) in impacts {
             if !self.packages.contains_key(name.as_str()) {
                 return Err(UnknownDecisionTarget::new(name).into());
             }
@@ -130,18 +130,18 @@ impl Proposal<'_> {
                 .ok_or_else(|| FirstPublicationRequired::new(name))?;
             let declared = self.declared(name);
             // Component bumps cannot express dropping a prerelease suffix, so deriving a
-            // mechanical level from a prerelease would silently overshoot its semantic target.
+            // mechanical bump from a prerelease would silently overshoot its semantic target.
             if !anchor.pre.is_empty() || !declared.pre.is_empty() {
                 return Err(PrereleaseDecision::new(name).into());
             }
-            let minimum = level.minimum(anchor)?;
+            let minimum = impact.minimum(anchor)?;
             if declared.cmp_precedence(&minimum).is_ge() {
                 verbose.note(|| {
                     format!(
-                        "Decision for package {} at semantic level '{}' is not emitted because \
+                        "Decision for package {} at semantic impact '{}' is not emitted because \
                          declared version {} already satisfies minimum version {} from anchor {}.",
                         quote_path(name),
-                        level.name(),
+                        impact.name(),
                         declared,
                         minimum,
                         anchor
@@ -149,20 +149,20 @@ impl Proposal<'_> {
                 });
                 continue;
             }
-            let cargo_level = if minimum.major > declared.major {
-                IncrementLevel::Major
+            let bump = if minimum.major > declared.major {
+                VersionBump::Major
             } else if minimum.minor > declared.minor {
-                IncrementLevel::Minor
+                VersionBump::Minor
             } else {
-                IncrementLevel::Patch
+                VersionBump::Patch
             };
             verbose.note(|| {
                 format!(
-                    "Decision for package {} at semantic level '{}' is emitted as '{}' because \
+                    "Decision for package {} at semantic impact '{}' is emitted as '{}' because \
                      declared version {} is below minimum version {} from anchor {}.",
                     quote_path(name),
-                    level.name(),
-                    cargo_level,
+                    impact.name(),
+                    bump,
                     declared,
                     minimum,
                     anchor
@@ -170,7 +170,7 @@ impl Proposal<'_> {
             });
             increments.push(PlanIncrement {
                 name: name.clone(),
-                level: Some(cargo_level.to_string()),
+                bump: Some(bump.to_string()),
                 version: None,
             });
         }
@@ -178,14 +178,14 @@ impl Proposal<'_> {
     }
 }
 
-/// A decision document must preserve the skill's typed name/level contract.
+/// A decision document must preserve the skill's typed name/impact contract.
 #[ohno::error]
 #[display("invalid release change-decision document")]
 struct InvalidDecisionFile;
 
 /// The decision working-file protocol is versioned independently from the report protocol.
 #[ohno::error]
-#[display("unsupported change-decision schema_version {version}; expected 1")]
+#[display("unsupported change-decision schema_version {version}; expected 2")]
 struct UnsupportedDecisionSchema {
     version: u32,
 }
@@ -244,41 +244,41 @@ mod tests {
             &[],
         );
         report.validate().unwrap();
-        let levels = BTreeMap::from([
-            ("breaking".to_owned(), ChangeLevel::Breaking),
-            ("feature".to_owned(), ChangeLevel::Nonbreaking),
-            ("patch".to_owned(), ChangeLevel::Patch),
-            ("pending-breaking".to_owned(), ChangeLevel::Breaking),
-            ("pending-feature".to_owned(), ChangeLevel::Nonbreaking),
-            ("pending-patch".to_owned(), ChangeLevel::Patch),
+        let impacts = BTreeMap::from([
+            ("breaking".to_owned(), SemanticImpact::Breaking),
+            ("feature".to_owned(), SemanticImpact::Nonbreaking),
+            ("patch".to_owned(), SemanticImpact::Patch),
+            ("pending-breaking".to_owned(), SemanticImpact::Breaking),
+            ("pending-feature".to_owned(), SemanticImpact::Nonbreaking),
+            ("pending-patch".to_owned(), SemanticImpact::Patch),
         ]);
         let notes = RefCell::new(Vec::new());
         let increments = Proposal::new(&report)
-            .decision_increments(&levels, &notes)
+            .decision_increments(&impacts, &notes)
             .unwrap();
         assert_eq!(
             increments,
             [
                 PlanIncrement {
                     name: "breaking".to_owned(),
-                    level: Some("major".to_owned()),
+                    bump: Some("major".to_owned()),
                     version: None,
                 },
                 PlanIncrement {
                     name: "feature".to_owned(),
-                    level: Some("minor".to_owned()),
+                    bump: Some("minor".to_owned()),
                     version: None,
                 },
                 PlanIncrement {
                     name: "patch".to_owned(),
-                    level: Some("patch".to_owned()),
+                    bump: Some("patch".to_owned()),
                     version: None,
                 },
             ]
         );
         let notes = notes.into_inner();
-        assert_eq!(notes.len(), levels.len());
-        for (name, semantic_level, declared, minimum, emitted) in [
+        assert_eq!(notes.len(), impacts.len());
+        for (name, semantic_impact, declared, minimum, emitted) in [
             ("breaking", "breaking", "1.0.0", "2.0.0", true),
             ("feature", "nonbreaking", "1.0.0", "1.1.0", true),
             ("patch", "patch", "1.0.0", "1.0.1", true),
@@ -290,7 +290,7 @@ mod tests {
                 .iter()
                 .find(|note| note.contains(&format!("package {}", quote_path(name))))
                 .unwrap();
-            assert!(note.contains(&format!("semantic level '{semantic_level}'")));
+            assert!(note.contains(&format!("semantic impact '{semantic_impact}'")));
             assert!(note.contains(&format!("declared version {declared}")));
             assert!(note.contains(&format!("minimum version {minimum}")));
             assert!(note.contains("anchor 1.0.0"));
@@ -305,21 +305,21 @@ mod tests {
             json!([]),
             json!({"changes": []}),
             json!({"schema_version": "1", "changes": []}),
-            json!({"schema_version": 1.0, "changes": []}),
-            json!({"schema_version": 1}),
-            json!({"schema_version": 1, "changes": {}}),
-            json!({"schema_version": 1, "changes": [null]}),
-            json!({"schema_version": 1, "changes": [{"name": "lib"}]}),
-            json!({"schema_version": 1, "changes": [{"name": "lib", "level": "patch", "version": "9.0.0"}]}),
-            json!({"schema_version": 1, "changes": [{"name": "lib", "level": "minor"}]}),
-            json!({"schema_version": 1, "changes": [{"name": "lib", "level": "Breaking"}]}),
-            json!({"schema_version": 1, "changes": [{"name": "lib", "level": null}]}),
+            json!({"schema_version": 2.0, "changes": []}),
+            json!({"schema_version": 2}),
+            json!({"schema_version": 2, "changes": {}}),
+            json!({"schema_version": 2, "changes": [null]}),
+            json!({"schema_version": 2, "changes": [{"name": "lib"}]}),
+            json!({"schema_version": 2, "changes": [{"name": "lib", "impact": "patch", "version": "9.0.0"}]}),
+            json!({"schema_version": 2, "changes": [{"name": "lib", "impact": "minor"}]}),
+            json!({"schema_version": 2, "changes": [{"name": "lib", "impact": "Breaking"}]}),
+            json!({"schema_version": 2, "changes": [{"name": "lib", "impact": null}]}),
         ] {
             let error = Decisions::parse(&value.to_string()).unwrap_err();
             assert!(error.find_source::<InvalidDecisionFile>().is_some());
         }
         let error = Decisions::parse(
-            r#"{"schema_version":1,"changes":[{"name":"lib","name":"other","level":"patch"}]}"#,
+            r#"{"schema_version":2,"changes":[{"name":"lib","name":"other","impact":"patch"}]}"#,
         )
         .unwrap_err();
         assert!(error.find_source::<InvalidDecisionFile>().is_some());
@@ -327,14 +327,19 @@ mod tests {
 
     #[test]
     fn schema_and_ordinal_unique_names_are_validated() {
-        let decisions = Decisions::parse(r#"{"schema_version":2,"changes":[]}"#).unwrap();
-        let error = decisions.validate().unwrap_err();
-        assert!(error.find_source::<UnsupportedDecisionSchema>().is_some());
+        for schema_version in [DECISION_SCHEMA_VERSION - 1, DECISION_SCHEMA_VERSION + 1] {
+            let decisions = Decisions::parse(
+                &json!({"schema_version": schema_version, "changes": []}).to_string(),
+            )
+            .unwrap();
+            let error = decisions.validate().unwrap_err();
+            assert!(error.find_source::<UnsupportedDecisionSchema>().is_some());
+        }
         for names in [["lib", "lib"], [" ", "lib"]] {
             let decisions = Decisions::parse(
                 &json!({
-                    "schema_version": 1,
-                    "changes": names.map(|name| json!({"name": name, "level": "patch"}))
+                    "schema_version": 2,
+                    "changes": names.map(|name| json!({"name": name, "impact": "patch"}))
                 })
                 .to_string(),
             )
@@ -343,17 +348,34 @@ mod tests {
             assert!(error.find_source::<InvalidDecisionName>().is_some());
         }
         let decisions = Decisions::parse(
-            r#"{"schema_version":1,"metadata":"allowed","changes":[{"name":"lib","level":"patch"},{"name":"Lib","level":"patch"}]}"#,
+            r#"{"schema_version":2,"metadata":"allowed","changes":[{"name":"lib","impact":"patch"},{"name":"Lib","impact":"patch"}]}"#,
         )
         .unwrap();
         assert_eq!(decisions.validate().unwrap().len(), 2);
         assert!(
-            Decisions::parse("\u{feff}{\"schema_version\":1,\"changes\":[]}")
+            Decisions::parse("\u{feff}{\"schema_version\":2,\"changes\":[]}")
                 .unwrap()
                 .validate()
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn semantic_decisions_reject_mechanical_bumps_and_retired_field_names() {
+        for change in [
+            json!({"name": "lib", "level": "patch"}),
+            json!({"name": "lib", "impact": "patch", "level": "patch"}),
+            json!({"name": "lib", "bump": "patch"}),
+            json!({"name": "lib", "impact": "major"}),
+        ] {
+            let document = json!({
+                "schema_version": DECISION_SCHEMA_VERSION,
+                "changes": [change],
+            });
+            let error = Decisions::parse(&document.to_string()).unwrap_err();
+            assert!(error.find_source::<InvalidDecisionFile>().is_some());
+        }
     }
 
     #[test]
@@ -364,18 +386,18 @@ mod tests {
             ("0.0.5", ["0.0.6", "0.0.6", "0.0.6"]),
         ] {
             let anchor = anchor.parse::<Version>().unwrap();
-            for (level, expected) in [
-                ChangeLevel::Breaking,
-                ChangeLevel::Nonbreaking,
-                ChangeLevel::Patch,
+            for (impact, expected) in [
+                SemanticImpact::Breaking,
+                SemanticImpact::Nonbreaking,
+                SemanticImpact::Patch,
             ]
             .into_iter()
             .zip(expected)
             {
-                assert_eq!(level.minimum(&anchor).unwrap().to_string(), expected);
+                assert_eq!(impact.minimum(&anchor).unwrap().to_string(), expected);
             }
         }
-        let error = ChangeLevel::Patch
+        let error = SemanticImpact::Patch
             .minimum(&Version::new(1, 0, u64::MAX))
             .unwrap_err();
         assert!(error.find_source::<VersionOverflowError>().is_some());
@@ -448,7 +470,7 @@ mod tests {
         assert_eq!(
             plan.increments
                 .first()
-                .and_then(|entry| entry.level.as_deref()),
+                .and_then(|entry| entry.bump.as_deref()),
             expected
         );
     }

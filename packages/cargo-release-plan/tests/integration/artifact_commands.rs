@@ -61,7 +61,7 @@ fn pending_reports_require_version_increases_but_not_extra_decisions() {
     *report.pointer_mut("/packages/0/status").unwrap() = json!("pending-release");
     fs::write(
         directory.path().join("decisions.json"),
-        r#"{"schema_version":1,"changes":[]}"#,
+        r#"{"schema_version":2,"changes":[]}"#,
     )
     .unwrap();
     for (version, accepted) in [("1.0.0", false), ("0.9.0", false), ("1.0.1", true)] {
@@ -113,7 +113,7 @@ fn dangling_workspace_dependencies_fail_every_report_consumer() {
     }
     fs::write(
         directory.path().join("decisions.json"),
-        r#"{"schema_version":1,"changes":[]}"#,
+        r#"{"schema_version":2,"changes":[]}"#,
     )
     .unwrap();
     let output_path = directory.path().join("proposal.json");
@@ -149,7 +149,7 @@ fn write_report(directory: &Path) {
     fs::write(
         directory.join("report.json"),
         json!({
-            "schema_version": 5, "head": "captured", "release_history": "released",
+            "schema_version": 6, "head": "captured", "release_history": "released",
             "packages": [{
                 "name": "api", "declared_version": "1.0.0", "status": "needs-increment",
                 "anchor": {"commit": "anchor", "version": "1.0.0"},
@@ -213,7 +213,7 @@ fn proposal_writes_a_usable_plan_without_workspace_discovery() {
     fs::write(
         directory.path().join("decisions.json"),
         json!({
-            "schema_version": 1, "changes": [{"name": "api", "level": "nonbreaking"}]
+            "schema_version": 2, "changes": [{"name": "api", "impact": "nonbreaking"}]
         })
         .to_string(),
     )
@@ -238,7 +238,7 @@ fn proposal_writes_a_usable_plan_without_workspace_discovery() {
     );
     let plan: Value =
         serde_json::from_slice(&fs::read(directory.path().join("proposal.json")).unwrap()).unwrap();
-    assert_eq!(plan.get("schema_version").unwrap(), 5);
+    assert_eq!(plan.get("schema_version").unwrap(), 6);
     assert_eq!(plan.get("increments").unwrap().as_array().unwrap().len(), 1);
     assert_eq!(plan.pointer("/increments/0/name").unwrap(), "api");
     assert!(plan.get("resolved").is_none());
@@ -274,7 +274,7 @@ fn utf8_bom_does_not_change_report_commands_or_path_forms() {
     fs::write(
         directory.path().join("decisions.json"),
         json!({
-            "schema_version": 1, "changes": [{"name": "api", "level": "patch"}]
+            "schema_version": 2, "changes": [{"name": "api", "impact": "patch"}]
         })
         .to_string(),
     )

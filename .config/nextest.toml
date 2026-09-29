@@ -28,11 +28,6 @@ filter = 'package(dure) & binary(windows)'
 test-group = 'dure-windows-conpty'
 
 [[profile.default.overrides]]
-filter = 'package(release-target-check) & binary(integration)'
-platform = 'cfg(windows)'
-test-group = 'release-source-io-windows'
-
-[[profile.default.overrides]]
 filter = 'package(crp_publication) & binary(boundaries) & test(candidate::)'
 platform = 'cfg(windows)'
 test-group = 'release-source-io-windows'

@@ -50,8 +50,8 @@ cargo release-plan --help
 without a Cargo workspace or Git repository. The short `--version` identity remains
 available for installation probes.
 
-The matching skill uses report/plan/prepared schema `5`, semantic-decision and
-compatibility schema `1`, and release-context schema `2`. Exact skill/tool package
+The matching skill uses report/plan/prepared schema `6`, semantic-decision and
+compatibility schema `2`, and release-context schema `2`. Exact skill/tool package
 version synchronization is unnecessary; check those schemas. If unexpected CLI
 errors suggest a mismatch, consider upgrading both tool and skill.
 
@@ -96,7 +96,7 @@ Establish:
 
 - Which branch actually releases, and whether full first-parent history exists.
 - Which tracked members are publishable, private implementation packages or
-  non-publishable version targets.
+  non-publishable packages.
 - Which exact dependencies intentionally form version groups.
 - Which packages contain an installable binary and what each executable is named.
 - Whether the committed lockfile and toolchain describe a reproducible source

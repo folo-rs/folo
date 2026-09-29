@@ -113,7 +113,7 @@ impl Groups {
 
     /// Group-level consistency on work-tree declared versions.
     ///
-    /// `exempt` names members that do not exist on the base revision and are
+    /// `exempt` names members that do not exist on the assessment predecessor and are
     /// therefore not required to match.
     pub(crate) fn verdicts(
         &self,
@@ -145,7 +145,7 @@ impl GroupVerdict {
     /// Derives the verdict for one group from the work tree's declared versions.
     ///
     /// Every member must have a declared version. `exempt` names members that
-    /// do not exist on the base revision.
+    /// do not exist on the assessment predecessor.
     #[must_use]
     pub fn new(
         members: &[String],
@@ -164,7 +164,7 @@ impl GroupVerdict {
             .collect();
         // Exemption governs consistency only. The group version is the highest
         // declared by any present member, including exempt ones, so that it
-        // matches the increment base `expand_plan` computes and no member is
+        // matches the increment base `resolve_plan` computes and no member is
         // ever moved backwards.
         let highest = members
             .iter()
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn exempt_member_still_raises_the_group_version() {
         // Exemption suppresses the consistency failure but must not lower the
-        // increment base, or `expand_plan` would move the exempt member back.
+        // increment base, or `resolve_plan` would move the exempt member back.
         let versions = BTreeMap::from([
             ("nm".to_string(), v("0.1.0")),
             ("nm_impl".to_string(), v("0.3.0")),

@@ -27,27 +27,16 @@ and action revision. See the
 [installation guide](https://folo-rs.github.io/folo/cargo-release-plan/integration/installation.html)
 for toolchain prerequisites and verification.
 
-## Inspect a workspace
+## Prepare a version-increment PR
 
-From a Git-tracked Cargo workspace with release history available:
+Install the complete `increment-versions` skill and ask an agent to assess the
+contribution. The skill is the supported version-planning interface; it reads
+the release report, chooses semantic impacts, previews workspace effects and
+applies the complete plan.
 
-```powershell
-$ErrorActionPreference = "Stop"
-$PSNativeCommandUseErrorActionPreference = $true
-cargo release-plan version
-cargo release-plan report --out-dir .release-plan-review
-```
-
-The report records every publishable package's release status and dependency
-relationships, with patches for changed released files. Each package is compared
-with its version anchor: the most recent first-parent commit that changed its
-parsed version within the selected release history.
-
-Pass `--release-history <commit>` to select actual release history explicitly.
-For a stacked PR, also pass `--merge-target <parent-commit>`: the parent's final
-version and content are treated as an anticipated squash release, and additional
-child changes need their own increment. Existing release-history anchors still
-retain unversioned catch-up changes. Reporting does not choose versions or publish.
+For a stacked PR, identify its parent so the skill can assess the child's changes
+against that parent's final version and content. An explicitly requested
+standalone run can prepare a version-increment PR without publishing configuration.
 
 ## Plan and publish
 
@@ -57,8 +46,7 @@ complete process:
 - [Configure a repository](https://folo-rs.github.io/folo/cargo-release-plan/integration/repository.html):
   declare version groups, consumer contracts and publication inputs.
 - [Prepare a version plan](https://folo-rs.github.io/folo/cargo-release-plan/integration/local-planning.html):
-  inspect evidence, choose semantic decisions and preview complete dependency
-  effects before applying them. The agent skill is optional.
+  use the agent skill to assess and apply the complete workspace change.
 - [Connect publication](https://folo-rs.github.io/folo/cargo-release-plan/integration/publication.html):
   publish reviewed exact versions through the reusable GitHub workflows.
 - [Verify delivery](https://folo-rs.github.io/folo/cargo-release-plan/operations/verification.html)

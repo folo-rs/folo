@@ -1,27 +1,28 @@
 # Choosing versions together
 
-An assessment answers **whether released content changed**. A semantic decision
-answers **what that change means to consumers**. A version plan translates the
-decision into numeric versions and their workspace effects.
+A release report describes **what changed**. The skill assesses the change's
+**semantic impact** on users, then produces a plan of the versions and workspace
+edits required to release it. This separation keeps a text diff from pretending
+to decide whether a consumer promise was broken.
 
-## Semantic decisions and numeric increments
+## Semantic impact and version bumps
 
-The author supplies semantic decisions:
+The skill records each package's semantic impact:
 
-| Decision | Use |
+| Impact | Use |
 | --- | --- |
 | `breaking` | A change breaks a consumer promise. |
 | `nonbreaking` | A compatible addition extends the consumer's promises. |
-| `patch` | A correction or other change needs no stronger semantic decision. |
+| `patch` | A correction or other change needs no stronger semantic impact. |
 
 Consumer promises include documented behavior, CLI arguments, data formats,
 feature availability and build requirements, not just Rust function signatures.
 
-Numeric plan increments use another vocabulary: `patch`, `minor`, `major`.
-These are not interchangeable with semantic decisions even though both JSON
-formats call the field `level`.
+The resulting numeric **version bump** is `patch`, `minor` or `major`.
+The decisions document calls the semantic field `impact`; the proposal calls
+the numeric field `bump`. An exact `version` can be supplied instead of a bump.
 
-| Starting version | Semantic decision | Example resulting version | Numeric increment |
+| Anchor version | Semantic impact | Example resulting version | Version bump |
 | --- | --- | --- | --- |
 | `1.4.0` | `nonbreaking` | `1.5.0` | `minor` |
 | `1.4.0` | `breaking` | `2.0.0` | `major` |
@@ -68,10 +69,10 @@ Use a single exact `=major.minor.patch` requirement. Partial exact versions,
 prerelease/build suffixes and compound exact requirements do not declare valid
 workspace groups.
 
-Every member shares the resolved version. A **non-publishable version target**
-is a tracked workspace member with `publish = false`. Its version can move for
+Every member shares the resolved version. A **non-publishable package**
+has `publish = false`. Its version can move for
 group alignment, but its source changes receive
-no semantic decision and it is never uploaded. The highest declared member
+no semantic impact and it is never uploaded. The highest declared member
 version participates in choosing the result, so alignment does not lower a member.
 
 The running example is:
@@ -84,12 +85,12 @@ widget-fixtures    publish = false helper      1.4.0
   exact dependency on widget_impl
 
 widget-cli         separate binary package    2.0.0
-  ordinary dependency on widget
+  compatible dependency on widget
   executable name: widget
 ```
 
 The library, implementation and helper form one group. `widget-cli` does not:
-ordinary compatible dependency requirements do not make exact-version groups.
+compatible dependency requirements do not make exact-version groups.
 
 ## Private APIs and public dependencies
 

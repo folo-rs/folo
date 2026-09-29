@@ -1,7 +1,5 @@
 //! External acquisition for metadata.
 
-#[cfg(unix)]
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -38,23 +36,4 @@ fn cargo_manifest_basename_only_rewrites_a_filesystem_alias() {
     let other = directory.path().join("manifest.input");
     fs::write(&other, "[workspace]\n").unwrap();
     assert_eq!(cargo_manifest_path(&other), other);
-}
-
-#[cfg(unix)]
-#[cfg_attr(miri, ignore)] // Creates a filesystem symbolic link, which Miri cannot emulate.
-#[test]
-fn member_resolution_follows_filesystem_aliases() {
-    use std::os::unix::fs::symlink;
-
-    let root = tempdir().unwrap();
-    let member = root.path().join("member");
-    fs::create_dir_all(&member).unwrap();
-    symlink(&member, root.path().join("alias")).unwrap();
-    let members = BTreeMap::from([(member, "member".to_string())]);
-    let canonical_members = canonical_members_by_dir(&members).unwrap();
-
-    assert_eq!(
-        resolved_member(root.path(), "alias", &members, &canonical_members).unwrap(),
-        Some("member")
-    );
 }

@@ -48,7 +48,7 @@ fn content_already_on_base_needs_an_increment() {
     let outcome = run(&RunInput::Report {
         merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
@@ -123,7 +123,7 @@ fn binary_executable_bit_alone_renders_only_modes() {
     run(&RunInput::Report {
         merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
@@ -368,7 +368,7 @@ fn declared_version_below_the_anchor_is_an_error() {
 
     let result = run(&RunInput::Check {
         merge_target: None,
-        base: Some(base),
+        release_history: Some(base),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,

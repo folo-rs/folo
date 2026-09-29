@@ -36,9 +36,9 @@ fn retained_acquisition_pins_history_and_target_and_propagates_both_failures() {
             .verify_candidate_with(
                 Path::new("retained/Cargo.toml"),
                 "final",
-                |manifest, base, target| {
+                |manifest, release_history, target| {
                     assert_eq!(manifest, Path::new("retained/Cargo.toml"));
-                    assert_eq!(base, Some("base"));
+                    assert_eq!(release_history, Some("base"));
                     assert_eq!(target, Some("parent-final"));
                     if fail_capture {
                         Err(CandidateFailure::new().into())

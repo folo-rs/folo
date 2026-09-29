@@ -4,10 +4,10 @@
 
 # Concepts
 
-- [Release history and package status](concepts/history.md)
+- [Which release are we changing?](concepts/history.md)
 - [Released content](concepts/released-content.md)
 - [Choosing versions together](concepts/versions.md)
-- [Evidence and resolved plans](concepts/evidence.md)
+- [From changes to a version plan](concepts/evidence.md)
 - [Publication and immutable intent](concepts/publication.md)
 
 # Integration walkthrough

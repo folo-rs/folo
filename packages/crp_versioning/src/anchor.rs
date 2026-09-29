@@ -1,6 +1,6 @@
 // Anchor resolution.
 //
-// The anchor is the most recent commit on the base first-parent line in which
+// The anchor is the most recent commit on the release-history first-parent line in which
 // the package's parsed `version` changed (including creation: absent → present).
 // A walk that exhausts available history without observing a version change is
 // an error, not a pass.
@@ -10,7 +10,7 @@ use semver::Version;
 
 use crate::ShallowHistoryError;
 
-/// The commit that last changed a package's declared version on the base line.
+/// The commit that last changed a package's declared version on the release-history line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Anchor {
     pub commit: String,
@@ -80,7 +80,7 @@ impl Presence {
 
 /// Resolves the version-change anchor from a newest-first first-parent timeline.
 ///
-/// The first entry is the base revision. Walking toward the root, the first time
+/// The first entry is the release-history revision. Walking toward the root, the first time
 /// the version differs from the previous (newer) commit, that newer commit is
 /// the anchor. Reaching a root commit (no parent) treats creation as the change.
 pub(crate) fn resolve_anchor(
@@ -100,7 +100,7 @@ pub(crate) fn resolve_anchor(
         return Err(ShallowHistoryError::new(package).into());
     };
     let Some(mut prev_version) = first.presence.released_version() else {
-        // Absent on the base revision: not an anchor walk. Callers treat this as
+        // Absent on the release-history revision: not an anchor walk. Callers treat this as
         // a new package (version increased from absent).
         return Err(ShallowHistoryError::new(package).into());
     };
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn a_base_revision_without_the_package_is_not_an_anchor_walk() {
+    fn a_history_revision_without_the_package_is_not_an_anchor_walk() {
         let timeline = vec![entry("c1", None, true), entry("c0", None, false)];
         let error = resolve_anchor("foo", &timeline).unwrap_err();
         assert!(error.find_source::<ShallowHistoryError>().is_some());

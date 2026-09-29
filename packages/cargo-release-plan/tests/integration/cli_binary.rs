@@ -122,7 +122,7 @@ fn unknown_flag_exits_failure() {
 fn passing_check_writes_stdout_and_exits_success() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
-    let output = release_plan(&["check", "--base", &base], Some(&fixture));
+    let output = release_plan(&["check", "--release-history", &base], Some(&fixture));
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stdout(&output).is_empty());
@@ -138,7 +138,7 @@ fn passing_packaging_warnings_write_stderr_without_replacing_stdout() {
     // producing a non-gating warning from the packaging cross-check.
     fixture.write("packages/demo/src/extra.rs", "pub fn g() {}\n");
     let output = release_plan(
-        &["check", "--base", &base, "--verify-packaging"],
+        &["check", "--release-history", &base, "--verify-packaging"],
         Some(&fixture),
     );
 
@@ -163,7 +163,7 @@ fn failing_check_writes_stderr_and_exits_failure() {
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 3; }\n");
     fixture.commit("content without a version increment");
     let base = fixture.sha("HEAD");
-    let output = release_plan(&["check", "--base", &base], Some(&fixture));
+    let output = release_plan(&["check", "--release-history", &base], Some(&fixture));
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("needs-increment"));
@@ -176,7 +176,10 @@ fn operational_error_writes_stderr_and_exits_failure() {
     let fixture = seeded_package();
     // A base revision no repository resolves, so classification fails before it
     // can produce a verdict.
-    let output = release_plan(&["check", "--base", "definitely-not-a-rev"], Some(&fixture));
+    let output = release_plan(
+        &["check", "--release-history", "definitely-not-a-rev"],
+        Some(&fixture),
+    );
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("Error:"));
@@ -192,7 +195,7 @@ fn report_writes_its_summary_to_stdout() {
     let output = release_plan(
         &[
             "report",
-            "--base",
+            "--release-history",
             &base,
             "--out-dir",
             &out_dir.to_string_lossy(),
@@ -206,12 +209,12 @@ fn report_writes_its_summary_to_stdout() {
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary and git; Miri cannot emulate that.
 #[test]
-fn apply_writes_its_summary_to_stdout() {
+fn apply_rejects_a_proposal_without_preview_even_for_dry_run() {
     let fixture = seeded_package();
     let plan_path = fixture.path().join("plan.json");
     fs::write(
         &plan_path,
-        r#"{ "schema_version": 5, "increments": [{ "name": "demo", "level": "patch" }] }"#,
+        r#"{ "schema_version": 6, "increments": [{ "name": "demo", "bump": "patch" }] }"#,
     )
     .unwrap();
     let output = release_plan(
@@ -219,8 +222,10 @@ fn apply_writes_its_summary_to_stdout() {
         Some(&fixture),
     );
 
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).contains("Dry run"));
+    assert!(!output.status.success());
+    assert!(stdout(&output).is_empty());
+    assert!(!stderr(&output).is_empty());
+    assert!(fixture.read("packages/demo/Cargo.toml").contains("0.1.0"));
 }
 
 #[test]
@@ -233,14 +238,14 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
     let proposal = fixture.path().join("proposal.json");
     fs::write(
         &proposal,
-        r#"{"schema_version":5,"increments":[{"name":"demo","level":"patch"}]}"#,
+        r#"{"schema_version":6,"increments":[{"name":"demo","bump":"patch"}]}"#,
     )
     .unwrap();
 
     let output = release_plan(
         &[
             "prepare",
-            "--base",
+            "--release-history",
             &base,
             "--output",
             &prepared.to_string_lossy(),
@@ -284,20 +289,6 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
     assert!(stderr(&output).is_empty());
 
     let output = release_plan(
-        &[
-            "expand",
-            "--plan",
-            &plan.to_string_lossy(),
-            "--out",
-            &fixture.path().join("portable.json").to_string_lossy(),
-        ],
-        Some(&fixture),
-    );
-    assert!(output.status.success());
-    assert!(!stdout(&output).is_empty());
-    assert!(stderr(&output).is_empty());
-
-    let output = release_plan(
         &["apply", "--plan", &plan.to_string_lossy()],
         Some(&fixture),
     );
@@ -306,7 +297,7 @@ fn resolved_workflow_dispatches_every_command_to_stdout() {
     assert!(stderr(&output).is_empty());
     assert!(fixture.read("packages/demo/Cargo.toml").contains("0.1.1"));
     assert!(
-        release_plan(&["check", "--base", &base], Some(&fixture))
+        release_plan(&["check", "--release-history", &base], Some(&fixture))
             .status
             .success()
     );

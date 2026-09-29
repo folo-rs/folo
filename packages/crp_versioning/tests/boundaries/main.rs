@@ -9,7 +9,6 @@ mod classify;
 mod classify_dependency_tests;
 mod classify_discovery_tests;
 mod classify_installation_tests;
-mod expand;
 mod history;
 mod preview;
 mod prospective;

@@ -1,99 +1,74 @@
-# Evidence and resolved plans
+# From changes to a version plan
 
-Planning separates evidence, judgment and application so that a dependency
-refresh cannot quietly change the release after its versions have been chosen.
+The skill must answer two different questions: **what changed**, and **what
+versions those changes require**. A diff can answer the first question, but it
+cannot determine whether a behavioral change breaks a promise to users.
 
-| Artifact or stage | Purpose |
-| --- | --- |
-| Prepared workspace and `prepared.json` | Perform the intended offline workspace resolution and capture the resulting inputs. |
-| `report.json` and `diffs` | Explain changed released content, package status and workspace relationships. |
-| Decisions document | Record the author's semantic decisions. |
-| Proposed plan | Translate those decisions into version choices and required propagation. |
-| Preview | Resolve prospective versions and requirements in a retained disposable workspace. |
-| Resolved expanded `plan.json` | Name every version target and capture its final versions, file edits and original input identity. |
-| Post-application report | Verify the result without overwriting the evidence used to choose it. |
+## Facts first, then semantic impact
 
-## Read the whole assessment
+A **release report** lists each package's changed released content, declared
+version and workspace dependencies. File patches explain source changes;
+structured entries explain inherited manifest values and binary dependency changes.
+Together with API comparison results, these are the facts used to choose versions.
 
-`report.json` is the complete verdict. Patches contain file changes, but inherited
-workspace values and binary dependency identities are reported as structured
-change entries, not invented file diffs. A package can need an increment without
-having a patch.
+A **semantic impact** describes what a package's change means to its users:
+`breaking`, `nonbreaking` or `patch`. The skill chooses it from the report,
+API comparisons and the package's behavioral contracts. Interpreting those facts
+and choosing the impacts is the **release assessment**.
 
-`analysis-order` supplies dependency-first assessment batches. Mutually dependent
-packages appear together; sharing a version group alone does not make a cycle.
-`semver-targets` selects public library contracts for comparison. These
-artifact-only operations do not query a checkout or a registry.
+For example, removing a public method is a breaking impact. Fixing a computation
+without withdrawing a promise is usually a patch impact. A Rust API checker can
+detect the removed method, but deciding whether the computation is a correction
+still requires understanding the promised behavior.
 
-## A resolved example
+## Preview makes the complete release visible
 
-Suppose `widget` gains a compatible operation implemented by `widget_impl`.
-The helper stays in their version group, and `widget-cli` already carries a
-sufficient pending patch increment. The following is **conceptual shorthand**,
-not JSON to submit to the CLI:
+The skill turns the selected impacts into a **version proposal**. A proposal
+starts with the changed packages, but a workspace release can affect more than
+those packages:
 
-```text
-prepared evidence:
-  widget:          new public operation, anchor 1.4.0
-  widget_impl:     supporting implementation, anchor 1.4.0
-  widget-fixtures: alignment-only, declared 1.4.0
-  widget-cli:      pending 2.0.1, anchor 2.0.0
+- Members of a version group must move together.
+- Dependencies must name the new versions.
+- A binary can need a release because its locked dependencies changed.
 
-semantic decisions:
-  widget: nonbreaking
-  widget_impl: patch
-  widget-cli: patch after assessing the prospective dependency change
+**Preview** computes these effects and produces a **resolved plan**: the complete
+package versions and exact manifest/lockfile edits to apply. Group expansion is
+part of that operation, not a separate user step.
 
-resolved plan:
-  widget:          1.5.0
-  widget_impl:     1.5.0
-  widget-fixtures: 1.5.0, not published
-  widget-cli:      2.0.1, existing increment retained
-  captured edits: manifests, dependent requirements, resolved Cargo.lock
-```
+Consider a compatible API addition in `widget`:
 
-Preview can discover that a binary's locked dependencies change only after the
-proposed versions and requirements are resolved. Assess that new evidence before
-application. A mechanically required release is a minimum obligation, not proof
-that the effect is semantically a patch.
+| Package | Starting version | Result | Why |
+| --- | --- | --- | --- |
+| `widget` | `1.4.0` | `1.5.0` | A compatible API addition. |
+| `widget_impl` | `1.4.0` | `1.5.0` | It shares `widget`'s version group. |
+| `widget-cli` | `2.0.0` | `2.0.1` | Its dependency and locked binary inputs change. |
 
-## Why expansion alone is insufficient
+The proposal begins with the API decision. Preview makes the complete set visible
+so the skill can assess the dependent changes too. A required dependent release
+is a minimum obligation, not a claim that every such change is harmless.
 
-`expand` turns a proposal into explicit package/version entries without resolving
-dependencies. It is useful for inspecting group membership, but does not capture
-the lockfile effects needed for a complete release.
+## Apply the result that was reviewed
 
-`preview` supplies the complete resolved artifact and retains the prospective
-workspace for compatibility checks. `check-compatibility --plan` selects that
-workspace, regenerates a read-only report and verifies the captured source
-before and after comparison. `--prepared` instead checks the original prepared
-inputs; without either selector, it acquires fresh evidence against the chosen
-history and merge target.
+Suppose preview records `widget` at `1.5.0` and a particular dependency resolution.
+Application must install those exact edits, not run resolution again and silently
+choose a newer dependency. The resolved plan therefore also records the original
+inputs that those edits may replace.
 
-A detached report does not establish that a checkout is still current.
-Additional analysis uses the preview's recorded prospective workspace and is
-followed by preview verification. The
-[planning walkthrough](../integration/local-planning.md) supplies the commands;
-the [artifact reference](../reference/artifacts.md) owns exact fields and schemas.
+If a manifest or source file changes after preview, the skill prepares a fresh
+plan. Editing the old generated plan by hand would hide which inputs were assessed.
+Applying a valid plan twice is a no-op the second time; a partially edited tree is
+not automatically treated as that completed result.
 
-The expanded target set includes non-publishable version targets. Dependents
-whose requirements are rewritten without receiving another version are reflected
-in the captured edits, not added as fictitious version movements.
+The same source binding matters for API checks. Comparisons before application
+use the preview's retained workspace, where the proposed versions and lockfile
+are already present. Comparing an unrelated checkout would say nothing about the
+release described by the plan.
 
-## Apply captured state, not a new interpretation
+## Planning files are not publishing instructions
 
-Resolved application validates its original inputs and installs the captured
-manifest and lockfile contents. It does not run resolution or quietly add
-targets. `--dry-run` performs the read-only validation first.
+The skill preserves its reports, comparisons and plan while preparing the PR.
+After merge, the publisher reads the approved versions from the merged source;
+it does not need the agent's local working files.
 
-Keep `prepared.json` and the resolved plan intact. They are tool-owned evidence,
-not templates for hand editing. Source, history, target, membership or semantic changes
-require fresh evidence and preview.
-
-Applying the same artifact to its fully applied state is a no-op. A partially
-changed tree is different: inspect it before recovering. Application validates
-before writing, but filesystem failures can still interrupt writes.
-
-After merge, publication does **not** consume the local planning files. It reads
-the approved versions from clean merged source and captures a separate
-[publication manifest](publication.md).
+Publication has a separate request that survives retries. That is the purpose of
+the [publication manifest](publication.md).

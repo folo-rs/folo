@@ -149,7 +149,7 @@ pub struct ReportedDep {
     /// `check-external-types` fails on an exposed type the list omits, so a
     /// passing workspace makes it a superset of what is genuinely exposed.
     /// Erring wide is the safe direction here: a dependency wrongly called
-    /// public over-states a change level, while a missed one would publish a
+    /// public over-states a change's semantic impact, while a missed one would publish a
     /// broken contract.
     /// Ref: docs/external-types.md; packages/cargo-release-plan/docs/design.md, "Public
     /// dependencies".
@@ -410,7 +410,7 @@ impl TrackedMetadata<'_> {
     fn contains_manifest(&self, manifest_path: &str) -> bool {
         // Cargo paths are first made workspace-relative using Cargo's own root
         // spelling, then rebased with Git's prefix. Subtracting Git's root from a
-        // Cargo path would fail for equivalent 8.3, symlinked, or substituted
+        // Cargo path would fail for equivalent 8.3 or substituted
         // spellings of the same directory.
         let Some(workspace_path) =
             workspace_relative_path(self.workspace_root, Path::new(manifest_path))

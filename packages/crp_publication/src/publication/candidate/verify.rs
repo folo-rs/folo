@@ -71,7 +71,7 @@ pub(crate) fn verify_using<R: VerificationRepository>(
         || {
             repository.check(
                 &CheckRequest {
-                    base: Some(&cli.commit),
+                    release_history: Some(&cli.commit),
                     manifest_path: &manifest,
                     format: CheckFormat::Text,
                     verify_packaging: false,

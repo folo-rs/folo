@@ -76,8 +76,8 @@ fn standalone_versions_reach_the_merged_tree_without_publishing_setup() {
         fs::write(
             &decisions,
             serde_json::to_vec(&json!({
-                "schema_version": 1,
-                "changes": [{"name": "support", "level": "patch"}]
+                "schema_version": 2,
+                "changes": [{"name": "support", "impact": "patch"}]
             }))
             .unwrap(),
         )

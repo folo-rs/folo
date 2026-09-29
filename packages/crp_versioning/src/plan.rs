@@ -1,7 +1,7 @@
 // Increment-plan parsing, validation, and group expansion.
 //
 // Plans name package or version-group decisions. Expansion resolves those
-// decisions to explicit package versions for both preview and application.
+// decisions to explicit package versions for preview; application verifies the captured set.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -17,7 +17,7 @@ use crate::resolved::{Inputs, ResolvedState};
 use crate::{
     ConflictingPlanIncrementKindError, ConflictingPlanVersionError, ExpandedPlanDriftError,
     InvalidVersionError, NonPlainGroupVersionError, PlanIncrementSpecError,
-    PlanVersionRegressionError, UnknownIncrementLevelError, UnknownPlanTargetError,
+    PlanVersionRegressionError, UnknownPlanTargetError, UnknownVersionBumpError,
     UnresolvedExpandedPlanError, UnsupportedPlanSchemaError, VersionOverflowError, quote_path,
 };
 
@@ -28,26 +28,25 @@ use crate::{
 /// packages/cargo-release-plan/book/src/reference/artifacts.md,
 /// "Local decisions and plans" and "Reports".
 ///
-/// The resolved-state revision distinguishes read-only group expansion from
-/// captured previews; only a captured preview is an applicable expanded plan.
+/// Only a captured preview is an applicable plan.
 /// Command and JSON incompatibilities require a breaking semantic decision even
 /// when comparison of the public Rust API finds no incompatible signatures.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// On-disk plan file.
 ///
-/// Expansion and preview share explicit package/version decisions. Preview also
-/// attaches the captured state required to apply those decisions.
+/// Preview expands the proposal into explicit package/version decisions and attaches the
+/// captured state required to apply them.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanFile {
     pub schema_version: u32,
-    /// Bound report history for generated proposals; hand-authored proposals may omit it.
+    /// Report history from which the skill's proposal was generated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_history: Option<String>,
     /// The anticipated predecessor used by the bound report, not an independently selected target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_target: Option<String>,
-    /// Set by `expand`, absent in a hand-written plan.
+    /// Set by preview to bind explicit versions to the complete package set.
     ///
     /// Read through [`PlanFile::stage`] rather than directly, so the two stages
     /// are matched on by name instead of by a bare condition.
@@ -128,32 +127,29 @@ struct PlanHistoryMismatch;
 ///
 /// The two stages carry different guarantees about the packages a document
 /// names, so resolving one is not the same operation as resolving the other.
-/// The additional captured state distinguishes a fully resolved preview from
-/// read-only group expansion without introducing an implicit resolver operation.
+/// Application additionally requires the preview's captured source and file effects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlanStage {
     /// A planner's input, which may name a version group or a single member of
     /// one and leave resolution to reach the rest. What it names is therefore a
     /// starting point rather than the full set of packages it moves, and an
-    /// entry may carry an increment level to be resolved when it is applied.
+    /// entry may carry a version bump to be resolved by preview.
     Proposed,
-    /// The document `expand` writes, which names every package whose version
+    /// The document preview writes, which names every package whose version
     /// the plan sets and records the version each will carry. Both halves
     /// matter: the first makes the captured set complete with respect to the
     /// release decision, and the second makes it stable, since a
-    /// level would be re-resolved against whatever the manifests say when the
+    /// bump would be re-resolved against whatever the manifests say when the
     /// document is applied. Resolving one must therefore reproduce it exactly.
     ///
-    /// Preview adds the captured manifest and lockfile effects needed for application.
-    /// Group expansion alone is not sufficient evidence for applying this stage.
+    /// The captured manifest and lockfile effects are required for application.
     Expanded,
 }
 
 /// Package name → resolved version.
 ///
-/// This is the outcome of resolving a plan of either stage, not the expanded
-/// document itself: `apply` resolves a proposal to exactly this shape without
-/// any expansion ever being written.
+/// Preview computes this set from a proposal; application recomputes it only to verify
+/// that the captured package set and explicit versions still match.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedVersions {
     pub packages: BTreeMap<String, Version>,
@@ -254,7 +250,7 @@ pub(crate) fn resolve_plan(
                 }
                 version.clone()
             }
-            IncrementSpec::Level(level) => increment_version(&highest, *level)?,
+            IncrementSpec::Bump(bump) => increment_version(&highest, *bump)?,
         };
         verbose.note(|| {
             format!(
@@ -304,21 +300,22 @@ pub(crate) fn resolve_plan(
 
 /// One increment entry as stored in plan JSON.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanIncrement {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub level: Option<String>,
+    pub bump: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
 
 impl PlanIncrement {
     fn spec(&self) -> Result<IncrementSpec, AppError> {
-        match (&self.level, &self.version) {
-            (Some(level), None) => {
-                let level = IncrementLevel::from_str(level)
-                    .map_err(|()| UnknownIncrementLevelError::new(&self.name, level))?;
-                Ok(IncrementSpec::Level(level))
+        match (&self.bump, &self.version) {
+            (Some(bump), None) => {
+                let bump = VersionBump::from_str(bump)
+                    .map_err(|()| UnknownVersionBumpError::new(&self.name, bump))?;
+                Ok(IncrementSpec::Bump(bump))
             }
             (None, Some(version)) => {
                 let version = version
@@ -335,13 +332,13 @@ impl PlanIncrement {
 
 /// Requested version increment relative to the highest declared member version.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum IncrementLevel {
+pub(crate) enum VersionBump {
     Patch,
     Minor,
     Major,
 }
 
-impl FromStr for IncrementLevel {
+impl FromStr for VersionBump {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -354,7 +351,7 @@ impl FromStr for IncrementLevel {
     }
 }
 
-impl Display for IncrementLevel {
+impl Display for VersionBump {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::Patch => "patch",
@@ -365,14 +362,14 @@ impl Display for IncrementLevel {
     }
 }
 
-/// Exactly one of `level` or `version`, parsed.
+/// Exactly one of `bump` or `version`, parsed.
 ///
 /// A plan entry declares one or the other, and expansion accumulates entries for
 /// the same group into the same shape, so this doubles as the running decision
 /// for a group or ungrouped package.
 #[derive(Clone)]
 enum IncrementSpec {
-    Level(IncrementLevel),
+    Bump(VersionBump),
     Version(Version),
 }
 
@@ -380,18 +377,18 @@ impl IncrementSpec {
     /// Renders the decision for an explanatory note.
     fn describe(&self) -> String {
         match self {
-            Self::Level(level) => format!("increment level {level}"),
+            Self::Bump(bump) => format!("version bump {bump}"),
             Self::Version(version) => format!("exact version {version}"),
         }
     }
 
     /// Folds a further plan entry for the same key into this decision.
     ///
-    /// Two levels take the higher and matching explicit versions coalesce.
+    /// Two bumps take the higher and matching explicit versions coalesce.
     /// Different explicit versions and mixed decision kinds contradict each other.
     fn merge(self, other: Self, key: &str) -> Result<Self, AppError> {
         match (self, other) {
-            (Self::Level(existing), Self::Level(added)) => Ok(Self::Level(existing.max(added))),
+            (Self::Bump(existing), Self::Bump(added)) => Ok(Self::Bump(existing.max(added))),
             (Self::Version(existing), Self::Version(added)) => {
                 if existing == added {
                     Ok(Self::Version(existing))
@@ -399,7 +396,7 @@ impl IncrementSpec {
                     Err(ConflictingPlanVersionError::new(key).into())
                 }
             }
-            (Self::Version(_), Self::Level(_)) | (Self::Level(_), Self::Version(_)) => {
+            (Self::Version(_), Self::Bump(_)) | (Self::Bump(_), Self::Version(_)) => {
                 Err(ConflictingPlanIncrementKindError::new(key).into())
             }
         }
@@ -441,26 +438,23 @@ fn members_for_key(
     }
 }
 
-pub(crate) fn increment_version(
-    version: &Version,
-    level: IncrementLevel,
-) -> Result<Version, AppError> {
-    match level {
-        IncrementLevel::Major => {
+pub(crate) fn increment_version(version: &Version, bump: VersionBump) -> Result<Version, AppError> {
+    match bump {
+        VersionBump::Major => {
             let major = version
                 .major
                 .checked_add(1)
                 .ok_or_else(|| VersionOverflowError::new(version.clone()))?;
             Ok(Version::new(major, 0, 0))
         }
-        IncrementLevel::Minor => {
+        VersionBump::Minor => {
             let minor = version
                 .minor
                 .checked_add(1)
                 .ok_or_else(|| VersionOverflowError::new(version.clone()))?;
             Ok(Version::new(version.major, minor, 0))
         }
-        IncrementLevel::Patch => {
+        VersionBump::Patch => {
             let patch = version
                 .patch
                 .checked_add(1)
@@ -473,6 +467,8 @@ pub(crate) fn increment_version(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn v(text: &str) -> Version {
@@ -497,24 +493,50 @@ mod tests {
     }
 
     #[test]
-    fn only_the_three_semver_levels_are_accepted() {
-        assert_eq!("patch".parse::<IncrementLevel>(), Ok(IncrementLevel::Patch));
-        assert_eq!("minor".parse::<IncrementLevel>(), Ok(IncrementLevel::Minor));
-        assert_eq!("major".parse::<IncrementLevel>(), Ok(IncrementLevel::Major));
-        "Patch".parse::<IncrementLevel>().unwrap_err();
-        "build".parse::<IncrementLevel>().unwrap_err();
+    fn only_the_three_semver_bumps_are_accepted() {
+        assert_eq!("patch".parse::<VersionBump>(), Ok(VersionBump::Patch));
+        assert_eq!("minor".parse::<VersionBump>(), Ok(VersionBump::Minor));
+        assert_eq!("major".parse::<VersionBump>(), Ok(VersionBump::Major));
+        "Patch".parse::<VersionBump>().unwrap_err();
+        "build".parse::<VersionBump>().unwrap_err();
+    }
+
+    #[test]
+    fn mechanical_bumps_and_explicit_versions_round_trip_without_semantic_fields() {
+        for entry in [
+            json!({"name": "nm", "bump": "major"}),
+            json!({"name": "nm", "bump": "minor"}),
+            json!({"name": "nm", "bump": "patch"}),
+            json!({"name": "nm", "version": "1.2.3"}),
+        ] {
+            let increment: PlanIncrement = serde_json::from_value(entry.clone()).unwrap();
+            _ = increment.spec().unwrap();
+            assert_eq!(serde_json::to_value(increment).unwrap(), entry);
+        }
+    }
+
+    #[test]
+    fn plan_entries_reject_retired_fields_even_beside_a_valid_version() {
+        for entry in [
+            json!({"name": "nm", "level": "patch"}),
+            json!({"name": "nm", "level": "patch", "version": "1.2.3"}),
+            json!({"name": "nm", "bump": "patch", "level": "patch"}),
+            json!({"name": "nm", "impact": "patch"}),
+        ] {
+            _ = serde_json::from_value::<PlanIncrement>(entry).unwrap_err();
+        }
+        let increment: PlanIncrement =
+            serde_json::from_value(json!({"name": "nm", "bump": "breaking"})).unwrap();
+        let error = increment.spec().err().unwrap();
+        assert!(error.find_source::<UnknownVersionBumpError>().is_some());
     }
 
     #[test]
     fn increment_descriptions_preserve_the_requested_decision() {
-        for level in [
-            IncrementLevel::Patch,
-            IncrementLevel::Minor,
-            IncrementLevel::Major,
-        ] {
-            let description = IncrementSpec::Level(level).describe();
-            assert!(description.contains("level"));
-            assert!(description.ends_with(&level.to_string()));
+        for bump in [VersionBump::Patch, VersionBump::Minor, VersionBump::Major] {
+            let description = IncrementSpec::Bump(bump).describe();
+            assert!(description.contains("bump"));
+            assert!(description.ends_with(&bump.to_string()));
         }
         // Prerelease and build metadata are part of an explicit version choice.
         for version in [v("2.4.6"), v("3.0.0-rc.2+build.7")] {
@@ -530,7 +552,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm_impl".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -559,7 +581,7 @@ mod tests {
             PlanStage::Expanded,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: None,
+                bump: None,
                 version: Some("0.1.1".to_string()),
             }],
         );
@@ -588,12 +610,12 @@ mod tests {
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.1.1".to_string()),
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.1.1".to_string()),
                 },
             ],
@@ -613,14 +635,14 @@ mod tests {
     ///
     /// Naming a group, or one member of it, and letting expansion reach the rest
     /// is a proposed plan's whole purpose, so the drift guard must not apply to a
-    /// document `expand` did not produce.
+    /// document preview did not produce.
     #[test]
     fn a_proposed_plan_may_still_widen_through_its_group() {
         let plan = PlanFile::new(
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -634,24 +656,24 @@ mod tests {
         assert!(expanded.packages.contains_key("nm_impl"));
     }
 
-    /// An expanded plan carrying a level is rejected.
+    /// An expanded plan carrying a bump is rejected.
     ///
-    /// A level is resolved against the manifests as they stand when it is
+    /// A bump is resolved against the manifests as they stand when it is
     /// applied, so an expanded plan carrying one would let the same captured
     /// document apply a version other than the recorded one.
     #[test]
-    fn an_expanded_plan_rejects_an_unresolved_increment_level() {
+    fn an_expanded_plan_rejects_an_unresolved_version_bump() {
         let plan = PlanFile::new(
             PlanStage::Expanded,
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.1.1".to_string()),
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: Some("patch".to_string()),
+                    bump: Some("patch".to_string()),
                     version: None,
                 },
             ],
@@ -665,23 +687,23 @@ mod tests {
         .unwrap_err();
         let unresolved = error
             .find_source::<UnresolvedExpandedPlanError>()
-            .expect("an expanded plan carrying a level reports it as unresolved");
+            .expect("an expanded plan carrying a bump reports it as unresolved");
         assert_eq!(unresolved.unresolved(), ["nm_impl".to_string()]);
     }
 
     #[test]
-    fn highest_level_wins_inside_a_group() {
+    fn highest_bump_wins_inside_a_group() {
         let plan = PlanFile::new(
             PlanStage::Proposed,
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: Some("patch".to_string()),
+                    bump: Some("patch".to_string()),
                     version: None,
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: Some("minor".to_string()),
+                    bump: Some("minor".to_string()),
                     version: None,
                 },
             ],
@@ -703,7 +725,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: None,
+                bump: None,
                 version: Some("0.2.0".to_string()),
             }],
         );
@@ -739,7 +761,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "ghost".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -754,12 +776,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_level_and_version() {
+    fn rejects_missing_bump_and_version() {
         let plan = PlanFile::new(
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "events".to_string(),
-                level: None,
+                bump: None,
                 version: None,
             }],
         );
@@ -781,7 +803,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -804,7 +826,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -828,12 +850,12 @@ mod tests {
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.2.0".to_string()),
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.3.0".to_string()),
                 },
             ],
@@ -855,12 +877,12 @@ mod tests {
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.2.0".to_string()),
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.2.0".to_string()),
                 },
             ],
@@ -877,29 +899,29 @@ mod tests {
     }
 
     #[test]
-    fn explicit_version_and_level_conflict_in_either_order() {
+    fn explicit_version_and_bump_conflict_in_either_order() {
         for increments in [
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: Some("patch".to_string()),
+                    bump: Some("patch".to_string()),
                     version: None,
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.3.0".to_string()),
                 },
             ],
             vec![
                 PlanIncrement {
                     name: "nm".to_string(),
-                    level: None,
+                    bump: None,
                     version: Some("0.3.0".to_string()),
                 },
                 PlanIncrement {
                     name: "nm_impl".to_string(),
-                    level: Some("patch".to_string()),
+                    bump: Some("patch".to_string()),
                     version: None,
                 },
             ],
@@ -931,7 +953,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "events".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -947,12 +969,12 @@ mod tests {
     }
 
     #[test]
-    fn major_level_increments_the_major_component() {
+    fn major_bump_increments_the_major_component() {
         let plan = PlanFile::new(
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "events".to_string(),
-                level: Some("major".to_string()),
+                bump: Some("major".to_string()),
                 version: None,
             }],
         );
@@ -969,7 +991,7 @@ mod tests {
     #[test]
     fn increment_version_errors_when_a_component_overflows() {
         let max = Version::new(0, 0, u64::MAX);
-        let error = increment_version(&max, IncrementLevel::Patch).unwrap_err();
+        let error = increment_version(&max, VersionBump::Patch).unwrap_err();
         assert!(error.find_source::<VersionOverflowError>().is_some());
     }
 
@@ -979,7 +1001,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "events".to_string(),
-                level: None,
+                bump: None,
                 version: Some("0.1.0".to_string()),
             }],
         );
@@ -1003,7 +1025,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: None,
+                bump: None,
                 version: Some("0.1.0".to_string()),
             }],
         );
@@ -1027,7 +1049,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm_impl".to_string(),
-                level: Some("patch".to_string()),
+                bump: Some("patch".to_string()),
                 version: None,
             }],
         );
@@ -1048,7 +1070,7 @@ mod tests {
             PlanStage::Proposed,
             vec![PlanIncrement {
                 name: "nm".to_string(),
-                level: None,
+                bump: None,
                 version: Some("0.2.0-alpha.1".to_string()),
             }],
         );

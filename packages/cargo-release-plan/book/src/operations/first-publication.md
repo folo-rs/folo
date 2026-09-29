@@ -59,7 +59,7 @@ release and native assets.
 the workspace as an advisory. Before applying a resolved plan,
 `check-published --plan <resolved-plan.json>` validates its targets and requires
 an established registry package for every publishable target. Missing or unknown
-registry results block that gate; non-publishable version targets make no query.
+registry results block that gate; non-publishable packages make no query.
 
 These observations do not verify Trusted Publisher registration. Complete that
 setup explicitly before resuming. The separate `check-publishing-identity`

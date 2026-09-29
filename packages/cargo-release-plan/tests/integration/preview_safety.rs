@@ -18,7 +18,7 @@ fn preparation_preserves_an_occupied_prospective_directory() {
     run(&RunInput::Prepare {
         merge_target: None,
         output: fixture.path().join("prepared"),
-        base: Some("HEAD".to_owned()),
+        release_history: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
@@ -33,7 +33,7 @@ fn preparation_preserves_an_occupied_prospective_directory() {
 fn preview_output_cannot_destroy_an_input_document() {
     let directory = tempdir().unwrap();
     let plan = directory.path().join("plan.json");
-    let before = r#"{"schema_version":5,"increments":[]}"#;
+    let before = r#"{"schema_version":6,"increments":[]}"#;
     fs::write(&plan, before).unwrap();
     // Collision checks precede reads, so neither a repository nor prepared evidence is needed.
     run(&RunInput::Preview {
@@ -63,7 +63,7 @@ fn offline_resolution_failure_never_becomes_prepared_evidence() {
     run(&RunInput::Prepare {
         merge_target: None,
         output: fixture.path().join("prepared"),
-        base: Some("HEAD".to_owned()),
+        release_history: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
         verbose: false,
     })

@@ -51,7 +51,6 @@ fn main() -> ExitCode {
             | RunOutcome::Preview { message }
             | RunOutcome::VerifyPreview { message }
             | RunOutcome::Report { message }
-            | RunOutcome::Expand { message }
             | RunOutcome::Apply { message } => {
                 // The credential provider has already written its protocol stream and returns
                 // an empty summary; no extra newline or generic success text may follow it.

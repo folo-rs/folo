@@ -198,8 +198,8 @@ publication-source workspace. Do not substitute a prospective planning workspace
 or later source commit.
 
 The [Cargo runtime requirement](../reference/commands.md#prepare-and-publish-exact-versions)
-supports verification and dependency-ordered workspace uploads. The application
-verifies packaged binary dependency identities against the assessed locked closure.
+supports locked package verification and dependency-ordered workspace uploads.
+Cargo owns normalization and hashing of the package bytes it uploads.
 Neither a failed upload command nor an old successful outcome replaces a fresh
 exact-version observation.
 

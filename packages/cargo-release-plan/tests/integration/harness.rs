@@ -47,14 +47,17 @@ pub(crate) fn nested_workspace() -> Fixture {
     fixture
 }
 
-pub(crate) fn check(fixture: &Fixture, base: &str) -> (bool, String) {
-    check_workspace(base, fixture.manifest())
+pub(crate) fn check(fixture: &Fixture, release_history: &str) -> (bool, String) {
+    check_workspace(release_history, fixture.manifest())
 }
 
-pub(crate) fn check_result(fixture: &Fixture, base: &str) -> Result<(bool, String), String> {
+pub(crate) fn check_result(
+    fixture: &Fixture,
+    release_history: &str,
+) -> Result<(bool, String), String> {
     match run(&RunInput::Check {
         merge_target: None,
-        base: Some(base.to_string()),
+        release_history: Some(release_history.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -69,10 +72,10 @@ pub(crate) fn check_result(fixture: &Fixture, base: &str) -> Result<(bool, Strin
     }
 }
 
-pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
+pub(crate) fn check_verbose(fixture: &Fixture, release_history: &str) -> (bool, String) {
     match run(&RunInput::Check {
         merge_target: None,
-        base: Some(base.to_string()),
+        release_history: Some(release_history.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -87,10 +90,10 @@ pub(crate) fn check_verbose(fixture: &Fixture, base: &str) -> (bool, String) {
     }
 }
 
-pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, String) {
+pub(crate) fn check_workspace(release_history: &str, manifest_path: PathBuf) -> (bool, String) {
     match run(&RunInput::Check {
         merge_target: None,
-        base: Some(base.to_string()),
+        release_history: Some(release_history.to_string()),
         manifest_path,
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -109,7 +112,7 @@ pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, Stri
 pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String), String> {
     match run(&RunInput::Check {
         merge_target: None,
-        base: None,
+        release_history: None,
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: false,
@@ -124,10 +127,13 @@ pub(crate) fn check_discovering_base(fixture: &Fixture) -> Result<(bool, String)
     }
 }
 
-pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool, String) {
+pub(crate) fn check_verifying_packaging(
+    fixture: &Fixture,
+    release_history: &str,
+) -> (bool, String) {
     match run(&RunInput::Check {
         merge_target: None,
-        base: Some(base.to_string()),
+        release_history: Some(release_history.to_string()),
         manifest_path: fixture.manifest(),
         format: CheckFormat::Text,
         verify_packaging: true,
@@ -142,36 +148,17 @@ pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool,
     }
 }
 
-pub(crate) fn report_json(fixture: &Fixture, base: &str) -> String {
+pub(crate) fn report_json(fixture: &Fixture, release_history: &str) -> String {
     let out_dir = fixture.path().join("out");
     run(&RunInput::Report {
         merge_target: None,
         out_dir: out_dir.clone(),
-        base: Some(base.to_string()),
+        release_history: Some(release_history.to_string()),
         manifest_path: fixture.manifest(),
         verbose: false,
     })
     .unwrap();
     fs::read_to_string(out_dir.join("report.json")).unwrap()
-}
-
-pub(crate) fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
-    let plan_path = fixture.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        format!(
-            r#"{{ "schema_version": 5, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
-        ),
-    )
-    .unwrap();
-
-    run(&RunInput::Apply {
-        plan: plan_path,
-        dry_run: false,
-        manifest_path: fixture.manifest(),
-        verbose: true,
-    })
-    .unwrap();
 }
 
 pub(crate) fn resolved_plan(fixture: &Fixture, proposal: &Path) -> PathBuf {
@@ -193,7 +180,7 @@ pub(crate) fn prepare(fixture: &Fixture) -> PathBuf {
     run(&RunInput::Prepare {
         merge_target: None,
         output: prepared.clone(),
-        base: Some("HEAD".to_owned()),
+        release_history: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
         verbose: false,
     })

@@ -213,7 +213,6 @@ runs:
           !~/.cargo/bin/cargo-fmt*
           !~/.cargo/bin/cargo-miri*
           ~/.cargo/bin/just*
-          ~/.cargo/bin/release-plz*
           ~/.cargo/bin/gungraun-runner*
           ~/.cargo/.crates.toml
           ~/.cargo/.crates2.json

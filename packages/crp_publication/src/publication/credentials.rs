@@ -1,7 +1,6 @@
 //! Invocation-owned credential state shared with Cargo's short-lived provider processes.
 
 use std::ffi::{OsStr, OsString};
-use std::fmt::Write as _;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,13 +9,11 @@ use std::{env, fs};
 use crp_workspace::command::BUILD_CREDENTIAL_VARIABLES;
 use ohno::AppError;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::publication::candidate::Repository;
 use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
 use crate::publication::manifest::PublicationManifest;
-use crate::publication::resolution::verify_packaged_closure;
 use crate::{PublicationOutput, ReadFileError, WriteFileError};
 
 /// Owns temporary credential files until Cargo exits and every issued token is revoked.
@@ -34,7 +31,6 @@ impl CredentialSession {
         identity: ActionsIdentity,
         publication: PublicationManifest,
         manifest: PathBuf,
-        target: PathBuf,
         publisher: TrustedPublisher,
     ) -> Result<Self, AppError> {
         publication.validate()?;
@@ -46,7 +42,6 @@ impl CredentialSession {
             identity,
             publication,
             manifest,
-            target,
             token_endpoint: publisher.endpoint().to_owned(),
         };
         let path = directory.path().join(CONTEXT_FILE);
@@ -99,7 +94,6 @@ struct CredentialContext {
     identity: ActionsIdentity,
     publication: PublicationManifest,
     manifest: PathBuf,
-    target: PathBuf,
     token_endpoint: String,
 }
 
@@ -129,7 +123,6 @@ struct CredentialRegistry {
 const CONTEXT_ENV: &str = "CARGO_RELEASE_PLAN_CREDENTIAL_CONTEXT";
 const CONTEXT_FILE: &str = "context.json";
 const LEASE_PREFIX: &str = "token-";
-const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 // Cargo selects requests from the provider's advertised versions.
 // Ref: https://doc.rust-lang.org/cargo/reference/credential-provider-protocol.html
 const CREDENTIAL_PROTOCOL_VERSION: u32 = 1;
@@ -189,44 +182,8 @@ pub fn serve_credential(
     validate_request(&request, &context.publication)?;
     let repository =
         Repository::discover(&context.manifest, &context.publication.publication.source)?;
-    // These clean-source checks bracket archive hashing and dependency inspection.
-    // The final check remains before authority is issued, not merely before reading inputs.
-    repository.ensure_clean_head()?;
-    let package = context
-        .publication
-        .publication
-        .packages
-        .iter()
-        .find(|package| package.name == request.name)
-        .expect("request validation requires an exact publication package");
-    if package.binary.is_some() {
-        let archive = context
-            .target
-            .join("package")
-            .join(format!("{}-{}.crate", request.name, request.version));
-        let bytes =
-            fs::read(&archive).map_err(|error| ReadFileError::caused_by(&archive, error))?;
-        let mut checksum = String::new();
-        for byte in Sha256::digest(&bytes) {
-            write!(checksum, "{byte:02x}")?;
-        }
-        if checksum != request.checksum {
-            return Err(PackageChecksumMismatch::new(
-                request.name.clone(),
-                request.version.clone(),
-            )
-            .into());
-        }
-        verify_packaged_closure(
-            &context.manifest,
-            &bytes,
-            &request.name,
-            &request.version,
-            CRATES_IO_SOURCE,
-        )?;
-    }
-    repository.ensure_clean_head()?;
     let publisher = TrustedPublisher::with_endpoint(&context.token_endpoint, diagnostics.clone())?;
+    repository.ensure_clean_head()?;
     let token = publisher.exchange(&context.identity)?;
     let directory = path
         .parent()
@@ -367,15 +324,6 @@ struct ProviderConfigurationError {
 }
 
 #[ohno::error]
-#[display(
-    "Cargo upload checksum differs from the inspected package archive for {package}@{version}"
-)]
-struct PackageChecksumMismatch {
-    package: String,
-    version: String,
-}
-
-#[ohno::error]
 #[display("credential cleanup also failed: {cleanup}")]
 struct CredentialCleanupFailed {
     cleanup: AppError,
@@ -511,5 +459,9 @@ mod tests {
         let mut requested = request();
         requested.checksum = "unknown".to_owned();
         validate_request(&requested, &publication).unwrap_err();
+        requested.checksum = "g".repeat(64);
+        validate_request(&requested, &publication).unwrap_err();
+        requested.checksum = "B".repeat(64);
+        validate_request(&requested, &publication).unwrap();
     }
 }

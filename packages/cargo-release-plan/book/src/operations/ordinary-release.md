@@ -10,9 +10,10 @@ Add a compatible public operation to `widget`, implement it in `widget_impl`,
 and update the relevant tests and public documentation. The group starts at
 `1.4.0`; `widget-cli` already has a pending `2.0.1` increment from `2.0.0`.
 
-Run the copied `increment-versions` skill, or follow
-[local planning](../integration/local-planning.md). Select release history and the merge target,
-prepare resolution and assess dependency-first. The implementation change selects
+Run the copied `increment-versions` skill using the
+[agent planning setup](../integration/local-planning.md). The skill selects release
+history and the merge target, prepares the report and assesses dependencies.
+The implementation change selects
 the public library contract for external comparison.
 
 Choose `nonbreaking` for the new library operation and assess the implementation
@@ -22,20 +23,20 @@ changes. Retain the binary's pending patch increment if it is sufficient.
 ## Present the complete release
 
 Put a **Version/release plan** section in the PR description. Base it on the final
-resolved expansion and current evidence, not a list of directly edited files:
+resolved plan and report, not a list of directly edited files:
 
 | Package or group | Previous version | Proposed version | Change and reason |
 | --- | --- | --- | --- |
 | `widget`, `widget_impl`, `widget-fixtures` | `1.4.0` | `1.5.0` | Compatible public operation in `widget`; supporting implementation in `widget_impl`; helper moves for alignment only and is not published. |
 | `widget-cli` | `2.0.0` | `2.0.1` | Assessed dependency update without a stronger CLI change; sufficient pending patch increment retained. |
 
-Show previous versions at each publishable package's anchor. For a non-publishable
-version target, use its declared alignment starting point. If members start at different
+Show versions at each publishable package's anchor. For a non-publishable
+package, use its declared alignment starting point. If members start at different
 versions, show each movement rather than hiding it in one group value.
 
 Include:
 
-- Every group member and ungrouped version target reached by the complete plan.
+- Every group member and ungrouped package reached by the complete plan.
 - Required dependent releases and requirement rewrites.
 - Semantic reasons, including any decision above the API compatibility checker's floor.
 - Pending increments already present before the latest planning run.
@@ -50,7 +51,7 @@ the final proposed release, not the sequence of planning attempts.
 
 ## Apply, validate and review
 
-Apply the captured resolved artifact unchanged, verify locked metadata and run
+Have the skill apply the resolved plan unchanged, verify locked metadata and run
 the repository's required checks. Preserve the before/after evidence separately
 from source.
 

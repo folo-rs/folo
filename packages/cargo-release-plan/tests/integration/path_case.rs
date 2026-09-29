@@ -397,7 +397,7 @@ fn package_report(fixture: &Fixture, name: &str) -> Value {
     run(&RunInput::Report {
         merge_target: None,
         out_dir: fixture.path().join("out"),
-        base: Some("HEAD".to_owned()),
+        release_history: Some("HEAD".to_owned()),
         manifest_path: fixture.manifest(),
         verbose: false,
     })

@@ -27,16 +27,6 @@ pub(crate) struct WriteFileError {
 impl UnwindSafe for WriteFileError {}
 impl RefUnwindSafe for WriteFileError {}
 
-/// An expanded-plan output directory could not be created.
-#[ohno::error]
-#[display("Failed to create output directory '{}'", path.quoted())]
-pub(crate) struct CreateOutputDirectoryError {
-    path: PathBuf,
-}
-
-impl UnwindSafe for CreateOutputDirectoryError {}
-impl RefUnwindSafe for CreateOutputDirectoryError {}
-
 /// A release artifact cannot be decoded as the supported JSON document.
 #[ohno::error]
 #[display("Failed to parse release artifact '{}'", path.quoted())]
@@ -68,10 +58,10 @@ impl UnsupportedPlanSchemaError {
     }
 }
 
-/// An increment entry is missing `level` and `version`, or supplies both.
+/// An increment entry is missing `bump` and `version`, or supplies both.
 #[ohno::error]
 #[display(
-    "Plan increment '{}' must supply exactly one of `level` or `version`",
+    "Plan increment '{}' must supply exactly one of `bump` or `version`",
     name.quoted()
 )]
 pub(crate) struct PlanIncrementSpecError {
@@ -115,7 +105,7 @@ impl UnknownPlanTargetError {
 #[ohno::error]
 #[display(
     "Expanded plan reaches packages it does not name: {}. The workspace's version groups changed \
-     after this document was produced, so expand the proposed plan again and review the wider set",
+     after this document was produced, so preview the proposal again and review the wider set",
     unnamed.join(", ")
 )]
 pub(crate) struct ExpandedPlanDriftError {
@@ -132,16 +122,16 @@ impl ExpandedPlanDriftError {
     }
 }
 
-/// An expanded plan carries an increment level instead of an explicit version.
+/// An expanded plan carries a version bump instead of an explicit version.
 ///
 /// An expanded plan records the version each package will take, which is what
-/// makes reviewing one meaningful. A level is resolved against the manifests as
+/// makes reviewing one meaningful. A bump is resolved against the manifests as
 /// they stand when it is applied, so the same expanded document could apply a
 /// different version than the one that was reviewed.
 #[ohno::error]
 #[display(
-    "Expanded plan leaves an increment level unresolved for: {}. An expanded plan records the \
-     version each package takes, so expand the proposed plan again",
+    "Expanded plan leaves a version bump unresolved for: {}. An expanded plan records the \
+     version each package takes, so preview the proposal again",
     unresolved.join(", ")
 )]
 pub(crate) struct UnresolvedExpandedPlanError {
@@ -158,25 +148,25 @@ impl UnresolvedExpandedPlanError {
     }
 }
 
-/// An increment level is not `major`, `minor`, or `patch`.
+/// A version bump is not `major`, `minor`, or `patch`.
 #[ohno::error]
 #[display(
-    "Unknown increment level '{}' for '{}'",
-    level.quoted(),
+    "Unknown version bump '{}' for '{}'",
+    bump.quoted(),
     name.quoted()
 )]
-pub(crate) struct UnknownIncrementLevelError {
+pub(crate) struct UnknownVersionBumpError {
     name: String,
-    level: String,
+    bump: String,
 }
 
-impl UnwindSafe for UnknownIncrementLevelError {}
-impl RefUnwindSafe for UnknownIncrementLevelError {}
+impl UnwindSafe for UnknownVersionBumpError {}
+impl RefUnwindSafe for UnknownVersionBumpError {}
 
 /// History ended before a version change (including creation) was observed.
 #[ohno::error]
 #[display(
-    "Shallow or truncated history: no version change found for package '{}' on the base first-parent line",
+    "Shallow or truncated history: no version change found for package '{}' on the release-history first-parent line",
     package.quoted()
 )]
 pub(crate) struct ShallowHistoryError {
@@ -206,10 +196,10 @@ pub(crate) struct ConflictingPlanVersionError {
 impl UnwindSafe for ConflictingPlanVersionError {}
 impl RefUnwindSafe for ConflictingPlanVersionError {}
 
-/// Entries affecting one target mix an increment level with an explicit version.
+/// Entries affecting one target mix a version bump with an explicit version.
 #[ohno::error]
 #[display(
-    "Plan target '{}' mixes increment levels with explicit versions",
+    "Plan target '{}' mixes version bumps with explicit versions",
     target.quoted()
 )]
 pub(crate) struct ConflictingPlanIncrementKindError {
@@ -308,7 +298,7 @@ impl PlanVersionRegressionError {
 /// packages/cargo-release-plan/docs/design.md, "Released content".
 #[ohno::error]
 #[display(
-    "Package '{}' releases '{}', which is a symbolic link",
+    "Package '{}' releases '{}'; symbolic links are unsupported",
     package.quoted(),
     path.quoted()
 )]
@@ -379,14 +369,13 @@ mod tests {
     use super::*;
     assert_impl_all!(ReadFileError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(WriteFileError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(CreateOutputDirectoryError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ParsePlanError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(UnsupportedPlanSchemaError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PlanIncrementSpecError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(UnknownPlanTargetError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ExpandedPlanDriftError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(UnresolvedExpandedPlanError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(UnknownIncrementLevelError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(UnknownVersionBumpError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ShallowHistoryError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ConflictingPlanVersionError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ConflictingPlanIncrementKindError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);

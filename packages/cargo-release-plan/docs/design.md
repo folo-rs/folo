@@ -19,6 +19,9 @@ not separately configured release tools. A reusable GitHub Action and workflows
 expose these operations to other repositories without requiring a Folo checkout
 or repository-local release scripts.
 
+The `increment-versions` skill is the supported version-planning interface; the
+CLI operations are its protocol, not an alternative manual planning workflow.
+
 Version planning also supports an explicitly requested standalone run. The user
 supplies the workspace, release-history ref and optional merge target instead of
 a publication configuration. The same assessment and application operations
@@ -48,18 +51,18 @@ the declared versions cover those changes. Its **release history** ends at a
 selected commit on the branch that publishes.
 Within that history, each package has its own **anchor**, the newest first-parent
 commit that changed its parsed version. The anchor supplies the package's
-comparison version and content. For a stacked PR, a separate **merge target**
+anchor version and content. The anchor version is the version declared by the
+package in that commit. For a stacked PR, a separate **merge target**
 identifies the unmerged parent's final state. Its higher package versions and
 final contents are treated together as anticipated predecessor releases.
 
-A **semantic decision** judges the significance of the changed consumer contract:
+A **semantic impact** describes the significance of the changed consumer contract:
 `breaking`, `nonbreaking` or `patch`. A **version plan** translates those decisions
 into package versions, including required group and dependency effects. The
 resulting resolved plan fixes the manifest and lockfile edits to apply.
 
-Every tracked workspace member is a **version target**. A **non-publishable version
-target** declares `publish = false`: it participates in version-group alignment
-without registry publication or a semantic decision about its source. A
+A **non-publishable package** declares `publish = false`: it participates in version-group alignment
+without registry publication or a semantic impact about its source. A
 publishable private-API package is different; it still has released content and
 publication obligations.
 
@@ -68,7 +71,7 @@ The process connects these concepts as follows:
 1. Prepare a consistent workspace lockfile and collect an assessment using
    the selected history and merge target. Review source changes, inherited inputs, dependency effects
    and external compatibility-check results.
-2. Choose semantic decisions, generate a version plan and preview its complete
+2. Choose semantic impacts, generate a version plan and preview its complete
    effects. Assess additional effects exposed by preview before applying the
    captured result.
 3. Review and squash-merge the source changes together with their version changes.
@@ -80,7 +83,7 @@ The process connects these concepts as follows:
    assets. Each phase observes remote state and completes missing work.
 
 For example, adding a compatible operation to a library calls for a `nonbreaking`
-semantic decision. The tool determines the appropriate version movement and
+semantic impact. The tool determines the appropriate version movement and
 propagates any related manifest or binary-lockfile effects. After review and merge,
 publication delivers those declared versions without reconsidering the decision.
 
@@ -91,7 +94,7 @@ publication delivers those declared versions without reconsidering the decision.
 | Maintainer or authoring agent | Understand the package's promises, judge behavioral and semantic compatibility, and explain the chosen levels. |
 | `cargo-release-plan` | Collect released-content evidence; validate version rules; compute and apply mechanical plan effects; validate publication inputs; reconcile and publish the chosen versions. |
 | API compatibility checker (`cargo-semver-checks`) | Supply evidence about supported Rust library contracts; it does not cover every behavioral, CLI or data-format promise. |
-| `increment-versions` skill | Guide the authoring agent through evidence collection, semantic decisions, preview, application and verification. It uses the tool's operations rather than implementing another version resolver. |
+| `increment-versions` skill | Guide the authoring agent through evidence collection, semantic impacts, preview, application and verification. It uses the tool's operations rather than implementing another version resolver. |
 | Reviewer and repository merge policy | Approve the complete contribution and require its automated checks. Completing the skill is not approval to merge or publish. |
 | GitHub Action and reusable workflows | Install the selected tools, select event-specific inputs, provide jobs and permissions, transport artifacts and expose outcomes. They do not independently choose package versions or release policy. |
 | Cargo | Resolve dependencies when explicitly requested, construct and verify crate archives, and perform workspace registry uploads with Cargo's dependency-ordering semantics. |
@@ -120,15 +123,15 @@ Publication answers the separate delivery question by checking exact versions an
 assets remotely. It includes all publishable packages declared in the validated
 source, not only the assessment's pending-release subset.
 
-Semantic decisions are distinct from numeric **increment levels** (`patch`,
+Semantic impacts are distinct from numeric **version bumps** (`patch`,
 `minor`, `major`). For stable versions, `nonbreaking` normally requires a minor
 increment and `breaking` a major increment. Pre-1.0 compatibility rules and
 already sufficient pending increments affect that translation. An exact target
 version can be chosen when numeric increments do not express the intended release.
 For example, a `nonbreaking` decision for `0.4.2` can require a numeric `patch`
 increment to `0.4.3`. The artifact reference distinguishes semantic
-`changes[].level` from numeric `increments[].level`; the shared field name does
-not make the vocabularies interchangeable.
+`changes[].impact` from numeric `increments[].bump`. These are distinct fields
+because the meaning of a change is not its numeric version operation.
 
 Version choices belong before merge. Publication never chooses another version,
 repairs a manifest or refreshes the committed dependency resolution. Preparation
@@ -178,7 +181,7 @@ contents release-relevant.
 ### Evidence and judgement stay separate
 
 Released-content analysis determines whether an increment is required and records
-the evidence. Semantic decisions combine that evidence with
+the evidence. Semantic impacts combine that evidence with
 external compatibility results and wider contract assessment. Proposal generation completes their mechanical
 version effects; resolution preview exposes additional dependency-resolution
 effects before application. A minimum imposed by a tool is not a complete semantic
@@ -321,7 +324,7 @@ The proposal settles version groups, requirement propagation, and binary
 dependency-closure effects internally. It retains adequate existing increments
 instead of repeatedly increasing a package at each resolution pass. The captured
 state includes resolved file contents and the inputs they depend on. Application
-uses that state without a late dependency refresh or unlisted version targets.
+uses that state without a late dependency refresh or unlisted package changes.
 Changed inputs require fresh preparation and assessment.
 
 ## Commands
@@ -338,7 +341,7 @@ unrelated repository merely because configuration is missing.
 Standalone planning passes resolved commits through `--release-history` and
 `--merge-target`; it does not synthesize publishing configuration or call
 `release-context`. The original refs are retained for refresh before application.
-Preparation, semantic decisions, dependency/group expansion, preview and captured
+Preparation, semantic impacts, dependency/group expansion, preview and captured
 application keep their ordinary contracts. The final version-readiness check
 omits `--config`, so binary publication metadata is not a prerequisite.
 
@@ -385,7 +388,7 @@ keep a deliberately narrower merge-queue check without weakening its full PR gat
 
 `check --verify-packaging` audits the tool's artifact model against
 `cargo package --list`. It warns when Cargo and the tool select different paths
-but does not alter the release verdict. The probe allows dirty trees, so
+but does not alter the version-readiness result. The probe allows dirty trees, so
 untracked inputs may legitimately appear only on Cargo's side. It also performs
 dependency resolution and Cargo's package preparation work, which the normal
 offline assessment deliberately avoids. A mismatch on a clean tree is evidence
@@ -396,23 +399,23 @@ that the artifact model needs correction.
 A version plan exists in two stages, and they carry different guarantees about the
 packages a document names.
 
-A **proposed plan** is what a planner writes. Its entries may name a version
+A **proposed plan** is generated from the skill's semantic impacts. Its entries may name a version
 group, or a single member of one, and leave resolution to reach the rest, so what
 it names is a starting point rather than the full set it moves.
 
-An **expanded plan** names every package whose
+The **resolved plan** produced by preview names every package whose
 version the plan sets and records the version each will carry. Both halves
 matter: the first makes the documented set complete with respect to the release
-decision, and the second makes it stable, since an increment level would be
+decision, and the second makes it stable, since a version bump would be
 resolved again against whatever the manifests say when the document is applied.
-Resolving an expanded plan must therefore reproduce it exactly.
+Resolving its package versions must therefore reproduce them exactly.
 
 Applying a plan also rewrites the requirements that dependents declare on the
 packages it moves. A dependent whose existing pending increment is sufficient
 need not receive another one. A dependent that would otherwise keep its
 anchor's version needs its own release decision before application.
 
-The expanded plan is applied unchanged, so the documented package/version set
+The resolved plan is applied unchanged, so the documented package/version set
 and applied document are the same artifact. Review and approval policy belong
 to the caller, not the tool.
 
@@ -441,7 +444,7 @@ These mechanical requirements do not replace semantic judgement.
 
 The proposal is based on the report's declared versions and release anchors.
 Preview remains responsible for resolving prospective manifests and lockfiles;
-its additional evidence can require a fresh semantic decision.
+its additional evidence can require a fresh semantic impact.
 
 ### Collect external compatibility evidence
 
@@ -449,7 +452,7 @@ its additional evidence can require a fresh semantic decision.
 prospective workspace, or collects fresh read-only report evidence. It uses the report-selected consumer contracts and runs
 the supported API compatibility checker. The operation records comparison inputs,
 checker identity, findings and diagnostics; it does not replace the author's
-semantic decisions.
+semantic impacts.
 
 Prepared execution explicitly selects a workspace and verifies its captured
 source, selected history, merge target and resolution. Fresh execution captures those inputs around
@@ -473,43 +476,18 @@ the skill uses it as a floor while assessing the complete contract.
 `check-published` is an explicit registry-read operation, separate from offline
 plan inspection. For a resolved plan, it validates the complete target set and
 checks whether its publishable packages are established on crates.io. Non-publishable
-version targets require no registry observation. Never-published packages and indeterminate
+packages require no registry observation. Never-published packages and indeterminate
 queries block this pre-application gate; neither is silently treated as published.
 
 Workspace-wide discovery provides an early advisory handoff before a plan exists.
 This check does not publish first versions or prove that Trusted Publisher
 registration is configured. Those remain maintainer setup responsibilities.
 
-### Expand version choices with `expand`
+### Inspect a plan
 
-`expand --plan <plan.json> --out <expanded.json>` resolves a proposed plan's
-version groups and increment levels into one explicit entry per package. A
-proposed plan may omit version-group members that `apply` will update; `expand`
-writes the explicit package/version set without resolving dependencies.
-
-That set is the packages whose versions move. Applying it also rewrites
-requirements inside their dependents, which the document does not name because
-the plan gives them no version.
-
-An expanded plan records its stage, which binds it to the package set it names:
-applying it after a version group gained a member fails rather than quietly
-editing an unlisted package. Recovering from that means refreshing the planning
-inputs and expanding the proposal again to document the wider set. A proposed
-plan keeps the opposite behavior, since naming a group and letting resolution
-reach its members is how such a plan is written.
-
-Structural expansion alone is not a complete resolved artifact. A release
-proposal must also account for the actual lockfile effects of those versions.
-
-Input-preserving expansion rejects destinations that alias the proposal and leaves
-an existing destination unchanged if expansion fails. Callers can request this
-behavior without giving up the general command's supported in-place expansion.
-
-### Inspect an expanded plan
-
-`inspect-plan` validates an expansion against the selected workspace and provides
+`inspect-plan` validates a plan against the selected workspace and provides
 publication-eligible target names and any retained compatibility manifest.
-Non-publishable version targets remain part of validation but not publication.
+Non-publishable packages remain part of validation but not publication.
 Requiring resolved evidence applies the same captured-state checks as a dry-run
 application. Inspection performs no writes or registry queries; external callers
 can use it independently of the publication commands' availability checks.
@@ -517,7 +495,7 @@ can use it independently of the publication commands' availability checks.
 ### Prepare evidence and preview resolution
 
 Preparation supplies a consistent workspace lockfile and evidence describing that
-same source, before semantic decisions are made.
+same source, before semantic impacts are made.
 
 Preview applies candidate versions and requirement rewrites in a disposable
 workspace and resolves there under the same offline policy. It classifies the
@@ -536,16 +514,14 @@ applying the stable proposal.
 
 ### Carry out a decision with `apply`
 
-`apply --plan <plan.json>` applies an expanded plan using the resolved
+`apply --plan <plan.json>` applies only a resolved plan using the exact
 state captured by preview. It validates the input
 snapshot and target set before installing the captured manifest and lockfile
 contents. It does not run dependency resolution. An already-applied resolved
 plan is an idempotent no-op; a partially changed or stale input is not treated as
 the captured state. `--dry-run` reports what would change without writing.
 
-Proposed plans support a separate low-level manifest-only application. That path
-does not resolve or install lockfiles and is not the complete release workflow.
-The guided release workflow accepts only the resolved expanded artifact.
+An unresolved proposal cannot be applied, including in dry-run mode.
 
 ### Between report and apply
 
@@ -564,7 +540,7 @@ it is not a routine source of additional lockfile-only release decisions.
 Workspace commands use the workspace selected by `--manifest-path`. Artifact-only
 planning commands instead use their supplied reports and decisions. `report` and
 `check` accept `--release-history` and optional `--merge-target` to identify the
-comparison history. `--base` remains a compatibility alias for release history.
+comparison history.
 
 ### Prepare and execute publication
 
@@ -617,7 +593,6 @@ an unmerged parent's intermediate commits into established releases.
 target ref. All assessment stages use that same returned commit pair.
 `--release-history <commit>` explicitly selects known release history;
 `--merge-target <commit>` supplies an anticipated parent.
-`--base` is an alias for `--release-history`, not a different comparison mode.
 Direct assessment without an explicit history uses `origin`'s recorded default
 branch, falling back to `origin/main`; automation should use the configured context.
 
@@ -722,9 +697,7 @@ Cargo includes several inputs outside ordinary package rules:
 * Without a `readme` declaration, Cargo detects a default README in the package
   directory. `readme = false` opts out.
 * A package-root `target` directory is never included.
-* A symbolic link in released content stops the assessment. Cargo publishes the
-  target bytes while Git stores the target path, so Git history alone cannot
-  compare the artifact correctly.
+* Symbolic links are unsupported and reported as such when encountered in release inputs.
 
 ### Relevant lockfile closures
 
@@ -805,9 +778,9 @@ tag or binary-asset availability.
 
 ## Version groups
 
-Every Git-tracked Cargo workspace member is a **version target**, including a
-member that cannot be published. An exact dependency declaration between two
-version targets states that their versions move together. Version groups are
+Every Git-tracked Cargo workspace package participates, including a package that
+cannot be published. An exact dependency declaration between two packages states
+that their versions move together. Version groups are
 the connected components formed by those declarations, in either dependency
 direction, and contain at least two members. A group's key is its
 lexicographically smallest member.
@@ -825,16 +798,16 @@ suffix, or a compound requirement containing an exact comparator is a manifest
 error. A well-formed exact requirement whose version is stale still forms its
 group: `check` reports the stale requirement and `apply` can repair it.
 
-If one publishable member needs an increment, the plan expands to every version
-target in its group. A plan may also target a non-publishable version target directly,
+If one publishable member needs an increment, the plan includes every package
+in its group. A plan may also target a non-publishable package directly,
 and groups containing only such targets can be aligned without publication. The target
 starts from the highest declared member version, including non-publishable and
 new members, and applies the highest chosen increment level. Entries that expand
 to the same group must all use increment levels or all use one matching exact
 version.
 
-`expand` exposes that resolution as a document so a caller can present and apply
-the complete package/version set rather than leave group members implicit.
+Preview records the complete package/version set rather than leaving group
+members implicit.
 
 An inconsistent group is a check failure in its own right, independent of any
 content change. A plan entry naming any member resolves it, and expansion is
@@ -857,7 +830,7 @@ membership is declared only by exact workspace dependency requirements.
 `report.json` is the complete machine-readable assessment. Its `packages` array
 records every publishable package, its status and anchor, the reasons it changed,
 and its dependencies and dependents. Its `non_publishable_packages` array
-records each remaining version target's name, declared version, and group.
+records each remaining package's name, declared version, and group.
 Group records cover the union of both arrays and report complete consistency.
 
 Per-package patch files are a readable supplement for file changes. They cover
@@ -869,7 +842,7 @@ are reported only as change entries. They use zero-context
 unified diffs, report binary changes without rendering binary bytes, and
 preserve addition, deletion, and mode information. Expensive line-level
 comparisons fall back to a whole-file replacement; this changes only the
-presentation, never the release verdict.
+presentation, never the version-readiness result.
 
 ### A version-planning example
 
@@ -897,7 +870,7 @@ analysis order
 compatibility targets
   [widget]
 
-author's semantic decisions
+author's semantic impacts
   widget: nonbreaking
   widget_impl: patch
 
@@ -912,15 +885,13 @@ resolved expanded version plan
   prospective evidence: report, patches and retained compatibility workspace
 ```
 
-The proposal can name a group once; the expanded artifact names every version
-target. If preview exposes a binary's changed dependency closure, that package
+The proposal can name a group once; the resolved plan names every package. If preview exposes a binary's changed dependency closure, that package
 also appears in the resolved effects and receives semantic assessment before
-application. A non-publishable version target appears for alignment, not upload.
+application. A non-publishable package appears for alignment, not upload.
 
 `prepared.json` binds the original inputs. `report.json` explains their released
 changes. The author's decisions are the semantic input to `propose`.
-`preview/plan.json` captures the complete applicable result; a structural
-`expand` result alone lacks the resolved state. The preview report and external
+`preview/plan.json` captures the complete applicable result. The preview report and external
 compatibility results justify the final choice. Fresh post-application evidence
 verifies it without overwriting the evidence used to make it.
 
@@ -976,7 +947,7 @@ process preserves that correspondence.
 
 Every publishable workspace package at that snapshot contributes its exact
 name/version request, including packages assessed as unchanged. Non-publishable
-version targets contribute no upload request. Preparation can read
+packages contribute no upload request. Preparation can read
 remote availability, but neither existing tags nor the report's pending-release
 subset substitutes for checking crates.io.
 
@@ -984,7 +955,7 @@ subset substitutes for checking crates.io.
 
 `prepare-publish` creates the publication manifest once from the validated merged
 source and its committed configuration. It discovers the workspace packages,
-excludes non-publishable version targets, and captures every remaining exact version
+excludes non-publishable packages, and captures every remaining exact version
 request. It also captures binary names, target selection and release-relevant
 source identity needed to validate subsequent operations.
 
@@ -1094,11 +1065,11 @@ registry-phase outcome.
 Cargo constructs and verifies the packages and publishes the selected missing
 versions using its workspace-publication dependency semantics. Version-assessment
 batches are not upload-order instructions: their development-dependency and
-version-group relationships serve different purposes. Package verification remains
-enabled, and the resulting installable binaries' dependency resolutions must agree
-with the validated locked closures. Packaging may normalize manifests and
-lockfiles, including pruning inactive dependency branches, but must not select a
-dependency identity outside the assessed binary installation closure.
+version-group relationships serve different purposes. Publication uses `--locked`
+and leaves Cargo's package verification enabled. Cargo owns manifest and lockfile
+normalization, archive hashing and upload. The application does not impose an
+additional comparison between the normalized package closure and the workspace
+closure used for pre-merge version assessment.
 
 Completion requires observing the requested versions in the registry, including
 availability needed by dependent publications. A Cargo failure after upload does
@@ -1427,7 +1398,7 @@ upgrade instructions.
 The public book teaches the complete process without relying on these internal
 design and implementation documents. It starts with motivation and goals, explains
 version assessment and publication as separate responsibilities, and introduces
-release history, merge targets, anchors, semantic decisions, plans and manifests before an integration
+release history, merge targets, anchors, semantic impacts, plans and manifests before an integration
 walkthrough. The walkthrough covers repository configuration, local planning,
 Trusted Publishing setup, reusable GitHub workflows, an ordinary release and
 verification of its remote results. Recovery and custom workflow arrangements

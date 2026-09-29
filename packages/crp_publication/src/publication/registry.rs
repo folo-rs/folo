@@ -178,7 +178,6 @@ pub trait RegistryRuntime {
         &self,
         publication: &PublicationManifest,
         manifest: &Path,
-        target: &Path,
     ) -> Result<CredentialSession, AppError>;
 
     fn upload(&self, command: &mut Command) -> io::Result<Output>;
@@ -196,13 +195,11 @@ impl RegistryRuntime for NativeRuntime<'_> {
         &self,
         publication: &PublicationManifest,
         manifest: &Path,
-        target: &Path,
     ) -> Result<CredentialSession, AppError> {
         CredentialSession::new(
             ActionsIdentity::from_environment()?,
             publication.clone(),
             manifest.to_path_buf(),
-            target.to_path_buf(),
             TrustedPublisher::new(self.output.clone())?,
         )
     }
@@ -501,7 +498,7 @@ pub fn execute_with(
         .tempdir()
         .map_err(RegistryBuildStateCreationFailed::caused_by)?;
     let target_path = target.path().to_path_buf();
-    let session = runtime.credentials(publication, &source_manifest, target.path())?;
+    let session = runtime.credentials(publication, &source_manifest)?;
     let mut command = Command::new("cargo");
     command
         .args([

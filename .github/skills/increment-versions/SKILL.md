@@ -8,7 +8,7 @@ Do not switch modes to bypass a failed configured check. In a repository that
 publishes on merge, an explicit standalone request does not disable that behavior
 or waive its required CI gates; make the existing merge behavior clear to the user.
 
-The skill assesses released changes, chooses semantic decisions, previews their
+The skill assesses released changes, chooses semantic impacts, previews their
 dependency effects and applies the resulting version plan. Review of the complete
 pull request approves the result; do not introduce a separate approval pause for
 version choices. This skill does not authorize merging, publication, tag creation
@@ -32,8 +32,8 @@ the caller's applicable permission. Fetching a private configured repository als
 requires GitHub CLI authentication.
 
 Check the schema revisions reported by `cargo release-plan version` before
-modifying source. This skill consumes plan/report/prepared schema `5`,
-semantic-decision schema `1` and compatibility schema `1`. Configured mode also
+modifying source. This skill consumes plan/report/prepared schema `6`,
+semantic-decision schema `2` and compatibility schema `2`. Configured mode also
 consumes release-context schema `2`. Matching package version numbers are not a prerequisite.
 
 If schemas differ, update the installed skill from the complete
@@ -54,8 +54,7 @@ parent target ref from the user or explicit task context. Ask for missing inputs
 do not guess them from a publishing setup the repository does not have. No
 configuration file, publishing workflow or GitHub remote is required.
 
-Existing tracked
-files may have staged or unstaged edits; a clean checkout or prior commit is not
+Existing tracked files may have staged or unstaged edits; a clean checkout or prior commit is not
 required. Newly created release inputs must be tracked before assessment. Stage
 those specific paths without disturbing unrelated changes, then collect fresh
 evidence. Version planning reads the working tree, not just the staged diff.
@@ -63,15 +62,16 @@ evidence. Version planning reads the working tree, not just the staged diff.
 # Assessment model
 
 The **release history** is the actual release branch up to one selected commit.
-A package's **anchor** is the newest first-parent commit in that history where
-its parsed version changed. It supplies the package's comparison version and
-content. Changes after an anchor remain relevant, allowing a repository to catch
+A package's **anchor** supplies the preceding package version and source.
+In actual release history it is the newest first-parent commit where that
+package's version changed. The **anchor version** is the package version declared
+in that commit. Changes after an anchor remain relevant, allowing a repository to catch
 up after migration or manual changes without matching version increments.
 
 The **merge target** is the commit the current pull request intends to merge into.
 For a stacked PR it can be the tip of an unmerged parent. Supply that target
 separately from release history. A parent's pending version and final content are
-assessed together as its anticipated squash release; its intermediate commits
+assessed together as its anticipated squash release and form the child's anchor; its intermediate commits
 do not define separate releases. Additional child changes need their own version
 movement. Packages still at their release-history version retain their historical
 anchors and catch-up obligations.
@@ -85,17 +85,18 @@ A **version group** connects tracked workspace members through exact local
 requirements such as `=1.2.3`; their versions align. A compatible requirement such
 as `1.2.3` permits later compatible releases and does not create a version group.
 
-A **semantic decision** is a `breaking`, `nonbreaking` or `patch` judgment produced
-by this skill. A **version plan** translates those decisions into package versions
+A **semantic impact** is `breaking`, `nonbreaking` or `patch`, selected by this
+skill from the package's changes and consumer promises. A **version plan** translates
+those impacts into package versions
 and required group/dependency changes.
 
 A package has a **pending increment** when its working-tree version is above its
-comparison version. Assess every change assigned to that increment. Keep it when
+anchor version. Assess every change assigned to that increment. Keep it when
 it is sufficient; raise it when a stronger decision requires more movement. Do
 not erase or increment it again merely because the skill was rerun.
 
-A **non-publishable version target** has `publish = false`. It can participate in
-group alignment but receives no publication request or semantic decision. A
+A **non-publishable package** has `publish = false`. It can participate in
+group alignment but receives no publication request or semantic impact. A
 publishable private-API package is different: it still has released content.
 
 # Evidence and commands
@@ -150,7 +151,7 @@ Record excluded untracked package paths and their rationale; track intended
 release inputs and restart instead of silently omitting them.
 
 Non-publishable targets appear separately for alignment. Do not assign them
-semantic decisions or query their registry publication status.
+semantic impacts or query their registry publication status.
 
 # Stage 3: Assess in dependency order
 
@@ -159,17 +160,17 @@ Read the ordered package batches. Each publishable package appears once,
 dependency-first. Assess a cyclic batch until its mutually dependent decisions
 settle. Version grouping alone does not create a semantic-assessment cycle.
 
-# Stage 4: Choose semantic decisions
+# Stage 4: Choose semantic impacts
 
 Use [determining-level.md](determining-level.md) for the complete released change
 in each package, including all changes covered by a pending increment.
 
 Require `completed: true` in compatibility evidence. A compared package's
-`required_level` supplies a minimum semantic decision; a null value imposes no
+`required_impact` supplies a minimum semantic impact; a null value imposes no
 minimum, and `compared: false` is not proof of compatibility. The skill's wider
-judgment of behavior, CLI, data formats and feature contracts can raise that floor.
+assessment of behavior, CLI, data formats and feature contracts can raise that floor.
 
-Write `decisions.json` with semantic levels, not numeric increments. Omit packages
+Write `decisions.json` with semantic impacts, not numeric version bumps. Omit packages
 requiring no semantic increment. Record substantive reasons, including inherited
 changes, dependency effects and retained pending versions. Do not invent a Git
 anchor for a package absent from release history and the anticipated parent.
@@ -177,7 +178,7 @@ anchor for a package absent from release history and the anticipated parent.
 # Stage 5: Review resolved effects
 
 Follow [proposal and preview](commands.md#stage-5-review-resolved-effects).
-Preview produces the complete version target set and exact manifest/lockfile
+Preview produces the complete package/version set and exact manifest/lockfile
 edits, including effects discovered through dependency resolution.
 
 Read its report, patches and compatibility results. Assess new effects and raise
@@ -187,7 +188,7 @@ Never hand-edit generated plans or widen exact requirements to evade grouping.
 
 Prepare the PR's **Version/release plan** from the union of resolved-plan targets
 and pending releases in the final report. Give one row per complete group or
-ungrouped package: previous comparison version, proposed version, semantic level
+ungrouped package: anchor version, proposed version, semantic impact
 and substantive reason. Explain dependent/group movements and retained versions.
 Mark non-publishable targets **version alignment only, not published** without
 inventing a published predecessor. State explicitly when nothing is to release.
@@ -240,5 +241,5 @@ the branch to the intended target and restart with new evidence directories.
 Do not reset the worktree or overwrite mixed manifest edits.
 
 Changed source, groups or configuration also require fresh preparation. Changed
-semantic decisions alone require proposal and preview again. Fix manifest defects
+semantic impacts alone require proposal and preview again. Fix manifest defects
 directly, then regenerate evidence; a malformed requirement is not a semantic choice.

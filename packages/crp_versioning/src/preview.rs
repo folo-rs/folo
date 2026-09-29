@@ -18,7 +18,7 @@ use crate::check::releases_breaking_change;
 use crate::classify::{ChangedItem, PackageClass, PackageStatus, classify_with_target};
 use crate::groups::{GroupVerdict, Groups};
 use crate::plan::{
-    IncrementLevel, PlanFile, PlanIncrement, PlanStage, ResolvedVersions, SCHEMA_VERSION,
+    PlanFile, PlanIncrement, PlanStage, ResolvedVersions, SCHEMA_VERSION, VersionBump,
     increment_version, resolve_plan,
 };
 use crate::prospective::Prospective;
@@ -152,7 +152,7 @@ pub fn run_preview(
     )?;
     let result = check_with_target(
         &CheckRequest {
-            base: Some(&prepared.inputs.release_history),
+            release_history: Some(&prepared.inputs.release_history),
             manifest_path: &prospective.manifest,
             format: CheckFormat::Text,
             verify_packaging: false,
@@ -328,7 +328,7 @@ fn add_consequences(
                 &versions,
                 resolved,
                 &package.name,
-                &increment_version(&anchor.version, IncrementLevel::Patch)?,
+                &increment_version(&anchor.version, VersionBump::Patch)?,
             );
         }
         for dependency in &package.dependencies {
@@ -349,17 +349,17 @@ fn add_consequences(
                 .iter()
                 .any(|target| target.name == dependency.name && releases_breaking_change(target))
             {
-                let level = if anchor.version.major == 0 {
-                    IncrementLevel::Minor
+                let bump = if anchor.version.major == 0 {
+                    VersionBump::Minor
                 } else {
-                    IncrementLevel::Major
+                    VersionBump::Major
                 };
                 raise(
                     membership,
                     &versions,
                     resolved,
                     &package.name,
-                    &increment_version(&anchor.version, level)?,
+                    &increment_version(&anchor.version, bump)?,
                 );
             }
         }
@@ -406,7 +406,7 @@ fn explicit_plan(resolved: &ResolvedVersions) -> PlanFile {
             .iter()
             .map(|(name, version)| PlanIncrement {
                 name: name.clone(),
-                level: None,
+                bump: None,
                 version: Some(version.to_string()),
             })
             .collect(),
@@ -448,7 +448,7 @@ fn validate_output_input(output: &Path, input: &Path, files: &[PathBuf]) -> Resu
 #[display("preview output overlaps an input; choose a separate output location")]
 pub(crate) struct OutputInputCollision;
 
-/// Source-level semantic decisions belong to the caller, not the resolver.
+/// Source-level semantic decisions belong to the skill, not the resolver.
 #[ohno::error]
 #[display("package {package} needs a semantic release decision in the proposed plan")]
 struct SemanticDecisionRequired {

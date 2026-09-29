@@ -35,8 +35,8 @@ fn assert_reciprocal_requirements(reverse: bool) {
     assert_eq!(
         entries(&plan),
         json!([
-            {"name": "alpha", "level": "patch"},
-            {"name": "beta", "level": "patch"}
+            {"name": "alpha", "bump": "patch"},
+            {"name": "beta", "bump": "patch"}
         ])
     );
     assert_versions(
@@ -75,9 +75,9 @@ fn group_requirement_changes_propagate_across_multiple_alignment_passes() {
     assert_eq!(
         entries(&plan),
         json!([
-            {"name": "a", "level": "patch"},
-            {"name": "b", "level": "patch"},
-            {"name": "c", "level": "patch"}
+            {"name": "a", "bump": "patch"},
+            {"name": "b", "bump": "patch"},
+            {"name": "c", "bump": "patch"}
         ])
     );
     assert_versions(
@@ -116,9 +116,9 @@ fn assert_helper_alignment(changes: &[(&str, &str)], expected: &str) {
     );
     let plan = generate(&report, changes).unwrap();
     assert!(
-        plan.increments.iter().any(|entry| {
-            entry.name == "application" && entry.level.as_deref() == Some("major")
-        })
+        plan.increments
+            .iter()
+            .any(|entry| { entry.name == "application" && entry.bump.as_deref() == Some("major") })
     );
     if changes.is_empty() {
         let first = plan.increments.first().unwrap();
@@ -127,7 +127,7 @@ fn assert_helper_alignment(changes: &[(&str, &str)], expected: &str) {
     } else {
         let last = plan.increments.last().unwrap();
         assert_eq!(last.name, "library");
-        assert_eq!(last.level.as_deref(), Some("patch"));
+        assert_eq!(last.bump.as_deref(), Some("patch"));
     }
     assert_versions(
         &report,
@@ -180,10 +180,7 @@ fn assert_nonplain_maximum(leader: &str, laggard: &str) {
         &[&["helper", "support"]],
     );
     let plan = generate(&report, &[]).unwrap();
-    assert_eq!(
-        entries(&plan),
-        json!([{"name": "helper", "level": "patch"}])
-    );
+    assert_eq!(entries(&plan), json!([{"name": "helper", "bump": "patch"}]));
     assert_versions(
         &report,
         &plan,

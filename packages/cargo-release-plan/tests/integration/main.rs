@@ -11,14 +11,12 @@
 
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
-mod apply;
 mod artifact_commands;
 mod baseline;
 mod captured;
 mod cli_binary;
 mod compatibility;
 mod evidence;
-mod expand;
 mod fixture;
 mod groups;
 mod harness;

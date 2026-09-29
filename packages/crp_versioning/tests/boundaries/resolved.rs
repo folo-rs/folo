@@ -113,7 +113,7 @@ fn capture_includes_local_sources_without_turning_them_into_release_reasons() {
     miri,
     ignore = "captures a nested Git and Cargo workspace without resolution"
 )]
-fn nested_capture_records_ancestor_configuration_and_the_default_base() {
+fn nested_capture_records_ancestor_configuration_and_the_default_release_history() {
     let directory = capture_fixture("rust/Cargo.toml");
     let head = git(directory.path(), &["rev-parse", "HEAD"]);
     git(

@@ -16,8 +16,9 @@ Author-selected binaries can therefore fail during native execution, where the i
 retains the actual Cargo failure without suppressing independent items.
 Preparation retains tracked, unchanged source and lockfile inputs without resolving
 Cargo's full dependency graph in advance. Registry publication and native builds keep
-their locked Cargo execution, while release-content and packaged-closure checks retain
-their separate identity guarantees.
+their locked Cargo execution. Cargo owns package construction, verification and upload;
+publication does not reread Cargo's archive or compare its normalized lockfile with the
+source installation closure. Released-content classification retains its own source identity.
 
 Publication manifests, platform batches and phase/item outcomes have one owner here.
 Native receives in-process build requests derived from validated publication data,
@@ -48,6 +49,12 @@ workspace's batched index API; canonical paths are reused during intent serializ
 Registry preflight consumes typed plan-inspection facts and the shared reserved-metadata
 and destination-eligibility rules, rather than a second schema or a JSON round trip.
 
+Credential issuance validates Cargo's publish operation, registry, requested package/version
+and checksum shape, with a clean-source check before acquiring per-upload authority.
+Cargo computes that checksum from the archive handle it uploads. The provider does not
+authenticate archive contents against source or enforce an additional packaged dependency
+closure. Private token leases, revocation and independent cleanup failures remain session-owned.
+
 GitHub upload credentials are separate from native build state. Scoped source-fetch
 authentication is supplied only to repository acquisition. Upload and its completeness
 recheck share native's existing item deadline and canonical controller directory;
@@ -58,8 +65,3 @@ Candidate policy consumes workspace facts and the typed versioning check result,
 not application command dispatch. Production entry points select concrete adapters;
 unit tests inject narrow observation and action interfaces. Real HTTP/Git/Cargo and delivery-adapter
 behavior belongs to boundary tests, never production registry or GitHub writes.
-
-The `legacy` module adapts the private `release-binaries` and `release-target-check` protocols to these same
-publication and native capabilities. It owns their compatibility command and
-batch translation, not another release-policy or execution implementation.
-See the application architecture for the selected workflow's adapter ownership.

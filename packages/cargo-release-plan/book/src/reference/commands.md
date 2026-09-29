@@ -1,5 +1,9 @@
 # Command tasks and prerequisites
 
+This reference describes the tool operations used by the skill and workflows.
+Use `increment-versions` for version planning rather than constructing a manual
+sequence from these commands.
+
 Use `cargo release-plan version` to read JSON identifying the executable and its
 supported artifact schemas, and `cargo release-plan --help` for its command
 interface. The short `--version` output remains available for installation checks.
@@ -56,7 +60,7 @@ contact crates.io, resolve dependencies or compile.
 explicitly and stops at the version-increment PR.
 
 `--verify-packaging` is an explicit audit against `cargo package --list`.
-Divergences are warnings rather than changes to the verdict. This probe performs
+Divergences are warnings rather than changes to the check result. This probe performs
 Cargo package preparation and resolution, and allows dirty trees; investigate
 clean-tree divergence rather than treating it as proof that the ordinary check
 performed the same work.
@@ -106,7 +110,7 @@ decisions. Select exactly one source mode:
 
 It regenerates a report bound to the selected source and verifies captured inputs
 before and after checking. It never accepts detached `--report` evidence.
-The regenerated report uses report/plan schema `5`.
+The regenerated report uses report/plan schema `6`.
 
 The new output directory contains `compatibility.json`, `semver-checks.log` and
 the read-only report. Evidence records the checker identity, comparison versions
@@ -116,11 +120,11 @@ requires neither checker execution nor registry access.
 
 Operational failures do not become compatibility passes. Completed findings are
 planning evidence by default; `--deny-findings` makes an insufficient increment
-fail the command as well. Read `completed`, `compared` and `required_level`,
+fail the command as well. Read `completed`, `compared` and `required_impact`,
 not merely the exit code.
 
 `check-published --plan` validates the resolved target set and fails on a
-never-published or indeterminate publishable target. Non-publishable version targets are
+never-published or indeterminate publishable target. Non-publishable packages are
 excluded. Without a plan, workspace-wide missing/unknown-package discovery is
 advisory. Neither mode uploads a first version or verifies Trusted Publisher
 administration.
@@ -128,8 +132,6 @@ administration.
 ## Inspect and apply
 
 ```text
-cargo release-plan expand --plan <plan.json> --out <expanded.json>
-    [--manifest-path <path>] [--preserve-input] [--verbose]
 cargo release-plan inspect-plan --plan <expanded.json> [--require-resolved]
     [--manifest-path <path>] [--verbose]
 cargo release-plan verify-preview --plan <plan.json> --manifest-path <prospective-manifest>
@@ -137,21 +139,15 @@ cargo release-plan verify-preview --plan <plan.json> --manifest-path <prospectiv
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
 
-`expand` performs structural expansion only. `--preserve-input` protects the
-proposal from input/output aliases and stages the result before replacing the
-destination.
-
 `inspect-plan --require-resolved` validates captured inputs and the retained
 compatibility workspace, then prints publication target names and its manifest
-path. Non-publishable version targets are not publication targets.
+path. Non-publishable packages are not publication targets.
 
 `verify-preview` checks that external analysis left the prospective workspace
 unchanged. It does not resolve or compile.
 
-Resolved `apply` installs captured manifests and the lockfile without resolving
-again. Use `--dry-run` for read-only validation. Applying an unexpanded proposal
-is a separate low-level manifest-only operation, not the complete release
-workflow.
+`apply` accepts only a resolved preview and installs its exact manifest and
+lockfile edits. `--dry-run` validates those same inputs without writing.
 
 ## Prepare and publish exact versions
 
@@ -235,7 +231,7 @@ Retain run/attempt attribution so the reporter can enforce
 
 `--manifest-path` defaults to `Cargo.toml` in the current directory. For planning,
 `--release-history` defaults to the branch advertised by `origin`, then `origin/main`.
-`--base` remains its compatibility alias. Automation supplies a commit explicitly.
+Automation supplies a commit explicitly.
 `release-context` is the
 explicit configuration-aware acquisition operation; unlike ordinary assessment,
 it fetches the configured branch when no explicit `--release-history` is supplied.

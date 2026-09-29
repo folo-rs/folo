@@ -36,7 +36,7 @@ fn unchanged_workspace_needs_no_checker_or_registry_and_keeps_fresh_report() {
         manifest_path: fixture.manifest(),
         prepared: None,
         plan: None,
-        base: Some(fixture.sha("HEAD")),
+        release_history: Some(fixture.sha("HEAD")),
         merge_target: None,
         output: path.clone(),
         deny_findings: true,
@@ -85,7 +85,7 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
     let prepared = output.path().join("prepared");
     run(&RunInput::Prepare {
         output: prepared.clone(),
-        base: Some(fixture.sha("HEAD")),
+        release_history: Some(fixture.sha("HEAD")),
         merge_target: None,
         manifest_path: fixture.manifest(),
         verbose: false,
@@ -114,7 +114,7 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
         &json!(["consumer", "dependency"])
     );
 
-    for (label, prepared_path, base) in [
+    for (label, prepared_path, release_history) in [
         ("fresh", None, Some(fixture.sha("HEAD"))),
         ("prepared", Some(prepared.join("prepared.json")), None),
     ] {
@@ -124,7 +124,7 @@ fn compatibility_reports_preserve_workspace_dependency_graphs() {
                 manifest_path: fixture.manifest(),
                 prepared: prepared_path,
                 plan: None,
-                base,
+                release_history,
                 merge_target: None,
                 output: evidence.clone(),
                 deny_findings: true,
@@ -152,7 +152,7 @@ fn prepared_compatibility_rejects_same_head_source_drift_before_comparison() {
     let prepared = output.path().join("prepared");
     run(&RunInput::Prepare {
         output: prepared.clone(),
-        base: Some(fixture.sha("HEAD")),
+        release_history: Some(fixture.sha("HEAD")),
         merge_target: None,
         manifest_path: fixture.manifest(),
         verbose: false,
@@ -167,7 +167,7 @@ fn prepared_compatibility_rejects_same_head_source_drift_before_comparison() {
         manifest_path: fixture.manifest(),
         prepared: Some(prepared.join("prepared.json")),
         plan: None,
-        base: None,
+        release_history: None,
         merge_target: None,
         output: evidence.clone(),
         deny_findings: false,
@@ -192,7 +192,7 @@ fn prepared_check_reclassifies_bound_source_instead_of_trusting_adjacent_report(
     let prepared = output.path().join("prepared");
     run(&RunInput::Prepare {
         output: prepared.clone(),
-        base: Some(fixture.sha("HEAD")),
+        release_history: Some(fixture.sha("HEAD")),
         merge_target: None,
         manifest_path: fixture.manifest(),
         verbose: false,
@@ -206,7 +206,7 @@ fn prepared_check_reclassifies_bound_source_instead_of_trusting_adjacent_report(
         manifest_path: fixture.manifest(),
         prepared: Some(prepared.join("prepared.json")),
         plan: None,
-        base: None,
+        release_history: None,
         merge_target: None,
         output: evidence.clone(),
         deny_findings: true,
@@ -245,7 +245,7 @@ fn prepared_check_rejects_unknown_schema_and_another_workspace() {
     let prepared = output.path().join("prepared");
     run(&RunInput::Prepare {
         output: prepared.clone(),
-        base: Some(fixture.sha("HEAD")),
+        release_history: Some(fixture.sha("HEAD")),
         merge_target: None,
         manifest_path: fixture.manifest(),
         verbose: false,
@@ -261,7 +261,7 @@ fn prepared_check_rejects_unknown_schema_and_another_workspace() {
         manifest_path: fixture.manifest(),
         prepared: Some(path.clone()),
         plan: None,
-        base: None,
+        release_history: None,
         merge_target: None,
         output: invalid.clone(),
         deny_findings: false,
@@ -277,7 +277,7 @@ fn prepared_check_rejects_unknown_schema_and_another_workspace() {
         manifest_path: other.manifest(),
         prepared: Some(path),
         plan: None,
-        base: None,
+        release_history: None,
         merge_target: None,
         output: wrong_source.clone(),
         deny_findings: false,
@@ -294,7 +294,7 @@ fn preview_check_uses_final_source_and_rejects_drift_in_either_workspace() {
     let fixture = private_library();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":5,"increments":[{"name":"library","level":"patch"}]}"#,
+        r#"{"schema_version":6,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     let plan = resolved_plan(&fixture, &fixture.path().join("proposal.json"));
     let output = TempDir::new().unwrap();
@@ -303,7 +303,7 @@ fn preview_check_uses_final_source_and_rejects_drift_in_either_workspace() {
         manifest_path: fixture.manifest(),
         prepared: None,
         plan: Some(plan.clone()),
-        base: None,
+        release_history: None,
         merge_target: None,
         output,
         deny_findings: true,
@@ -357,7 +357,7 @@ fn compatibility_requires_resolved_plan_evidence() {
     let fixture = private_library();
     fixture.write(
         "proposal.json",
-        r#"{"schema_version":5,"increments":[{"name":"library","level":"patch"}]}"#,
+        r#"{"schema_version":6,"increments":[{"name":"library","bump":"patch"}]}"#,
     );
     let output = TempDir::new().unwrap();
     let evidence = output.path().join("evidence");
@@ -365,7 +365,7 @@ fn compatibility_requires_resolved_plan_evidence() {
         manifest_path: fixture.manifest(),
         prepared: None,
         plan: Some(fixture.path().join("proposal.json")),
-        base: None,
+        release_history: None,
         merge_target: None,
         output: evidence.clone(),
         deny_findings: false,
@@ -404,7 +404,7 @@ fn checker_failures_leave_incomplete_evidence_and_preserve_diagnostics() {
             command
                 .args(["check-compatibility", "--manifest-path"])
                 .arg(fixture.manifest())
-                .args(["--base", &fixture.sha("HEAD"), "--output"])
+                .args(["--release-history", &fixture.sha("HEAD"), "--output"])
                 .arg(&evidence)
                 .arg("--deny-findings")
                 .env("CRP_FIXTURE_SCENARIO", scenario)
@@ -505,7 +505,7 @@ fn checker_start_failure_retains_selected_but_unidentified_state() {
         let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
             .args(["check-compatibility", "--manifest-path"])
             .arg(fixture.manifest())
-            .args(["--base", &fixture.sha("HEAD"), "--output"])
+            .args(["--release-history", &fixture.sha("HEAD"), "--output"])
             .arg(&evidence)
             .env("PATH", path)
             .output()
@@ -535,37 +535,16 @@ fn fresh_source_drift_during_report_prevents_checker_invocation_and_evidence_acc
         write_package(&fixture, "library", "1.0.0", "");
         fixture.commit("captured source");
         let output = TempDir::new().unwrap();
-        let tools = output.path().join("git-shim");
-        fs::create_dir_all(&tools).unwrap();
-        let real_git = env::split_paths(&env::var_os("PATH").unwrap())
-            .map(|directory| directory.join(format!("git{EXE_SUFFIX}")))
-            .find(|candidate| candidate.is_file())
-            .unwrap()
-            .canonicalize()
-            .unwrap();
-        fs::copy(
-            CHECKER
-                .path()
-                .join(format!("cargo-semver-checks{EXE_SUFFIX}")),
-            tools.join(format!("git{EXE_SUFFIX}")),
-        )
-        .unwrap();
-        let path = env::join_paths(
-            [tools, CHECKER.path().to_path_buf()]
-                .into_iter()
-                .chain(env::split_paths(&env::var_os("PATH").unwrap())),
-        )
-        .unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"));
+        configure_git_shim(&mut command, output.path());
         let calls = output.path().join("checker-calls");
         let marker = output.path().join("report-drift");
         let evidence = output.path().join("evidence");
-        let result = Command::new(env!("CARGO_BIN_EXE_cargo-release-plan"))
+        let result = command
             .args(["check-compatibility", "--manifest-path"])
             .arg(fixture.manifest())
-            .args(["--base", &fixture.sha("HEAD"), "--output"])
+            .args(["--release-history", &fixture.sha("HEAD"), "--output"])
             .arg(&evidence)
-            .env("PATH", path)
-            .env("CRP_REAL_GIT", real_git)
             .env("CRP_REPORT_DRIFT_MARKER", &marker)
             .env(
                 "CRP_FIXTURE_SOURCE",
@@ -640,7 +619,7 @@ fn anticipated_parent_final_api_is_the_child_baseline_without_registry_access() 
             .first()
             .unwrap();
         assert_eq!(comparison.get("baseline_version").unwrap(), "1.1.0");
-        assert_eq!(comparison.get("required_level").unwrap(), "breaking");
+        assert_eq!(comparison.get("required_impact").unwrap(), "breaking");
         assert_eq!(comparison.get("compared").unwrap(), true);
         assert_eq!(
             fs::read_to_string(&calls).unwrap(),
@@ -698,7 +677,7 @@ fn anticipated_parent_baseline_uses_workspace_root_for_a_moved_member_manifest()
             "1.1.0"
         );
         assert_eq!(
-            outcome.pointer("/packages/0/required_level").unwrap(),
+            outcome.pointer("/packages/0/required_impact").unwrap(),
             "breaking"
         );
         assert_eq!(
@@ -721,7 +700,7 @@ fn moved_anticipated_parent_invalidates_captured_compatibility_before_checker() 
         let prepared = output.path().join("prepared");
         run(&RunInput::Prepare {
             output: prepared.clone(),
-            base: Some(history.clone()),
+            release_history: Some(history.clone()),
             merge_target: Some("anticipated-parent".to_owned()),
             manifest_path: fixture.manifest(),
             verbose: false,
@@ -730,7 +709,7 @@ fn moved_anticipated_parent_invalidates_captured_compatibility_before_checker() 
         let proposal = output.path().join("proposal.json");
         fs::write(
             &proposal,
-            r#"{"schema_version":5,"increments":[{"name":"library","level":"major"}]}"#,
+            r#"{"schema_version":6,"increments":[{"name":"library","bump":"major"}]}"#,
         )
         .unwrap();
         let preview = output.path().join("preview");
@@ -831,10 +810,22 @@ fn anticipated_parent_source_and_target_drift_invalidate_comparison_evidence() {
 )]
 fn anticipated_parent_comparison_and_cleanup_failures_remain_explicit() {
     testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
-        let (fixture, history, parent) = anticipated_parent();
-        fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
+        // The checker consumes the nested Cargo workspace, but cleanup owns its enclosing
+        // registered Git worktree. Those paths must not be conflated.
+        let (fixture, history, parent) = anticipated_parent_in("nested-workspace/");
+        fixture.write(
+            "nested-workspace/packages/library/src/lib.rs",
+            "pub fn existing() {}\n",
+        );
         fixture.commit("child removes anticipated API");
         let output = TempDir::new().unwrap();
+        #[cfg(windows)]
+        let temporary = tempfile::Builder::new()
+            .prefix("compatibility temporary alias ")
+            .tempdir()
+            .unwrap();
+        #[cfg(windows)]
+        let short_temporary = windows_short_directory(temporary.path());
         for scenario in [
             "parent-comparison-failure",
             "parent-comparison-and-cleanup-failure",
@@ -842,7 +833,13 @@ fn anticipated_parent_comparison_and_cleanup_failures_remain_explicit() {
             let evidence = output.path().join(scenario);
             let calls = output.path().join(format!("{scenario}.calls"));
             let baseline = output.path().join(format!("{scenario}.baseline"));
-            let result = parent_check(&fixture, &history, &evidence, &calls)
+            let mut command = parent_check(&fixture, &history, &evidence, &calls);
+            #[cfg(windows)]
+            if let Some(path) = &short_temporary {
+                // Only this child uses the alias; parallel tests retain their own environment.
+                command.env("TEMP", path).env("TMP", path);
+            }
+            let result = command
                 .env("CRP_FIXTURE_SCENARIO", scenario)
                 .env("CRP_EXPECTED_PARENT", &parent)
                 .env("CRP_FIXTURE_BASELINE_PATH", &baseline)
@@ -854,11 +851,18 @@ fn anticipated_parent_comparison_and_cleanup_failures_remain_explicit() {
             assert!(stderr.contains("cargo-semver-checks failed"));
             if scenario == "parent-comparison-and-cleanup-failure" {
                 assert!(stderr.contains("source cleanup also failed"));
-                // Cleanup removed the directory, so Git cannot canonicalize a trailing separator.
-                let baseline = PathBuf::from(fs::read_to_string(&baseline).unwrap());
-                let baseline: PathBuf = baseline.components().collect();
-                fixture.git(&["worktree", "unlock", baseline.to_str().unwrap()]);
+                assert!(stderr.contains("comparison failure canary"));
+                // The checker captured Git's registered root while it existed. TempDir cleanup
+                // removes the source even when Git refuses removal of a locked registration.
+                let registered = PathBuf::from(fs::read_to_string(&baseline).unwrap());
+                let supplied =
+                    PathBuf::from(fs::read_to_string(baseline.with_extension("supplied")).unwrap());
+                assert!(!registered.exists());
+                assert!(!registered.parent().unwrap().exists());
+                fixture.git(&["worktree", "unlock", registered.to_str().unwrap()]);
                 fixture.git(&["worktree", "prune"]);
+                let supplied: PathBuf = supplied.components().collect();
+                assert_eq!(supplied, registered.join("nested-workspace"));
             }
             assert_eq!(
                 fixture
@@ -871,19 +875,69 @@ fn anticipated_parent_comparison_and_cleanup_failures_remain_explicit() {
     });
 }
 
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Injects a failed native Git result after worktree registration"
+)]
+fn failed_parent_worktree_add_still_cleans_its_registered_source() {
+    testing::with_watchdog_timeout(CHECKER_WATCHDOG, || {
+        let (fixture, release_history, parent) = anticipated_parent();
+        fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
+        fixture.commit("child removes anticipated API");
+        let output = TempDir::new().unwrap();
+        let evidence = output.path().join("evidence");
+        let calls = output.path().join("calls");
+        let marker = output.path().join("partial-add");
+        let mut command = parent_check(&fixture, &release_history, &evidence, &calls);
+        configure_git_shim(&mut command, output.path());
+        let result = command
+            .env("CRP_FIXTURE_SCENARIO", "anticipated-parent")
+            .env("CRP_EXPECTED_PARENT", &parent)
+            .env("CRP_PARENT_ADD_FAILURE", &marker)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(marker.is_file());
+        assert!(marker.with_extension("removed").is_file());
+        assert!(!calls.exists());
+        assert_eq!(read_outcome(&evidence).get("completed").unwrap(), false);
+        assert!(String::from_utf8_lossy(&result.stderr).contains("partial-add failure canary"));
+        assert_eq!(
+            fixture
+                .git(&["worktree", "list", "--porcelain"])
+                .matches("worktree ")
+                .count(),
+            1,
+        );
+    });
+}
+
 fn anticipated_parent() -> (Fixture, String, String) {
-    let fixture = Fixture::new("");
-    write_package(&fixture, "library", "1.0.0", "");
-    fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
+    anticipated_parent_in("")
+}
+
+fn anticipated_parent_in(prefix: &str) -> (Fixture, String, String) {
+    let fixture = Fixture::with_workspace_manifest(
+        &format!("{prefix}Cargo.toml"),
+        "[workspace]\nmembers = ['packages/*']\nresolver = '2'\n",
+    );
+    let manifest = format!("{prefix}packages/library/Cargo.toml");
+    let source = format!("{prefix}packages/library/src/lib.rs");
+    fixture.write(
+        &manifest,
+        "[package]\nname = 'library'\nversion = '1.0.0'\nedition = '2021'\n",
+    );
+    fixture.write(&source, "pub fn existing() {}\n");
     fixture.commit("published history without parent API");
     let history = fixture.sha("HEAD");
     fixture.git(&["checkout", "-b", "anticipated-parent"]);
-    write_package(&fixture, "library", "1.1.0", "");
-    fixture.commit("parent version edit");
     fixture.write(
-        "packages/library/src/lib.rs",
-        "pub fn existing() {}\npub fn parent_added() {}\n",
+        &manifest,
+        "[package]\nname = 'library'\nversion = '1.1.0'\nedition = '2021'\n",
     );
+    fixture.commit("parent version edit");
+    fixture.write(&source, "pub fn existing() {}\npub fn parent_added() {}\n");
     fixture.commit("parent final API");
     let parent = fixture.sha("HEAD");
     fixture.git(&["checkout", "-b", "child"]);
@@ -906,10 +960,54 @@ fn parent_check(fixture: &Fixture, history: &str, evidence: &Path, calls: &Path)
         .arg("--deny-findings")
         .env(
             "CRP_FIXTURE_SOURCE",
-            fixture.path().join("packages/library/src/lib.rs"),
+            fixture
+                .manifest()
+                .parent()
+                .unwrap()
+                .join("packages/library/src/lib.rs"),
         )
         .env("CRP_FIXTURE_CALLS", calls);
     command
+}
+
+#[cfg(windows)]
+fn windows_short_directory(path: &Path) -> Option<PathBuf> {
+    // Probe the actual filesystem's short-name support using the existing fixture approach.
+    // No volume setting, global environment or case-sensitivity assumption is changed.
+    let script = path.join("short-path.ps1");
+    fs::write(
+        &script,
+        "# Returns the actual short-name spelling for this fixture's owned temporary directory.\n\
+         param([string] $Path)\n\
+         Set-StrictMode -Version Latest\n\
+         $ErrorActionPreference = 'Stop'\n\
+         $PSNativeCommandUseErrorActionPreference = $true\n\
+         $filesystem = New-Object -ComObject Scripting.FileSystemObject\n\
+         $filesystem.GetFolder($Path).ShortPath\n",
+    )
+    .unwrap();
+    let output = Command::new("pwsh")
+        .args(["-NoProfile", "-NonInteractive", "-File"])
+        .arg(&script)
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let short = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    assert_eq!(
+        fs::canonicalize(&short).unwrap(),
+        fs::canonicalize(path).unwrap()
+    );
+    if short == path {
+        eprintln!("The fixture filesystem exposes no distinct short directory name.");
+        None
+    } else {
+        Some(short)
+    }
 }
 
 fn private_library() -> Fixture {
@@ -925,7 +1023,35 @@ fn private_library() -> Fixture {
 }
 
 fn read_outcome(output: &Path) -> Value {
-    serde_json::from_slice(&fs::read(output.join("compatibility.json")).unwrap()).unwrap()
+    let outcome: Value =
+        serde_json::from_slice(&fs::read(output.join("compatibility.json")).unwrap()).unwrap();
+    assert_eq!(outcome.get("schema_version").unwrap(), 2);
+    outcome
+}
+
+fn configure_git_shim(command: &mut Command, output: &Path) {
+    let tools = output.join("git-shim");
+    fs::create_dir_all(&tools).unwrap();
+    let real_git = env::split_paths(&env::var_os("PATH").unwrap())
+        .map(|directory| directory.join(format!("git{EXE_SUFFIX}")))
+        .find(|candidate| candidate.is_file())
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    fs::copy(
+        CHECKER
+            .path()
+            .join(format!("cargo-semver-checks{EXE_SUFFIX}")),
+        tools.join(format!("git{EXE_SUFFIX}")),
+    )
+    .unwrap();
+    let path = env::join_paths(
+        [tools, CHECKER.path().to_path_buf()]
+            .into_iter()
+            .chain(env::split_paths(&env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    command.env("PATH", path).env("CRP_REAL_GIT", real_git);
 }
 
 fn checker_command() -> Command {
@@ -967,7 +1093,20 @@ fn main() {
         // not Inputs::capture; this event injects drift without invocation counts or clocks.
         let status = process::Command::new(env::var_os("CRP_REAL_GIT").unwrap())
             .args(&os_args[1..]).status().unwrap();
-        if status.success() && os_args.iter().any(|arg| arg == "ls-tree") {
+        if status.success() {
+            if let Some(marker) = env::var_os("CRP_PARENT_ADD_FAILURE") {
+                if os_args.windows(2).any(|pair| pair[0] == "worktree" && pair[1] == "add") {
+                    fs::write(&marker, "registered").unwrap();
+                    eprintln!("partial-add failure canary");
+                    process::exit(1);
+                }
+                if os_args.windows(2).any(|pair| pair[0] == "worktree" && pair[1] == "remove") {
+                    fs::write(Path::new(&marker).with_extension("removed"), "removed").unwrap();
+                }
+            }
+        }
+        if status.success() && env::var_os("CRP_REPORT_DRIFT_MARKER").is_some()
+            && os_args.iter().any(|arg| arg == "ls-tree") {
             match OpenOptions::new().write(true).create_new(true)
                 .open(env::var_os("CRP_REPORT_DRIFT_MARKER").unwrap()) {
                 Ok(_) => fs::write(env::var_os("CRP_FIXTURE_SOURCE").unwrap(),
@@ -1019,9 +1158,15 @@ fn main() {
         let current = fs::read_to_string(env::var_os("CRP_FIXTURE_SOURCE").unwrap()).unwrap();
         assert!(!current.contains("pub fn parent_added()"));
         if scenario == "parent-comparison-and-cleanup-failure" {
-            fs::write(env::var_os("CRP_FIXTURE_BASELINE_PATH").unwrap(), &baseline).unwrap();
+            let root = git().args(["-C", &baseline, "rev-parse", "--show-toplevel"]).output().unwrap();
+            assert!(root.status.success());
+            let root = String::from_utf8(root.stdout).unwrap();
+            let root = root.trim();
+            let record = env::var_os("CRP_FIXTURE_BASELINE_PATH").unwrap();
+            fs::write(&record, root).unwrap();
+            fs::write(Path::new(&record).with_extension("supplied"), &baseline).unwrap();
             let status = git()
-                .args(["-C", &baseline, "worktree", "lock", "--reason", "cleanup fixture", &baseline])
+                .args(["-C", root, "worktree", "lock", "--reason", "cleanup fixture", root])
                 .status().unwrap();
             assert!(status.success());
         }

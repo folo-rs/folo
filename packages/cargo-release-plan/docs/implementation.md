@@ -190,12 +190,11 @@ plan from confirmed delivery. Each attempt writes a new outcome file rather than
 overwriting intent or earlier receipts.
 
 The Cargo credential provider acquires a fresh GitHub assertion and crates.io
-token per upload, after Cargo package verification. It checks the requested
-registry/package/version and the binary archive's Cargo-supplied checksum before
-releasing a credential. Normalized workspace registry identities are compared
-with the source's installation closure using the existing lockfile model.
-Packaging may prune inactive feature branches, but cannot select an identity
-outside that assessed closure. Cargo's compilation still verifies the package.
+token per upload, after Cargo package verification. It validates the requested
+operation, registry, package and version and rechecks source identity before
+releasing a credential. Cargo hashes the same archive handle it uploads; the
+provider does not reopen Cargo's generated archives. Package normalization and
+locked verification belong to Cargo, not a second archive-closure inspector.
 
 Cargo starts short-lived provider processes. Invocation-owned temporary files
 therefore retain identity context and issued token leases for the parent to revoke
@@ -231,15 +230,6 @@ build requests to `crp_native`. Batch/delivery decisions stay in publication;
 unit tested in the component; real filesystem and process behavior belongs in its
 boundary tests, and executable-connected contracts belong in the application's
 native integration suite.
-
-Folo's `release.yml` also uses the nonpublished `release-binaries`
-and `release-target-check` executables. Their private command protocols are
-adapted by `crp_publication::legacy`, reusing the same native executor, publication
-operations and typed candidate verifier. They are legacy workflow adapters, not
-API compatibility checkers or a second release engine. Wrapper-connected tests
-belong beside those executables; the owning
-[workflow guide](../../../.github/workflows/implementation.md#release-publication)
-describes their invocation.
 
 The controller repository supplies Git objects and the shared target directory,
 while each release tag selects a disposable immutable source worktree.
@@ -438,8 +428,8 @@ tests inject acquisition at its existing boundary so they exercise production
 ordering, including rejection before writes and completion-marker invalidation,
 without rebuilding a successful preview for every failure case.
 
-Proposal and expansion inject artifact operations into their command cores.
-Their unit tests retain input-collision checks, acquisition and publication order,
+Proposal generation injects artifact operations into its command core.
+Its unit tests retain input-collision checks, acquisition and publication order,
 plan generation, rendered output, and error propagation without touching files.
 Proposal publication also checks stale-output invalidation and failed-write cleanup.
 Real artifact path interpretation and file access stay in integration coverage.
@@ -485,21 +475,17 @@ operations is excluded from mutation discovery. Integration coverage verifies
 that inspection uses read-only application validation and rejects stale live or
 retained workspaces without resolving Cargo again.
 
-Manifest application injects captured-plan application, workspace acquisition,
-manifest reads and writes into its shared orchestration. Unit tests exercise
-dispatch, full edit computation before writes, unique root/member acquisition,
-package and dependency rewrites, dry-run output, and unchanged-write suppression.
-Prospective resolution uses the same edit computation. Only the adapters that
-connect these operations to real files and repository state are excluded from
-mutation discovery; integration tests retain the actual application boundary.
+Preview's manifest-edit computation has in-process tests for complete root/member
+edits, dependency rewrites and read/parse failures. Application accepts only the
+captured preview; admission tests reject incomplete input before filesystem
+acquisition, and boundary tests verify exact writes and dry-run preservation.
 
 Integration tests establish the real Git, Cargo, filesystem, and executable
 connections: history and index semantics, manifest discovery, offline resolution,
 captured-workspace identity, and a complete CLI release-plan round trip. A test
 classifies each unchanged workspace state only once where the resulting report
 can establish all its assertions. Output-format combinations belong to renderer
-tests, not additional repository classifications. Structural expansion tests stop
-at the expanded artifact; only preview tests acquire resolved evidence.
+tests, not additional repository classifications.
 
 Fixtures remain independently mutable. Immutable Git initialization and empty
 global configuration can be shared within a test process, while commits still
@@ -525,14 +511,11 @@ Released-file discovery acquisition belongs in integration tests using small Git
 without constructing or resolving Cargo workspaces. They exercise selection,
 presence, modes and cleaned blob bytes at the acquisition boundary. Optional
 reads and hash-input validation inject metadata and byte-read observations so
-disappearance between operations, permission failures and symlink rejection remain
-deterministic without races, delays or host symlink privileges. Real-filesystem
-link tests also exercise the metadata adapter on platforms that permit them.
+disappearance between operations, permission failures and unsupported input
+rejection remain deterministic without races or delays.
 
-Filesystem path tests create symlinked temporary roots explicitly rather than
-depending on the host's temporary-directory layout. Expected destinations use a
-canonical existing ancestor followed by the missing suffix, preserving assertions
-about symlink resolution and parent traversal without assuming a root spelling.
+Filesystem identity tests cover native path spelling and missing-path handling
+without assuming case sensitivity from the operating system.
 Artifact path resolution accepts injected canonicalization and directory queries
 for deterministic operational-error tests. A transient failure must propagate even
 if a subsequent query would succeed; tests do not depend on filesystem races or
@@ -822,14 +805,6 @@ captured-state checks, so metadata cannot direct a caller to an unchecked worksp
 Proposal and preview output guards resolve existing path ancestors before
 normalizing missing components. Creating an output directory therefore cannot
 turn an accepted destination into an alias of the input evidence.
-The PowerShell preview wrapper leaves initial directory creation and marker
-invalidation to Rust. It may invalidate a successfully produced preview if later
-compatibility evidence fails, but a rejected native invocation grants no ownership
-over the requested output path.
-The expansion wrapper requests Rust's input-preserving mode and supplies the final
-destination directly. Rust checks aliases and promotes an exclusively created
-temporary file only after a complete write. General expansion retains its separate
-in-place behavior when that mode is not selected.
 
 `plan` owns both planning stages and the resolution shared between them. It first
 resolves package and group entries into one target version per tracked version
@@ -846,13 +821,11 @@ was written, and a surviving increment level would be re-resolved against the
 manifests of the day. Both are rejected. The stage is matched on rather than
 tested as a condition, so a new code path has to state which rule it wants.
 
-Structural expansion and prospective preview share version-target resolution.
-Both read the same Git-tracked version-target set. Preview also computes manifest
-edits and resolves the resulting lockfile before writing the complete artifact.
+Preview resolves the Git-tracked package set, computes manifest edits and resolves
+the resulting lockfile before writing the complete artifact.
 
-`apply` accepts plan targets and validates groups against the Git-tracked
-version-target set. It parses and rewrites every affected
-manifest in memory before writing any of them. All Cargo-visible members remain
+Preview validates groups and computes all affected manifest edits before applying
+them to the prospective workspace. Final application installs only the captured result. All Cargo-visible members remain
 rewrite candidates, including non-publishable, untracked, and ignored members,
 because they may carry exact pins to a package being incremented. A dependency
 requirement is changed only when:

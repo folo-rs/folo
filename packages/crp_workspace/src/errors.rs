@@ -140,15 +140,15 @@ pub(crate) struct InvalidVersionError {
 impl UnwindSafe for InvalidVersionError {}
 impl RefUnwindSafe for InvalidVersionError {}
 
-/// The base revision could not be resolved.
+/// A requested Git revision could not be resolved.
 #[ohno::error]
-#[display("Failed to resolve base revision '{}'", rev.quoted())]
-pub(crate) struct UnresolvedBaseError {
+#[display("Failed to resolve revision '{}'", rev.quoted())]
+pub(crate) struct UnresolvedRevisionError {
     rev: String,
 }
 
-impl UnwindSafe for UnresolvedBaseError {}
-impl RefUnwindSafe for UnresolvedBaseError {}
+impl UnwindSafe for UnresolvedRevisionError {}
+impl RefUnwindSafe for UnresolvedRevisionError {}
 
 /// The current workspace still declares the obsolete manual group key.
 #[ohno::error]
@@ -291,7 +291,7 @@ mod tests {
     assert_impl_all!(ParseTomlError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(ParseMetadataError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(InvalidVersionError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(UnresolvedBaseError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(UnresolvedRevisionError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(LegacyVersionGroupsError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(UnsupportedExactRequirementError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(InvalidPackagingPatternError: Send, Sync, Debug, error::Error, UnwindSafe, RefUnwindSafe);

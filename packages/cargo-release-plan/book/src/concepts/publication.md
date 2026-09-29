@@ -1,105 +1,93 @@
-# Publication and immutable intent
+# Deliver the release that was requested
 
-Publication delivers versions already chosen before merge. It does not increment
-them, repair manifests or refresh committed dependency resolution.
+A merged version change is only the start of delivery. The crate upload might
+succeed while a tag or one platform's binary archive fails. Publication must be
+able to finish that release later, even if another PR has already merged.
 
-## Capture intent once
+That is why the publisher separates **what was requested** from **what completed**.
 
-A **publication manifest** is the immutable release request captured from a
-clean, merged source commit and its committed configuration. It includes every
-publishable package's exact declared version, even when version assessment
-reports that package as unchanged.
+## One request survives every retry
 
-The manifest records source identity, workspace locations, destination
-configuration and each binary's executable name and targets. It is not a PR
-version plan and contains no mutable "published" flags.
+A **publication manifest** records the merged source commit, destination and exact
+package versions to deliver. It does not choose versions or contain mutable
+completed flags. It is the stable request shared by the publishing phases.
 
-A **publication outcome** records one attempt at a phase, linked to the
-manifest's identity. A **platform batch** is a frozen derivative describing the
-binary work for one native target, including actual tag commits.
+For example, a run requests `widget-cli 2.0.1`. Its crate reaches crates.io, but a
+binary build fails. While the prerequisite is repaired, `2.0.2` merges. Retrying
+the original manifest still completes `2.0.1`; reading the current branch instead
+would silently change the request.
 
-```text
-clean merged source + configuration
-  -> immutable publication manifest
-       -> registry reconciliation -> attempt outcome
-       -> GitHub reconciliation   -> attempt outcome + platform batches
-                                                     -> binary attempt outcomes
+```mermaid
+flowchart LR
+    A["Merged source: widget-cli 2.0.1"] --> B["Publication manifest"]
+    B --> C["Upload crate"]
+    C --> D["Create package tag and release"]
+    D --> E["Deliver binary archives"]
+    E --> F["Complete release"]
+    E -. "Retry missing work with the same manifest" .-> B
 ```
 
-This shows artifact flow, not concurrent permission to publish. Registry
-completion is a prerequisite for GitHub writes.
+Each phase observes the actual destination and skips work already complete.
+Existing registry versions and tags are not rewritten to make a retry pass.
+Changing the requested source or versions requires a new manifest.
 
-Changing the source, requested versions or effective configuration requires a
-new manifest at a distinct destination. A fetched release-branch tip is not part
-of the manifest's intent digest: branch movement does not change what the
-original source asked to publish.
+## Outcomes explain partial completion
 
-## Reconcile exact versions
+A **publication outcome** records what happened during one phase attempt. It is
+kept separately from the manifest so a later attempt does not erase the original
+request or earlier diagnostics.
 
-Registry publication observes every requested exact version. Existing versions
-are not uploaded again. A yanked version still occupies its identity; the
-publisher neither republishes nor unyanks it. A failed query is unknown state,
-not evidence of absence.
+The final report combines these outcomes with the current workflow job results.
+An old successful artifact cannot hide a newly failed job, and an unreadable
+destination is not treated as empty. This gives the operator a specific missing
+step to repair rather than a misleading overall success.
 
-Cargo verifies archives and orders missing workspace uploads. Assessment batches
-are not an upload scheduler. Package normalization may remove inactive dependency
-branches, but cannot introduce unassessed binary dependency identities.
+## Tags fix the source of binary builds
 
-Automatic uploads use GitHub Actions OIDC and crates.io Trusted Publishing.
-Credentials are acquired per upload after package verification, rather than
-assuming one short-lived credential can cover an entire cold build. There is no
-stored-token or PAT fallback.
+The **publication source** is the merged commit that requested the release. A
+package tag identifies the source used to build that package's binary archives.
+It may name a later release-branch commit only when the package's version and
+released content are unchanged there.
 
-## Source, tags and platform batches
+Tags use `{package}-v{version}` and are never moved. Binaries build from the commit
+the actual tag resolves to, not whichever checkout happens to be current.
 
-The **publication source** is the merged commit whose versions are requested.
-The **tag target** is the actual commit named by a package tag. A later commit
-can be a valid tag target when the requested version and released content remain
-equivalent. The history and merge target used for planning are separate identities.
+This matters when repairing an old release: rebuilding from today's branch could
+put different code inside an archive still labelled `2.0.1`.
 
-Package tags use `{package}-v{version}` and are never moved. A missing tag is
-created only at a verified eligible release-branch snapshot. Libraries receive
-tags; binary packages also receive GitHub releases attached to established tags.
+## Platform batches organize missing binary work
 
-A batch records the actual **peeled tag commit**: the commit reached after
-resolving an annotated or lightweight tag. Binaries build from that commit, not
-from the version anchor, current branch tip or publication source by assumption.
+A **platform batch** lists the incomplete binary releases for one native target,
+with their executable names and tag commits. It lets a runner reuse compatible
+Cargo artifacts while building each package separately with its own default
+feature selection.
 
-The package `widget-cli` illustrates why package and executable names are separate:
+For example, a release may already have its Windows archive but still lack Linux
+assets. Reconciliation creates only the required remaining work. A target is
+complete when both its ZIP and checksum are present; an incomplete pair is
+replaced together so a new checksum cannot accidentally describe an old archive.
+
+Package and executable names can differ:
 
 ```text
-package/version: widget-cli 2.0.1
-executable:      widget
-tag:             widget-cli-v2.0.1
-Windows assets:  widget-cli-v2.0.1-x86_64-pc-windows-msvc.zip
-                 widget-cli-v2.0.1-x86_64-pc-windows-msvc.sha256
-ZIP member:      widget.exe
+package:     widget-cli 2.0.1
+executable:  widget
+tag:         widget-cli-v2.0.1
+ZIP member:  widget.exe on Windows
 ```
 
-This is naming shorthand, not a platform-batch schema.
+The [artifact reference](../reference/artifacts.md) describes the transported
+manifest, batch and outcome fields. Consumers use tool-produced artifacts rather
+than constructing them manually.
 
-Each target batches packages but builds them separately with their own default
-feature selection. A release/target pair is complete only when both ZIP and
-checksum assets are uploaded. An incomplete pair is repaired together.
+## A failed phase is not a rollback
 
-## Retries preserve the request
+Successful uploads remain valid when a later step fails. Cargo verifies package
+archives and orders missing uploads; per-upload OIDC credentials avoid relying
+on a stored publishing secret.
 
-Every attempt writes a new outcome. Original manifests and emitted batches
-remain unchanged. Fresh remote observations determine work; a previous success
-outcome does not prove that an asset still exists.
-
-GitHub Actions outcomes carry optional run and attempt linkage. The final
-reporter checks phase outcomes and current job results, not only artifact
-identities. The [artifact reference](../reference/artifacts.md#derived-batches-and-later-outcomes)
-defines which retained outcomes can satisfy current work.
-
-A dry run reports observations and intended work, never a completed publication.
-Missing required artifacts are errors, not empty work sets. Successful uploads
-are retained after a later failure.
-
-Queued workflows do not serialize merges. A newer version can reach the release
-branch before an older request has a tag. If automatic tag creation cannot
-complete, that release's tag-dependent work is skipped, independent releases
-continue, and the workflow **fails** with an operator handoff. The operator
-creates the exact missing tag at the original publication source and retries
-the original failed run. See [recovery](../operations/recovery.md#missing-tag-after-a-newer-version-merges).
+If another version reaches the release branch before an older request can create
+its tag, that request may need an operator to create the exact missing tag at its
+recorded source. Independent releases can continue, but the incomplete workflow
+remains failed. [Recovery](../operations/recovery.md) explains how to finish the
+original request without relabelling newer content.

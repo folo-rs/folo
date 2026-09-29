@@ -2,7 +2,7 @@ use crp_diag::Verbose;
 use semver::Version;
 use serde_json::json;
 
-use crate::plan::{IncrementLevel, increment_version, resolve_plan};
+use crate::plan::{VersionBump, increment_version, resolve_plan};
 use crate::propose::tests::{
     assert_invariants, depends, entries, generate, helper, package, report,
 };
@@ -20,7 +20,7 @@ fn semantic_member_entries_keep_their_names_and_merge_only_in_the_resolver() {
     let plan = generate(&report, &[("nm", "nonbreaking"), ("nm_impl", "patch")]).unwrap();
     assert_eq!(
         entries(&plan),
-        json!([{"name": "nm_impl", "level": "patch"}])
+        json!([{"name": "nm_impl", "bump": "patch"}])
     );
     let plan = generate(&report, &[("nm", "breaking"), ("nm_impl", "patch")]).unwrap();
     assert_eq!(plan.increments.len(), 2);
@@ -71,9 +71,9 @@ fn assert_ordered_output(reverse: bool) {
     assert_eq!(
         entries(&plan),
         json!([
-            {"name": "alpha", "level": "patch"},
+            {"name": "alpha", "bump": "patch"},
             {"name": "laggard", "version": "1.1.0"},
-            {"name": "zeta", "level": "patch"}
+            {"name": "zeta", "bump": "patch"}
         ])
     );
     assert_invariants(&report, &plan);
@@ -97,7 +97,7 @@ fn empty_and_consistent_reports_generate_empty_proposals() {
 }
 
 #[test]
-fn mechanical_levels_use_the_original_group_base_only_once() {
+fn mechanical_bumps_use_the_original_group_base_only_once() {
     let report = report(
         vec![
             package("a", "1.0.0", Some("1.0.0")),
@@ -114,7 +114,7 @@ fn mechanical_levels_use_the_original_group_base_only_once() {
         Verbose::new(false, &crp_diag::Discard),
     )
     .unwrap();
-    let expected = increment_version(&Version::new(2, 3, 4), IncrementLevel::Major).unwrap();
+    let expected = increment_version(&Version::new(2, 3, 4), VersionBump::Major).unwrap();
     assert_eq!(resolved.packages.get("a"), Some(&expected));
     assert_eq!(resolved.packages.get("b"), Some(&expected));
 }

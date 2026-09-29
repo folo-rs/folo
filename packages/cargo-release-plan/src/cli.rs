@@ -57,7 +57,7 @@ impl Cli {
     /// Translates the parsed arguments into the [`RunInput`] the core logic consumes.
     ///
     /// CLI-owned defaults such as the workspace manifest path are resolved here.
-    /// An absent base remains `None` so execution can use the repository's
+    /// An absent history selection remains `None` so execution can use the repository's
     /// recorded remote default branch, falling back to `origin/main`.
     #[must_use]
     pub fn into_input(self) -> RunInput {
@@ -76,7 +76,7 @@ impl Cli {
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 prepared: args.prepared,
                 plan: args.plan,
-                base: args.base,
+                release_history: args.release_history,
                 merge_target: args.merge_target,
                 output: args.output,
                 deny_findings: args.deny_findings,
@@ -95,7 +95,7 @@ impl Cli {
                     .manifest_path
                     .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 config: args.config,
-                base: args.base,
+                release_history: args.release_history,
                 merge_target: args.merge_target,
                 verbose: args.verbose,
             },
@@ -170,7 +170,7 @@ impl Cli {
             },
             Command::Prepare(args) => RunInput::Prepare {
                 output: args.output,
-                base: args.base,
+                release_history: args.release_history,
                 merge_target: args.merge_target,
                 manifest_path: args
                     .manifest_path
@@ -188,7 +188,7 @@ impl Cli {
             },
             Command::Report(args) => RunInput::Report {
                 out_dir: args.out_dir,
-                base: args.base,
+                release_history: args.release_history,
                 merge_target: args.merge_target,
                 manifest_path: args
                     .manifest_path
@@ -196,7 +196,7 @@ impl Cli {
                 verbose: args.verbose,
             },
             Command::Check(args) => RunInput::Check {
-                base: args.base,
+                release_history: args.release_history,
                 merge_target: args.merge_target,
                 manifest_path: args
                     .manifest_path
@@ -204,15 +204,6 @@ impl Cli {
                 format: args.format.into(),
                 verify_packaging: args.verify_packaging,
                 config: args.config,
-                verbose: args.verbose,
-            },
-            Command::Expand(args) => RunInput::Expand {
-                plan: args.plan,
-                out: args.out,
-                preserve_input: args.preserve_input,
-                manifest_path: args
-                    .manifest_path
-                    .unwrap_or_else(|| PathBuf::from("Cargo.toml")),
                 verbose: args.verbose,
             },
             Command::Apply(args) => RunInput::Apply {
@@ -273,7 +264,7 @@ enum Command {
     CheckPublished(PublishedArgs),
     /// Collect supported external API comparisons without making semantic decisions.
     ///
-    /// Without --prepared or --plan, classify the current workspace against --base or its default.
+    /// Without --prepared or --plan, classify against --release-history or its default.
     CheckCompatibility(CompatibilityArgs),
     /// Resolve configured release-branch history and a workspace-scoped concurrency identity.
     ReleaseContext(ContextArgs),
@@ -310,9 +301,7 @@ enum Command {
     /// malformed, or when a package whose public API exposes a workspace dependency stays
     /// compatible while that dependency releases a breaking change.
     Check(CheckArgs),
-    /// Expand groups without resolution; pass the result through preview before apply.
-    Expand(ExpandArgs),
-    /// Install captured files without resolution, or make proposed manifest-only edits.
+    /// Install the exact manifest and lockfile edits recorded by preview.
     Apply(ApplyArgs),
 }
 
@@ -337,8 +326,8 @@ struct ContextArgs {
     #[arg(long)]
     config: Option<PathBuf>,
     /// Commit delimiting actual release history; otherwise fetch the configured release branch.
-    #[arg(long = "release-history", visible_alias = "base")]
-    base: Option<String>,
+    #[arg(long)]
+    release_history: Option<String>,
     /// Intended target of this PR, including an unmerged parent's final snapshot.
     #[arg(long)]
     merge_target: Option<String>,
@@ -371,14 +360,14 @@ struct CompatibilityArgs {
     #[arg(long)]
     manifest_path: Option<PathBuf>,
     /// Check the captured original prepared inputs.
-    #[arg(long,conflicts_with_all=["plan","base","merge_target"])]
+    #[arg(long,conflicts_with_all=["plan","release_history","merge_target"])]
     prepared: Option<PathBuf>,
     /// Check a resolved preview's retained prospective workspace.
-    #[arg(long,conflicts_with_all=["prepared","base","merge_target"])]
+    #[arg(long,conflicts_with_all=["prepared","release_history","merge_target"])]
     plan: Option<PathBuf>,
     /// Release history for fresh assessment when no evidence artifact is selected.
-    #[arg(long = "release-history", visible_alias = "base")]
-    base: Option<String>,
+    #[arg(long)]
+    release_history: Option<String>,
     /// Intended PR target for fresh assessment; captured artifacts already contain this input.
     #[arg(long)]
     merge_target: Option<String>,
@@ -558,11 +547,11 @@ struct InspectPlanArgs {
 #[derive(Debug, Parser)]
 struct PrepareArgs {
     /// Directory receiving report.json, diffs/, and prepared.json.
-    #[arg(long, visible_alias = "out-dir")]
+    #[arg(long)]
     output: PathBuf,
     /// Actual release-history commit, defaulting to the remote default branch.
-    #[arg(long = "release-history", visible_alias = "base")]
-    base: Option<String>,
+    #[arg(long)]
+    release_history: Option<String>,
     /// Intended PR target, including the final snapshot of an unmerged parent.
     #[arg(long)]
     merge_target: Option<String>,
@@ -618,8 +607,8 @@ struct ReportArgs {
     /// Actual release-history commit whose first-parent line supplies package anchors.
     ///
     /// Defaults to the default branch the `origin` remote advertises.
-    #[arg(long = "release-history", visible_alias = "base")]
-    base: Option<String>,
+    #[arg(long)]
+    release_history: Option<String>,
     /// Intended PR target, including the final snapshot of an unmerged parent.
     #[arg(long)]
     merge_target: Option<String>,
@@ -639,8 +628,8 @@ struct CheckArgs {
     /// Actual release-history commit whose first-parent line supplies package anchors.
     ///
     /// Defaults to the default branch the `origin` remote advertises.
-    #[arg(long = "release-history", visible_alias = "base")]
-    base: Option<String>,
+    #[arg(long)]
+    release_history: Option<String>,
     /// Intended PR target, including the final snapshot of an unmerged parent.
     #[arg(long)]
     merge_target: Option<String>,
@@ -664,30 +653,6 @@ struct CheckArgs {
     verify_packaging: bool,
 
     /// Print explanatory notes for each classification decision.
-    #[arg(long)]
-    verbose: bool,
-}
-
-/// Arguments for `expand`.
-#[derive(Debug, Parser)]
-struct ExpandArgs {
-    /// Path to the plan JSON file to expand.
-    #[arg(long)]
-    plan: PathBuf,
-
-    /// Path that receives the expanded plan JSON.
-    #[arg(long)]
-    out: PathBuf,
-
-    /// Reject input/output aliases and stage the output before replacing it.
-    #[arg(long)]
-    preserve_input: bool,
-
-    /// Path to the workspace `Cargo.toml`.
-    #[arg(long)]
-    manifest_path: Option<PathBuf>,
-
-    /// Print explanatory notes for each expansion decision.
     #[arg(long)]
     verbose: bool,
 }
@@ -778,29 +743,29 @@ mod tests {
                 .into_input(),
             RunInput::Version
         ));
-        for history_flag in ["--release-history", "--base"] {
-            let RunInput::Check {
-                base, merge_target, ..
-            } = Cli::from_args_os([
-                "cargo-release-plan",
-                "check",
-                history_flag,
-                "released",
-                "--merge-target",
-                "parent",
-            ])
-            .unwrap()
-            .into_input()
-            else {
-                panic!()
-            };
-            assert_eq!(base.as_deref(), Some("released"));
-            assert_eq!(merge_target.as_deref(), Some("parent"));
-        }
+        let RunInput::Check {
+            release_history,
+            merge_target,
+            ..
+        } = Cli::from_args_os([
+            "cargo-release-plan",
+            "check",
+            "--release-history",
+            "released",
+            "--merge-target",
+            "parent",
+        ])
+        .unwrap()
+        .into_input()
+        else {
+            panic!()
+        };
+        assert_eq!(release_history.as_deref(), Some("released"));
+        assert_eq!(merge_target.as_deref(), Some("parent"));
         for arguments in [
             vec![
                 "check",
-                "--base",
+                "--release-history",
                 "released",
                 "--release-history",
                 "another",
@@ -848,7 +813,7 @@ mod tests {
             manifest_path,
             prepared,
             plan,
-            base,
+            release_history,
             merge_target: None,
             output,
             deny_findings,
@@ -861,14 +826,14 @@ mod tests {
         assert_eq!(output, Path::new("evidence"));
         assert!(prepared.is_none());
         assert!(plan.is_none());
-        assert!(base.is_none());
+        assert!(release_history.is_none());
         assert!(!deny_findings);
         assert!(!verbose);
     }
 
     #[test]
     fn compatibility_preserves_each_exclusive_source_and_execution_option() {
-        for option in ["--prepared", "--plan", "--base"] {
+        for option in ["--prepared", "--plan", "--release-history"] {
             let cli = Cli::from_args_os([
                 "cargo-release-plan",
                 "release-plan",
@@ -887,7 +852,7 @@ mod tests {
                 manifest_path,
                 prepared,
                 plan,
-                base,
+                release_history,
                 merge_target: None,
                 output,
                 deny_findings,
@@ -907,8 +872,8 @@ mod tests {
                 (option == "--plan").then_some(Path::new("selected-source"))
             );
             assert_eq!(
-                base.as_deref(),
-                (option == "--base").then_some("selected-source")
+                release_history.as_deref(),
+                (option == "--release-history").then_some("selected-source")
             );
             assert!(deny_findings);
             assert!(verbose);
@@ -919,8 +884,13 @@ mod tests {
     fn compatibility_rejects_ambiguous_sources_and_missing_output() {
         for options in [
             vec!["--prepared", "prepared", "--plan", "plan"],
-            vec!["--prepared", "prepared", "--base", "base"],
-            vec!["--plan", "plan", "--base", "base"],
+            vec![
+                "--prepared",
+                "prepared",
+                "--release-history",
+                "release_history",
+            ],
+            vec!["--plan", "plan", "--release-history", "release_history"],
         ] {
             let mut args = vec![
                 "cargo-release-plan",
@@ -983,15 +953,15 @@ mod tests {
                     "selected-manifest",
                     "--config",
                     "selected-config",
-                    "--base",
-                    "tested-base",
+                    "--release-history",
+                    "tested-release_history",
                     "--verbose",
                 ]);
             }
             let RunInput::ReleaseContext {
                 manifest_path,
                 config,
-                base,
+                release_history,
                 merge_target: None,
                 verbose,
             } = Cli::from_args_os(args).unwrap().into_input()
@@ -1010,7 +980,10 @@ mod tests {
                 config.as_deref(),
                 explicit.then_some(Path::new("selected-config"))
             );
-            assert_eq!(base.as_deref(), explicit.then_some("tested-base"));
+            assert_eq!(
+                release_history.as_deref(),
+                explicit.then_some("tested-release_history")
+            );
             assert_eq!(verbose, explicit);
         }
     }

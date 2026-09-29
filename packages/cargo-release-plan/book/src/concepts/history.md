@@ -1,119 +1,101 @@
-# Release history and package status
+# Which release are we changing?
 
-Version assessment answers: **which changes belong to this pull request's release,
-and which versions must move to cover them?**
+Before choosing a new version, the skill needs to know **which package version
+and content this pull request follows**. The answer can differ between packages,
+and between an ordinary PR and a PR stacked on an unmerged parent.
 
-It needs the repository's existing release history and, for a stacked PR, the
-final state of the parent that will merge first. These are different inputs.
+## Package anchors retain unfinished release work
 
-## Existing release history
+The **release branch** is the branch whose merged versions are published.
+**Release history** is that branch up to the commit selected for an assessment.
 
-The **release branch** is the branch whose merged versions your publication
-workflow delivers. **Release history** means that branch up to a selected commit.
-The commit ID fixes which history the report, preview and final check use.
+A package's **anchor** supplies the preceding version and source for its
+comparison. In actual release history, it is the latest first-parent commit that
+changed the package's version. The **anchor version** means exactly the version
+declared by that package in the anchor commit.
 
-For each package, the tool looks backward through first-parent history for the
-most recent commit that changed its parsed version. This is the package's
-**anchor**: its comparison version and content.
+For example, `widget` reached `1.4.0` in commit `B`:
 
 ```text
-release branch
+release history
 
-A ---- B ---- C ---- D ---- E   <- selected release-history commit
-       ^           ^
-       |           +-- widget-cli anchor: 2.0.0
-       +-------------- widget anchor: 1.4.0
+A ---- B ---- C ---- D
+       |           |
+       |           +-- unrelated documentation change
+       +-- widget 1.4.0
 ```
 
-An unrelated commit at `E` does not change either package's comparison point.
-If somebody changed `widget` after `B` without increasing its version, those
-changes still need a release. Comparing only with `E` would hide that unfinished
-work. Anchors allow a repository to catch up after migration or manual changes.
+The documentation change does not create a new `widget` release. Its anchor is
+still `B`. If commit `C` instead changed `widget` without increasing its version,
+that work must still be included in the next release. Comparing only with `D`
+would hide it.
 
-Reformatting a version string does not create an anchor; changing its parsed value
-or adding the package does. Full history is needed to find the applicable anchor.
+This is why the tool retains anchors rather than simply comparing every package
+with the release branch's latest tree: it can catch up after migration or manual
+changes that omitted version planning.
 
-## The current pull request's target
+## A stacked PR follows its parent's final result
 
-The **merge target** is the commit the pull request intends to merge into.
-For an ordinary PR targeting the release branch, it is already release history.
-For a stacked PR, it can be the final commit of an unmerged parent PR.
+The **merge target** is the commit a PR intends to merge into. In a stack, that
+can be an unmerged parent PR.
 
-The parent may increase a package to `1.5.0` and then receive more fixes.
-Its final content belongs to its `1.5.0` release, regardless of which intermediate
-commit edited the version. The child compares with that final parent snapshot.
-If the child changes released content too, it needs a version above `1.5.0`.
-It cannot reuse the parent's increment merely because publication has not happened yet.
+Suppose the parent changes `widget` to `1.5.0`, then receives another fix before
+review is complete. All of the parent's final content belongs to its `1.5.0`
+release. The child must compare with that final snapshot, not the parent's
+intermediate version-edit commit.
 
-Packages retaining their release-history versions keep their historical anchors.
-Unversioned work in existing history therefore remains visible even when an
-unrelated parent PR is present.
+```text
+release history: widget 1.4.0
+    |
+    +-- parent PR: widget 1.5.0, including all final fixes
+            |
+            +-- child PR: further changes need a version above 1.5.0
+```
 
-The managed workflow uses **squash merges**: one merged PR contributes one commit
-containing its final content and final versions. The anticipated parent state
-then agrees with the state recorded in release history. Fast-forwarding the
-parent's intermediate commits is not the supported publication workflow.
-The history can still contain older or manually created commits that omitted
-version planning; the anchor comparison finds their catch-up work.
+For a new or incremented parent package, the parent's final commit acts as the
+child's anticipated anchor. Packages still at their release-history version keep
+their historical anchors and any catch-up work.
 
-Each PR is assessed for its own target. Neither the skill nor the version decision
-assumes that a merge queue will merge a stack together.
+The managed workflow uses squash merges so each PR's final version and content
+enter release history in one commit. The anticipated parent then becomes the
+actual preceding release. The child does not depend on a merge queue combining
+the PRs, and it cannot reuse the parent's version merely because the parent has
+not merged yet.
 
-## What the assessment says
+## What the package status means
 
-**Released content** is what matters to consumers of a Cargo package, including
-its packaging inputs and an installable binary's locked dependencies. The
-[next chapter](released-content.md) explains that boundary.
+The report uses the package's anchor version and content to distinguish:
 
-| Status in `report.json` | Meaning |
+| Status | Meaning |
 | --- | --- |
-| `pending-release` | The working-tree version is above the comparison version, or this PR introduces the package. |
-| `needs-increment` | Released content changed without advancing its comparison version. |
-| `unchanged` | Content and version match the comparison state. |
+| `needs-increment` | Released content changed, but the version did not advance above the anchor version. |
+| `pending-release` | This PR already has a higher version, or introduces the package. |
+| `unchanged` | The package still matches its anchor's content and version. |
 
-A pending increment already covers some work in this PR. Reassess all of that
-work, retaining the increment if sufficient and raising it if a stronger semantic
-decision requires it. Rerunning planning does not itself require another increment.
+A pending increment is kept when it covers the full change. If later edits make
+the impact stronger, the skill raises it. Merely rerunning the skill is not a
+reason for another increment.
 
-`needs-increment` fails version readiness. Group consistency and dependency
-requirements are checked separately; so are
-[public dependency compatibility obligations](versions.md#private-apis-and-public-dependencies).
-A version below the comparison version is an error.
+Packages with `publish = false` are not publication requests, but their versions
+can still participate in [version groups](versions.md#version-groups).
 
-Packages with `publish = false` receive no release status, but can participate in
-[version alignment](versions.md#version-groups).
+## History movement changes the question
 
-## Select and refresh the inputs
+If another PR merges a version that this PR planned to use, that version now
+belongs to different content. Likewise, a changed parent can alter what a child
+must be compared with. The skill records one history/target pair for the assessment
+and refreshes it before applying the plan.
 
-`release-context --config <path>` fetches the configured repository's release
-branch and returns `release_history`. For a stacked PR, also supply
-`--merge-target <parent-ref>`. The returned `merge_target` is either its full commit
-ID or null when the target is already in release history. Pass both returned
-values to assessment rather than fetching history independently in each stage.
+When either input moves, the skill reassesses instead of attaching old results
+to the new history. [Recovery](../operations/recovery.md#release-branch-movement)
+describes that process.
 
-`--release-history <commit>` explicitly selects known release history; `--base`
-is a compatibility alias. Without an explicit history, direct assessment commands
-use `origin`'s recorded default branch, falling back to `origin/main`.
-The configuration-aware context command is preferable for automation.
+## Recorded versions do not prove delivery
 
-Before applying a plan, refresh history and the original target ref. If either
-changed, reassess. Another PR may have consumed a proposed version, or the parent
-may have gained changes that alter the child's comparison. Do not assign old
-evidence to new commits. See [recovery](../operations/recovery.md#release-branch-movement).
+After `widget 1.5.0` merges, its source can be unchanged against its new anchor
+even if its registry upload failed. Package status describes version readiness,
+not whether crates.io, a GitHub tag or a binary archive exists.
 
-Merged-source validation uses the pinned merged source as release history and
-has no anticipated parent. A maintenance series can use its own release branch.
-
-## Git state is not upload state
-
-After a version-changing PR merges, its package can be `unchanged` against its
-new anchor even if registry upload has failed. Git versions establish the
-assessment model, not delivery completion.
-
-Publication separately checks exact registry versions, tags and archives. It
-considers every publishable package in its selected source, not just entries that
-a pre-merge report called `pending-release`.
-
-The API compatibility checker also has a comparison source. Existing releases
-normally use a published crate; a child may instead need the anticipated parent's
-source so that a newly added parent API cannot disappear unnoticed in the child.
+Publication checks those destinations separately and completes missing work.
+That distinction makes a failed upload recoverable without inventing another
+version solely to retry it.

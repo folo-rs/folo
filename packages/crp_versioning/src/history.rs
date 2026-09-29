@@ -1,7 +1,7 @@
 //! Resolves actual release history and an optional final snapshot anticipated to squash onto it.
 
 use crp_diag::{Quotable as _, Verbose};
-use crp_workspace::git::{DefaultBase, GitRepo};
+use crp_workspace::git::{DefaultReleaseHistory, GitRepo};
 use ohno::AppError;
 
 /// Immutable assessment boundaries plus the caller's refs, retained to detect ref movement.
@@ -23,13 +23,13 @@ impl AssessmentHistory {
         let release_history_revision = match release_history {
             Some(revision) => revision.to_owned(),
             None => {
-                let default = git.default_base()?;
+                let default = git.default_release_history()?;
                 verbose.note(|| match &default {
-                    DefaultBase::RemoteHead(revision) => format!(
+                    DefaultReleaseHistory::RemoteHead(revision) => format!(
                         "no --release-history given; the remote default {} supplies committed release history",
                         revision.quoted()
                     ),
-                    DefaultBase::Convention(revision) => format!(
+                    DefaultReleaseHistory::Convention(revision) => format!(
                         "no --release-history or recorded remote default; {} supplies committed release history",
                         revision.quoted()
                     ),

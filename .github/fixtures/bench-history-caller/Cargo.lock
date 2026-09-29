@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "cargo-bench-history-faker"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "folo_utils",
  "mimalloc",

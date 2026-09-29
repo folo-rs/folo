@@ -70,7 +70,7 @@ fn failed_input_reads_and_verification_invalidate_the_previous_completion_marker
     assert!(error.find_source::<serde_json::Error>().is_some());
     assert!(!marker.exists());
 
-    fs::write(&proposal, r#"{"schema_version":5,"increments":[]}"#).unwrap();
+    fs::write(&proposal, r#"{"schema_version":6,"increments":[]}"#).unwrap();
     let (_, plan) = preview_inputs(&proposal, &prepared, output, &manifest, |_| Ok(())).unwrap();
     assert!(plan.increments.is_empty());
     assert!(!marker.exists());

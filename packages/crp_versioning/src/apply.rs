@@ -1,4 +1,4 @@
-// Manifest rewrites for prospective resolution and proposed manifest-only edits.
+// Manifest rewrites for prospective resolution and application of captured previews.
 
 #![allow(
     clippy::self_named_module_files,
@@ -6,24 +6,22 @@
 )]
 
 use std::collections::{BTreeMap, HashSet};
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crp_diag::{Verbose, plural};
+use crp_diag::Verbose;
 use crp_workspace::inherited::is_workspace_inherit;
 use crp_workspace::manifest::{
     DEPENDENCY_TABLES, dependency_table_name, parse_document, requirement_names_version,
 };
-use crp_workspace::metadata::{WorkTree, load_tracked_work_tree};
+use crp_workspace::metadata::WorkTree;
 use ohno::AppError;
 use semver::Version;
 use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 
-use crate::groups::Groups;
-use crate::plan::{PlanFile, PlanStage, ResolvedVersions, resolve_plan};
+use crate::plan::{PlanFile, ResolvedVersions};
 use crate::resolved::{apply_resolved, read_json};
-use crate::{ReadFileError, WriteFileError, quote_path};
+use crate::{ReadFileError, quote_path};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -57,11 +55,9 @@ impl DepTargets<'_> {
             return declared == package_name;
         }
 
-        // Cargo resolves a dependency path through the filesystem, so a symbolic
-        // link or a case-variant spelling can name a workspace member that the
-        // lexical form above cannot match. Asking the filesystem is deferred to
-        // this point because it costs a system call per candidate, and only a
-        // path dependency whose package the plan already names reaches here.
+        // Filesystem aliases such as case variants and Windows short names can identify a
+        // member that lexical comparison misses. Defer filesystem identity acquisition until
+        // the lexical lookup fails; do not assume case sensitivity from the host platform.
         let Ok(resolved) = fs::canonicalize(&joined) else {
             return false;
         };
@@ -90,9 +86,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
-// Connects the unit-tested orchestration to real artifact, Git and filesystem operations.
-// Integration tests own these adapters. See packages/cargo-release-plan/docs/implementation.md,
-// "Test boundaries".
+// Artifact acquisition and captured application are exercised by boundary integration tests.
 #[cfg_attr(test, mutants::skip)]
 pub fn run_apply(
     plan_path: &Path,
@@ -102,74 +96,7 @@ pub fn run_apply(
 ) -> Result<String, AppError> {
     let plan: PlanFile = read_json(plan_path)?;
 
-    apply_plan(
-        &plan,
-        dry_run,
-        verbose,
-        |plan, dry_run| apply_resolved(plan, manifest_path, dry_run, verbose),
-        || load_tracked_work_tree(manifest_path).map(|(work_tree, _)| work_tree),
-        read_manifest,
-        |edit| {
-            fs::write(&edit.path, edit.updated.as_bytes())
-                .map_err(|error| WriteFileError::caused_by(&edit.path, error).into())
-        },
-    )
-}
-
-fn apply_plan(
-    plan: &PlanFile,
-    dry_run: bool,
-    verbose: Verbose<'_>,
-    apply_captured: impl FnOnce(&PlanFile, bool) -> Result<String, AppError>,
-    load_work_tree: impl FnOnce() -> Result<WorkTree, AppError>,
-    read: impl FnMut(&Path) -> Result<String, AppError>,
-    mut write: impl FnMut(&ManifestEdit) -> Result<(), AppError>,
-) -> Result<String, AppError> {
-    if plan.stage() == PlanStage::Expanded || plan.resolved.is_some() {
-        return apply_captured(plan, dry_run);
-    }
-    let work_tree = load_work_tree()?;
-    // Git-tracked members decide which plan targets are valid and supply their
-    // increment bases. All Cargo-visible member manifests remain
-    // available below for dependent-pin rewrites.
-    // Ref: packages/cargo-release-plan/docs/implementation.md, "Plan resolution and application".
-    let target_versions = work_tree.target_versions();
-    let resolved = resolve_plan(
-        plan,
-        &Groups::from_workspace(&work_tree),
-        &target_versions,
-        verbose,
-    )?;
-    verbose.note(|| {
-        format!(
-            "plan expands to {}; every tracked group member is included even when the plan named \
-             only one of them",
-            plural(resolved.packages.len(), "package version")
-        )
-    });
-
-    let edits = compute_edits_with(&work_tree, &resolved, verbose, read)?;
-    let changed = changed_edit_count(&edits);
-
-    if dry_run {
-        return Ok(dry_run_summary(&edits));
-    }
-
-    for edit in &edits {
-        if edit.original == edit.updated {
-            continue;
-        }
-        write(edit)?;
-        verbose.note(|| format!(
-            "wrote {} after computing the full edit set in memory; remaining writes can still fail",
-            quote_path(&edit.path.to_string_lossy())
-        ));
-    }
-
-    Ok(format!(
-        "Updated {} and left the workspace lockfile untouched; use prepare and preview for a resolved release plan",
-        plural(changed, "manifest")
-    ))
+    apply_resolved(&plan, manifest_path, dry_run, verbose)
 }
 
 // The prospective resolver uses the same edit computation with real manifest acquisition.
@@ -222,26 +149,6 @@ fn compute_edits_with(
         })?);
     }
     Ok(edits)
-}
-
-fn dry_run_summary(edits: &[ManifestEdit]) -> String {
-    let changed = changed_edit_count(edits);
-    let mut message = format!("Dry run: {} would change", plural(changed, "manifest"));
-    for edit in edits {
-        if edit.original != edit.updated {
-            write!(message, "\n  {}", quote_path(&edit.path.to_string_lossy()))
-                .expect("writing to String");
-        }
-    }
-    message.push_str("; the workspace lockfile would be left untouched");
-    message
-}
-
-fn changed_edit_count(edits: &[ManifestEdit]) -> usize {
-    edits
-        .iter()
-        .filter(|edit| edit.original != edit.updated)
-        .count()
 }
 
 // Real filesystem acquisition is covered by integration tests, not library mutation targets.
@@ -533,37 +440,6 @@ mod tests {
             .and_then(Item::as_table_like_mut)
             .and_then(|table| table.get_mut("foo"))
             .unwrap()
-    }
-
-    #[test]
-    fn changed_edit_count_counts_only_rewritten_manifests() {
-        let edits = [
-            ManifestEdit {
-                path: PathBuf::from("unchanged.toml"),
-                original: "a".to_string(),
-                updated: "a".to_string(),
-            },
-            ManifestEdit {
-                path: PathBuf::from("changed.toml"),
-                original: "a".to_string(),
-                updated: "b".to_string(),
-            },
-        ];
-        assert_eq!(changed_edit_count(&edits), 1);
-        assert_eq!(changed_edit_count(&edits[..1]), 0);
-        let summary = dry_run_summary(&edits);
-        assert!(summary.contains("changed.toml"));
-        assert!(!summary.contains("unchanged.toml"));
-        assert!(summary.contains("lockfile would be left untouched"));
-    }
-
-    #[test]
-    fn empty_manifest_only_dry_run_reports_no_writes() {
-        let summary = dry_run_summary(&[]);
-        assert_eq!(
-            summary,
-            "Dry run: 0 manifests would change; the workspace lockfile would be left untouched"
-        );
     }
 
     #[test]

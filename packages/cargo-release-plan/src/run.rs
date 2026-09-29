@@ -16,7 +16,6 @@ use crp_publication::publication::registry::publish as publish_registry;
 use crp_publication::publication::report::report as report_publication;
 use crp_versioning::analysis_order::run_analysis_order;
 use crp_versioning::apply::run_apply;
-use crp_versioning::expand::run_expand;
 use crp_versioning::inspect_plan::run_inspect_plan;
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::preview::{run_prepare_with_target, run_preview};
@@ -51,7 +50,7 @@ pub enum RunInput {
         manifest_path: PathBuf,
         prepared: Option<PathBuf>,
         plan: Option<PathBuf>,
-        base: Option<String>,
+        release_history: Option<String>,
         merge_target: Option<String>,
         output: PathBuf,
         deny_findings: bool,
@@ -73,7 +72,7 @@ pub enum RunInput {
     ReleaseContext {
         manifest_path: PathBuf,
         config: Option<PathBuf>,
-        base: Option<String>,
+        release_history: Option<String>,
         merge_target: Option<String>,
         verbose: bool,
     },
@@ -166,7 +165,7 @@ pub enum RunInput {
         /// Directory receiving report evidence and prepared.json.
         output: PathBuf,
         /// Actual release history; defaults to the remote default branch.
-        base: Option<String>,
+        release_history: Option<String>,
         /// Optional anticipated parent release, using its final content and versions.
         merge_target: Option<String>,
         /// Workspace manifest to prepare.
@@ -203,7 +202,7 @@ pub enum RunInput {
         /// Actual release-history commit whose first-parent line supplies anchors.
         ///
         /// `None` defers to the default branch of the `origin` remote.
-        base: Option<String>,
+        release_history: Option<String>,
         /// Optional anticipated parent release, using its final content and versions.
         merge_target: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
@@ -216,7 +215,7 @@ pub enum RunInput {
         /// Actual release-history commit whose first-parent line supplies anchors.
         ///
         /// `None` defers to the default branch of the `origin` remote.
-        base: Option<String>,
+        release_history: Option<String>,
         /// Optional anticipated parent release, using its final content and versions.
         merge_target: Option<String>,
         /// Workspace manifest to classify. Used verbatim.
@@ -230,20 +229,7 @@ pub enum RunInput {
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
     },
-    /// `expand` — resolve version groups into an explicit per-package plan.
-    Expand {
-        /// Path to the plan JSON file to expand.
-        plan: PathBuf,
-        /// Path that receives the expanded plan JSON.
-        out: PathBuf,
-        /// Workspace manifest supplying members and dependency-derived groups. Used verbatim.
-        manifest_path: PathBuf,
-        /// Protect input aliases and stage output before replacing the destination.
-        preserve_input: bool,
-        /// When set, print explanatory decision notes to stderr.
-        verbose: bool,
-    },
-    /// `apply` — install captured files or perform proposed manifest-only edits.
+    /// Install the exact manifest and lockfile edits recorded by preview.
     Apply {
         /// Path to the plan JSON file.
         plan: PathBuf,
@@ -313,11 +299,6 @@ pub enum RunOutcome {
         /// Non-gating advisory lines for stderr.
         warnings: String,
     },
-    /// `expand` finished and wrote the expanded plan.
-    Expand {
-        /// Human-readable summary for stdout.
-        message: String,
-    },
     /// `apply` finished (including `--dry-run`).
     Apply {
         /// Human-readable summary for stdout.
@@ -370,7 +351,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             manifest_path,
             prepared,
             plan,
-            base,
+            release_history,
             merge_target,
             output,
             deny_findings,
@@ -380,7 +361,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 manifest_path,
                 prepared.as_deref(),
                 plan.as_deref(),
-                base.as_deref(),
+                release_history.as_deref(),
                 merge_target.as_deref(),
                 output,
                 *deny_findings,
@@ -414,14 +395,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
         RunInput::ReleaseContext {
             manifest_path,
             config,
-            base,
+            release_history,
             merge_target,
             verbose,
         } => {
             let message = release_context(
                 manifest_path,
                 config.as_deref(),
-                base.as_deref(),
+                release_history.as_deref(),
                 merge_target.as_deref(),
                 Verbose::new(*verbose, &crp_diag::Stderr),
             )?;
@@ -562,14 +543,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
         }
         RunInput::Prepare {
             output,
-            base,
+            release_history,
             merge_target,
             manifest_path,
             verbose,
         } => {
             let message = run_prepare_with_target(
                 output,
-                base.as_deref(),
+                release_history.as_deref(),
                 merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
@@ -594,14 +575,14 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
         }
         RunInput::Report {
             out_dir,
-            base,
+            release_history,
             merge_target,
             manifest_path,
             verbose,
         } => {
             let message = run_report_with_target(
                 out_dir,
-                base.as_deref(),
+                release_history.as_deref(),
                 merge_target.as_deref(),
                 manifest_path,
                 Verbose::new(*verbose, &crp_diag::Stderr),
@@ -609,7 +590,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             Ok(RunOutcome::Report { message })
         }
         RunInput::Check {
-            base,
+            release_history,
             merge_target,
             manifest_path,
             format,
@@ -626,7 +607,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
             }
             let outcome = check_with_target(
                 &CheckRequest {
-                    base: base.as_deref(),
+                    release_history: release_history.as_deref(),
                     manifest_path,
                     format: *format,
                     verify_packaging: *verify_packaging,
@@ -639,22 +620,6 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
                 message: outcome.message,
                 warnings: outcome.warnings,
             })
-        }
-        RunInput::Expand {
-            plan,
-            out,
-            manifest_path,
-            preserve_input,
-            verbose,
-        } => {
-            let message = run_expand(
-                plan,
-                out,
-                manifest_path,
-                *preserve_input,
-                Verbose::new(*verbose, &crp_diag::Stderr),
-            )?;
-            Ok(RunOutcome::Expand { message })
         }
         RunInput::Apply {
             plan,

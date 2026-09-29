@@ -10,38 +10,37 @@ A decisions document is caller-authored literal JSON:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "changes": [
-    { "name": "widget", "level": "nonbreaking" },
-    { "name": "widget_impl", "level": "patch" }
+    { "name": "widget", "impact": "nonbreaking" },
+    { "name": "widget_impl", "impact": "patch" }
   ]
 }
 ```
 
-`changes[].level` is semantic: `breaking`, `nonbreaking` or `patch`.
-Non-publishable version targets have no semantic decisions.
+`changes[].impact` is semantic: `breaking`, `nonbreaking` or `patch`.
+Non-publishable packages have no semantic impacts.
 
-The proposed-plan format uses report/plan schema revision `5`. This is a literal
+The proposed-plan format uses report/plan schema revision `6`. This is a literal
 example of that format:
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "increments": [
-    { "name": "widget", "level": "minor" },
+    { "name": "widget", "bump": "minor" },
     { "name": "widget-cli", "version": "2.0.1" }
   ]
 }
 ```
 
-`increments[].level` is numeric: `major`, `minor` or `patch`. Supply exactly one
-of `level` and `version` per entry. Names select tracked workspace members;
+`increments[].bump` is numeric: `major`, `minor` or `patch`. Supply exactly one
+of `bump` and `version` per entry. Names select tracked workspace members;
 group members expand together. Explicit targets cannot lower declared versions,
 and group targets use plain `major.minor.patch` versions.
 
-An expanded plan has `expanded` set, names every version target and supplies
-explicit versions. Structural expansion alone is not sufficient for complete
-release application. `preview` adds captured `resolved` evidence, including
+Preview produces an expanded plan with explicit package versions and the
+`resolved` source/files needed for application, including
 resolved file contents, original inputs and `evidence_manifest_path`.
 
 Treat `prepared.json` and the `resolved` object as opaque. Preserve them intact;
@@ -49,7 +48,7 @@ regenerate unsupported or stale evidence with `prepare` and `preview`.
 
 ## Reports
 
-The revision-5 report's top level contains:
+The revision-6 report's top level contains:
 
 | Field | Content |
 | --- | --- |
@@ -79,12 +78,12 @@ Dependencies record `name`, `req`, `exact_pin` and `public`. Consumer-contract
 flags select public library comparisons; they do not claim that binaries or
 private implementation changes lack behavioral consequences.
 
-Non-publishable version targets carry `name`, `declared_version` and an optional group,
-not a status or semantic decision. Group records include complete sorted
+Non-publishable packages carry `name`, `declared_version` and an optional group,
+not a status or semantic impact. Group records include complete sorted
 members and their highest declared version.
 
 Patch paths are relative to the report directory. Patches are zero-context
-unified file diffs, not the complete verdict. An inherited-only or lockfile-only
+unified file diffs, not the complete report. An inherited-only or lockfile-only
 change can have no patch.
 
 A report's HEAD alone does not prove that an arbitrary dirty checkout matches
@@ -119,7 +118,7 @@ Each `check-compatibility` invocation uses a new output directory and writes
 The evidence retains checker identity and exact comparison versions. Its linked
 report identifies any anticipated-parent anchor supplying the comparison source.
 
-Compatibility evidence uses schema `1`:
+Compatibility evidence uses schema `2`:
 
 | Field | Meaning |
 | --- | --- |
@@ -131,16 +130,16 @@ Compatibility evidence uses schema `1`:
 | `packages` | Comparison records containing the fields below. |
 
 Each comparison record contains `name`, `compared`, nullable `baseline_version`,
-and nullable `required_level`. A compared package uses a published version or its
+and nullable `required_impact`. A compared package uses a published version or its
 anticipated parent's version and final source. An unavailable comparison has
-`compared: false` and no comparison version or required level.
+`compared: false` and no comparison version or required impact.
 An operational failure can leave only earlier completed records; inspect the
 overall completion flag and retained diagnostics rather than treating absent
 records as passes.
 
 Require `completed: true` before using the result. A package's `compared: false`
 means no comparison was available, not proof of compatibility.
-`required_level` is a semantic `breaking` or `nonbreaking` floor; `null`
+`required_impact` is a semantic `breaking` or `nonbreaking` floor; `null`
 establishes no minimum. The author still judges behavioral, CLI, format and
 feature-subset effects.
 
@@ -161,7 +160,7 @@ is verified around comparison; operational errors never become semantic passes.
 ```
 
 This example assumes those are the publishable packages. Every publishable
-member appears once, including unchanged ones; non-publishable version targets do not.
+member appears once, including unchanged ones; non-publishable packages do not.
 Cycle batches represent actual dependencies, not group alignment.
 
 `semver-targets` emits sorted package names, or `[]` when no public contract is
@@ -206,7 +205,7 @@ commit. Workspace, package and configuration paths are repository-relative.
 `name` is the executable name, not necessarily its package name.
 
 The package array includes every publishable exact version at that source,
-including unchanged packages, and excludes non-publishable version targets.
+including unchanged packages, and excludes non-publishable packages.
 The artifact records producer identity and schema independently of local-plan
 schemas.
 

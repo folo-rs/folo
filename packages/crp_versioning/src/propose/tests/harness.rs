@@ -45,10 +45,10 @@ pub(crate) fn assert_invariants(report: &ReportFile, plan: &PlanFile) -> BTreeMa
     let mut kinds = BTreeMap::new();
     for entry in &plan.increments {
         assert!(declared.contains_key(&entry.name));
-        assert!(entry.level.is_some() ^ entry.version.is_some());
+        assert!(entry.bump.is_some() ^ entry.version.is_some());
         let key = groups.group_of(&entry.name).unwrap_or(&entry.name);
-        if let Some(previous) = kinds.insert(key, entry.level.is_some()) {
-            assert_eq!(previous, entry.level.is_some());
+        if let Some(previous) = kinds.insert(key, entry.bump.is_some()) {
+            assert_eq!(previous, entry.bump.is_some());
         }
     }
     let mut resolved = declared.clone();

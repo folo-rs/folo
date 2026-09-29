@@ -57,9 +57,7 @@ or resources outside the package directory. Without an explicit README setting,
 Cargo detects a default README; `readme = false` opts out.
 
 These inputs can affect a package even when its `include` list names only `src`.
-A package-root `target` directory is not packaged. Released symbolic links need
-attention: Git stores the link target path while Cargo packages target bytes, so
-the ordinary historical comparison cannot establish their released contents.
+A package-root `target` directory is not packaged.
 
 To audit the model against Cargo, use the explicit
 [`--verify-packaging` probe](../reference/commands.md#assessment). It is not part

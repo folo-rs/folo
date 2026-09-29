@@ -25,7 +25,7 @@ pub(crate) fn classification(packages: Vec<PackageClass>) -> Classification {
         .collect();
     Classification {
         head: "classified-head".to_owned(),
-        base: "release-base".to_owned(),
+        release_history_revision: "release-base".to_owned(),
         release_history: "release-history".to_owned(),
         merge_target: None,
         packages,

@@ -47,9 +47,7 @@ impl RegistryRuntime for UploadRuntime<'_> {
         &self,
         publication: &PublicationManifest,
         manifest: &Path,
-        target: &Path,
     ) -> Result<CredentialSession, AppError> {
-        _ = self.target.replace(Some(target.to_owned()));
         CredentialSession::new(
             serde_json::from_value::<ActionsIdentity>(json!({
                 "request_url":format!("{}/identity",self.identity.url()),
@@ -57,7 +55,6 @@ impl RegistryRuntime for UploadRuntime<'_> {
             }))?,
             publication.clone(),
             manifest.to_owned(),
-            target.to_owned(),
             TrustedPublisher::with_endpoint(
                 &format!("{}/tokens", self.identity.url()),
                 crp_publication::PublicationOutput::new(
@@ -71,6 +68,14 @@ impl RegistryRuntime for UploadRuntime<'_> {
 
     fn upload(&self, command: &mut Command) -> io::Result<Output> {
         self.uploads.set(self.uploads.get().checked_add(1).unwrap());
+        _ = self.target.replace(Some(PathBuf::from(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "CARGO_TARGET_DIR")
+                .unwrap()
+                .1
+                .unwrap(),
+        )));
         assert_eq!(
             command.get_current_dir().unwrap().canonicalize().unwrap(),
             self.repository.path().canonicalize().unwrap()
@@ -584,7 +589,6 @@ impl RegistryRuntime for NoRegistryWork {
         &self,
         _publication: &PublicationManifest,
         _manifest: &Path,
-        _target: &Path,
     ) -> Result<CredentialSession, AppError> {
         panic!("source acquisition must fail before credential or build-artifact setup");
     }

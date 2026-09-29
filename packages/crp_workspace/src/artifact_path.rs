@@ -62,7 +62,8 @@ fn resolve_path_with(
         match canonicalize(&ancestor) {
             Ok(mut resolved) => {
                 // A parent component can return from a missing directory to an existing one.
-                // Resolve each subsequent component again so a later symlink keeps its meaning.
+                // Reacquire identity for existing components to preserve filesystem casing
+                // and short-name aliases rather than relying on lexical spelling.
                 for component in suffix.into_iter().rev() {
                     match metadata(&resolved) {
                         Ok(metadata) if !metadata.is_dir() => {

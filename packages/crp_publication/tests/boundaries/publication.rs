@@ -9,7 +9,6 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crp_publication::publication::resolution::verify_packaged_closure;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -91,14 +90,6 @@ fn cargo_orders_workspace_publication_and_preserves_locked_binary_dependencies()
         };
         assert_eq!(order, ["publication-core", "publication-cli"]);
         let archive = archive.unwrap();
-        verify_packaged_closure(
-            &fixture.path().join("Cargo.toml"),
-            &archive,
-            "publication-cli",
-            "1.0.0",
-            &format!("sparse+{}/index/", registry.http.url()),
-        )
-        .unwrap();
         let files = archive_files(&archive);
         let lockfile = files
             .get("publication-cli-1.0.0/Cargo.lock")
@@ -201,14 +192,22 @@ fn packaged_binary_can_prune_an_inactive_workspace_dependency_feature() {
             .get("publication-cli")
             .map(|package| package.archive.clone());
         let archive = archive.unwrap();
-        verify_packaged_closure(
-            &fixture.path().join("Cargo.toml"),
-            &archive,
-            "publication-cli",
-            "1.0.0",
-            &format!("sparse+{}/index/", registry.http.url()),
-        )
-        .unwrap();
+        let files = archive_files(&archive);
+        let lockfile = files
+            .get("publication-cli-1.0.0/Cargo.lock")
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        let packages = lockfile
+            .get("package")
+            .unwrap()
+            .as_array_of_tables()
+            .unwrap();
+        assert!(
+            packages
+                .iter()
+                .all(|package| package["name"].as_str() != Some("publication-optional"))
+        );
     });
 }
 
@@ -256,6 +255,17 @@ fn cargo_requests_uncached_publish_credentials_after_package_verification() {
                 .all(|(position, _)| *position > last_build),
             "{events:?}"
         );
+        // The actual uploaded bytes, not an assumed archive path, bind each Cargo request.
+        let state = registry.state.lock().unwrap();
+        for (_, request) in publication_requests {
+            let name = request.get("name").unwrap().as_str().unwrap();
+            let archive = &state.packages.get(name).unwrap().archive;
+            let mut checksum = String::new();
+            for byte in Sha256::digest(archive) {
+                write!(checksum, "{byte:02x}").unwrap();
+            }
+            assert_eq!(request.get("cksum").unwrap(), &checksum);
+        }
     });
 }
 

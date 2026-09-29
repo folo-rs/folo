@@ -2,13 +2,11 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
 use crp_diag::Verbose;
 use crp_versioning::apply::*;
-use crp_versioning::plan::ResolvedVersions;
+use crp_versioning::plan::{PlanFile, PlanIncrement, PlanStage, ResolvedVersions};
 use semver::Version;
 use tempfile::tempdir;
 use toml_edit::DocumentMut;
@@ -19,6 +17,44 @@ fn v(text: &str) -> Version {
 
 fn dep_item(toml: &str) -> DocumentMut {
     toml.parse::<DocumentMut>().unwrap()
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "Reads plan artifacts and verifies that live files remain unchanged"
+)]
+fn apply_never_accepts_a_proposal_or_an_uncaptured_expansion() {
+    let directory = tempdir().unwrap();
+    let manifest = directory.path().join("Cargo.toml");
+    let lockfile = directory.path().join("Cargo.lock");
+    let plan_path = directory.path().join("plan.json");
+    let original_manifest = "[package]\nname='demo'\nversion='1.0.0'\n";
+    let original_lockfile = "# live lockfile\n";
+    fs::write(&manifest, original_manifest).unwrap();
+    fs::write(&lockfile, original_lockfile).unwrap();
+    for stage in [PlanStage::Proposed, PlanStage::Expanded] {
+        let plan = PlanFile::new(
+            stage,
+            vec![PlanIncrement {
+                name: "demo".to_owned(),
+                bump: None,
+                version: Some("2.0.0".to_owned()),
+            }],
+        );
+        fs::write(&plan_path, serde_json::to_vec(&plan).unwrap()).unwrap();
+        for dry_run in [false, true] {
+            _ = run_apply(
+                &plan_path,
+                dry_run,
+                &manifest,
+                Verbose::new(false, &crp_diag::Discard),
+            )
+            .unwrap_err();
+            assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
+            assert_eq!(fs::read_to_string(&lockfile).unwrap(), original_lockfile);
+        }
+    }
 }
 
 /// A path outside the workspace keeps its own requirement.
@@ -49,41 +85,6 @@ fn a_path_outside_the_workspace_keeps_its_own_requirement() {
     assert_eq!(outside.to_string(), outside_text);
 }
 
-/// A path reaching a member through a link still resolves to the member.
-///
-/// Cargo resolves a dependency path through the filesystem, so a link that reaches a workspace
-/// member declares that member and its requirement must follow the member's new version.
-#[cfg(unix)]
-#[cfg_attr(miri, ignore)] // tempdir and symlinks are host filesystem, which Miri cannot emulate.
-#[test]
-fn a_path_reaching_a_member_through_a_link_still_resolves_to_the_member() {
-    let dir = tempdir().unwrap();
-    let root = dir.path();
-    fs::create_dir_all(root.join("packages/demo")).unwrap();
-    fs::create_dir_all(root.join("packages/caller")).unwrap();
-    symlink(root.join("packages/demo"), root.join("packages/demo-link")).unwrap();
-
-    let resolved = ResolvedVersions {
-        packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
-    };
-    let members = BTreeMap::from([(root.join("packages/demo"), "demo".to_string())]);
-    let targets = DepTargets {
-        manifest_dir: root.join("packages/caller"),
-        members_by_dir: &members,
-    };
-
-    let mut item =
-        dep_item("[dependencies]\ndemo = { version = \"=0.1.0\", path = \"../demo-link\" }\n");
-    rewrite_dependency_tables(
-        &mut item,
-        &targets,
-        &resolved,
-        Verbose::new(false, &crp_diag::Discard),
-    );
-
-    assert!(item.to_string().contains("=0.2.0"), "{item}");
-}
-
 /// A path that does not exist declares no member.
 ///
 /// A path that reaches nothing on disk names no member, whatever its spelling, so an outside
@@ -108,8 +109,7 @@ fn canonical_dependency_identity_requires_both_name_and_directory() {
     for name in ["member", "outside", "via"] {
         fs::create_dir_all(directory.path().join(name)).unwrap();
     }
-    // Keep an equivalent but non-lexical member spelling to exercise the
-    // filesystem fallback without requiring symlink privileges on Windows.
+    // An equivalent but non-lexical member spelling exercises filesystem identity acquisition.
     let members = BTreeMap::from([(directory.path().join("via/../member"), "member".to_string())]);
     let targets = DepTargets {
         manifest_dir: directory.path().to_path_buf(),

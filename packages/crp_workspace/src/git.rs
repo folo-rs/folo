@@ -18,7 +18,8 @@ use ohno::AppError;
 use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes, spawn};
 use crate::manifest::{PathCase, to_git_separators};
 use crate::{
-    CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError, UnresolvedBaseError,
+    CommandFailedError, NonUtf8BlobError, NonUtf8PathError, PathTooLongError,
+    UnresolvedRevisionError,
 };
 
 #[cfg(any(test, feature = "private-test-util"))]
@@ -74,24 +75,24 @@ const DEFAULT_REMOTE_HEAD_REF: &str = "refs/remotes/origin/HEAD";
 ///
 /// Only reached by a repository that has never recorded a remote head, so the
 /// most widely used name for a default branch is the one remaining guess.
-const CONVENTIONAL_BASE: &str = "origin/main";
+const CONVENTIONAL_RELEASE_HISTORY: &str = "origin/main";
 
-/// Where the release baseline came from when the caller did not name one.
+/// Where actual release history came from when the caller did not name a revision.
 ///
-/// Which of the two answered decides how much a run should trust the baseline,
+/// Which of the two answered decides how much a run should trust the revision,
 /// so the distinction is carried to the caller rather than collapsed into a
 /// string: a recorded remote head is the repository's own statement of the
 /// branch it releases from, while the convention is a guess that a repository
 /// releasing from a differently named branch would silently make wrong.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DefaultBase {
+pub enum DefaultReleaseHistory {
     /// The remote's recorded default branch.
     RemoteHead(String),
     /// The conventional name, because the remote records no default branch.
     Convention(String),
 }
 
-impl DefaultBase {
+impl DefaultReleaseHistory {
     #[must_use]
     pub fn revision(&self) -> &str {
         match self {
@@ -105,19 +106,19 @@ impl DefaultBase {
 /// A repository whose remote head is unset fails the lookup rather than
 /// answering emptily, but a configuration that answers with nothing names no
 /// branch either, so both reach the convention by the same route.
-fn decode_default_base(recorded: Option<String>) -> DefaultBase {
+fn decode_default_release_history(recorded: Option<String>) -> DefaultReleaseHistory {
     let recorded = recorded
         .map(|branch| branch.trim().to_owned())
         .filter(|branch| !branch.is_empty());
     match recorded {
-        Some(branch) => DefaultBase::RemoteHead(branch),
-        None => DefaultBase::Convention(CONVENTIONAL_BASE.to_owned()),
+        Some(branch) => DefaultReleaseHistory::RemoteHead(branch),
+        None => DefaultReleaseHistory::Convention(CONVENTIONAL_RELEASE_HISTORY.to_owned()),
     }
 }
 
 /// The tool's access to one Git repository.
 ///
-/// Every historical fact a verdict rests on — the commits on the base
+/// Every historical fact a verdict rests on — the commits on the release-history
 /// first-parent line, the manifests and file contents at a commit, the tracked
 /// state of the work tree — is read through this type by spawning `git`, so it
 /// is the single place where repository state enters classification
@@ -144,8 +145,7 @@ impl GitRepo {
         // Both answers are asked of the same directory rather than derived from
         // one another: stripping the root from a path Cargo reported would
         // compare two spellings of the same directory that need not match, since
-        // Windows hands out 8.3 short names for some paths and symlinked or
-        // substituted roots differ on every platform.
+        // Windows hands out 8.3 short names for some paths and substituted roots can differ.
         //
         // Each answer is read from its own invocation because `git` separates
         // them with a newline, which is a legal character in a path name and so
@@ -180,7 +180,7 @@ impl GitRepo {
             &self.root,
         ) {
             Ok(stdout) => Ok(stdout.trim().to_string()),
-            Err(error) => Err(UnresolvedBaseError::caused_by(rev, error).into()),
+            Err(error) => Err(UnresolvedRevisionError::caused_by(rev, error).into()),
         }
     }
 
@@ -203,18 +203,18 @@ impl GitRepo {
         }
     }
 
-    /// The branch releases are made from, used when the caller names no baseline.
+    /// The branch releases are made from, used when the caller names no release history.
     ///
     /// `git clone` records the remote's default branch, and `git remote
     /// set-head` refreshes it, so the repository already knows the branch it
     /// releases from and the tool does not have to assume what it is called.
-    pub fn default_base(&self) -> Result<DefaultBase, AppError> {
+    pub fn default_release_history(&self) -> Result<DefaultReleaseHistory, AppError> {
         let recorded = run_capture_ok(
             "git",
             &["symbolic-ref", "--short", DEFAULT_REMOTE_HEAD_REF],
             &self.root,
         )?;
-        Ok(decode_default_base(recorded))
+        Ok(decode_default_release_history(recorded))
     }
 
     // HEAD is only used as a report label; tests do not pin the exact SHA string.
@@ -291,7 +291,7 @@ impl GitRepo {
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .collect();
-        // Keep the base revision and the oldest first-parent commit even when they
+        // Keep the selected revision and the oldest first-parent commit even when they
         // do not touch a manifest, so the timeline still observes HEAD and can
         // distinguish a true root from truncated history.
         let newest = all.first().cloned();
@@ -799,42 +799,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_recorded_remote_head_is_the_default_base() {
+    fn a_recorded_remote_head_is_the_default_release_history() {
         assert_eq!(
-            decode_default_base(Some("origin/trunk".to_owned())),
-            DefaultBase::RemoteHead("origin/trunk".to_owned())
+            decode_default_release_history(Some("origin/trunk".to_owned())),
+            DefaultReleaseHistory::RemoteHead("origin/trunk".to_owned())
         );
         assert_eq!(
-            decode_default_base(Some("origin/main\n".to_owned())),
-            DefaultBase::RemoteHead("origin/main".to_owned())
+            decode_default_release_history(Some("origin/main\n".to_owned())),
+            DefaultReleaseHistory::RemoteHead("origin/main".to_owned())
         );
     }
 
     #[test]
     fn an_unrecorded_remote_head_falls_back_to_the_convention() {
         assert_eq!(
-            decode_default_base(None),
-            DefaultBase::Convention(CONVENTIONAL_BASE.to_owned())
+            decode_default_release_history(None),
+            DefaultReleaseHistory::Convention(CONVENTIONAL_RELEASE_HISTORY.to_owned())
         );
         // An answer that names no branch is as unusable as no answer.
         assert_eq!(
-            decode_default_base(Some(String::new())),
-            DefaultBase::Convention(CONVENTIONAL_BASE.to_owned())
+            decode_default_release_history(Some(String::new())),
+            DefaultReleaseHistory::Convention(CONVENTIONAL_RELEASE_HISTORY.to_owned())
         );
         assert_eq!(
-            decode_default_base(Some("  \n".to_owned())),
-            DefaultBase::Convention(CONVENTIONAL_BASE.to_owned())
+            decode_default_release_history(Some("  \n".to_owned())),
+            DefaultReleaseHistory::Convention(CONVENTIONAL_RELEASE_HISTORY.to_owned())
         );
     }
 
     #[test]
-    fn either_default_base_yields_its_revision() {
+    fn either_default_release_history_yields_its_revision() {
         assert_eq!(
-            DefaultBase::RemoteHead("origin/trunk".to_owned()).revision(),
+            DefaultReleaseHistory::RemoteHead("origin/trunk".to_owned()).revision(),
             "origin/trunk"
         );
         assert_eq!(
-            DefaultBase::Convention("origin/main".to_owned()).revision(),
+            DefaultReleaseHistory::Convention("origin/main".to_owned()).revision(),
             "origin/main"
         );
     }

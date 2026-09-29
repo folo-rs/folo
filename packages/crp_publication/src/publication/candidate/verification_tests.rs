@@ -112,12 +112,12 @@ impl VerificationRepository for Evidence<'_> {
         verbose: Verbose<'_>,
     ) -> Result<CheckOutcome, AppError> {
         let CheckRequest {
-            base,
+            release_history,
             manifest_path,
             format,
             verify_packaging,
         } = input;
-        assert_eq!(*base, Some(self.cli.commit.as_str()));
+        assert_eq!(*release_history, Some(self.cli.commit.as_str()));
         assert_eq!(*manifest_path, canonical_manifest());
         assert!(matches!(format, CheckFormat::Text));
         assert!(!verify_packaging);

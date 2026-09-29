@@ -58,12 +58,12 @@ pub const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 #[derive(Debug)]
 pub struct Classification {
     pub head: String,
-    /// The revision every anchor was resolved against.
+    /// The caller's revision naming actual committed release history.
     ///
     /// Retained as the revision the caller named - or the configured default
     /// when it named none - rather than the commit it resolved to, so a
     /// diagnostic can quote a command that reproduces this run.
-    pub base: String,
+    pub release_history_revision: String,
     /// Actual committed release history resolved for this assessment.
     pub release_history: String,
     /// Distinct final parent identity; targets already in release history normalize to `None`.
@@ -84,7 +84,7 @@ pub struct Classification {
 /// Per-package classification: its status and the evidence behind it.
 ///
 /// The status, anchor, and change evidence are not independent: a package that
-/// does not exist on the base line has no anchor and no evidence, while an
+/// does not exist in either assessment predecessor has no anchor and no evidence, while an
 /// anchored package always has one and carries a patch whenever its released
 /// files differ, whatever its status. The classifier produces only those
 /// combinations, so they are held in one closed
@@ -260,7 +260,7 @@ impl PackageClass {
 pub enum Verdict {
     /// The package was created on this branch.
     ///
-    /// It is absent from the base line and from its earlier first-parent
+    /// It is absent from release history and from its earlier first-parent
     /// history, so its creation counts as a version increase and there is
     /// nothing to compare against.
     New,
@@ -411,10 +411,10 @@ pub struct AnchorJson {
 
 pub fn classify(
     manifest_path: &Path,
-    base: Option<&str>,
+    release_history: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<Classification, AppError> {
-    classify_with_target(manifest_path, base, None, verbose)
+    classify_with_target(manifest_path, release_history, None, verbose)
 }
 
 /// Assesses the working snapshot against actual history and an optional final parent snapshot.
@@ -426,21 +426,21 @@ pub fn classify_with_target(
 ) -> Result<Classification, AppError> {
     let (mut work_tree, git) = load_tracked_work_tree(manifest_path)?;
     let history = AssessmentHistory::resolve(&git, release_history, merge_target, verbose)?;
-    let base = history.release_history_revision.clone();
+    let release_history_revision = history.release_history_revision.clone();
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
         package.resources =
             resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
     let head = git.head()?;
-    let base_sha = &history.release_history;
+    let history_commit = &history.release_history;
     verbose.note(|| {
         format!(
-            "classifying {} against release history {} ({base_sha}); \
+            "classifying {} against release history {} ({history_commit}); \
          anchors are the last parsed version change on that revision's first-parent line, \
          not on the work tree's branch",
             plural(work_tree.packages.len(), "publishable package"),
-            quote_path(&base)
+            quote_path(&release_history_revision)
         )
     });
 
@@ -448,7 +448,7 @@ pub fn classify_with_target(
         &work_tree.workspace_root,
         work_tree.installation.registries.clone(),
     );
-    let base_snapshot = cache.snapshot(&git, base_sha)?;
+    let history_snapshot = cache.snapshot(&git, history_commit)?;
     let target_snapshot = history
         .effective_target()
         .map(|target| cache.snapshot(&git, target))
@@ -472,7 +472,7 @@ pub fn classify_with_target(
             .map_err(|error| ReadFileError::caused_by(&work_root_path, error))?,
     )?;
 
-    let commits = git.first_parent_manifest_commits(base_sha, cache.case())?;
+    let commits = git.first_parent_manifest_commits(history_commit, cache.case())?;
     let mut classes = Vec::new();
     let groups = Groups::from_workspace(&work_tree);
     let versions = work_tree.target_versions();
@@ -480,8 +480,8 @@ pub fn classify_with_target(
         .version_targets
         .iter()
         .filter(|target| {
-            is_new_on_base(&base_snapshot, &target.name)
-                && projected.is_none_or(|(_, snapshot)| is_new_on_base(snapshot, &target.name))
+            is_new_at_snapshot(&history_snapshot, &target.name)
+                && projected.is_none_or(|(_, snapshot)| is_new_at_snapshot(snapshot, &target.name))
         })
         .map(|target| target.name.clone())
         .collect();
@@ -497,9 +497,9 @@ pub fn classify_with_target(
             &work_tree,
             &groups,
             &git,
-            base_sha,
+            history_commit,
             &commits,
-            &base_snapshot,
+            &history_snapshot,
             projected,
             &work_root_doc,
             &mut cache,
@@ -532,7 +532,7 @@ pub fn classify_with_target(
     history.verify(&git)?;
     Ok(Classification {
         head,
-        base,
+        release_history_revision,
         release_history: history.release_history.clone(),
         merge_target: history.merge_target.clone(),
         packages: classes,
@@ -553,9 +553,9 @@ fn classify_one(
     work_tree: &WorkTree,
     groups: &Groups,
     git: &GitRepo,
-    base_sha: &str,
+    history_commit: &str,
     commits: &[String],
-    base_snapshot: &CommitSnapshot,
+    history_snapshot: &CommitSnapshot,
     projected: Option<(&str, &CommitSnapshot)>,
     work_root_doc: &DocumentMut,
     cache: &mut SnapshotCache,
@@ -571,7 +571,7 @@ fn classify_one(
 
     let anticipated = projected.and_then(|(target, snapshot)| {
         anticipated_anchor(
-            base_snapshot
+            history_snapshot
                 .packages
                 .get(name)
                 .map(|package| &package.version),
@@ -581,7 +581,7 @@ fn classify_one(
     });
     let anchor = if let Some(anchor) = anticipated {
         anchor
-    } else if base_snapshot.packages.contains_key(name) {
+    } else if history_snapshot.packages.contains_key(name) {
         let timeline = build_timeline(git, name, commits, cache)?;
         resolve_anchor(name, &timeline)?
     } else {
@@ -595,7 +595,7 @@ fn classify_one(
         // publish".
         verbose.note(|| {
             format!(
-                "{shown}: not published by the baseline {base_sha}, so it is treated as a new \
+                "{shown}: not published by the baseline {history_commit}, so it is treated as a new \
                  package whose first release this branch prepares"
             )
         });
@@ -766,7 +766,7 @@ fn build_timeline(
             presence,
             has_parent,
         });
-        // Stop once we have observed a version different from the base (the
+        // Stop once we have observed a version different from the history endpoint (the
         // resolver only needs the first change plus whether the last entry is
         // a true root). Keep going until a change appears so creation vs
         // shallow can be distinguished.
@@ -1284,18 +1284,14 @@ fn released_in_work_tree(
     })
 }
 
-/// Whether a group member is too new on the base revision to be held to its
-/// group's declared version.
+/// Whether a group member is absent from an assessment predecessor.
 ///
-/// The exemption is base membership, not anchor presence: a reintroduced package
-/// is absent from the base yet still resolves an older anchor, and the documented
-/// rule exempts every member that does not exist on the base revision from
-/// matching its group (packages/cargo-release-plan/docs/design.md, "Version groups"). A member the
-/// base
-/// carries but does not publish does exist there, and may well have been released
-/// before it was withdrawn, so it stays bound to its group.
-fn is_new_on_base(base: &CommitSnapshot, name: &str) -> bool {
-    !base.packages.contains_key(name) && !base.unpublished.contains(name)
+/// Membership, not anchor presence, decides exemption from group matching. A reintroduced
+/// package may retain an older anchor despite being absent from this snapshot. An unpublished
+/// member remains present and bound to its group.
+/// Ref: packages/cargo-release-plan/docs/design.md, "Version groups".
+fn is_new_at_snapshot(snapshot: &CommitSnapshot, name: &str) -> bool {
+    !snapshot.packages.contains_key(name) && !snapshot.unpublished.contains(name)
 }
 
 /// The subset of `paths` the work tree still holds on disk.
@@ -1507,7 +1503,7 @@ fn load_snapshot(
     // `members` globs are written relative to the workspace root, which need not be
     // the git root, while Git yields git-root-relative paths. Rebase before
     // matching, or a nested workspace would find no members and silently classify
-    // every package as absent from the base revision.
+    // every package as absent from the history endpoint.
     let workspace_prefix = git.prefix();
     let workspace = WorkspaceInherit::from_root(&root_doc);
 
@@ -1986,7 +1982,7 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
         return false;
     };
     // The anchor walk starts at the newest commit that released the package: the
-    // base itself when the base releases it, the reintroduction point otherwise.
+    // history endpoint itself when it releases the package, the reintroduction point otherwise.
     // Until an older commit declares a different version the anchor is still
     // undetermined, and a package no commit has released yet needs the whole
     // history to tell creation from truncation.
@@ -2411,14 +2407,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_package_the_base_never_carried_is_new_on_it() {
-        let mut base = CommitSnapshot {
+    fn only_a_package_absent_from_the_snapshot_is_new_on_it() {
+        let mut snapshot = CommitSnapshot {
             packages: BTreeMap::new(),
             unpublished: BTreeSet::new(),
             root_doc: DocumentMut::new(),
             installation: InstallationGraph::default(),
         };
-        base.packages.insert(
+        snapshot.packages.insert(
             "released".to_string(),
             HistoricalPackage {
                 directory: "packages/released".to_string(),
@@ -2429,12 +2425,12 @@ mod tests {
                 has_lockfile_target: false,
             },
         );
-        base.unpublished.insert("withdrawn".to_string());
+        snapshot.unpublished.insert("withdrawn".to_string());
 
-        assert!(!is_new_on_base(&base, "released"));
-        // Withdrawn on the base is still present on it, so the group binds it.
-        assert!(!is_new_on_base(&base, "withdrawn"));
-        assert!(is_new_on_base(&base, "added"));
+        assert!(!is_new_at_snapshot(&snapshot, "released"));
+        // Withdrawn in this snapshot is still present, so the group binds it.
+        assert!(!is_new_at_snapshot(&snapshot, "withdrawn"));
+        assert!(is_new_at_snapshot(&snapshot, "added"));
     }
 
     #[test]
@@ -2879,10 +2875,10 @@ mod tests {
             entry("c2", Some("0.1.0")),
             entry("c1", Some("0.0.9")),
         ]));
-        // Absent at the base and never carried: creation cannot be told from
+        // Absent at the history endpoint and never carried: creation cannot be told from
         // truncation until the walk reaches a root.
         assert!(!can_stop_timeline(&[entry("c2", None), entry("c1", None)]));
-        // Absent at the base but carried earlier: the reintroduction anchor is
+        // Absent at the history endpoint but carried earlier: the reintroduction anchor is
         // still undetermined while the carried version keeps repeating.
         assert!(!can_stop_timeline(&[
             entry("c3", None),

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crp_diag::{Verbose, quote_path};
 use ohno::AppError;
 
-use crate::plan::{IncrementLevel, PlanIncrement};
+use crate::plan::{PlanIncrement, VersionBump};
 use crate::propose::generate::{Proposal, record_state};
 
 impl Proposal<'_> {
@@ -127,7 +127,7 @@ impl Proposal<'_> {
         });
         PlanIncrement {
             name: name.to_owned(),
-            level: None,
+            bump: None,
             version: Some(highest.to_string()),
         }
     }
@@ -136,7 +136,7 @@ impl Proposal<'_> {
 fn patch_alignment(name: &str) -> PlanIncrement {
     PlanIncrement {
         name: name.to_owned(),
-        level: Some(IncrementLevel::Patch.to_string()),
+        bump: Some(VersionBump::Patch.to_string()),
         version: None,
     }
 }
@@ -165,7 +165,7 @@ mod tests {
         );
         assert_eq!(increment.name, "a");
         assert_eq!(increment.version.as_deref(), Some("1.1.0"));
-        assert!(increment.level.is_none());
+        assert!(increment.bump.is_none());
     }
 
     #[test]
@@ -185,7 +185,7 @@ mod tests {
             Verbose::new(true, &crp_diag::Discard),
         );
         assert_eq!(increment.name, "a");
-        assert_eq!(increment.level.as_deref(), Some("patch"));
+        assert_eq!(increment.bump.as_deref(), Some("patch"));
         assert!(increment.version.is_none());
     }
 
@@ -203,7 +203,7 @@ mod tests {
             Verbose::new(true, &crp_diag::Discard),
         );
         assert_eq!(increment.name, "a");
-        assert_eq!(increment.level.as_deref(), Some("patch"));
+        assert_eq!(increment.bump.as_deref(), Some("patch"));
         assert!(increment.version.is_none());
     }
 }

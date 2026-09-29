@@ -57,8 +57,8 @@ pub struct Inputs {
 }
 
 impl Inputs {
-    pub fn capture(manifest: &Path, base: Option<&str>) -> Result<Self, AppError> {
-        Self::capture_with_target(manifest, base, None)
+    pub fn capture(manifest: &Path, release_history: Option<&str>) -> Result<Self, AppError> {
+        Self::capture_with_target(manifest, release_history, None)
     }
 
     pub fn capture_with_target(
@@ -690,7 +690,7 @@ fn append_field(bytes: &mut Vec<u8>, field: &[u8]) {
 #[display("prepared release inputs are stale; regenerate with prepare and preview")]
 pub(crate) struct StaleInputs;
 
-/// A plain expansion has not captured the resolution effects required for application.
+/// Application requires the complete source and file effects captured by preview.
 #[ohno::error]
 #[display("apply requires the unchanged resolved plan produced by preview")]
 pub(crate) struct ResolutionRequired;
@@ -867,6 +867,23 @@ mod tests {
     }
 
     #[test]
+    fn uncaptured_plans_are_rejected_before_acquisition_in_both_application_modes() {
+        for stage in [PlanStage::Proposed, PlanStage::Expanded] {
+            let plan = PlanFile::new(stage, Vec::new());
+            for dry_run in [false, true] {
+                let error = apply_resolved(
+                    &plan,
+                    Path::new("absent/Cargo.toml"),
+                    dry_run,
+                    Verbose::new(false, &crp_diag::Discard),
+                )
+                .unwrap_err();
+                assert!(error.find_source::<ResolutionRequired>().is_some());
+            }
+        }
+    }
+
+    #[test]
     fn fields_use_fixed_width_little_endian_lengths() {
         let mut bytes = Vec::new();
         append_field(&mut bytes, b"abc");
@@ -991,14 +1008,13 @@ mod tests {
 
     #[test]
     fn unsupported_artifact_schema_precedes_body_validation() {
-        let error =
-            parse_artifact::<PlanFile>(Path::new("prepared.json"), r#"{"schema_version":3}"#)
-                .unwrap_err();
-        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
-        let future = serde_json::json!({"schema_version": SCHEMA_VERSION + 1});
-        let error = parse_artifact::<PlanFile>(Path::new("prepared.json"), &future.to_string())
-            .unwrap_err();
-        assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+        for schema_version in [SCHEMA_VERSION - 1, SCHEMA_VERSION + 1] {
+            let artifact = serde_json::json!({"schema_version": schema_version});
+            let error =
+                parse_artifact::<PlanFile>(Path::new("prepared.json"), &artifact.to_string())
+                    .unwrap_err();
+            assert!(error.find_source::<UnsupportedPlanSchemaError>().is_some());
+        }
         let current = serde_json::json!({"schema_version": SCHEMA_VERSION});
         let error = parse_artifact::<PlanFile>(Path::new("prepared.json"), &current.to_string())
             .unwrap_err();

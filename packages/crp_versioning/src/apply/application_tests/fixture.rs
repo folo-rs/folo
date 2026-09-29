@@ -1,28 +1,24 @@
-//! Synthetic plans, manifests and injected failures for application behavior tests.
+//! Synthetic manifests and injected acquisition failures for edit calculation.
 
 use crp_workspace::lockfile::InstallationGraph;
 use crp_workspace::metadata::{ExactDependency, VersionTarget};
-use serde_json::json;
 
 use super::super::*;
-use crate::plan::PlanIncrement;
 
 /// Distinguishes injected acquisition/application failures from successful empty work.
 #[ohno::error]
 pub(crate) struct ApplicationFailure;
 
-pub(crate) fn failed_manifest_application(failure: Result<String, AppError>) -> AppError {
+pub(crate) fn failed_edit_computation(failure: Result<String, AppError>) -> AppError {
     let originals = manifests();
     let mut failure = Some(failure);
     let mut reads = Vec::new();
     let paths = unique_paths();
     let last = paths.last().unwrap();
-    let error = apply_plan(
-        &plan(PlanStage::Proposed, false),
-        false,
+    let error = compute_edits_with(
+        &work_tree(),
+        &versions("0.2.0"),
         Verbose::new(false, &crp_diag::Discard),
-        |_, _| panic!(),
-        || Ok(work_tree()),
         |path| {
             reads.push(path.to_path_buf());
             if path == last {
@@ -31,41 +27,11 @@ pub(crate) fn failed_manifest_application(failure: Result<String, AppError>) -> 
                 Ok(originals.get(path).unwrap().clone())
             }
         },
-        |_| panic!(),
     )
-    .unwrap_err();
+    .err()
+    .unwrap();
     assert_eq!(reads, paths);
     error
-}
-
-pub(crate) fn plan(stage: PlanStage, captured: bool) -> PlanFile {
-    let mut plan = PlanFile::new(
-        stage,
-        ["root", "api"]
-            .into_iter()
-            .map(|name| PlanIncrement {
-                name: name.to_owned(),
-                level: None,
-                version: Some("0.2.0".to_owned()),
-            })
-            .collect(),
-    );
-    if captured {
-        // Dispatch forwards capture contents unchanged; the captured-state validator owns them.
-        plan.resolved = Some(
-            serde_json::from_value(json!({
-                "inputs": {
-                    "root": "workspace", "manifest": "Cargo.toml",
-                    "head": "head", "release_history": "base", "release_history_revision": "main",
-                    "index": "", "paths": [], "digest": "inputs"
-                },
-                "files": [], "final_digest": "candidate", "versions": {},
-                "evidence_manifest_path": "candidate/Cargo.toml"
-            }))
-            .unwrap(),
-        );
-    }
-    plan
 }
 
 pub(crate) fn versions(version: &str) -> ResolvedVersions {
@@ -157,17 +123,4 @@ pub(crate) fn updated_manifests() -> BTreeMap<PathBuf, String> {
         .to_owned(),
     );
     updated
-}
-
-pub(crate) fn manifest_only_summary(dry_run: bool) -> String {
-    if dry_run {
-        let mut summary = "Dry run: 3 manifests would change".to_owned();
-        for path in &unique_paths()[..3] {
-            write!(summary, "\n  {}", quote_path(&path.to_string_lossy())).unwrap();
-        }
-        summary.push_str("; the workspace lockfile would be left untouched");
-        summary
-    } else {
-        "Updated 3 manifests and left the workspace lockfile untouched; use prepare and preview for a resolved release plan".to_owned()
-    }
 }

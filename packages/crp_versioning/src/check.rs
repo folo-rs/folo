@@ -37,7 +37,7 @@ pub enum CheckFormat {
 #[derive(Clone, Copy, Debug)]
 pub struct CheckRequest<'a> {
     /// Actual committed release history; absence uses the remote-default-branch selection.
-    pub base: Option<&'a str>,
+    pub release_history: Option<&'a str>,
     /// Cargo manifest identifying the workspace to assess.
     pub manifest_path: &'a Path,
     /// Diagnostic rendering format, without changing the verdict.
@@ -78,7 +78,14 @@ pub fn check_with_target(
     verbose: Verbose<'_>,
 ) -> Result<CheckOutcome, AppError> {
     let (passed, message, warnings) = check_workspace(
-        || classify_with_target(request.manifest_path, request.base, merge_target, verbose),
+        || {
+            classify_with_target(
+                request.manifest_path,
+                request.release_history,
+                merge_target,
+                verbose,
+            )
+        },
         request.format,
         request.verify_packaging,
         verify_packaging_rules,
@@ -103,7 +110,7 @@ fn check_workspace(
     let mut message = render_workspace_diagnostics(
         &classification.packages,
         &classification.groups,
-        &classification.base,
+        &classification.release_history_revision,
         format,
         &classification.work_tree.version_targets,
         &classification.work_tree.exact_dependencies,
@@ -146,7 +153,7 @@ fn default_success_message(passed: bool, message: &str) -> Option<&'static str> 
 fn render_workspace_diagnostics(
     packages: &[PackageClass],
     groups: &BTreeMap<String, GroupVerdict>,
-    base: &str,
+    release_history: &str,
     format: CheckFormat,
     version_targets: &[VersionTarget],
     exact_dependencies: &[ExactDependency],
@@ -197,7 +204,7 @@ fn render_workspace_diagnostics(
         let text = format!(
             "{}: needs-increment since {anchor}; {changed}.{group_text} {}",
             quote_path(&package.name),
-            remedy(base)
+            remedy(release_history)
         );
         if format == CheckFormat::Github {
             let file = os_path(&package.manifest_path);
@@ -228,7 +235,7 @@ fn render_workspace_diagnostics(
         let text = format!(
             "group {}: members declare different versions ({listed}). {}",
             quote_path(name),
-            remedy(base)
+            remedy(release_history)
         );
         if format == CheckFormat::Github {
             let file = verdict
@@ -270,7 +277,7 @@ fn render_workspace_diagnostics(
                 quote_path(&dependency.name),
                 quote_path(&dependency.req),
                 quote_path(&expected),
-                remedy(base)
+                remedy(release_history)
             );
             if format == CheckFormat::Github {
                 let file = os_path(&package.manifest_path);
@@ -305,7 +312,7 @@ fn render_workspace_diagnostics(
             quote_path(&dependency.requirement),
             quote_path(&dependency.location),
             quote_path(&expected),
-            remedy(base)
+            remedy(release_history)
         );
         if format == CheckFormat::Github {
             let file = os_path(&dependency.manifest_path);
@@ -352,7 +359,7 @@ fn render_workspace_diagnostics(
                 quote_path(&dependency.name),
                 anchor.version,
                 broken.declared_version,
-                remedy(base)
+                remedy(release_history)
             );
             if format == CheckFormat::Github {
                 let file = os_path(&package.manifest_path);
@@ -373,7 +380,7 @@ fn render_workspace_diagnostics(
 fn render_diagnostics(
     packages: &[PackageClass],
     groups: &BTreeMap<String, GroupVerdict>,
-    base: &str,
+    release_history: &str,
     format: CheckFormat,
 ) -> String {
     let version_targets = packages
@@ -385,7 +392,14 @@ fn render_diagnostics(
             publishable: true,
         })
         .collect::<Vec<_>>();
-    render_workspace_diagnostics(packages, groups, base, format, &version_targets, &[])
+    render_workspace_diagnostics(
+        packages,
+        groups,
+        release_history,
+        format,
+        &version_targets,
+        &[],
+    )
 }
 
 /// Whether the package's declared version is a semver-incompatible move from its last release.
@@ -435,20 +449,17 @@ fn escape_property(value: &str) -> String {
 
 /// The remediation sentence appended to every gating diagnostic.
 ///
-/// The self-contained path comes first so the message stays actionable without
-/// any tooling beyond this binary; the skill is named as the assisted route.
-/// The history ref is spelled out separately from the copyable command because it can
+/// Planning belongs to the skill. The history ref is spelled out separately from its
+/// preparation command because it can
 /// come from a repository-controlled ref name and diagnostic quoting is not
 /// shell quoting.
-fn remedy(base: &str) -> String {
+fn remedy(release_history: &str) -> String {
     format!(
-        "Run `cargo release-plan prepare --output <dir> --release-history <history>` to prepare offline \
-         resolution and inspect the changes. Write a proposed plan, then run \
-         `cargo release-plan preview --prepared <prepared.json> --plan <proposed.json> \
-         --output <preview-dir>` to resolve its complete effects before running \
-         `cargo release-plan apply --plan <resolved-plan.json>`, or run the \
-         {INCREMENT_VERSIONS_SKILL} skill. Set `<history>` to the release history reported here: {}.",
-        quote_path(base)
+        "Run the {INCREMENT_VERSIONS_SKILL} skill to assess semantic impact, generate a proposal, \
+         preview its complete effects, and apply the resolved plan. Its preparation uses \
+         `cargo release-plan prepare --output <dir> --release-history <history>`. \
+         Set `<history>` to the release history reported here: {}.",
+        quote_path(release_history)
     )
 }
 
@@ -589,7 +600,7 @@ mod tests {
     assert_impl_all!(CheckFormat: UnwindSafe, RefUnwindSafe);
 
     /// Stands in for whichever revision a run classified against.
-    const BASE: &str = "origin/main";
+    const RELEASE_HISTORY: &str = "origin/main";
 
     #[test]
     fn command_derives_verdict_and_runs_only_selected_packaging_probe() {
@@ -600,7 +611,7 @@ mod tests {
                     let expected = render_workspace_diagnostics(
                         &data.packages,
                         &data.groups,
-                        &data.base,
+                        &data.release_history_revision,
                         format,
                         &data.work_tree.version_targets,
                         &data.work_tree.exact_dependencies,
@@ -677,8 +688,8 @@ mod tests {
     }
 
     #[test]
-    fn the_remedy_names_the_base_the_run_used() {
-        // Following the remediation against a different base would report a
+    fn the_remedy_names_the_release_history_the_run_used() {
+        // Following the remediation against a different release history would report a
         // different set of packages than the one that failed.
         let package = failing("demo", Vec::new());
 
@@ -689,26 +700,27 @@ mod tests {
     }
 
     #[test]
-    fn remedy_keeps_a_repository_controlled_base_out_of_commands() {
-        let base = "release; echo injected";
+    fn remedy_keeps_a_repository_controlled_history_out_of_commands() {
+        let release_history = "release; echo injected";
 
-        let text = remedy(base);
+        let text = remedy(release_history);
         let prepare_command = text.split('`').nth(1).unwrap();
 
         assert_eq!(
             prepare_command,
             "cargo release-plan prepare --output <dir> --release-history <history>"
         );
-        assert!(!prepare_command.contains(base));
+        assert!(!prepare_command.contains(release_history));
     }
 
     #[test]
-    fn remedy_previews_resolution_before_applying_the_resolved_plan() {
-        let text = remedy(BASE);
-        let preview = text.find("cargo release-plan preview").unwrap();
-        let apply = text
-            .find("cargo release-plan apply --plan <resolved-plan.json>")
-            .unwrap();
+    fn remedy_routes_planning_through_the_skill_and_preview() {
+        let text = remedy(RELEASE_HISTORY);
+        assert!(text.contains(&format!("Run the {INCREMENT_VERSIONS_SKILL} skill")));
+        let proposal = text.find("generate a proposal").unwrap();
+        let preview = text.find("preview its complete effects").unwrap();
+        let apply = text.find("apply the resolved plan").unwrap();
+        assert!(proposal < preview);
         assert!(preview < apply);
     }
 
@@ -816,7 +828,12 @@ mod tests {
             vec![dependency("lib_impl", "^1.1.0", true)],
         );
 
-        let text = render_diagnostics(&[shell, library], &BTreeMap::new(), BASE, CheckFormat::Text);
+        let text = render_diagnostics(
+            &[shell, library],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Text,
+        );
 
         assert_eq!(text, "");
     }
@@ -835,7 +852,7 @@ mod tests {
         let text = render_diagnostics(
             &[consumer, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -856,7 +873,7 @@ mod tests {
         let text = render_diagnostics(
             &[consumer, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -878,7 +895,7 @@ mod tests {
         let text = render_diagnostics(
             &[dependent, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -905,7 +922,7 @@ mod tests {
             let text = render_diagnostics(
                 &[dependent, library.clone()],
                 &BTreeMap::new(),
-                BASE,
+                RELEASE_HISTORY,
                 CheckFormat::Text,
             );
 
@@ -933,7 +950,7 @@ mod tests {
         let text = render_diagnostics(
             &[dependent, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -958,7 +975,7 @@ mod tests {
         let text = render_diagnostics(
             &[dependent, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -984,7 +1001,7 @@ mod tests {
                 with_dependencies("lib", Version::new(1, 1, 0), Version::new(1, 1, 0), vec![]),
             ],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Github,
         );
         assert!(
@@ -1006,7 +1023,7 @@ mod tests {
                 with_dependencies("lib", Version::new(2, 0, 0), Version::new(1, 1, 0), vec![]),
             ],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Github,
         );
         assert!(
@@ -1034,7 +1051,7 @@ mod tests {
                 with_dependencies("lib", Version::new(1, 1, 0), Version::new(1, 1, 0), vec![]),
             ],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -1055,7 +1072,7 @@ mod tests {
                 vec![dependency("absent", "^1.0.0", true)],
             )],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -1081,7 +1098,7 @@ mod tests {
         let text = render_diagnostics(
             &[newcomer, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -1104,7 +1121,7 @@ mod tests {
         let text = render_diagnostics(
             &[dependent, library],
             &BTreeMap::new(),
-            BASE,
+            RELEASE_HISTORY,
             CheckFormat::Text,
         );
 
@@ -1140,7 +1157,12 @@ mod tests {
             PathBuf::from("packages/demo/Cargo.toml"),
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
+        let text = render_diagnostics(
+            &[package],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Text,
+        );
 
         assert_eq!(text, "");
     }
@@ -1160,7 +1182,12 @@ mod tests {
             ],
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
+        let text = render_diagnostics(
+            &[package],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Text,
+        );
 
         assert!(
             text.contains("src/lib.rs (and related paths) changed"),
@@ -1177,7 +1204,12 @@ mod tests {
             }],
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
+        let text = render_diagnostics(
+            &[package],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Text,
+        );
 
         assert!(
             text.contains("package.rust-version (and related paths) changed"),
@@ -1193,7 +1225,12 @@ mod tests {
     fn a_package_without_changed_items_still_reports() {
         let package = failing("demo", Vec::new());
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Text);
+        let text = render_diagnostics(
+            &[package],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Text,
+        );
 
         assert!(text.contains("released content changed"), "{text}");
     }
@@ -1214,7 +1251,7 @@ mod tests {
             ),
         )]);
 
-        let text = render_diagnostics(&[package], &groups, BASE, CheckFormat::Text);
+        let text = render_diagnostics(&[package], &groups, RELEASE_HISTORY, CheckFormat::Text);
 
         assert!(
             text.contains("Group g also includes demo, sibling."),
@@ -1249,7 +1286,7 @@ mod tests {
             ),
         )]);
 
-        let text = render_diagnostics(&[member], &groups, BASE, CheckFormat::Text);
+        let text = render_diagnostics(&[member], &groups, RELEASE_HISTORY, CheckFormat::Text);
 
         assert!(text.contains("demo@0.2.0"), "{text}");
         assert!(text.contains("absent"), "{text}");
@@ -1295,8 +1332,9 @@ mod tests {
             Version::new(1, 4, 0),
             vec![],
         )];
-        let render =
-            |format| render_workspace_diagnostics(&packages, &groups, BASE, format, &targets, &[]);
+        let render = |format| {
+            render_workspace_diagnostics(&packages, &groups, RELEASE_HISTORY, format, &targets, &[])
+        };
         let text = render(CheckFormat::Text);
         for member in &members {
             assert!(text.contains(&format!("{member}@{}", declared.get(member).unwrap())));
@@ -1342,7 +1380,7 @@ mod tests {
             render_workspace_diagnostics(
                 &packages,
                 &BTreeMap::new(),
-                BASE,
+                RELEASE_HISTORY,
                 format,
                 &targets,
                 &dependencies,
@@ -1381,7 +1419,12 @@ mod tests {
     fn github_format_precedes_each_diagnostic_with_an_annotation() {
         let package = failing("demo", Vec::new());
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Github);
+        let text = render_diagnostics(
+            &[package],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Github,
+        );
 
         let mut lines = text.lines();
         assert!(
@@ -1425,7 +1468,12 @@ mod tests {
             }],
         );
 
-        let text = render_diagnostics(&[package], &BTreeMap::new(), BASE, CheckFormat::Github);
+        let text = render_diagnostics(
+            &[package],
+            &BTreeMap::new(),
+            RELEASE_HISTORY,
+            CheckFormat::Github,
+        );
 
         assert_eq!(text.lines().count(), 2, "{text}");
         assert!(text.contains(r#""src/\n::error::spoofed""#), "{text}");

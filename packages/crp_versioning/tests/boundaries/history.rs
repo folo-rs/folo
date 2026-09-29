@@ -6,11 +6,10 @@ use std::path::{Path, PathBuf};
 use crp_diag::{Discard, Stderr, Verbose};
 use crp_versioning::apply::run_apply;
 use crp_versioning::classify::{Classification, PackageClass, PackageStatus, classify_with_target};
-use crp_versioning::expand::run_expand;
 use crp_versioning::history::resolve_merge_target;
 use crp_versioning::plan::SCHEMA_VERSION;
 use crp_versioning::preview::{run_prepare_with_target, run_preview};
-use crp_versioning::propose::run_propose;
+use crp_versioning::propose::{DECISION_SCHEMA_VERSION, run_propose};
 use crp_versioning::report::{read_report, run_report_with_target};
 use crp_versioning::resolved::{Inputs, ResolvedState, run_verify_preview};
 use crp_versioning::{CheckFormat, CheckRequest, check_with_target};
@@ -522,8 +521,8 @@ fn prepared_proposal_preview_and_apply_preserve_history_target_and_graph_provena
     fs::write(
         &decisions,
         serde_json::to_vec(&json!({
-            "schema_version":1,
-            "changes":[{"name":"api","level":"patch"},{"name":"catchup","level":"patch"}]
+            "schema_version": DECISION_SCHEMA_VERSION,
+            "changes":[{"name":"api","impact":"patch"},{"name":"catchup","impact":"patch"}]
         }))
         .unwrap(),
     )
@@ -591,6 +590,7 @@ fn prepared_proposal_preview_and_apply_preserve_history_target_and_graph_provena
             .as_str()
             .unwrap(),
     );
+    assert_captured_dry_run_preserves_live_files(&fixture, &preview.join("plan.json"), &resolved);
     run_verify_preview(&preview.join("plan.json"), &candidate, quiet()).unwrap();
     verify_retained_target_binding(&fixture, &resolved, &candidate);
 
@@ -616,7 +616,7 @@ fn prepared_proposal_preview_and_apply_preserve_history_target_and_graph_provena
     );
     let check = check_with_target(
         &CheckRequest {
-            base: Some("release-history"),
+            release_history: Some("release-history"),
             manifest_path: &fixture.manifest(),
             format: CheckFormat::Text,
             verify_packaging: false,
@@ -629,14 +629,12 @@ fn prepared_proposal_preview_and_apply_preserve_history_target_and_graph_provena
     // A report-derived follow-up proposal must retain adequate pending increments.
     let retained = output.path().join("retained-proposal.json");
     run_propose(&fresh.join("report.json"), &decisions, &retained, quiet()).unwrap();
-    let expanded = output.path().join("retained-expanded.json");
-    run_expand(&retained, &expanded, &fixture.manifest(), true, quiet()).unwrap();
-    let expanded = read(&expanded);
-    assert_retained_increments(&expanded, &resolved);
+    let retained = read(&retained);
+    assert_retained_increments(&retained, &resolved);
 
-    assert_eq!(expanded.get("merge_target").unwrap(), &fixture.parent_final);
+    assert_eq!(retained.get("merge_target").unwrap(), &fixture.parent_final);
     assert_eq!(
-        expanded.get("release_history").unwrap(),
+        retained.get("release_history").unwrap(),
         &fixture.release_history
     );
     let mut malformed = resolved;
@@ -663,6 +661,32 @@ fn prepared_proposal_preview_and_apply_preserve_history_target_and_graph_provena
     .unwrap_err();
 }
 
+fn assert_captured_dry_run_preserves_live_files(
+    fixture: &HistoryFixture,
+    plan_path: &Path,
+    plan: &Value,
+) {
+    let live_files: Vec<_> = plan
+        .pointer("/resolved/files")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| {
+            let path = fixture
+                .repository
+                .path()
+                .join(file.get("path").unwrap().as_str().unwrap());
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    run_apply(plan_path, true, &fixture.manifest(), quiet()).unwrap();
+    for (path, bytes) in live_files {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
 fn verify_retained_target_binding(fixture: &HistoryFixture, plan: &Value, candidate: &Path) {
     let retained_state: ResolvedState =
         serde_json::from_value(plan.get("resolved").unwrap().clone()).unwrap();
@@ -680,8 +704,8 @@ fn verify_retained_target_binding(fixture: &HistoryFixture, plan: &Value, candid
     retained_state.verify_candidate(candidate).unwrap();
 }
 
-fn assert_retained_increments(expanded: &Value, resolved: &Value) {
-    for increment in expanded.get("increments").unwrap().as_array().unwrap() {
+fn assert_retained_increments(proposal: &Value, resolved: &Value) {
+    for increment in proposal.get("increments").unwrap().as_array().unwrap() {
         let name = increment.get("name").unwrap().as_str().unwrap();
         assert_eq!(
             increment.get("version").unwrap(),

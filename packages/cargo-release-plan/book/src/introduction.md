@@ -41,7 +41,7 @@ outside this process.
 
 | Participant | Responsibility |
 | --- | --- |
-| Author or authoring agent | Understand consumer promises and choose `breaking`, `nonbreaking` or `patch` semantic decisions. |
+| Author or authoring agent | Understand consumer promises and choose `breaking`, `nonbreaking` or `patch` semantic impacts. |
 | `cargo-release-plan` | Collect release evidence, enforce version relationships, resolve and apply plans, and reconcile publication. |
 | API compatibility checker (`cargo-semver-checks`) | Detect supported Rust API changes; its result is evidence, not a complete behavioral assessment. |
 | `increment-versions` skill | Guide an agent through the tool's planning operations and explain its decisions. |

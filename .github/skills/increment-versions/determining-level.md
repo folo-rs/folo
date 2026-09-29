@@ -1,11 +1,11 @@
-# Choosing a semantic decision
+# Choosing a semantic impact
 
 Use this guide for every publishable package in the release-plan report. The decision concerns
 the complete released change since the package's version anchor, including changes already
 pending release.
 
 The skill's [assessment model](SKILL.md#assessment-model) defines release history,
-the merge target, package anchors, semantic decisions and version plans.
+the merge target, package anchors, semantic impacts and version plans.
 
 ## Evidence to inspect
 
@@ -78,7 +78,7 @@ does.
 Choose `nonbreaking` for a meaningful compatible capability: a new API, supported input,
 command, output option, or documented behavior that existing consumers can ignore.
 
-Do not choose this level merely because implementation volume is large. The level describes
+Do not choose this impact merely because implementation volume is large. The impact describes
 the consumer-visible change.
 
 ## Patch
@@ -90,7 +90,7 @@ adding a meaningful consumer-facing capability.
 A direct `[package]` metadata change or an inherited `[workspace.package]` change establishes
 at least `patch` for every affected package. This rule applies to every package metadata field,
 including `rust-version` (the minimum supported Rust version). Combine this minimum with the
-package's other evidence and choose the strongest applicable semantic decision.
+package's other evidence and choose the strongest applicable semantic impact.
 
 Treat dependency and feature-table changes separately: analyze the consumer impact of the
 resulting dependency or feature behavior rather than assuming every `Cargo.toml` edit is
@@ -114,16 +114,16 @@ this by omitting the package from `decisions.json`.
 
 Membership of a version group does not change this. A group whose members declare different
 versions is realigned mechanically when the plan is generated, even when `consistent` is true
-because a member absent from the comparison history is exempt from the consistency verdict.
+because a member absent from the comparison history is exempt from that consistency check.
 Alignment normally uses the highest version any publishable or non-publishable member declares.
 The group is patch-incremented when exact alignment would rewrite a dependency inside a
 publishable member that otherwise kept a published version, or when the highest version is not a
 plain SemVer triplet. The tooling chooses the realignment. Judge each publishable member on its
 own released changes and choose no increment when it has none. Do not assess source changes in
-`non_publishable_packages` or assign those non-publishable version targets a semantic decision.
+`non_publishable_packages` or assign those non-publishable packages a semantic impact.
 
 A publishable package in `report.json.packages` that has no anchor has no comparison release
-for this assessment. Do not assign a semantic decision merely because it is new to the release
+for this assessment. Do not assign a semantic impact merely because it is new to the release
 branch, and do not infer that it has never reached crates.io. Configured mode follows the
 [first-publication handoff](SKILL.md#first-publication-handoff): a maintainer manually
 publishes its bootstrap version before the first merge and configures Trusted Publishing.

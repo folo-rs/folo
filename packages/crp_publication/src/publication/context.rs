@@ -87,7 +87,7 @@ pub const CONTEXT_SCHEMA_VERSION: u32 = 2;
 pub fn release_context(
     manifest: &Path,
     configured_path: Option<&Path>,
-    base: Option<&str>,
+    release_history: Option<&str>,
     merge_target: Option<&str>,
     verbose: Verbose<'_>,
 ) -> Result<String, AppError> {
@@ -109,8 +109,8 @@ pub fn release_context(
                 InvalidManifest::new("release context paths must be UTF-8".to_owned()).into()
             })
     };
-    let release_history = match base {
-        Some(base) => git.rev_parse(&format!("{base}^{{commit}}"))?,
+    let release_history = match release_history {
+        Some(release_history) => git.rev_parse(&format!("{release_history}^{{commit}}"))?,
         None => fetch_release_line(git.root(), &config)?,
     };
     let merge_target = resolve_merge_target(&git, &release_history, merge_target)?;

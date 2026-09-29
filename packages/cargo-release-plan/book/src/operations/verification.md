@@ -15,7 +15,7 @@ the remote state you depend on.
 - Any dry-run, blocked, failed or unknown outcome remains distinguishable from
   completed delivery.
 
-Non-publishable version targets do not appear as registry requests. Packages
+Non-publishable packages do not appear as registry requests. Packages
 unchanged against their merged anchors still do.
 
 ## Read outcomes correctly
