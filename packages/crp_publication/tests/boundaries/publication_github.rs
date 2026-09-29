@@ -413,7 +413,7 @@ pkg-fmt="zip"
     miri,
     ignore = "Uses the GitHub client against a loopback issue service"
 )]
-fn failure_issue_is_run_qualified_and_reused_after_retry() {
+fn installation_token_failure_issue_is_run_qualified_and_reused_after_retry() {
     let issue = Arc::new(Mutex::new(None::<Value>));
     let methods = Arc::new(Mutex::new(Vec::new()));
     let service = HttpService::new({
@@ -422,13 +422,24 @@ fn failure_issue_is_run_qualified_and_reused_after_retry() {
         move |_, mut request| {
             let path = request.url().to_owned();
             let body = match (request.method(), path.as_str()) {
-                (&Method::Get, "/user") => json!({"login":"fixture-owner"}),
+                (&Method::Get, "/user") => {
+                    request
+                        .respond(
+                            Response::from_string(
+                                json!({"message":"Resource not accessible by integration"})
+                                    .to_string(),
+                            )
+                            .with_status_code(StatusCode(403)),
+                        )
+                        .unwrap();
+                    return;
+                }
                 (&Method::Get, "/repos/example/releases") => {
                     json!({"full_name":"example/releases"})
                 }
                 (
                     &Method::Get,
-                    "/repos/example/releases/issues?state=all&creator=fixture-owner&per_page=100&page=1",
+                    "/repos/example/releases/issues?state=all&creator=github-actions[bot]&per_page=100&page=1",
                 ) => {
                     // Fill the first page to require pagination; otherwise matching author,
                     // title and marker still cannot make pull-request records reusable issues.
@@ -437,16 +448,23 @@ fn failure_issue_is_run_qualified_and_reused_after_retry() {
                             .map(|index| json!({
                                 "number":index,"title":"Release failed: workflow run 123",
                                 "body":"<!-- cargo-release-plan:123:1 -->","pull_request":{},
-                                "user":{"login":"fixture-owner"}
+                                "user":{"login":"github-actions[bot]"}
                             }))
                             .collect::<Vec<_>>()
                     )
                 }
                 (
                     &Method::Get,
-                    "/repos/example/releases/issues?state=all&creator=fixture-owner&per_page=100&page=2",
+                    "/repos/example/releases/issues?state=all&creator=github-actions[bot]&per_page=100&page=2",
                 ) => {
-                    json!(issue.lock().unwrap().iter().cloned().collect::<Vec<_>>())
+                    // Matching text from another creator never becomes this bot's report.
+                    let mut candidates = vec![json!({
+                        "number":42,"title":"Release failed: workflow run 123",
+                        "body":"<!-- cargo-release-plan:123:1 -->",
+                        "user":{"login":"somebody-else"}
+                    })];
+                    candidates.extend(issue.lock().unwrap().iter().cloned());
+                    json!(candidates)
                 }
                 (&Method::Post, "/repos/example/releases/issues")
                 | (&Method::Patch, "/repos/example/releases/issues/7") => {
@@ -472,7 +490,7 @@ fn failure_issue_is_run_qualified_and_reused_after_retry() {
                         .insert("number".to_owned(), json!(7));
                     body.as_object_mut()
                         .unwrap()
-                        .insert("user".to_owned(), json!({"login":"fixture-owner"}));
+                        .insert("user".to_owned(), json!({"login":"github-actions[bot]"}));
                     *issue.lock().unwrap() = Some(body.clone());
                     body
                 }
@@ -502,6 +520,7 @@ fn failure_issue_is_run_qualified_and_reused_after_retry() {
         issue.get("title").unwrap(),
         "Release failed: workflow run 123"
     );
+    assert_eq!(issue.get("state").unwrap(), "open");
     assert!(
         issue
             .get("body")
