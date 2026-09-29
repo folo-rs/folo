@@ -139,7 +139,7 @@ struct PublishRequest {
 }
 
 /// Cargo's wire-level failures distinguish unsupported operations from invalid requests.
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum CredentialFailure {
     OperationNotSupported,

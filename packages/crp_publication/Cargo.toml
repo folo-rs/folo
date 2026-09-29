@@ -45,6 +45,7 @@ tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["parse", "display", "serde"] }
 
 [dev-dependencies]
+crp-publication-test-helper = { path = "../crp-publication-test-helper" }
 crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 crp_workspace = { path = "../crp_workspace", features = ["private-test-util"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
@@ -53,10 +54,6 @@ static_assertions = { workspace = true }
 tar = { workspace = true }
 testing = { path = "../testing" }
 tiny_http = { workspace = true }
-
-[[example]]
-name = "credential-provider"
-path = "tests/boundaries/publication/credential_provider.rs"
 
 [lints]
 workspace = true

@@ -372,7 +372,10 @@ Registry-publication boundary tests exercise real Cargo and its credential-provi
 protocol through the production provider against an isolated sparse registry and identity service.
 Cargo's own test-only crates.io transport routing preserves the canonical credential identity
 without rewriting requests or relaxing production registry validation. The fixture links the
-provider as a development-only example, built once per boundary-test process.
+provider through the nonpublished
+[`crp-publication-test-helper`](../../crp-publication-test-helper/docs/implementation.md),
+built once per boundary-test process. The path-only development dependency keeps that helper
+in the publication component's test dependency graph and out of published archives.
 Tests cover preflight and verification ordering,
 archive and lockfile identity checks, per-upload credentials and partial
 publication without production registry access. Protocol and fixture mechanics

@@ -1199,6 +1199,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
+name = "crp-publication-test-helper"
+version = "0.0.0"
+dependencies = [
+ "crp_diag",
+ "crp_publication",
+ "mutants",
+ "ohno",
+ "serde_json",
+ "testing",
+]
+
+[[package]]
 name = "crp_diag"
 version = "0.5.2"
 dependencies = [
@@ -1234,6 +1246,7 @@ dependencies = [
 name = "crp_publication"
 version = "0.5.2"
 dependencies = [
+ "crp-publication-test-helper",
  "crp_diag",
  "crp_native",
  "crp_versioning",

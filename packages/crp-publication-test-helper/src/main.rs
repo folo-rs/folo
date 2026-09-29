@@ -1,4 +1,4 @@
-//! Links the production provider into the local-registry Cargo boundary fixture.
+//! Runs the production provider for the local-registry Cargo boundary fixture.
 //!
 //! Requests are recorded without rewriting them. Cargo's own local crates.io routing retains
 //! the canonical credential identity; decoding, authority checks and leases remain production code.

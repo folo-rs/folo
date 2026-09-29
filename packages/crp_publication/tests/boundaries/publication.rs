@@ -4,9 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{Cursor, Read};
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flate2::read::GzDecoder;
@@ -408,7 +407,7 @@ fn cargo(fixture: &Repository, args: &[&str]) {
                 PublicationOutput::new("1.0.0", false, Arc::new(crp_diag::Discard))
             ).unwrap()
         ).unwrap();
-        session.configure(&mut command, credential_provider()).unwrap();
+        session.configure(&mut command, crp_publication_test_helper::executable()).unwrap();
         (session, upload_count)
     });
     let output = command.output().unwrap();
@@ -434,55 +433,6 @@ fn cargo(fixture: &Repository, args: &[&str]) {
         revoked.sort();
         assert_eq!(tokens, revoked);
     }
-}
-
-fn credential_provider() -> &'static PathBuf {
-    static PROVIDER: OnceLock<PathBuf> = OnceLock::new();
-    PROVIDER.get_or_init(|| {
-        // Cargo links the fixture against the exact production component and its dependencies.
-        // Build once per boundary-test process, without selecting hashed rlib names.
-        // An absolute target path avoids reinterpreting a relative CARGO_TARGET_DIR from the
-        // package working directory instead of the original workspace invocation.
-        let executable = std::env::current_exe().unwrap();
-        let target = executable
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
-        let output = Command::new("cargo")
-            .args([
-                "build",
-                "--offline",
-                "--locked",
-                "--example",
-                "credential-provider",
-                "--message-format=json",
-            ])
-            .arg("--target-dir")
-            .arg(target)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .lines()
-            .filter_map(|line| {
-                serde_json::from_str::<Value>(line)
-                    .unwrap()
-                    .get("executable")
-                    .and_then(Value::as_str)
-                    .map(PathBuf::from)
-            })
-            .next_back()
-            .unwrap()
-    })
 }
 
 fn archive_files(bytes: &[u8]) -> BTreeMap<String, String> {
