@@ -54,8 +54,8 @@ parent target ref from the user or explicit task context. Ask for missing inputs
 do not guess them from a publishing setup the repository does not have. No
 configuration file, publishing workflow or GitHub remote is required.
 
-Existing tracked files may have staged or unstaged edits; a clean checkout or prior commit is not
-required. Newly created release inputs must be tracked before assessment. Stage
+Existing tracked files may have staged or unstaged edits; a clean checkout or prior
+commit is not required. Newly created release inputs must be tracked before assessment. Stage
 those specific paths without disturbing unrelated changes, then collect fresh
 evidence. Version planning reads the working tree, not just the staged diff.
 
@@ -65,14 +65,14 @@ The **release history** is the actual release branch up to one selected commit.
 A package's **anchor** supplies the preceding package version and source.
 In actual release history it is the newest first-parent commit where that
 package's version changed. The **anchor version** is the package version declared
-in that commit. Changes after an anchor remain relevant, allowing a repository to catch
-up after migration or manual changes without matching version increments.
+in that commit. Changes after an anchor remain relevant, allowing a repository to
+catch up after migration or manual changes without matching version increments.
 
 The **merge target** is the commit the current pull request intends to merge into.
 For a stacked PR it can be the tip of an unmerged parent. Supply that target
 separately from release history. A parent's pending version and final content are
-assessed together as its anticipated squash release and form the child's anchor; its intermediate commits
-do not define separate releases. Additional child changes need their own version
+assessed together as its anticipated squash release and form the child's anchor;
+its intermediate commits do not define separate releases. Additional child changes need their own version
 movement. Packages still at their release-history version retain their historical
 anchors and catch-up obligations.
 
@@ -87,8 +87,7 @@ as `1.2.3` permits later compatible releases and does not create a version group
 
 A **semantic impact** is `breaking`, `nonbreaking` or `patch`, selected by this
 skill from the package's changes and consumer promises. A **version plan** translates
-those impacts into package versions
-and required group/dependency changes.
+those impacts into package versions and required group/dependency changes.
 
 A package has a **pending increment** when its working-tree version is above its
 anchor version. Assess every change assigned to that increment. Keep it when
@@ -150,7 +149,7 @@ Include inherited manifest changes and binary dependency changes listed in
 Record excluded untracked package paths and their rationale; track intended
 release inputs and restart instead of silently omitting them.
 
-Non-publishable targets appear separately for alignment. Do not assign them
+Non-publishable packages appear separately for alignment. Do not assign them
 semantic impacts or query their registry publication status.
 
 # Stage 3: Assess in dependency order
@@ -190,7 +189,7 @@ Prepare the PR's **Version/release plan** from the union of resolved-plan target
 and pending releases in the final report. Give one row per complete group or
 ungrouped package: anchor version, proposed version, semantic impact
 and substantive reason. Explain dependent/group movements and retained versions.
-Mark non-publishable targets **version alignment only, not published** without
+Mark non-publishable packages **version alignment only, not published** without
 inventing a published predecessor. State explicitly when nothing is to release.
 
 ## First-publication handoff

@@ -763,7 +763,11 @@ fn anticipated_parent_source_and_target_drift_invalidate_comparison_evidence() {
         fixture.write("packages/library/src/lib.rs", "pub fn existing() {}\n");
         fixture.commit("child removes anticipated API");
         let output = TempDir::new().unwrap();
-        for scenario in ["parent-source-drift", "parent-target-drift"] {
+        for scenario in [
+            "parent-source-drift",
+            "parent-head-drift",
+            "parent-target-drift",
+        ] {
             let evidence = output.path().join(scenario);
             let calls = output.path().join(format!("{scenario}.calls"));
             let result = parent_check(&fixture, &history, &evidence, &calls)
@@ -777,10 +781,16 @@ fn anticipated_parent_source_and_target_drift_invalidate_comparison_evidence() {
             let outcome = read_outcome(&evidence);
             assert_eq!(outcome.get("completed").unwrap(), false);
             let invocations = fs::read_to_string(&calls).unwrap();
-            if scenario == "parent-source-drift" {
+            if scenario != "parent-target-drift" {
                 assert_eq!(invocations, "version\ncanary\ncomparison\n");
                 assert_eq!(outcome.get("findings").unwrap(), true);
-                assert!(String::from_utf8_lossy(&result.stderr).contains("unchanged source"));
+                let diagnostic = if scenario == "parent-head-drift" {
+                    "immutable source HEAD"
+                } else {
+                    "unchanged source"
+                };
+                assert!(String::from_utf8_lossy(&result.stderr).contains(diagnostic));
+                assert_eq!(fixture.sha("anticipated-parent"), parent);
             } else {
                 assert_eq!(invocations, "version\ncanary\n");
                 assert_eq!(outcome.get("packages").unwrap(), &json!([]));
@@ -1173,6 +1183,17 @@ fn main() {
         if scenario == "parent-source-drift" {
             fs::write(Path::new(&baseline).join("packages/library/src/lib.rs"),
                 "pub fn altered_parent_source() {}\n").unwrap();
+        }
+        if scenario == "parent-head-drift" {
+            // Move only the owned detached worktree's HEAD, leaving the original parent ref
+            // and source files unchanged so immutable-HEAD verification is the failing boundary.
+            let symbolic = git().args(["-C", &baseline, "symbolic-ref", "--quiet", "HEAD"])
+                .output().unwrap();
+            assert!(!symbolic.status.success());
+            let status = git().args(["-C", &baseline, "update-ref", "--no-deref", "HEAD",
+                &env::var("CRP_FIXTURE_HISTORY").unwrap(), &env::var("CRP_EXPECTED_PARENT").unwrap()])
+                .status().unwrap();
+            assert!(status.success());
         }
         if scenario.starts_with("parent-comparison-") {
             eprintln!("comparison failure canary");

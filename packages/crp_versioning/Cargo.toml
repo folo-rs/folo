@@ -28,7 +28,6 @@ allowed_external_types = [
     "semver::Version",
     "serde_core::de::Deserialize",
     "serde_core::ser::Serialize",
-    "tempfile::file::NamedTempFile",
     "toml_edit::document::DocumentMut",
 ]
 
