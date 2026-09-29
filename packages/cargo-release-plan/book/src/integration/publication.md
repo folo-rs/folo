@@ -107,7 +107,7 @@ artifact transport and action-revision identification.
 Do not provision a registry PAT or stored-token fallback. The application acquires
 short-lived credentials through OIDC for Cargo's initial credential preflight and
 independently for each upload after verification. Preflight credentials are not reused for
-uploads, and all issued credentials are revoked when the attempt finishes.
+uploads. Cleanup attempts to revoke every issued credential and reports failures.
 Package verification shares the publication job's trust boundary,
 including its job-level OIDC identity. Run only reviewed repository code and
 trusted build dependencies in that job; credential handling is not a sandbox

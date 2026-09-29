@@ -16,7 +16,7 @@ use crate::publication::identity::{ActionsIdentity, TrustedPublisher};
 use crate::publication::manifest::PublicationManifest;
 use crate::{PublicationOutput, ReadFileError, WriteFileError};
 
-/// Owns temporary credential files until Cargo exits and every issued token is revoked.
+/// Owns credential files through Cargo execution and revocation cleanup.
 ///
 /// Provider processes do not outlive Cargo and cannot retain leases in memory for their parent.
 /// This directory is private runtime state, never source, an outcome or a workflow artifact.
