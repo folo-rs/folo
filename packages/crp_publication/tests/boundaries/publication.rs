@@ -8,6 +8,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crp_publication::PublicationOutput;
+use crp_publication::publication::credentials::CredentialSession;
+use crp_publication::publication::identity::TrustedPublisher;
+use crp_publication::publication::manifest::PublicationManifest;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -553,7 +557,3 @@ fn read_field(body: &mut Cursor<Vec<u8>>) -> Vec<u8> {
     body.read_exact(&mut value).unwrap();
     value
 }
-use crp_publication::PublicationOutput;
-use crp_publication::publication::credentials::CredentialSession;
-use crp_publication::publication::identity::TrustedPublisher;
-use crp_publication::publication::manifest::PublicationManifest;
