@@ -97,18 +97,54 @@ struct CredentialContext {
     token_endpoint: String,
 }
 
-/// Cargo's versioned request, including the exact package archive awaiting upload.
+/// Cargo's request envelope, shared by credential lookups and account operations.
 #[derive(Debug, Deserialize)]
 struct CredentialRequest {
     v: u32,
-    kind: String,
-    operation: String,
+    registry: CredentialRegistry,
+    #[serde(flatten)]
+    action: CredentialAction,
+}
+
+/// Only credential lookups can acquire publication authority.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum CredentialAction {
+    Get {
+        #[serde(flatten)]
+        operation: CredentialOperation,
+    },
+    #[serde(other)]
+    Unsupported,
+}
+
+/// Package identity is required for uploads, not for Cargo's preceding index reads.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "operation", rename_all = "kebab-case")]
+enum CredentialOperation {
+    Read,
+    Publish(PublishRequest),
+    #[serde(other)]
+    Unsupported,
+}
+
+/// Identifies the exact archive for which Cargo requests an upload credential.
+#[derive(Debug, Deserialize)]
+struct PublishRequest {
     name: String,
     #[serde(rename = "vers")]
     version: String,
     #[serde(rename = "cksum")]
     checksum: String,
-    registry: CredentialRegistry,
+}
+
+/// Cargo's wire-level failures distinguish unsupported operations from invalid requests.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum CredentialFailure {
+    OperationNotSupported,
+    UrlNotSupported,
+    Other { message: &'static str },
 }
 
 /// Registry identity supplied by Cargo, not a destination chosen by the provider.
@@ -177,9 +213,12 @@ pub fn serve_credential(
     output.flush()?;
     let mut line = String::new();
     input.read_line(&mut line)?;
-    let request: CredentialRequest =
-        serde_json::from_str(&line).map_err(CredentialRequestDecodeError::caused_by)?;
-    validate_request(&request, &context.publication)?;
+    if let Err(failure) = validate_request(&line, &context.publication) {
+        serde_json::to_writer(&mut *output, &serde_json::json!({"Err": failure}))?;
+        writeln!(output)?;
+        output.flush()?;
+        return Ok(());
+    }
     let repository =
         Repository::discover(&context.manifest, &context.publication.publication.source)?;
     let publisher = TrustedPublisher::with_endpoint(&context.token_endpoint, diagnostics.clone())?;
@@ -212,29 +251,55 @@ pub fn serve_credential(
     Ok(())
 }
 
-fn validate_request(
-    request: &CredentialRequest,
-    manifest: &PublicationManifest,
-) -> Result<(), AppError> {
-    if request.v != CREDENTIAL_PROTOCOL_VERSION
-        || request.kind != "get"
-        || request.operation != "publish"
-        || !matches!(
-            request.registry.index_url.as_str(),
-            "https://github.com/rust-lang/crates.io-index" | "sparse+https://index.crates.io/"
-        )
-        || !manifest
-            .publication
-            .packages
-            .iter()
-            .any(|package| package.name == request.name && package.version == request.version)
+fn validate_request(line: &str, manifest: &PublicationManifest) -> Result<(), CredentialFailure> {
+    // Account-operation input can contain credentials. Do not echo deserializer values.
+    let request: CredentialRequest =
+        serde_json::from_str(line).map_err(|_sensitive_input| CredentialFailure::Other {
+            message: "cannot decode Cargo's credential request",
+        })?;
+    if request.v != CREDENTIAL_PROTOCOL_VERSION {
+        return Err(CredentialFailure::Other {
+            message: "unsupported Cargo credential protocol version",
+        });
+    }
+    if !matches!(
+        request.registry.index_url.as_str(),
+        "https://github.com/rust-lang/crates.io-index" | "sparse+https://index.crates.io/"
+    ) {
+        return Err(CredentialFailure::UrlNotSupported);
+    }
+    let request = match request.action {
+        CredentialAction::Get {
+            operation: CredentialOperation::Publish(request),
+        } => request,
+        CredentialAction::Get {
+            operation: CredentialOperation::Read,
+        } => {
+            // Cargo requires a credential preflight even for the public crates.io index.
+            // The same session/source checks and uncached lease lifecycle apply; uploads
+            // still require exact package identity and acquire independent credentials.
+            // Ref: cargo-release-plan/docs/implementation.md, Registry publication boundaries.
+            return Ok(());
+        }
+        CredentialAction::Get {
+            operation: CredentialOperation::Unsupported,
+        }
+        | CredentialAction::Unsupported => return Err(CredentialFailure::OperationNotSupported),
+    };
+    if !manifest
+        .publication
+        .packages
+        .iter()
+        .any(|package| package.name == request.name && package.version == request.version)
         || request.checksum.len() != 64
         || !request
             .checksum
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(CredentialRequestRejected::new().into());
+        return Err(CredentialFailure::Other {
+            message: "credential request does not identify a requested crates.io publication",
+        });
     }
     Ok(())
 }
@@ -310,14 +375,6 @@ fn record_cleanup_failure(
 struct CredentialStateError;
 
 #[ohno::error]
-#[display("cannot decode Cargo's credential request")]
-struct CredentialRequestDecodeError;
-
-#[ohno::error]
-#[display("credential request does not identify a requested crates.io publication")]
-struct CredentialRequestRejected;
-
-#[ohno::error]
 #[display("credential provider configuration is invalid: {reason}")]
 struct ProviderConfigurationError {
     reason: &'static str,
@@ -332,7 +389,7 @@ struct CredentialCleanupFailed {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::publication::manifest::{InvalidManifest, Publication};
@@ -422,46 +479,89 @@ mod tests {
         PublicationManifest::new(publication).unwrap()
     }
 
-    fn request() -> CredentialRequest {
-        serde_json::from_value(json!({
+    fn request() -> Value {
+        json!({
             "v":1, "kind":"get", "operation":"publish",
             "name":"library", "vers":"1.0.0", "cksum":"b".repeat(64),
             "registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}
-        }))
-        .unwrap()
+        })
     }
 
     #[test]
     fn only_the_exact_registry_publication_request_can_acquire_a_token() {
         let publication = publication();
-        validate_request(&request(), &publication).unwrap();
+        validate_request(&request().to_string(), &publication).unwrap();
         let mut requested = request();
-        requested.registry.index_url = "sparse+https://index.crates.io/".to_owned();
-        validate_request(&requested, &publication).unwrap();
-        let mut requested = request();
-        requested.version = "1.0.1".to_owned();
-        validate_request(&requested, &publication).unwrap_err();
-        let mut requested = request();
-        requested.name = "another".to_owned();
-        validate_request(&requested, &publication).unwrap_err();
-        let mut requested = request();
-        requested.registry.index_url = "https://another.invalid/index".to_owned();
-        validate_request(&requested, &publication).unwrap_err();
-        let mut requested = request();
-        requested.operation = "read".to_owned();
-        validate_request(&requested, &publication).unwrap_err();
-        let mut requested = request();
-        requested.kind = "login".to_owned();
-        validate_request(&requested, &publication).unwrap_err();
-        let mut requested = request();
-        requested.v = 2;
-        validate_request(&requested, &publication).unwrap_err();
-        let mut requested = request();
-        requested.checksum = "unknown".to_owned();
-        validate_request(&requested, &publication).unwrap_err();
-        requested.checksum = "g".repeat(64);
-        validate_request(&requested, &publication).unwrap_err();
-        requested.checksum = "B".repeat(64);
-        validate_request(&requested, &publication).unwrap();
+        *requested.pointer_mut("/registry/index-url").unwrap() =
+            json!("sparse+https://index.crates.io/");
+        *requested.get_mut("cksum").unwrap() = json!("B".repeat(64));
+        validate_request(&requested.to_string(), &publication).unwrap();
+        for (field, value) in [
+            ("vers", json!("1.0.1")),
+            ("name", json!("another")),
+            ("v", json!(2)),
+            ("cksum", json!("unknown")),
+            ("cksum", json!("g".repeat(64))),
+        ] {
+            let mut requested = request();
+            *requested.get_mut(field).unwrap() = value;
+            assert!(matches!(
+                validate_request(&requested.to_string(), &publication),
+                Err(CredentialFailure::Other { .. })
+            ));
+        }
+        for field in [
+            "name",
+            "vers",
+            "cksum",
+            "kind",
+            "operation",
+            "v",
+            "registry",
+        ] {
+            let mut requested = request();
+            requested.as_object_mut().unwrap().remove(field);
+            assert!(matches!(
+                validate_request(&requested.to_string(), &publication),
+                Err(CredentialFailure::Other { .. })
+            ));
+        }
+        assert!(matches!(
+            validate_request("{", &publication),
+            Err(CredentialFailure::Other { .. })
+        ));
+    }
+
+    #[test]
+    fn reads_and_unsupported_operations_do_not_require_publication_fields() {
+        let publication = publication();
+        let mut requested = json!({
+            "v":1, "kind":"get", "operation":"read",
+            "registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}, "args":[]
+        });
+        validate_request(&requested.to_string(), &publication).unwrap();
+        *requested.pointer_mut("/registry/index-url").unwrap() =
+            json!("https://another.invalid/index");
+        assert_eq!(
+            validate_request(&requested.to_string(), &publication),
+            Err(CredentialFailure::UrlNotSupported)
+        );
+        *requested.pointer_mut("/registry/index-url").unwrap() =
+            json!("sparse+https://index.crates.io/");
+        for operation in ["yank", "unyank", "owners", "future-operation"] {
+            *requested.get_mut("operation").unwrap() = json!(operation);
+            assert_eq!(
+                validate_request(&requested.to_string(), &publication),
+                Err(CredentialFailure::OperationNotSupported)
+            );
+        }
+        requested.as_object_mut().unwrap().remove("operation");
+        for kind in ["login", "logout", "future-kind"] {
+            *requested.get_mut("kind").unwrap() = json!(kind);
+            assert_eq!(
+                validate_request(&requested.to_string(), &publication),
+                Err(CredentialFailure::OperationNotSupported)
+            );
+        }
     }
 }

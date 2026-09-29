@@ -1086,6 +1086,11 @@ publication attempts and revoked when no longer needed. Authentication failures
 do not select a stored-token fallback. Credentials never enter publication
 artifacts, diagnostics or command-line arguments.
 
+Cargo's credential preflight receives a separate short-lived credential before package
+verification. Each upload receives fresh authority after verification; preflight credentials
+are not reused for uploads. Both follow the same source, registry and session validation and
+revocation lifecycle.
+
 The consuming repository owns its Trusted Publisher registration and optional
 protected environment. Registration names that repository and its calling entry
 workflow filename, for both direct composite use and reusable-workflow use. The

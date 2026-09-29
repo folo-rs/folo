@@ -190,29 +190,105 @@ fn provider_issues_only_requested_credentials_and_parent_revokes_the_lease() {
             "registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}
         })
         .to_string();
+        let preflight = json!({
+            "v":1,"kind":"get","operation":"read","args":[],
+            "registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}
+        })
+        .to_string();
+        assert_rejected_protocol_requests(&PathBuf::from(&context), &service);
         repository.write("src/lib.rs", b"pub fn changed() {}\n");
-        let mut rejected = Vec::new();
-        serve_credential(
-            &PathBuf::from(&context),
-            &mut Cursor::new(request.as_bytes()),
-            &mut rejected,
-            &crp_publication::PublicationOutput::new(
-                "1.2.3",
-                false,
-                std::sync::Arc::new(crp_diag::Discard),
-            ),
-        )
-        .unwrap_err();
-        assert!(service.operations().is_empty());
-        assert_eq!(
-            serde_json::from_slice::<Value>(&rejected).unwrap(),
-            json!({"v":[1]})
-        );
+        for request in [&preflight, &request] {
+            let mut rejected = Vec::new();
+            serve_credential(
+                &PathBuf::from(&context),
+                &mut Cursor::new(request.as_bytes()),
+                &mut rejected,
+                &crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    std::sync::Arc::new(crp_diag::Discard),
+                ),
+            )
+            .unwrap_err();
+            assert!(service.operations().is_empty());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&rejected).unwrap(),
+                json!({"v":[1]})
+            );
+        }
         repository.write("src/lib.rs", b"pub fn ready() {}\n");
+        for request in [&preflight, &request] {
+            let mut output = Vec::new();
+            serve_credential(
+                &PathBuf::from(&context),
+                &mut Cursor::new(request.as_bytes()),
+                &mut output,
+                &crp_publication::PublicationOutput::new(
+                    "1.2.3",
+                    false,
+                    std::sync::Arc::new(crp_diag::Discard),
+                ),
+            )
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            let messages: Vec<Value> = output
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages.first().unwrap().get("v").unwrap(), &json!([1]));
+            let credential = messages.last().unwrap().get("Ok").unwrap();
+            assert_eq!(
+                credential.get("token").unwrap(),
+                "registry-credential-canary"
+            );
+            assert_eq!(credential.get("cache").unwrap(), "never");
+            assert_eq!(credential.get("operation_independent").unwrap(), false);
+        }
+        assert_eq!(
+            service.operations(),
+            ["identity", "exchange", "identity", "exchange"]
+        );
+        let result = session.finish();
+        assert_eq!(result.is_ok(), !reject_revocation);
+        assert_eq!(
+            service.operations(),
+            [
+                "identity", "exchange", "identity", "exchange", "revoke", "revoke"
+            ]
+        );
+        assert!(!PathBuf::from(context).exists());
+    }
+}
+
+fn assert_rejected_protocol_requests(context: &Path, service: &IdentityService) {
+    // Unsupported operations and incomplete uploads must not acquire authority or leases.
+    for (fields, kind) in [
+        (
+            json!({"kind":"get","operation":"yank"}),
+            "operation-not-supported",
+        ),
+        (json!({"kind":"login"}), "operation-not-supported"),
+        (json!({"kind":"logout"}), "operation-not-supported"),
+        (json!({"kind":"get","operation":"publish"}), "other"),
+        (json!({"v":2,"kind":"get","operation":"read"}), "other"),
+        (
+            json!({"kind":"get","operation":"read",
+            "registry":{"index-url":"https://another.invalid/index"}}),
+            "url-not-supported",
+        ),
+    ] {
+        let mut input = json!({
+            "v":1,"registry":{"index-url":"https://github.com/rust-lang/crates.io-index"}
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
         let mut output = Vec::new();
         serve_credential(
-            &PathBuf::from(&context),
-            &mut Cursor::new(request.as_bytes()),
+            context,
+            &mut Cursor::new(input.to_string()),
             &mut output,
             &crp_publication::PublicationOutput::new(
                 "1.2.3",
@@ -221,24 +297,17 @@ fn provider_issues_only_requested_credentials_and_parent_revokes_the_lease() {
             ),
         )
         .unwrap();
-        let output = String::from_utf8(output).unwrap();
-        let messages: Vec<Value> = output
+        let messages: Vec<Value> = String::from_utf8(output)
+            .unwrap()
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages.first().unwrap().get("v").unwrap(), &json!([1]));
-        let credential = messages.last().unwrap().get("Ok").unwrap();
-        assert_eq!(
-            credential.get("token").unwrap(),
-            "registry-credential-canary"
-        );
-        assert_eq!(credential.get("cache").unwrap(), "never");
-        assert_eq!(service.operations(), ["identity", "exchange"]);
-        let result = session.finish();
-        assert_eq!(result.is_ok(), !reject_revocation);
-        assert_eq!(service.operations(), ["identity", "exchange", "revoke"]);
-        assert!(!PathBuf::from(context).exists());
+        assert_eq!(messages.first().unwrap(), &json!({"v":[1]}));
+        assert_eq!(messages.last().unwrap().pointer("/Err/kind").unwrap(), kind);
+        assert!(messages.last().unwrap().get("Ok").is_none());
+        assert!(service.operations().is_empty());
+        assert_eq!(fs::read_dir(context.parent().unwrap()).unwrap().count(), 1);
     }
 }
 

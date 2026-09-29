@@ -2,7 +2,7 @@
 name = "crp_publication"
 description = "Publication implementation for cargo-release-plan - do not reference directly"
 publish = true
-version = "0.5.1"
+version = "0.5.2"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -53,6 +53,10 @@ static_assertions = { workspace = true }
 tar = { workspace = true }
 testing = { path = "../testing" }
 tiny_http = { workspace = true }
+
+[[example]]
+name = "credential-provider"
+path = "tests/boundaries/publication/credential_provider.rs"
 
 [lints]
 workspace = true
