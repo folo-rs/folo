@@ -190,9 +190,14 @@ plan from confirmed delivery. Each attempt writes a new outcome file rather than
 overwriting intent or earlier receipts.
 
 The Cargo credential provider acquires a fresh GitHub assertion and crates.io
-token per upload, after Cargo package verification. It validates the requested
-operation, registry, package and version and rechecks source identity before
-releasing a credential. Cargo hashes the same archive handle it uploads; the
+token for Cargo's initial read preflight and independently per upload after package
+verification. Cargo requires that preflight credential even for the public crates.io index;
+returning a missing-credential response aborts publication. Read requests have no package
+fields. Every issuance validates the protocol, registry and session and rechecks source
+identity; publish requests additionally validate the package, version and checksum shape.
+Responses disable caching and cross-operation reuse. Unsupported operations and malformed
+requests receive Cargo's structured error response without acquiring identity.
+Cargo hashes the same archive handle it uploads; the
 provider does not reopen Cargo's generated archives. Package normalization and
 locked verification belong to Cargo, not a second archive-closure inspector.
 
@@ -364,7 +369,14 @@ Workspace snapshot acquisition has its own boundary tests. Native scheduling and
 last-chance watchdog policy are maintained by the fixtures and nextest configuration.
 
 Registry-publication boundary tests exercise real Cargo and its credential-provider
-protocol against an isolated sparse registry. They cover verification ordering,
+protocol through the production provider against an isolated sparse registry and identity service.
+Cargo's own test-only crates.io transport routing preserves the canonical credential identity
+without rewriting requests or relaxing production registry validation. The fixture links the
+provider through the nonpublished
+[`crp-publication-test-helper`](../../crp-publication-test-helper/docs/implementation.md),
+built once per boundary-test process. The path-only development dependency keeps that helper
+in the publication component's test dependency graph and out of published archives.
+Tests cover preflight and verification ordering,
 archive and lockfile identity checks, per-upload credentials and partial
 publication without production registry access. Protocol and fixture mechanics
 are documented beside the helpers that depend on them.
