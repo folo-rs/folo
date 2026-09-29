@@ -43,7 +43,7 @@ checkout or a prior commit to assess them. Newly created intended release inputs
 must be tracked before the assessment.
 
 For one-off planning without publishing configuration, explicitly request
-[standalone mode](standalone.md).
+[standalone mode](../advanced/standalone.md).
 
 ## What the skill produces
 

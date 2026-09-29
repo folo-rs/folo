@@ -86,6 +86,11 @@ authorization boundary; source-mode checks do not authorize a live release.
 Use the unified application's publication operations and manifest-linked batches.
 Do not introduce repository-local publication policy or alternate command adapters.
 
+Write the user book for the person adopting and operating the toolkit. The skill
+owns version planning and generated release tables; workflows own happy-path
+delivery checks. Explain user decisions, failure signals and safe recovery actions
+rather than turning routine automation steps into manual user instructions.
+
 Keep every application-family library target marked `private-api = true` with library documentation
 disabled. Assess the CLI and artifact contracts defined in `docs/design.md`,
 not internal Rust construction or exhaustive matching, when choosing release levels.

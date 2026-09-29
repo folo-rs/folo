@@ -1,181 +1,145 @@
-# Recover incomplete work
+# Recover a failed release
 
-Recover the requested release, not whatever versions happen to be current when
-you notice the failure. Keep the original manifest, run identity, batches and
-attempt outcomes while inspecting the failure.
+You do not need to inspect tags, archives or registry entries after every
+successful release. The shared workflow owns those checks. Use this chapter when
+GitHub reports a failure and you need to decide what to retry or repair.
 
-Successful registry uploads, established tags and complete asset pairs are not
-rolled back. A retry observes them and completes missing work.
+## Find out what failed
 
-Retain phase outcomes as separate `outcome.json` artifact subdirectories with
-their GitHub run/attempt metadata. Apply the
-[outcome freshness rules](../reference/artifacts.md#derived-batches-and-later-outcomes)
-when choosing evidence to reuse.
+Before merge, a failed PR check appears on the pull request. Fix the reported
+problem before merging; these checks do not start publication.
 
-## Triage checklist
+After merge, an incomplete release marks its workflow and affected commit checks
+as failed. The final reporter creates or updates an issue titled
+**Release failed: workflow run ...**, linking the run and describing incomplete
+packages and any required operator action. A failed retry updates that same
+issue rather than creating a new issue for each attempt.
 
-1. Identify the original run, publication identity, source commit and failing
-   phase.
-2. Read package-specific diagnostics, including cleanup and reporting failures.
-   Interpret native results using the [binary-outcome contract](../reference/artifacts.md#binary-outcome).
-3. Distinguish unknown remote state from confirmed missing state.
-4. Confirm the original manifest and required batches remain available.
-5. Correct the specific source, setup, permission or remote-state blocker.
-6. Retry the original run or phase with the same intent and a new outcome path.
-7. Verify all required phases; an independent success does not erase another
-   release's failure.
+Start with the issue's instructions and the failed job's logs. If there is no
+issue, open the failed or cancelled run in the repository's **Actions** tab.
+Cancellation, startup failure or missing reporting permissions can prevent an
+issue from being created; its absence does not mean the release succeeded.
 
-## Registry and binary failures
+## Choose the recovery action
 
-| Failure | Recovery |
+| Reported problem | What to do |
 | --- | --- |
-| Throttling or transient registry unavailability | Let bounded retries finish; when exhausted, retry original intent after service recovery. |
-| Cargo fails after an upload | Requery exact-version availability. Do not assume failure means the version is absent. |
-| OIDC exchange or registration failure | Verify caller repository, entry workflow and environment registration. Do not add a PAT fallback. |
-| Missing or inconsistent lockfile | Correct the source through reviewed planning. Publication never regenerates resolution to make an upload pass. |
-| Missing checksum or archive | Reconcile the existing release; repair the incomplete pair together. |
-| Deterministic compiler failure | Fix the native build prerequisite or source defect rather than repeatedly retrying an unchanged command. |
-| Query failure | Restore access and repeat the observation. Do not turn an unreadable release into an empty asset inventory. |
+| Temporary network, registry or runner failure | Wait for the service to recover, then rerun the original failed jobs. |
+| Publishing permission or Trusted Publisher registration is wrong | Have a maintainer correct the setting, then retry. If the fix changes workflow code, use a new recovery run as described below. |
+| A native build prerequisite is unavailable | Repair the build environment. Retry the original run if it can use that repair; use a new recovery run if updated automation is required. |
+| A ZIP or checksum upload is incomplete | Rerun the original failed jobs. The publisher completes missing work and repairs an incomplete pair together. |
+| The failure issue names a missing tag after another version merged | Create that exact tag at the recorded source, then retry the original failed jobs. |
+| Required artifacts expired, or the publisher needs corrected automation | Start a new recovery run for the original source. Do not reconstruct or edit the old artifacts. |
+| The released package's source is defective | Correct it in a new PR, run the skill and release a new version. Retrying unchanged source will not fix it. |
+| An existing tag or uploaded version refers to unexpected content | Stop automatic retries and investigate. Do not move the tag or overwrite the version to make the run green. |
 
-If a source defect needs correction, it belongs in a reviewed forward release.
-Do not edit an immutable manifest to point an old version at new content.
+## Retry the original run when its request is still correct
+
+In **Actions**, open the original failed release run and choose **Re-run failed
+jobs** after correcting the cause. Rerunning the whole original workflow is also
+safe when that is necessary: it still requests the original source and versions.
+
+Already published versions, established tags and complete archive pairs are
+preserved. Retrying an upload failure therefore does not normally need a new
+package version. Independent packages may have completed even though the overall
+run failed.
+
+A retry does not update the run to newer source or newer workflow code. If that
+is what the repair requires, choose the appropriate path below rather than
+repeatedly rerunning the same failing inputs.
+
+When a retry succeeds, close its failure issue with a link to the successful
+attempt. Successful retries do not automatically close those issues.
 
 ## Missing tag after a newer version merges
 
-Consider publication source `A` requesting `widget-cli` version `2.0.1`. While its
-registry phase runs, source `B` merges `2.0.2`. The older run still needs
-`widget-cli-v2.0.1`, but the current release-branch candidate no longer carries
-that version.
+For example, the run for `widget-cli 2.0.1` can finish its crate upload after
+`2.0.2` has already merged. The old run still needs the `2.0.1` tag, but cannot
+automatically tag the newer source as that version.
 
-Workflow queuing does not serialize those merges. The publisher does not relabel
-`B` as `2.0.1`, prevent further merges or acquire broader tagging authority.
-Instead:
+The failure issue identifies the exact tag and original source commit. An
+authorized maintainer must create that tag at the recorded commit, not at the
+current branch tip. Do not move an existing tag.
 
-- It skips this release's tag-dependent work.
-- Independent releases and valid platform batches continue.
-- The reconciliation phase and workflow remain failed.
-- The failure issue identifies the package/version, exact missing tag, original
-  publication source SHA, conflicting branch version when applicable, failure
-  reason and original run.
-
-### Operator tag recovery
-
-An operator with the necessary rights verifies the recorded source and creates
-the missing tag **at the original publication source**, then retries the
-**original failed run**.
-
-The commands below are operator actions, not automatic repair instructions for a
-version-planning agent. Replace the source and run placeholders from the failure
-report, verify repository identity, and confirm the source contains the requested
-package/version and release inputs:
+These commands are for that specific manual repair. Replace the example values
+with those from the failure issue:
 
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
-# Take these identities from the failed run, not the current branch tip.
 $Repository = "example/widgets"
 $Tag = "widget-cli-v2.0.1"
-$Source = "<full-original-publication-source-SHA>"
-$RunId = "<original-failed-run-id>"
+$Source = "<original-source-SHA-from-the-failure-issue>"
 $RepositoryUrl = "https://github.com/$Repository.git"
 
-# Inspect the original source and confirm the tag is absent before creating it.
+# Inspect the recorded source and check whether the tag already exists.
 git fetch $RepositoryUrl $Source
 git show --no-patch --format=fuller $Source
 git ls-remote $RepositoryUrl "refs/tags/$Tag" "refs/tags/$Tag^{}"
 ```
 
-Only when the tag is absent locally and remotely, create and push it:
+Only after confirming the intended source and that the tag is absent, create it:
 
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
-# Create the missing immutable tag; never replace an existing tag.
 git tag --annotate $Tag $Source --message "Release $Tag"
 git push $RepositoryUrl "refs/tags/$Tag"
-
-# Resume the same publication request after its tag prerequisite is satisfied.
-gh run rerun $RunId --repo $Repository
 ```
 
-Never force-update an existing tag. If a tag already exists but points to
-unexpected source, stop and investigate its identity rather than replacing it.
-The Git URL and GitHub CLI destination derive from the same reviewed repository,
-not a checkout-local remote nickname. Use the maintainer's configured GitHub
-authentication; do not embed credentials in the URL.
+Then use **Re-run failed jobs** on the original run. It recognizes the created
+tag and completes the remaining work from that source. If the tag already exists
+but identifies different content, investigate instead of force-updating it.
 
-The retry recognizes the valid manually created tag through its existing-tag
-path. It does not repeat the moving-candidate selection used only for missing
-tags. It can create the missing GitHub release and generate the formerly blocked
-platform batches, which build from the tag's actual peeled commit. Existing
-registry versions and completed assets are retained.
+## Start a new recovery run when retrying is insufficient
 
-A new run against the latest branch tip is not a substitute for completing
-`2.0.1`. Manual tagging resolves this blocker only; unrelated failures remain.
+If the original artifacts are unavailable or a fix requires newer publishing
+automation, open the release workflow in **Actions** and choose **Run workflow**.
+Select the release branch and set its `source` input to the **full original
+publication-source commit** from the failure issue or failed run.
 
-## Missing or expired artifacts
+This uses the release branch's current automation to create a new publication
+request for that original source and its configuration. It observes existing
+uploads and completes what is still missing. It does not recreate the old
+outcomes or turn the earlier failed run into a successful attempt.
+If the original source cannot be restored, do not substitute different content
+under the same versions; prepare a new release instead.
 
-A missing manifest or required batch is an error, not an empty release. Do not
-reconstruct an outcome from a later checkout or edit an outcome into success.
+The caller needs the recovery input shown in
+[Connect publication](../integration/publication.md#add-the-release-caller).
+If your caller does not expose it, have a maintainer update the caller rather
+than assembling publication commands or editing artifacts manually.
 
-The final `publish report` operation still runs when the manifest is unavailable:
-omit `--publication`, retain the available outcomes and current job results, and
-report the failure in the original GitHub run context. It writes Markdown and
-can create the failure issue, but cannot declare the release complete.
+If the original publication configuration itself was wrong, selecting the same
+source also selects that old configuration. Correct the configuration through a
+reviewed PR and let its normal release run issue a new request instead. Do not
+edit an existing publication manifest to change its targets or destination.
 
-If retained artifacts are unavailable, choose the original immutable source
-explicitly and use a compatible tool to prepare a **new** publication manifest.
-This is a separate recovery invocation with new evidence and fresh remote
-validation, not a continuation of a missing artifact. Preparation still requires
-clean source and its committed configuration and lockfile.
+After a successful replacement run, close the original failure issue with a link
+and explain that the new run supersedes it. The original failed run remains an
+accurate record of the request it could not complete.
 
-The [release caller example](../integration/publication.md#add-the-release-caller)
-exposes the optional `source` input for this recovery:
+## When a new version is necessary
 
-```powershell
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$PSNativeCommandUseErrorActionPreference = $true
+Create a forward release when the repair changes released package content or
+when an occupied version cannot describe the intended code. Ask the agent to
+make the correction and run `increment-versions`; review its proposed versions
+normally.
 
-$Repository = "example/widgets"
-$ReleaseBranch = "main"
-$Source = "<full-original-publication-source-SHA>"
-
-# Use current release automation to recover the recorded historical source.
-gh workflow run release.yml --repo $Repository --ref $ReleaseBranch --field "source=$Source"
-```
-
-Use the caller's release branch for its workflow and controller, while the explicit
-source selects the historical publication snapshot. This does not repoint a tag
-or recreate an old outcome. A normal failed-job retry with intact artifacts remains
-the simpler path after manual tagging.
-
-If that source is unavailable or its artifacts require another schema/tool
-version, restore the retained evidence or select the matching tool deliberately.
-Never fall back silently to the latest source.
+A transient service failure, missing archive, permission repair or
+automation-only correction does not by itself require new package versions.
+The skill determines whether a proposed source/configuration correction actually
+changes released content. A newer successful release does not retroactively
+repair an older defective one; record that the old failure is superseded rather
+than retrying it indefinitely.
 
 ## Release-branch movement
 
-This is a pre-merge planning problem, separate from publication recovery.
-A newer release-history or parent-target commit can consume an already selected
-version or change the comparison source, invalidating prepared evidence.
-
-Have `increment-versions` refresh the selected history and parent refs, then:
-
-1. Identify version, requirement and lockfile edits generated by the superseded
-   planning run.
-2. Undo only those generated edits, preserving source changes, independent
-   manifest edits and upstream work. No rollback is needed if nothing was
-   applied.
-3. Integrate the current intended target using the repository's normal policy.
-4. Run the skill again with fresh history/target inputs and working directories.
-5. Refresh compatibility evidence and the PR's Version/release plan section.
-
-Do not increment stale proposed versions manually, reset the whole worktree or
-revert a mixed-purpose commit. Resolve genuine conflicts deliberately. The new
-assessment may retain an adequate pending increment; rerunning is not itself a
-reason to increase versions.
+If a PR's version check fails because release history or its parent advanced,
+ask the agent to refresh its branch and rerun `increment-versions`. It preserves
+your source changes, reassesses against the new history and updates the release
+table. Do not compensate by manually increasing stale proposed versions.

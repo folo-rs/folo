@@ -1399,10 +1399,15 @@ The public book teaches the complete process without relying on these internal
 design and implementation documents. It starts with motivation and goals, explains
 version assessment and publication as separate responsibilities, and introduces
 release history, merge targets, anchors, semantic impacts, plans and manifests before an integration
-walkthrough. The walkthrough covers repository configuration, local planning,
-Trusted Publishing setup, reusable GitHub workflows, an ordinary release and
-verification of its remote results. Recovery and custom workflow arrangements
-follow the standard path rather than obscuring it.
+walkthrough. The walkthrough addresses the user's work: configure adoption,
+invoke the skill, review its proposed release and merge under repository policy.
+The workflows own successful delivery and its verification; the guide does not
+assign a routine manual audit after every release.
+
+Recovery explains how users discover failures through checks, workflow results
+and failure issues, then choose between retrying, repairing prerequisites,
+issuing a new recovery request and releasing corrected source. Advanced modes
+and custom arrangements follow the ordinary path rather than obscuring it.
 
 General release-process guidance belongs in that book. Repository instructions
 select local policy and link to the book instead of maintaining another explanation

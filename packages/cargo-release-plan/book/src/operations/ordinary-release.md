@@ -1,85 +1,49 @@
 # An ordinary release
 
-This example assumes the packages are already published, their Trusted
-Publishers are configured, and repository checks and publication are connected.
-For a new package, use [first publication](first-publication.md) instead.
+Once the packages, Trusted Publishers and shared workflows are configured, an
+ordinary release is part of the PR process. For a new package, complete
+[first publication](first-publication.md) before its first merge.
 
-## Make and assess the change
+## Make the change and invoke the skill
 
-Add a compatible public operation to `widget`, implement it in `widget_impl`,
-and update the relevant tests and public documentation. The group starts at
-`1.4.0`; `widget-cli` already has a pending `2.0.1` increment from `2.0.0`.
+Develop the change with its tests and public documentation, then ask the agent:
 
-Run the copied `increment-versions` skill using the
-[agent planning setup](../integration/local-planning.md). The skill selects release
-history and the merge target, prepares the report and assesses dependencies.
-The implementation change selects
-the public library contract for external comparison.
+> Run increment-versions for this PR and update its Version/release plan.
 
-Choose `nonbreaking` for the new library operation and assess the implementation
-and binary dependency effects. Preview reveals the complete group and dependency
-changes. Retain the binary's pending patch increment if it is sufficient.
+The [installed skill](../integration/local-planning.md) handles compatibility
+assessment, version selection, dependent-package changes and application of the
+plan. You do not need to choose tool commands, edit generated planning files or
+assemble the release table yourself.
 
-## Present the complete release
+## Review the proposed release
 
-Put a **Version/release plan** section in the PR description. Base it on the final
-resolved plan and report, not a list of directly edited files:
+Review the source changes and the skill's generated **Version/release plan**
+together. For a compatible operation added to `widget`, the table might contain:
 
-| Package or group | Previous version | Proposed version | Change and reason |
+| Package or group | Previous version | Proposed version | Reason |
 | --- | --- | --- | --- |
-| `widget`, `widget_impl`, `widget-fixtures` | `1.4.0` | `1.5.0` | Compatible public operation in `widget`; supporting implementation in `widget_impl`; helper moves for alignment only and is not published. |
-| `widget-cli` | `2.0.0` | `2.0.1` | Assessed dependency update without a stronger CLI change; sufficient pending patch increment retained. |
+| `widget`, `widget_impl`, `widget-fixtures` | `1.4.0` | `1.5.0` | Compatible public operation; implementation and fixture helper align with the group. The helper is not published. |
+| `widget-cli` | `2.0.0` | `2.0.1` | Dependency update without a stronger CLI change; its existing pending patch increment is sufficient. |
 
-Show versions at each publishable package's anchor. For a non-publishable
-package, use its declared alignment starting point. If members start at different
-versions, show each movement rather than hiding it in one group value.
+The review question is whether those reasons accurately describe the change.
+For example, removing or changing an existing operation's promised behavior may
+require a breaking release instead. A dependent package's movement should have a
+clear explanation rather than an invented user-facing feature.
 
-Include:
+If the table's reasoning does not match the source, ask the agent to correct the
+assessment and rerun the skill. If source or release history changes during
+review, have it refresh the plan rather than editing version numbers or generated
+artifacts by hand.
 
-- Every group member and ungrouped package reached by the complete plan.
-- Required dependent releases and requirement rewrites.
-- Semantic reasons, including any decision above the API compatibility checker's floor.
-- Pending increments already present before the latest planning run.
+## Merge under normal repository policy
 
-Do not invent a consumer-facing change for alignment-only movement. If no
-released-content or version changes exist, state that explicitly. An empty
-newly generated plan does not by itself establish that nothing is pending.
+Review and the required checks approve the source and version changes together.
+Invoking the skill is not itself merge authorization.
 
-New packages need a separate bootstrap/first-automated-version handoff. Keep
-local artifact logs out of the PR's release explanation; the section describes
-the final proposed release, not the sequence of planning attempts.
+After an authorized merge, the shared workflow publishes the requested packages,
+tags, releases and native archives automatically. Successful publication needs no
+separate manual delivery audit.
 
-## Apply, validate and review
-
-Have the skill apply the resolved plan unchanged, verify locked metadata and run
-the repository's required checks. Preserve the before/after evidence separately
-from source.
-
-Source, group, history, target or decision changes require reassessment and an updated
-section. If another PR consumes the version, use
-[release-branch movement recovery](recovery.md#release-branch-movement).
-
-Human review approves the source and versions together. The skill does not
-publish, and completing it is not merge authorization.
-
-## Observe publication
-
-After the authorized merge:
-
-1. The workflow captures a manifest from the clean merged source, including
-   all publishable packages at their declared versions.
-2. Registry reconciliation uploads only missing versions.
-3. GitHub reconciliation establishes package tags and binary releases.
-4. Native jobs complete missing archive/checksum pairs from actual tag commits.
-5. Outcomes and a failure report, when needed, identify remaining work.
-
-The manifest omits `widget-fixtures` because it is not publishable, even though
-the version plan aligned it.
-
-Suppose the Linux assets complete but the Windows checksum is missing. Retry the
-original run: registry versions remain present, complete Linux work is skipped,
-and the Windows pair is repaired. No new version decision or package-list input
-is needed.
-
-Finish with [delivery verification](verification.md), not merely an observation
-that one publication job was green.
+If something goes wrong, the release workflow fails and its reporter creates or
+updates a failure issue. Follow [failure recovery](recovery.md) for the safe retry
+or repair action instead of starting another version increment by default.

@@ -25,7 +25,7 @@ Those ref names are your choices, not defaults inferred from a publishing setup.
 A repository without remotes can use a local branch or commit. If you want a
 remote-tracking ref refreshed first, say so.
 
-The [agent prerequisites](local-planning.md#install-the-complete-skill) still apply.
+The [agent prerequisites](../integration/local-planning.md#install-the-complete-skill) still apply.
 Tracked files may have staged or unstaged changes; newly created intended release
 inputs must be tracked before assessment.
 

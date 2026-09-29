@@ -26,7 +26,7 @@ Publication runs are not cancelled when another merge arrives. A failed run
 retains its original requests and is retried rather than replacing them with the
 newest branch state. Follow the book's
 [publication walkthrough](https://folo-rs.github.io/folo/cargo-release-plan/integration/publication.html)
-and [delivery verification](https://folo-rs.github.io/folo/cargo-release-plan/operations/verification.html).
+and [failure recovery](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html).
 
 ## Target selection
 

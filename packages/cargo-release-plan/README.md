@@ -49,9 +49,8 @@ complete process:
   use the agent skill to assess and apply the complete workspace change.
 - [Connect publication](https://folo-rs.github.io/folo/cargo-release-plan/integration/publication.html):
   publish reviewed exact versions through the reusable GitHub workflows.
-- [Verify delivery](https://folo-rs.github.io/folo/cargo-release-plan/operations/verification.html)
-  and [recover incomplete work](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html):
-  distinguish version readiness from actual package and archive availability.
+- [Recover a failed release](https://folo-rs.github.io/folo/cargo-release-plan/operations/recovery.html):
+  use the workflow failure and its issue to choose a safe retry or repair.
 
 The [command reference](https://folo-rs.github.io/folo/cargo-release-plan/reference/commands.html)
 documents prerequisites, outputs and side effects. New packages require the

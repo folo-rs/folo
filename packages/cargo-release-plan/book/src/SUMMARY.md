@@ -15,20 +15,19 @@
 - [Install and inspect](integration/installation.md)
 - [Configure your repository](integration/repository.md)
 - [Adopt local version planning](integration/local-planning.md)
-- [One-off version increments](integration/standalone.md)
 - [Add GitHub checks](integration/github-checks.md)
 - [Connect publication](integration/publication.md)
 
 # Operations
 
 - [An ordinary release](operations/ordinary-release.md)
-- [Verify delivery](operations/verification.md)
 - [Recover incomplete work](operations/recovery.md)
 - [First publication and adoption](operations/first-publication.md)
 - [Upgrade tools, actions and skills](operations/upgrades.md)
 
 # Advanced and reference
 
+- [One-off version increments](advanced/standalone.md)
 - [Custom jobs and source identity](advanced/custom-jobs.md)
 - [Configuration reference](reference/configuration.md)
 - [Command tasks and prerequisites](reference/commands.md)
