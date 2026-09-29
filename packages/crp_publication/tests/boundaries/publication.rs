@@ -388,7 +388,9 @@ fn cargo(fixture: &Repository, args: &[&str]) {
         let publication = PublicationManifest::new(serde_json::from_value(json!({
             "schema_version":1,"tool_version":"1.0.0","source":source,
             "workspace_manifest":"Cargo.toml","config_path":".cargo/release_plan.toml",
-            "configuration":{"schema-version":1,"repository":"example/library","release-branch":"main","targets":[]},
+            "configuration":{
+                "schema-version":1,"repository":"example/library","release-branch":"main","targets":[]
+            },
             "packages":packages
         })).unwrap()).unwrap();
         let upload_count = if args.contains(&"--workspace") {

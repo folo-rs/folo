@@ -20,8 +20,9 @@ use serde_json::Value;
 pub fn executable() -> &'static PathBuf {
     static PROVIDER: OnceLock<PathBuf> = OnceLock::new();
     PROVIDER.get_or_init(|| {
-        // An absolute target path preserves the original workspace invocation's build location
-        // when Cargo runs this locator from a package's working directory.
+        // A private child target avoids the parent Cargo build lock and executable-swap races.
+        // Resolve it from the test executable so relative CARGO_TARGET_DIR values cannot
+        // change meaning when Cargo runs this locator from a package's working directory.
         let executable = env::current_exe().unwrap();
         let target = executable
             .parent()
@@ -29,7 +30,8 @@ pub fn executable() -> &'static PathBuf {
             .parent()
             .unwrap()
             .parent()
-            .unwrap();
+            .unwrap()
+            .join("crp-publication-test-helper");
         let output = Command::new("cargo")
             .args([
                 "build",

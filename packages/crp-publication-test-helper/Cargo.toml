@@ -9,6 +9,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.release-plan]
+private-api = true
+
+[lib]
+doc = false
+
 [dependencies]
 crp_diag = { path = "../crp_diag", features = ["private-test-util"] }
 crp_publication = { path = "../crp_publication" }
