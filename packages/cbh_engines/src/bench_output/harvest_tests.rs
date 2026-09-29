@@ -174,13 +174,23 @@ fn flat_engines_select_regular_top_level_json_and_preserve_engine_shape() {
 }
 
 #[test]
-fn freshness_includes_the_cutoff_and_newer_output_but_not_older_output() {
-    for engine in engines() {
-        let cutoff = boundary() - MTIME_SLACK;
+fn recursive_freshness_includes_the_cutoff_and_newer_output_but_not_older_output() {
+    assert_freshness([Engine::Callgrind, Engine::Criterion]);
+}
+
+#[test]
+fn flat_freshness_includes_the_cutoff_and_newer_output_but_not_older_output() {
+    assert_freshness([Engine::AllocTracker, Engine::AllTheTime]);
+}
+
+fn assert_freshness(engines: [Engine; 2]) {
+    // Separate collector families keep the per-test Miri workload bounded.
+    for engine in engines {
+        let cutoff = boundary().checked_sub(MTIME_SLACK).unwrap();
         for (modified, included) in [
-            (cutoff - Duration::from_secs(1), false),
+            (cutoff.checked_sub(Duration::from_secs(1)).unwrap(), false),
             (cutoff, true),
-            (cutoff + Duration::from_secs(1), true),
+            (cutoff.checked_add(Duration::from_secs(1)).unwrap(), true),
         ] {
             let files = candidate(engine, modified, included);
             assert_eq!(
