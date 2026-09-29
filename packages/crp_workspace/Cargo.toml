@@ -45,7 +45,6 @@ private-test-util = []
 
 [dependencies]
 crp_diag = { workspace = true }
-dunce = { workspace = true }
 ignore = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }

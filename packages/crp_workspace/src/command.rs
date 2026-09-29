@@ -351,7 +351,8 @@ mod tests {
         // POSIX wait status for a process terminated by SIGTERM.
         let status = ExitStatus::from_raw(15);
         let failure = CommandFailedError::new("git", status, "terminated");
-        assert!(optional_capture(Err(failure.into())).is_err());
+        let error = optional_capture(Err(failure.into())).unwrap_err();
+        assert!(error.find_source::<CommandFailedError>().is_some());
         let failure = CommandFailedError::new("git", status, "terminated");
         let error = CommandError::from(failure);
         assert!(!error.is_nonzero_exit());
