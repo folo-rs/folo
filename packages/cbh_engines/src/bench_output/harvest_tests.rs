@@ -252,41 +252,58 @@ fn recursive_collectors_skip_disappeared_children_but_propagate_other_scan_error
 }
 
 #[test]
-fn entry_iteration_type_metadata_and_contents_errors_propagate() {
+fn entry_iteration_errors_propagate() {
+    entry_errors_propagate("next_entry");
+}
+
+#[test]
+fn entry_type_errors_propagate() {
+    entry_errors_propagate("file_type");
+}
+
+#[test]
+fn entry_metadata_errors_propagate() {
+    entry_errors_propagate("modified");
+}
+
+#[test]
+fn entry_contents_errors_propagate() {
+    entry_errors_propagate("read_to_string");
+}
+
+fn entry_errors_propagate(operation: &str) {
     for engine in engines() {
         // NotFound is optional only for read_dir, never for a selected entry or its contents.
         for kind in [io::ErrorKind::NotFound, io::ErrorKind::PermissionDenied] {
-            for operation in ["next_entry", "file_type", "modified", "read_to_string"] {
-                let mut files = candidate(engine, boundary(), true);
-                let directory_path = if engine == Engine::Criterion {
-                    path("criterion/new")
-                } else {
-                    path(engine_dir(engine))
-                };
-                let entries = &mut files
-                    .directories
-                    .get_mut()
-                    .get_mut(&directory_path)
-                    .unwrap()
-                    .as_mut()
-                    .unwrap()
-                    .0;
-                // Criterion freshness belongs to estimates, never benchmark.json.
-                let entry = entries.back_mut().unwrap().as_mut().unwrap();
-                match operation {
-                    "next_entry" => entries.push_front(Err(kind.into())),
-                    "file_type" => entry.file_type = Err(kind),
-                    "modified" => entry.modified = Err(kind),
-                    "read_to_string" => {
-                        files
-                            .contents
-                            .get_mut()
-                            .insert(entry.path.clone(), Err(kind.into()));
-                    }
-                    _ => unreachable!(),
+            let mut files = candidate(engine, boundary(), true);
+            let directory_path = if engine == Engine::Criterion {
+                path("criterion/new")
+            } else {
+                path(engine_dir(engine))
+            };
+            let entries = &mut files
+                .directories
+                .get_mut()
+                .get_mut(&directory_path)
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .0;
+            // Criterion freshness belongs to estimates, never benchmark.json.
+            let entry = entries.back_mut().unwrap().as_mut().unwrap();
+            match operation {
+                "next_entry" => entries.push_front(Err(kind.into())),
+                "file_type" => entry.file_type = Err(kind),
+                "modified" => entry.modified = Err(kind),
+                "read_to_string" => {
+                    files
+                        .contents
+                        .get_mut()
+                        .insert(entry.path.clone(), Err(kind.into()));
                 }
-                assert_eq!(collect(&files, engine, None).unwrap_err().kind(), kind);
+                _ => unreachable!(),
             }
+            assert_eq!(collect(&files, engine, None).unwrap_err().kind(), kind);
         }
     }
 }
